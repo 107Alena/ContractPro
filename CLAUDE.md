@@ -36,6 +36,7 @@ The system is decomposed into 8 domains communicating via event-driven architect
 
 - `docs/domain-decomposition.md` — high-level domain breakdown of the entire system
 - `docs/ТЗ-1. Модуль проверки договора.md` — full requirements spec for the contract review module (user requirements, functional requirements, NFRs)
+- `DocumentProcessing/architecture/high-architecture.md` - верхнеуровневая архитектура сервиса DocumentProcessing
 
 ## Language
 

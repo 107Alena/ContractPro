@@ -249,8 +249,8 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 | № | Компонент | Назначение |
 |---|-----------|-----------|
 | 14 | **DM Outbound Adapter** | Публикация событий в Document Management: `DocumentProcessingArtifactsReady` (артефакты обработки), `GetSemanticTreeRequest` (запрос semantic tree для сравнения), `DocumentVersionDiffReady` (результат сравнения). |
-| 15 | **DM Inbound Adapter** | Подписка на ответы от Document Management: `DocumentProcessingArtifactsPersisted`, `DocumentProcessingArtifactsPersistFailed`, `SemanticTreeProvided`. Корреляция ответов по `correlation_id` / `job_id`, уведомление соответствующего оркестратора. |
-| 16 | **Event Publisher** | Публикация статусных событий и событий завершения обработки/сравнения для внешних потребителей (API/backend-оркестратор, другие домены). |
+| 15 | **DM Inbound Adapter** | Подписка на ответы от Document Management: `DocumentProcessingArtifactsPersisted`, `DocumentProcessingArtifactsPersistFailed`, `SemanticTreeProvided`, `DocumentVersionDiffPersisted`, `DocumentVersionDiffPersistFailed`. Корреляция ответов по `correlation_id` / `job_id`, уведомление соответствующего оркестратора. |
+| 16 | **Event Publisher** | Публикация статусных событий (`StatusChangedEvent`), событий завершения (`ProcessingCompletedEvent`, `ComparisonCompletedEvent`) и событий ошибок (`ProcessingFailedEvent`, `ComparisonFailedEvent`) для внешних потребителей (API/backend-оркестратор, другие домены). События ошибок содержат `error_code`, `error_message`, `failed_at_stage`, `is_retryable`. |
 | 17 | **Temporary Artifact Storage Adapter** | Работа с временными артефактами в Yandex Object Storage: сохранение, чтение, удаление при cleanup. |
 
 ### Слой инфраструктуры (Cross-cutting)
@@ -401,7 +401,7 @@ Document Processing (DP) — stateless-домен, отвечающий за:
    * к key-value store (Idempotency Guard),
    * к системе observability.
 4. Command Consumer подписывается на команды: `ProcessDocumentRequested`, `CompareDocumentVersionsRequested`.
-5. DM Inbound Adapter подписывается на ответы: `DocumentProcessingArtifactsPersisted`, `DocumentProcessingArtifactsPersistFailed`, `SemanticTreeProvided`.
+5. DM Inbound Adapter подписывается на ответы: `DocumentProcessingArtifactsPersisted`, `DocumentProcessingArtifactsPersistFailed`, `SemanticTreeProvided`, `DocumentVersionDiffPersisted`, `DocumentVersionDiffPersistFailed`.
 6. Система переводится в состояние readiness.
 7. Начинается потребление сообщений.
 
@@ -495,14 +495,17 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 15. При успехе:
     * Orchestrator запускает cleanup временных артефактов через Temporary Artifact Storage Adapter;
     * Job Lifecycle Manager публикует статус: `COMPLETED` (если warnings пуст) или `COMPLETED_WITH_WARNINGS`;
+    * Event Publisher публикует `ProcessingCompletedEvent` (`job_id`, `document_id`, `status`, `has_warnings`, `warning_count`, `correlation_id`, `timestamp`);
     * Idempotency Guard обновляет статус `job_id` → завершен.
 
 16. При ошибке:
     * retryable → retry-политика;
-    * non-retryable или retry исчерпаны → `FAILED`, запись в DLQ, cleanup.
+    * non-retryable или retry исчерпаны → `FAILED`, запись в DLQ, cleanup;
+    * Event Publisher публикует `ProcessingFailedEvent` (`job_id`, `document_id`, `status`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=false`, `correlation_id`, `timestamp`).
 
 17. При таймауте (> 120 сек):
-    * Job Lifecycle Manager прерывает обработку → `TIMED_OUT`, cleanup, событие ошибки.
+    * Job Lifecycle Manager прерывает обработку → `TIMED_OUT`, cleanup;
+    * Event Publisher публикует `ProcessingFailedEvent` (`job_id`, `document_id`, `status=TIMED_OUT`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=true`, `correlation_id`, `timestamp`).
 
 #### Диаграмма сценария
 
@@ -590,16 +593,29 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 8. **DM Inbound Adapter** получает ответы `SemanticTreeProvided`, коррелирует по `correlation_id`, передает в Pending Response Registry.
 
 9. **Pending Response Registry** уведомляет оркестратор, когда оба ответа получены.
-   * Если один из ответов не получен в течение настраиваемого таймаута → ошибка.
-   * Если DM вернул ошибку (версия не найдена) → `FAILED`.
+   * Если один из ответов не получен в течение настраиваемого таймаута → `ComparisonFailedEvent` с `is_retryable=true`.
+   * Если DM вернул ошибку (версия не найдена) → `FAILED`, `ComparisonFailedEvent` с `is_retryable=false`.
 
 10. **Version Comparison Engine** выполняет текстовый diff и структурный diff по semantic tree.
 
 11. **DM Outbound Adapter** отправляет `DocumentVersionDiffReady` с результатом сравнения.
 
-12. **DM Inbound Adapter** ожидает подтверждение сохранения.
+12. **DM Inbound Adapter** ожидает подтверждение сохранения:
+    * `DocumentVersionDiffPersisted` → успех;
+    * `DocumentVersionDiffPersistFailed` → ошибка (содержит `is_retryable`).
 
-13. При успехе → `COMPLETED`. При ошибке → retry или `FAILED`. При таймауте → `TIMED_OUT`.
+13. При успехе:
+    * `COMPLETED`;
+    * Event Publisher публикует `ComparisonCompletedEvent` (`job_id`, `document_id`, `base_version_id`, `target_version_id`, `status`, `text_diff_count`, `structural_diff_count`, `correlation_id`, `timestamp`).
+
+14. При ошибке:
+    * retryable (`is_retryable=true` из `DocumentVersionDiffPersistFailed`) → retry-политика;
+    * non-retryable или retry исчерпаны → `FAILED`;
+    * Event Publisher публикует `ComparisonFailedEvent` (`job_id`, `document_id`, `status`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=false`, `correlation_id`, `timestamp`).
+
+15. При таймауте (> 120 сек):
+    * `TIMED_OUT`, cleanup;
+    * Event Publisher публикует `ComparisonFailedEvent` (`job_id`, `document_id`, `status=TIMED_OUT`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=true`, `correlation_id`, `timestamp`).
 
 #### Диаграмма сценария
 

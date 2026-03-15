@@ -35,6 +35,17 @@ type ComparisonJob struct {
 	UserID          string          `json:"requested_by_user_id,omitempty"`
 }
 
+// TransitionTo validates and performs a status transition.
+// On success, updates Status and UpdatedAt. Returns an error if the transition is invalid.
+func (m *JobMeta) TransitionTo(newStatus JobStatus) error {
+	if err := ValidateTransition(m.Status, newStatus); err != nil {
+		return err
+	}
+	m.Status = newStatus
+	m.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
 // NewProcessingJob creates a new ProcessingJob in QUEUED status.
 func NewProcessingJob(jobID, documentID, fileURL string) *ProcessingJob {
 	now := time.Now().UTC()

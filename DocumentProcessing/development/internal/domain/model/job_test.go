@@ -147,6 +147,99 @@ func TestComparisonJob_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProcessingJob_TransitionTo_ValidTransitions(t *testing.T) {
+	valid := []struct {
+		from JobStatus
+		to   JobStatus
+	}{
+		{StatusQueued, StatusInProgress},
+		{StatusQueued, StatusRejected},
+		{StatusInProgress, StatusCompleted},
+		{StatusInProgress, StatusCompletedWithWarnings},
+		{StatusInProgress, StatusFailed},
+		{StatusInProgress, StatusTimedOut},
+		{StatusInProgress, StatusRejected},
+	}
+
+	for _, tc := range valid {
+		t.Run(string(tc.from)+"->"+string(tc.to), func(t *testing.T) {
+			job := NewProcessingJob("job-1", "doc-1", "https://example.com/file.pdf")
+			job.Status = tc.from
+			beforeTransition := job.UpdatedAt
+
+			// Small sleep to ensure UpdatedAt changes.
+			time.Sleep(time.Millisecond)
+
+			if err := job.TransitionTo(tc.to); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if job.Status != tc.to {
+				t.Errorf("Status = %q, want %q", job.Status, tc.to)
+			}
+			if !job.UpdatedAt.After(beforeTransition) {
+				t.Error("UpdatedAt should be updated after transition")
+			}
+		})
+	}
+}
+
+func TestProcessingJob_TransitionTo_InvalidTransitions(t *testing.T) {
+	invalid := []struct {
+		from JobStatus
+		to   JobStatus
+	}{
+		{StatusQueued, StatusCompleted},
+		{StatusQueued, StatusFailed},
+		{StatusInProgress, StatusQueued},
+		{StatusCompleted, StatusInProgress},
+		{StatusFailed, StatusCompleted},
+		{StatusTimedOut, StatusInProgress},
+		{StatusRejected, StatusQueued},
+	}
+
+	for _, tc := range invalid {
+		t.Run(string(tc.from)+"->"+string(tc.to), func(t *testing.T) {
+			job := NewProcessingJob("job-1", "doc-1", "https://example.com/file.pdf")
+			job.Status = tc.from
+			originalStatus := job.Status
+			originalUpdatedAt := job.UpdatedAt
+
+			if err := job.TransitionTo(tc.to); err == nil {
+				t.Errorf("expected error for transition %s -> %s, got nil", tc.from, tc.to)
+			}
+			if job.Status != originalStatus {
+				t.Errorf("Status changed to %q on error, should remain %q", job.Status, originalStatus)
+			}
+			if !job.UpdatedAt.Equal(originalUpdatedAt) {
+				t.Error("UpdatedAt should not change on failed transition")
+			}
+		})
+	}
+}
+
+func TestComparisonJob_TransitionTo(t *testing.T) {
+	job := NewComparisonJob("job-1", "doc-1", "ver-1", "ver-2")
+
+	if err := job.TransitionTo(StatusInProgress); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if job.Status != StatusInProgress {
+		t.Errorf("Status = %q, want %q", job.Status, StatusInProgress)
+	}
+
+	if err := job.TransitionTo(StatusCompleted); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if job.Status != StatusCompleted {
+		t.Errorf("Status = %q, want %q", job.Status, StatusCompleted)
+	}
+
+	// Terminal status — no further transitions
+	if err := job.TransitionTo(StatusInProgress); err == nil {
+		t.Error("expected error for transition from terminal status, got nil")
+	}
+}
+
 func TestProcessingJob_JSONOmitsEmptyOptionalFields(t *testing.T) {
 	job := NewProcessingJob("job-1", "doc-1", "https://example.com/file.pdf")
 

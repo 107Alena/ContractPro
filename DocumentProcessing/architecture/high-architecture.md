@@ -381,6 +381,49 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 
 ---
 
+## 3.3.1. Реестр топиков брокера сообщений
+
+Именование топиков следует иерархическому стандарту `{домен}.{тип}.{действие}`.
+
+### DP — входящие команды (Command Consumer подписывается)
+
+| Топик | Описание |
+|-------|----------|
+| `dp.commands.process-document` | Команда на обработку документа (ProcessDocumentRequested) |
+| `dp.commands.compare-versions` | Команда на сравнение версий (CompareDocumentVersionsRequested) |
+
+### DP → DM — артефакты и запросы (DM Outbound Adapter публикует)
+
+| Топик | Описание |
+|-------|----------|
+| `dp.artifacts.processing-ready` | Артефакты обработки готовы (DocumentProcessingArtifactsReady) |
+| `dp.requests.semantic-tree` | Запрос semantic tree версии (GetSemanticTreeRequest) |
+| `dp.artifacts.diff-ready` | Результат сравнения версий готов (DocumentVersionDiffReady) |
+
+### DM → DP — ответы (DM Inbound Adapter подписывается)
+
+| Топик | Описание |
+|-------|----------|
+| `dm.responses.artifacts-persisted` | Артефакты успешно сохранены (DocumentProcessingArtifactsPersisted) |
+| `dm.responses.artifacts-persist-failed` | Ошибка сохранения артефактов (DocumentProcessingArtifactsPersistFailed) |
+| `dm.responses.semantic-tree-provided` | Semantic tree предоставлен (SemanticTreeProvided) |
+| `dm.responses.diff-persisted` | Результат сравнения сохранён (DocumentVersionDiffPersisted) |
+| `dm.responses.diff-persist-failed` | Ошибка сохранения результата сравнения (DocumentVersionDiffPersistFailed) |
+
+### DP → внешние потребители (Event Publisher публикует)
+
+| Топик | Описание |
+|-------|----------|
+| `dp.events.status-changed` | Изменение статуса задачи (StatusChangedEvent) |
+| `dp.events.processing-completed` | Обработка завершена успешно (ProcessingCompletedEvent) |
+| `dp.events.processing-failed` | Обработка завершена с ошибкой (ProcessingFailedEvent) |
+| `dp.events.comparison-completed` | Сравнение завершено успешно (ComparisonCompletedEvent) |
+| `dp.events.comparison-failed` | Сравнение завершено с ошибкой (ComparisonFailedEvent) |
+
+Все имена топиков конфигурируются через переменные окружения (см. `DocumentProcessing/architecture/configuration.md`).
+
+---
+
 ## 3.4. Описание поведения системы
 
 ### 3.4.1. Сценарий "Инициализация системы"
@@ -393,15 +436,16 @@ Document Processing (DP) — stateless-домен, отвечающий за:
    * настройки Yandex Object Storage;
    * настройки OCR-интеграции;
    * настройки retry/DLQ;
-   * настройки Idempotency Guard (TTL, backend).
+   * настройки Idempotency Guard (TTL, backend);
+   * настройки HTTP-сервера (health/readiness probes).
 3. Инициализация подключений:
    * к брокеру сообщений,
    * к Yandex Object Storage,
    * к Yandex Cloud Vision OCR (healthcheck),
    * к key-value store (Idempotency Guard),
    * к системе observability.
-4. Command Consumer подписывается на команды: `ProcessDocumentRequested`, `CompareDocumentVersionsRequested`.
-5. DM Inbound Adapter подписывается на ответы: `DocumentProcessingArtifactsPersisted`, `DocumentProcessingArtifactsPersistFailed`, `SemanticTreeProvided`, `DocumentVersionDiffPersisted`, `DocumentVersionDiffPersistFailed`.
+4. Command Consumer подписывается на команды: `dp.commands.process-document`, `dp.commands.compare-versions`.
+5. DM Inbound Adapter подписывается на ответы: `dm.responses.artifacts-persisted`, `dm.responses.artifacts-persist-failed`, `dm.responses.semantic-tree-provided`, `dm.responses.diff-persisted`, `dm.responses.diff-persist-failed`.
 6. Система переводится в состояние readiness.
 7. Начинается потребление сообщений.
 

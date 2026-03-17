@@ -1,0 +1,998 @@
+{
+  "agent_instructions": {
+    "before_start": [
+      "Прочитай этот файл и git log --oneline -20",
+      "Выбери ОДНУ задачу со статусом pending и наивысшим приоритетом",
+      "Проверь, что все dependencies этой задачи имеют статус done"
+    ],
+    "during_work": [
+      "Работай только над выбранной задачей",
+      "Делай коммиты после каждого логического изменения",
+      "Не трогай код, не связанный с текущей задачей"
+    ],
+    "before_finish": [
+      "Выполни ВСЕ test_steps из задачи",
+      "Меняй status на done ТОЛЬКО после успешного прохождения всех тестов",
+      "Напиши summary в progress.md",
+      "ЗАПРЕЩЕНО удалять или редактировать задачи — только менять status"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Инициализация Go-модуля и структуры проекта Document Processing",
+      "acceptance_criteria": [
+        "Создан go.mod с именем модуля contractpro/document-processing",
+        "Создана полная структура каталогов: cmd/dp-worker/, internal/config/, internal/domain/model/, internal/domain/port/, internal/ingress/consumer/, internal/ingress/idempotency/, internal/application/processing/, internal/application/comparison/, internal/application/lifecycle/, internal/application/warning/, internal/engine/validator/, internal/engine/fetcher/, internal/engine/ocr/, internal/engine/textextract/, internal/engine/structure/, internal/engine/semantictree/, internal/engine/comparison/, internal/egress/dm/, internal/egress/publisher/, internal/egress/storage/, internal/infra/broker/, internal/infra/kvstore/, internal/infra/objectstorage/, internal/infra/ocr/, internal/infra/concurrency/, internal/infra/observability/, internal/pdf/",
+        "Создан Makefile с целями build, test, lint",
+        "go mod tidy выполняется без ошибок"
+      ],
+      "test_steps": [
+        "Шаг 1: cd DocumentProcessing/development && go mod tidy",
+        "Шаг 2: make build должен выполняться без ошибок (пустой main.go с package main)",
+        "Шаг 3: make test должен выполняться (даже если тестов ещё нет)",
+        "Шаг 4: проверить наличие всех каталогов через ls -R"
+      ],
+      "dependencies": [],
+      "status": "done",
+      "completed_at": "2026-03-12",
+      "summary": "Go module initialized (contractpro/document-processing), 26+ directories created, Makefile with build/test/lint targets, minimal main.go. All test_steps passed."
+    },
+    {
+      "id": "TASK-002",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Доменные модели: задачи и статусы (ProcessingJob, ComparisonJob, JobStatus, JobStage)",
+      "acceptance_criteria": [
+        "Определены типы ProcessingJob и ComparisonJob с полями из архитектуры (job_id, document_id, file_url, status, stage, timestamps)",
+        "Определены enum-типы JobStatus (QUEUED, IN_PROGRESS, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, TIMED_OUT, REJECTED)",
+        "Определены enum-типы JobStage для processing pipeline и comparison pipeline",
+        "Определены правила валидных переходов между статусами как константы/map",
+        "Написаны unit-тесты на валидность переходов статусов"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... — все тесты проходят",
+        "Шаг 2: проверить, что невалидные переходы (например COMPLETED → IN_PROGRESS) возвращают ошибку",
+        "Шаг 3: проверить, что все 7 внешних статусов определены"
+      ],
+      "dependencies": ["TASK-001"],
+      "status": "done",
+      "completed_at": "2026-03-14",
+      "summary": "Определены типы JobStatus (7 string-констант), ProcessingStage (11 констант), ComparisonStage (6 констант), JobMeta (embedded), ProcessingJob, ComparisonJob. Карта валидных переходов с ValidateTransition() и IsTerminal(). 55 unit-тестов: все 49 комбинаций переходов, IsTerminal, конструкторы, JSON round-trip."
+    },
+    {
+      "id": "TASK-003",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Доменные модели: сущности документа (InputDocumentReference, ExtractedText, DocumentStructure, OCRRawArtifact)",
+      "acceptance_criteria": [
+        "Определён InputDocumentReference (document_id, file_name, file_size, mime_type, checksum)",
+        "Определён ExtractedText (document_id, text, pages[])",
+        "Определён DocumentStructure с типами Section, Clause, SubClause, Appendix, PartyDetails",
+        "Определён OCRRawArtifact с полем raw_text и статусом (applicable/not_applicable)",
+        "Все структуры имеют JSON-теги для сериализации"
+      ],
+      "test_steps": [
+        "Шаг 1: go build ./internal/domain/model/... — компилируется без ошибок",
+        "Шаг 2: проверить JSON-сериализацию/десериализацию для каждой структуры через тесты"
+      ],
+      "dependencies": ["TASK-001"],
+      "status": "done",
+      "completed_at": "2026-03-15",
+      "summary": "Определены InputDocumentReference, ExtractedText (Pages + FullText() без дублирования), DocumentStructure (Section, Clause, SubClause, Appendix, PartyDetails), OCRRawArtifact (с OCRStatus enum: applicable/not_applicable). Все структуры с JSON-тегами и omitempty для опциональных полей. 22 unit-теста: JSON round-trip, omitempty-проверки, FullText() с table-driven тестами, тест OCR-констант."
+    },
+    {
+      "id": "TASK-004",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Доменные модели: SemanticTree, ProcessingWarning, VersionDiffResult, TemporaryArtifacts",
+      "acceptance_criteria": [
+        "Определён SemanticTree с типами узлов (RootNode, SectionNode, ClauseNode, TextNode, AppendixNode, PartyDetailsNode)",
+        "Определён ProcessingWarning (code, message, stage) — согласовано: вместо source_component используется Stage (тип ProcessingStage) для type safety",
+        "Определён VersionDiffResult (text_diff_entries[], structural_diff_entries[])",
+        "Определён TemporaryArtifacts (job_id, storage_keys[])"
+      ],
+      "test_steps": [
+        "Шаг 1: go build ./internal/domain/model/... — компилируется",
+        "Шаг 2: создать тестовое семантическое дерево в тесте и проверить обход (traversal)"
+      ],
+      "dependencies": ["TASK-001"],
+      "status": "done",
+      "completed_at": "2026-03-15",
+      "summary": "Определены SemanticTree (NodeType enum 6 типов, SemanticNode с Children/Metadata, Walk() depth-first traversal), ProcessingWarning (code, message, stage — Stage вместо source_component для type safety), VersionDiffResult (TextDiffEntry, StructuralDiffEntry с общим DiffType enum), TemporaryArtifacts (job_id, storage_keys + AddKey/HasKeys). 22 unit-теста: JSON round-trip, omitempty, Walk traversal/early-stop/nil-root, константы. Итого 99 тестов в пакете model."
+    },
+    {
+      "id": "TASK-005",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Доменные модели: команды и события (ProcessDocumentCommand, CompareVersionsCommand, все event-типы)",
+      "acceptance_criteria": [
+        "Определён ProcessDocumentCommand (job_id, document_id, file_url, organization_id, requested_by_user_id, file_name, file_size, mime_type, checksum)",
+        "Определён CompareVersionsCommand (job_id, document_id, base_version_id, target_version_id, organization_id, requested_by_user_id)",
+        "Определены события: DocumentProcessingArtifactsReady, DocumentProcessingArtifactsPersisted, DocumentProcessingArtifactsPersistFailed, GetSemanticTreeRequest, SemanticTreeProvided, DocumentVersionDiffReady, StatusChangedEvent, ProcessingCompletedEvent, ComparisonCompletedEvent",
+        "Все события содержат correlation_id и timestamp"
+      ],
+      "test_steps": [
+        "Шаг 1: go build ./internal/domain/model/... — компилируется",
+        "Шаг 2: JSON-сериализация/десериализация для каждой команды и события работает корректно"
+      ],
+      "dependencies": ["TASK-001"],
+      "status": "done",
+      "completed_at": "2026-03-15",
+      "summary": "Определены 2 команды (ProcessDocumentCommand, CompareVersionsCommand) и 13 событий. Оригинальные 9 событий + 4 дополнительных: ProcessingFailedEvent, ComparisonFailedEvent (error_code, error_message, failed_at_stage, is_retryable), DocumentVersionDiffPersisted, DocumentVersionDiffPersistFailed. EventMeta embedded struct (correlation_id, timestamp). is_retryable во всех 4 error-событиях. 22 unit-теста, итого 121 тест в пакете model."
+    },
+    {
+      "id": "TASK-006",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Определение всех port-интерфейсов (inbound и outbound) — контракты между слоями",
+      "acceptance_criteria": [
+        "Определены inbound-порты: ProcessingCommandHandler, ComparisonCommandHandler, DMResponseHandler",
+        "Определены outbound-порты: TempStoragePort, SourceFileDownloaderPort, OCRServicePort, EventPublisherPort, DMArtifactSenderPort, DMTreeRequesterPort, IdempotencyStorePort, ConcurrencyLimiterPort",
+        "Определены engine-порты: InputValidatorPort, SourceFileFetcherPort, TextExtractionPort, StructureExtractionPort, SemanticTreeBuilderPort, VersionComparisonPort",
+        "Все интерфейсы используют context.Context первым параметром",
+        "Все интерфейсы возвращают ошибки с типизированными domain-ошибками"
+      ],
+      "test_steps": [
+        "Шаг 1: go build ./internal/domain/port/... — компилируется",
+        "Шаг 2: go vet ./internal/domain/... — нет предупреждений"
+      ],
+      "dependencies": ["TASK-002", "TASK-003", "TASK-004", "TASK-005"],
+      "status": "done",
+      "completed_at": "2026-03-15",
+      "summary": "Определены 3 inbound-порта (ProcessingCommandHandler, ComparisonCommandHandler, DMResponseHandler с 5 методами), 8 outbound-портов (TempStoragePort, SourceFileDownloaderPort, OCRServicePort, EventPublisherPort с 5 методами, DMArtifactSenderPort, DMTreeRequesterPort, IdempotencyStorePort с IdempotencyStatus enum, ConcurrencyLimiterPort), 6 engine-портов (InputValidatorPort, SourceFileFetcherPort с FetchResult, TextExtractionPort, StructureExtractionPort, SemanticTreeBuilderPort, VersionComparisonPort). Типизированные доменные ошибки: DomainError struct (Code, Message, Retryable, Cause), 13 констант кодов, 13 конструкторов, 3 хелпера (IsDomainError, IsRetryable, ErrorCode). 55 unit-тестов для errors.go. Все context.Context первым параметром, go vet без предупреждений."
+    },
+    {
+      "id": "TASK-007",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Модуль конфигурации — загрузка и валидация параметров из переменных окружения",
+      "acceptance_criteria": [
+        "Определена структура Config со всеми параметрами: BrokerConfig, StorageConfig, OCRConfig, LimitsConfig (max_file_size=20MB, max_pages=100, job_timeout=120s), ConcurrencyConfig (max_concurrent_jobs), IdempotencyConfig (ttl), ObservabilityConfig",
+        "Реализована загрузка из переменных окружения с значениями по умолчанию",
+        "Реализована валидация обязательных параметров при старте",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/config/... — все тесты проходят",
+        "Шаг 2: проверить, что отсутствие обязательного параметра возвращает понятную ошибку",
+        "Шаг 3: проверить, что значения по умолчанию применяются корректно"
+      ],
+      "dependencies": ["TASK-001"],
+      "status": "done",
+      "completed_at": "2026-03-15",
+      "summary": "Определена структура Config с 9 вложенными конфигурациями: BrokerConfig (Address + 15 топиков с иерархическим именованием dp.*/dm.*), StorageConfig (Yandex Object Storage, 5 полей), OCRConfig (Yandex Vision, 4 поля), LimitsConfig (20MB/100 стр/120s), ConcurrencyConfig (max_concurrent_jobs=5), IdempotencyConfig (TTL=24h), ObservabilityConfig (log/metrics/tracing), HTTPConfig (port=8080), RetryConfig (max_attempts=3, backoff_base=1s). Загрузка через os.Getenv с DP_ префиксом, без внешних зависимостей. Агрегированная валидация 8 обязательных полей. 11 тестов (55 подтестов). Создана документация: architecture/configuration.md (инструкция по конфигурации), обновлён high-architecture.md (раздел 3.3.1 — реестр топиков)."
+    },
+    {
+      "id": "TASK-008",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Инфраструктурный клиент брокера сообщений — подключение, publish/subscribe",
+      "acceptance_criteria": [
+        "Реализован клиент брокера с методами Publish(topic, payload) и Subscribe(topic, handler)",
+        "Поддержка переподключения при обрыве соединения",
+        "Определены константы всех топиков/очередей (dp.commands.process, dp.commands.compare, dp.events.status, dm.artifacts, dm.responses и т.д.)",
+        "Реализован graceful shutdown (закрытие подписок и соединений)",
+        "Написаны unit-тесты с mock-брокером"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/broker/... — тесты проходят",
+        "Шаг 2: проверить, что Publish и Subscribe корректно сериализуют/десериализуют сообщения",
+        "Шаг 3: проверить graceful shutdown"
+      ],
+      "dependencies": ["TASK-001", "TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-009",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Инфраструктурный клиент KV-store — для Idempotency Guard",
+      "acceptance_criteria": [
+        "Реализован KV-клиент с методами Set(key, value, TTL), Get(key), Exists(key)",
+        "Поддержка connection pooling",
+        "Реализован graceful shutdown",
+        "Написаны unit-тесты с in-memory реализацией"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/kvstore/... — тесты проходят",
+        "Шаг 2: проверить TTL-поведение (ключ исчезает после TTL)",
+        "Шаг 3: проверить конкурентный доступ"
+      ],
+      "dependencies": ["TASK-001", "TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-010",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Инфраструктурный клиент Yandex Object Storage — для временных артефактов",
+      "acceptance_criteria": [
+        "Реализован клиент с методами Upload(key, reader), Download(key), Delete(key), DeleteByPrefix(prefix)",
+        "Поддержка S3-совместимого API (Yandex Object Storage)",
+        "Написаны unit-тесты с mock-хранилищем",
+        "Обработка ошибок: timeout, не найден, нет доступа"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/objectstorage/... — тесты проходят",
+        "Шаг 2: проверить Upload → Download цикл в тестах",
+        "Шаг 3: проверить DeleteByPrefix удаляет все ключи с данным префиксом"
+      ],
+      "dependencies": ["TASK-001", "TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-011",
+      "category": "integration",
+      "priority": "high",
+      "description": "Инфраструктурный клиент Yandex Cloud Vision OCR — HTTP-клиент для распознавания",
+      "acceptance_criteria": [
+        "Реализован HTTP/gRPC-клиент для Yandex Cloud Vision OCR API",
+        "Сериализация запроса (PDF → base64) и десериализация ответа",
+        "Обработка ошибок OCR-сервиса: rate limit, timeout, server error",
+        "Маппинг ошибок OCR в доменные ошибки",
+        "Написаны unit-тесты с mock HTTP-сервером"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/ocr/... — тесты проходят",
+        "Шаг 2: проверить обработку HTTP 429 (rate limit) в тестах",
+        "Шаг 3: проверить обработку HTTP 500 (server error)"
+      ],
+      "dependencies": ["TASK-001", "TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-012",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Observability SDK — структурированное логирование, метрики, трейсинг",
+      "acceptance_criteria": [
+        "Реализован структурированный логгер с полями job_id, document_id, correlation_id, stage",
+        "Определён реестр метрик Prometheus: dp_job_duration_seconds, dp_job_status_total, dp_ocr_duration_seconds, dp_concurrent_jobs_active, dp_file_size_bytes",
+        "Настроен OpenTelemetry tracing с propagation context",
+        "Написаны примеры использования в тестах"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/observability/... — тесты проходят",
+        "Шаг 2: проверить, что логгер выводит JSON с нужными полями",
+        "Шаг 3: проверить, что метрики регистрируются без конфликтов"
+      ],
+      "dependencies": ["TASK-001", "TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-013",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Concurrency Limiter — семафор для ограничения одновременных задач на экземпляре",
+      "acceptance_criteria": [
+        "Реализован семафор с настраиваемым max_concurrent_jobs",
+        "Реализованы методы Acquire(ctx) и Release()",
+        "Acquire блокируется при достижении лимита и уважает context cancellation",
+        "Метрики: active_jobs, waiting_jobs",
+        "Написаны unit-тесты на конкурентный доступ"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/infra/concurrency/... — тесты проходят без race conditions",
+        "Шаг 2: проверить, что Acquire блокируется при полном семафоре",
+        "Шаг 3: проверить, что Release освобождает слот и разблокирует ожидающего",
+        "Шаг 4: проверить cancellation через context"
+      ],
+      "dependencies": ["TASK-001", "TASK-007", "TASK-012"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-014",
+      "category": "functional",
+      "priority": "high",
+      "description": "PDF-утилита — определение типа PDF (text/scan), подсчёт страниц, валидация формата",
+      "acceptance_criteria": [
+        "Реализовано определение text-PDF vs scan-PDF",
+        "Реализован подсчёт страниц документа",
+        "Реализована валидация файла как PDF (magic bytes 25504446)",
+        "Реализовано извлечение текста из text-layer PDF",
+        "Написаны unit-тесты с тестовыми PDF-файлами"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/pdf/... — тесты проходят",
+        "Шаг 2: проверить определение text-PDF на тестовом файле",
+        "Шаг 3: проверить определение scan-PDF на тестовом файле",
+        "Шаг 4: проверить, что non-PDF файл отклоняется"
+      ],
+      "dependencies": ["TASK-001"],
+      "status": "done",
+      "completed_at": "2026-03-17",
+      "summary": "Util в internal/pdf/pdf.go. Stateless struct, конструктор NewUtil(). Библиотека pdfcpu (pure Go, Apache 2.0). IsValidPDF(io.Reader) — проверка magic bytes %PDF (4 байта). Analyze(io.ReadSeeker) — возвращает Info{PageCount, IsTextPDF}: парсинг через pdfcpu api.ReadAndValidate, извлечение текста со всех страниц, IsTextPDF=true только если ВСЕ страницы содержат текст. ExtractText(io.ReadSeeker) — постраничное извлечение текста, парсинг BT/ET блоков content stream, операторы Tj/TJ/'/\". Sentinel errors: ErrInvalidPDF, ErrEmptyReader. Тестовые PDF генерируются программно (generateTextPDF, generateEmptyPagePDF, generateMixedPDF). 22 теста с -race: IsValidPDF (5 table-driven + nil), Analyze (single/multi text, scan, mixed, corrupted, nil), ExtractText (single/multi, scan, corrupted, ordering, nil), internal helpers (decodePDFString 5, extractBTETBlocks 3, parseTextFromContentStream 4), constructor."
+    },
+    {
+      "id": "TASK-015",
+      "category": "functional",
+      "priority": "high",
+      "description": "Command Consumer — получение и десериализация команд из брокера с валидацией контракта",
+      "acceptance_criteria": [
+        "Реализована подписка на топики ProcessDocumentRequested и CompareDocumentVersionsRequested",
+        "Реализована десериализация JSON в доменные команды",
+        "Реализована первичная валидация контракта: проверка обязательных полей (job_id, document_id, file_url / base_version_id+target_version_id)",
+        "При невалидном сообщении — ack (не возвращать в очередь) + лог ошибки",
+        "Маршрутизация на правильный handler (processing / comparison)",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/consumer/... — тесты проходят",
+        "Шаг 2: проверить десериализацию валидной команды ProcessDocumentRequested",
+        "Шаг 3: проверить отклонение сообщения без обязательного поля job_id",
+        "Шаг 4: проверить маршрутизацию на processing и comparison handlers"
+      ],
+      "dependencies": ["TASK-005", "TASK-006", "TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-016",
+      "category": "functional",
+      "priority": "high",
+      "description": "Idempotency Guard — проверка дедупликации задач по job_id через KV-store",
+      "acceptance_criteria": [
+        "Реализована проверка job_id в KV-store перед обработкой",
+        "При уже завершённой задаче — ack без обработки",
+        "При задаче в процессе — ack без обработки",
+        "При новой задаче — регистрация job_id и передача дальше",
+        "TTL ключа настраивается через конфигурацию",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/idempotency/... — тесты проходят",
+        "Шаг 2: проверить, что новый job_id проходит guard",
+        "Шаг 3: проверить, что повторный job_id отклоняется",
+        "Шаг 4: проверить обновление статуса при завершении задачи"
+      ],
+      "dependencies": ["TASK-006", "TASK-009"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-017",
+      "category": "integration",
+      "priority": "high",
+      "description": "Интеграция Ingress-слоя: Consumer → Idempotency Guard → Concurrency Limiter → dispatch",
+      "acceptance_criteria": [
+        "Command Consumer передаёт валидные команды через Idempotency Guard",
+        "Idempotency Guard передаёт новые задачи через Concurrency Limiter",
+        "Concurrency Limiter делает nack без retry penalty при отсутствии слотов",
+        "При наличии слота — dispatch на соответствующий оркестратор",
+        "Корректная обработка ошибок на каждом этапе",
+        "Написаны integration-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/... — тесты проходят",
+        "Шаг 2: отправить валидную команду → проверить, что она дошла до оркестратора (mock)",
+        "Шаг 3: отправить дублирующую команду → проверить, что она отклонена",
+        "Шаг 4: заполнить все слоты и отправить команду → проверить nack"
+      ],
+      "dependencies": ["TASK-013", "TASK-015", "TASK-016"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-018",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Job Status State Machine — машина состояний для переходов между внешними статусами",
+      "acceptance_criteria": [
+        "Определены все валидные переходы между внешними статусами JobStatus",
+        "Метод Transition(from, to) → error при невалидном переходе",
+        "Метод IsTerminal(status) → bool (COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, TIMED_OUT, REJECTED)",
+        "100% покрытие тестами всех переходов (валидных и невалидных)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/lifecycle/... — тесты проходят",
+        "Шаг 2: проверить все валидные переходы: QUEUED→IN_PROGRESS, IN_PROGRESS→COMPLETED и т.д.",
+        "Шаг 3: проверить невалидные переходы: COMPLETED→IN_PROGRESS, FAILED→COMPLETED и т.д.",
+        "Шаг 4: проверить IsTerminal для каждого статуса"
+      ],
+      "dependencies": ["TASK-002"],
+      "status": "done",
+      "completed_at": "2026-03-15",
+      "summary": "Вместо отдельного StateMachine struct реализован метод TransitionTo(newStatus) на JobMeta (embedded в ProcessingJob и ComparisonJob). Валидация перехода через ValidateTransition(), обновление Status и UpdatedAt при успехе. Отдельный пакет application/lifecycle не создан — логика state machine интегрирована в domain model, что исключает бесполезную обёртку. 17 новых подтестов (7 valid transitions, 7 invalid transitions, 3 ComparisonJob transitions). Все test_steps пройдены."
+    },
+    {
+      "id": "TASK-019",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Job Lifecycle Manager — управление жизненным циклом задачи, таймауты, cleanup",
+      "acceptance_criteria": [
+        "Использует State Machine для переходов статусов",
+        "Контроль таймаута 120 сек через context.WithTimeout",
+        "Публикация статусных событий через EventPublisherPort при каждом переходе",
+        "Вызов cleanup callback при переходе в терминальный статус",
+        "Обновление Idempotency Guard при завершении задачи",
+        "Написаны unit-тесты с mock-зависимостями"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/lifecycle/... — тесты проходят",
+        "Шаг 2: проверить, что при переходе в IN_PROGRESS публикуется событие",
+        "Шаг 3: проверить, что при таймауте статус переходит в TIMED_OUT",
+        "Шаг 4: проверить, что cleanup вызывается при терминальном статусе"
+      ],
+      "dependencies": ["TASK-006", "TASK-018"],
+      "status": "done",
+      "completed_at": "2026-03-15",
+      "summary": "LifecycleManager в internal/application/lifecycle/manager.go. ManagedJob интерфейс (GetJobMeta, GetDocumentID, GetStage) реализован на ProcessingJob и ComparisonJob. CleanupFunc передаётся в конструктор (принимает ctx + jobID). TransitionJob(ctx, job, newStatus): transition → publish StatusChangedEvent → на terminal: cleanup (best-effort) + idempotency.MarkCompleted. NewJobContext — context.WithTimeout(jobTimeout). 13 unit-тестов с mock EventPublisherPort и IdempotencyStorePort."
+    },
+    {
+      "id": "TASK-020",
+      "category": "functional",
+      "priority": "high",
+      "description": "Warning Collector — потокобезопасная агрегация предупреждений от компонентов pipeline",
+      "acceptance_criteria": [
+        "Потокобезопасный Add(warning ProcessingWarning)",
+        "Метод Collect() возвращает все собранные warnings",
+        "Метод Reset() очищает коллектор для повторного использования",
+        "Метод HasWarnings() → bool",
+        "Написаны unit-тесты на конкурентный доступ"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/application/warning/... — тесты проходят без race conditions",
+        "Шаг 2: проверить добавление и получение warnings из нескольких goroutine",
+        "Шаг 3: проверить Reset() очищает все warnings"
+      ],
+      "dependencies": ["TASK-004"],
+      "status": "done",
+      "completed_at": "2026-03-16",
+      "summary": "Collector в internal/application/warning/collector.go. Struct с sync.Mutex + []ProcessingWarning. NewCollector() конструктор. Add(w) — потокобезопасный append. Collect() — возвращает копию слайса (nil при пустом). Reset() — очистка. HasWarnings() — проверка наличия. 7 тестов: add/collect single+multiple, HasWarnings empty/non-empty, Reset, Collect returns copy (mutation safety), empty returns nil, 100 concurrent Add, 100 concurrent Add+Collect+HasWarnings. Все тесты проходят с -race."
+    },
+    {
+      "id": "TASK-021",
+      "category": "functional",
+      "priority": "high",
+      "description": "Pending Response Registry — отслеживание и корреляция асинхронных ответов от DM",
+      "acceptance_criteria": [
+        "Метод Register(jobID, expectedCorrelationIDs[]) — регистрация ожидаемых ответов",
+        "Метод Receive(correlationID, response) — получение ответа и корреляция с job",
+        "Уведомление через callback/channel при получении всех ожидаемых ответов",
+        "Настраиваемый таймаут на каждый отдельный ответ",
+        "Обработка ошибочных ответов (версия не найдена)",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/egress/dm/... — тесты проходят",
+        "Шаг 2: зарегистрировать 2 ожидания → получить оба → проверить уведомление",
+        "Шаг 3: зарегистрировать 2 ожидания → получить только 1 → проверить таймаут",
+        "Шаг 4: проверить обработку ответа с ошибкой (version not found)"
+      ],
+      "dependencies": ["TASK-005", "TASK-006"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-022",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Input Validator — валидация метаданных команды до скачивания файла (FR-1.1.1)",
+      "acceptance_criteria": [
+        "Проверка заявленного размера файла ≤ 20 МБ",
+        "Проверка mime-type = application/pdf",
+        "Проверка наличия обязательных полей (document_id, file_url)",
+        "При нарушении — возврат типизированной ошибки ValidationError с описанием",
+        "Результат валидации: REJECTED или OK",
+        "Написаны unit-тесты для каждого правила"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/engine/validator/... — тесты проходят",
+        "Шаг 2: проверить отклонение файла > 20 МБ",
+        "Шаг 3: проверить отклонение файла с mime-type text/plain",
+        "Шаг 4: проверить прохождение валидной команды"
+      ],
+      "dependencies": ["TASK-002", "TASK-005", "TASK-006"],
+      "status": "done",
+      "completed_at": "2026-03-15",
+      "summary": "Validator в internal/engine/validator/validator.go. Struct с полями maxFileSize (int64) и allowedMimeType (string) — конфигурируется через конструктор NewValidator(). Validate(ctx, cmd) проверяет 4 правила по порядку: document_id required, file_url required, file_size ≤ limit (если заявлен), mime_type == allowed (если заявлен). Возвращает типизированные DomainError (VALIDATION_ERROR, FILE_TOO_LARGE, INVALID_FORMAT). Compile-time проверка реализации InputValidatorPort. 10 table-driven тестов: valid, empty document_id, empty file_url, size exceeds, size at limit, size zero, invalid mime, empty mime, correct mime, priority check."
+    },
+    {
+      "id": "TASK-023",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Source File Fetcher — скачивание PDF по URL, проверка размера при скачивании",
+      "acceptance_criteria": [
+        "HTTP GET по file_url с настраиваемым таймаутом",
+        "Потоковое скачивание с проверкой размера ≤ 20 МБ (прерывание при превышении)",
+        "Проверка HTTP-статуса ответа (200 OK)",
+        "Сохранение файла во временное хранилище",
+        "Обработка ошибок: timeout, недоступен, ошибка сервера",
+        "Написаны unit-тесты с mock HTTP-сервером"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/engine/fetcher/... — тесты проходят",
+        "Шаг 2: проверить скачивание файла ≤ 20 МБ — успех",
+        "Шаг 3: проверить прерывание скачивания файла > 20 МБ",
+        "Шаг 4: проверить обработку HTTP 404"
+      ],
+      "dependencies": ["TASK-006", "TASK-010"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-024",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Source File Fetcher — валидация скачанного файла (формат PDF, кол-во страниц ≤ 100)",
+      "acceptance_criteria": [
+        "Проверка скачанного файла: magic bytes PDF (25504446)",
+        "Подсчёт страниц через pdf/reader и проверка ≤ 100",
+        "Загрузка валидного файла во временное хранилище и возврат temp_storage_key",
+        "При нарушении ограничений — REJECTED + cleanup скачанного файла",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/engine/fetcher/... — тесты проходят",
+        "Шаг 2: проверить принятие валидного PDF ≤ 100 страниц",
+        "Шаг 3: проверить отклонение не-PDF файла",
+        "Шаг 4: проверить отклонение PDF > 100 страниц"
+      ],
+      "dependencies": ["TASK-014", "TASK-023"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-025",
+      "category": "functional",
+      "priority": "high",
+      "description": "OCR Integration Adapter — определение необходимости OCR и маршрутизация",
+      "acceptance_criteria": [
+        "Определение text-PDF vs scan-PDF через pdf/reader",
+        "Для text-PDF: возврат OCRRawArtifact с status=not_applicable, пропуск OCR",
+        "Для scan-PDF: передача на OCR-обработку",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/engine/ocr/... — тесты проходят",
+        "Шаг 2: подать text-PDF → проверить, что OCR не вызывается, статус not_applicable",
+        "Шаг 3: подать scan-PDF → проверить, что OCR вызывается"
+      ],
+      "dependencies": ["TASK-006", "TASK-014"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-026",
+      "category": "functional",
+      "priority": "high",
+      "description": "OCR Integration Adapter — вызов Yandex Vision OCR с rate limiter и обработкой warnings (FR-1.2.1, FR-1.2.2)",
+      "acceptance_criteria": [
+        "Вызов Yandex Cloud Vision OCR через инфраструктурный клиент",
+        "Rate limiter (token bucket) с настраиваемым RPS (ocr_rps_limit)",
+        "Формирование warnings при частичном распознавании → Warning Collector",
+        "Формирование warnings при низком качестве распознавания",
+        "Обработка ошибок OCR-сервиса: retry для retryable, FAILED для non-retryable",
+        "Возврат OCRRawArtifact с raw_text",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/engine/ocr/... — тесты проходят",
+        "Шаг 2: проверить вызов OCR и получение результата",
+        "Шаг 3: проверить формирование warning при частичном распознавании",
+        "Шаг 4: проверить, что rate limiter ограничивает вызовы"
+      ],
+      "dependencies": ["TASK-011", "TASK-025"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-027",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Text Extraction & Normalization Engine — извлечение и нормализация текста (FR-1.3.1)",
+      "acceptance_criteria": [
+        "Извлечение текста из text-PDF (через pdf/reader) или из OCR-результата",
+        "Нормализация unicode (NFC), удаление мусорных символов",
+        "Обработка пустых страниц → warning",
+        "Формирование ExtractedText с постраничной разбивкой",
+        "Формирование warnings → Warning Collector",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/engine/textextract/... — тесты проходят",
+        "Шаг 2: проверить извлечение текста из text-PDF",
+        "Шаг 3: проверить извлечение текста из OCR-результата",
+        "Шаг 4: проверить формирование warning для пустой страницы",
+        "Шаг 5: проверить нормализацию unicode"
+      ],
+      "dependencies": ["TASK-004", "TASK-006", "TASK-014"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-028",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Structure Extraction Engine — выделение разделов, пунктов, приложений, реквизитов (FR-1.3.1, FR-1.3.2)",
+      "acceptance_criteria": [
+        "Выделение разделов по заголовкам (нумерованные, текстовые)",
+        "Выделение пунктов и подпунктов (1., 1.1., 1.1.1. и т.д.)",
+        "Выделение приложений",
+        "Распознавание блока реквизитов сторон (FR-1.3.2)",
+        "Формирование DocumentStructure с иерархией",
+        "Формирование warnings при невозможности определить структуру → Warning Collector",
+        "Написаны unit-тесты на образцах текста русских договоров"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/engine/structure/... — тесты проходят",
+        "Шаг 2: проверить выделение разделов из образца договора",
+        "Шаг 3: проверить распознавание реквизитов сторон",
+        "Шаг 4: проверить warning при невозможности определить структуру"
+      ],
+      "dependencies": ["TASK-003", "TASK-004", "TASK-006"],
+      "status": "done",
+      "completed_at": "2026-03-16",
+      "summary": "Extractor в internal/engine/structure/extractor.go. Реализует StructureExtractionPort. Regex-based парсинг русских договоров: разделы (^N. Заголовок), пункты (N.N.), подпункты (N.N.N.), приложения (Приложение N), реквизиты сторон (ИНН, ОГРН, адрес, представитель). Поддержка role-label строк (Заказчик:/Исполнитель:), isKnownHeader() для 20+ типовых заголовков. 3 типа warnings: STRUCTURE_EMPTY_TEXT, STRUCTURE_NO_SECTIONS, STRUCTURE_PARTIAL_PARTY_DETAILS. Compile-time проверка var _ StructureExtractionPort. 14 тестов (16 с подтестами): полный договор, только разделы, реквизиты 2 сторон, пустой текст (3 подтеста), без структуры, 3 приложения, 3 стороны, interface check, context cancellation, section с content без clauses, warning stage, partial party details, sub-clauses, multipage документ."
+    },
+    {
+      "id": "TASK-029",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Semantic Tree Builder — построение семантического дерева из текста и структуры",
+      "acceptance_criteria": [
+        "Построение SemanticTree на основе ExtractedText и DocumentStructure",
+        "Корректные parent-child связи между узлами",
+        "Типизация узлов: RootNode, SectionNode, ClauseNode, TextNode, AppendixNode, PartyDetailsNode",
+        "JSON-сериализация дерева для передачи в Document Management",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/engine/semantictree/... — тесты проходят",
+        "Шаг 2: проверить построение дерева из образца DocumentStructure",
+        "Шаг 3: проверить, что все узлы имеют корректные parent-child связи",
+        "Шаг 4: проверить JSON-сериализацию/десериализацию дерева"
+      ],
+      "dependencies": ["TASK-003", "TASK-004", "TASK-006"],
+      "status": "done",
+      "completed_at": "2026-03-17",
+      "summary": "Builder в internal/engine/semantictree/builder.go. Реализует SemanticTreeBuilderPort. Stateless struct, конструктор NewBuilder(). Build(ctx, text, structure) строит дерево из DocumentStructure: Section→SectionNode (metadata: number, title), Clause→ClauseNode (metadata: number, content), SubClause→ClauseNode, Appendix→AppendixNode (metadata: number, title), PartyDetails→PartyDetailsNode (content: name, metadata: name + непустые inn/ogrn/address/representative). Section.Content и Appendix.Content → TextNode дети. ID-схема: root, section-N, clause-N.N, subclause-N.N.N, appendix-N, party-N, text-N (глобальный счётчик). NOTE(v1): параметр ExtractedText принимается по контракту интерфейса, но не используется — дерево строится целиком из DocumentStructure. Compile-time проверка var _ SemanticTreeBuilderPort. 17 тестов с -race: full contract, sections only, empty structure, appendices only, party details only, section with content, section with content+clauses, clause with sub-clauses, JSON round-trip, Walk traversal (DFS pre-order), context cancellation, nil structure, nil text, multiple appendices, unique node IDs, DocumentID from structure, interface compliance."
+    },
+    {
+      "id": "TASK-030",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Version Comparison Engine — текстовый и структурный diff двух версий документа (FR-5.3.1, FR-5.3.2)",
+      "acceptance_criteria": [
+        "Текстовый diff (на уровне абзацев/параграфов): добавленные, удалённые, изменённые блоки",
+        "Структурный diff по SemanticTree: добавленные, удалённые, перемещённые узлы",
+        "Формирование VersionDiffResult с обоими типами diff",
+        "Написаны unit-тесты на различных сценариях"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/engine/comparison/... — тесты проходят",
+        "Шаг 2: сравнить два идентичных документа → пустой diff",
+        "Шаг 3: сравнить документы с добавленным разделом → diff показывает добавление",
+        "Шаг 4: сравнить документы с изменённым пунктом → diff показывает изменение"
+      ],
+      "dependencies": ["TASK-004", "TASK-006"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-031",
+      "category": "functional",
+      "priority": "high",
+      "description": "Temporary Artifact Storage Adapter — работа с временными артефактами в Object Storage",
+      "acceptance_criteria": [
+        "Реализация TempStoragePort: сохранение, чтение, удаление временных артефактов",
+        "Ключи с префиксом job_id для изоляции артефактов задач",
+        "Bulk cleanup по префиксу job_id при завершении задачи",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/storage/... — тесты проходят",
+        "Шаг 2: проверить Upload → Download цикл",
+        "Шаг 3: проверить cleanup по префиксу"
+      ],
+      "dependencies": ["TASK-006", "TASK-010"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-032",
+      "category": "functional",
+      "priority": "high",
+      "description": "Event Publisher — публикация статусных событий и событий завершения",
+      "acceptance_criteria": [
+        "Реализация EventPublisherPort",
+        "Публикация StatusChangedEvent при каждом переходе статуса",
+        "Публикация ProcessingCompletedEvent при COMPLETED/COMPLETED_WITH_WARNINGS",
+        "Публикация ComparisonCompletedEvent при завершении сравнения",
+        "Публикация ProcessingFailedEvent при FAILED/TIMED_OUT/REJECTED обработки документа",
+        "Публикация ComparisonFailedEvent при FAILED/TIMED_OUT сравнения версий",
+        "Сериализация событий в JSON",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/publisher/... — тесты проходят",
+        "Шаг 2: проверить формат JSON-сообщения при публикации статуса",
+        "Шаг 3: проверить, что каждый тип события публикуется в правильный топик",
+        "Шаг 4: проверить, что ProcessingFailedEvent содержит error_code, error_message, failed_at_stage, is_retryable",
+        "Шаг 5: проверить, что ComparisonFailedEvent содержит error_code, error_message, failed_at_stage, is_retryable"
+      ],
+      "dependencies": ["TASK-005", "TASK-006", "TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-033",
+      "category": "integration",
+      "priority": "high",
+      "description": "DM Outbound Adapter — отправка артефактов и запросов в Document Management",
+      "acceptance_criteria": [
+        "Реализация DMArtifactSenderPort и DMTreeRequesterPort",
+        "Сериализация и публикация DocumentProcessingArtifactsReady (с ocr_raw, text, structure, semantic_tree, warnings)",
+        "Сериализация и публикация GetSemanticTreeRequest (с version_id, correlation_id)",
+        "Сериализация и публикация DocumentVersionDiffReady",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/dm/... — тесты проходят",
+        "Шаг 2: проверить формат JSON для DocumentProcessingArtifactsReady",
+        "Шаг 3: проверить, что correlation_id передаётся в GetSemanticTreeRequest"
+      ],
+      "dependencies": ["TASK-005", "TASK-006", "TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-034",
+      "category": "integration",
+      "priority": "high",
+      "description": "DM Inbound Adapter — подписка и корреляция ответов от Document Management",
+      "acceptance_criteria": [
+        "Подписка на топики: DocumentProcessingArtifactsPersisted, DocumentProcessingArtifactsPersistFailed, SemanticTreeProvided, DocumentVersionDiffPersisted, DocumentVersionDiffPersistFailed",
+        "Десериализация ответов",
+        "Корреляция ответов по correlation_id / job_id",
+        "Уведомление Processing Pipeline Orchestrator при подтверждении/ошибке сохранения артефактов",
+        "Уведомление Comparison Pipeline Orchestrator при подтверждении/ошибке сохранения diff-результата (DocumentVersionDiffPersisted/PersistFailed)",
+        "Уведомление Pending Response Registry при получении SemanticTreeProvided",
+        "Обработка is_retryable из PersistFailed-событий для управления retry-логикой",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/dm/... — тесты проходят",
+        "Шаг 2: проверить корреляцию ответа по job_id",
+        "Шаг 3: проверить уведомление registry при получении SemanticTreeProvided",
+        "Шаг 4: проверить обработку ArtifactsPersistFailed",
+        "Шаг 5: проверить обработку DocumentVersionDiffPersisted",
+        "Шаг 6: проверить обработку DocumentVersionDiffPersistFailed с is_retryable"
+      ],
+      "dependencies": ["TASK-005", "TASK-006", "TASK-008", "TASK-021"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-035",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Processing Pipeline Orchestrator — happy path: полный pipeline обработки документа",
+      "acceptance_criteria": [
+        "Оркестрация шагов: Input Validator → Source File Fetcher → OCR Adapter → Text Extraction → Structure Extraction → Semantic Tree Builder → Warning Collector → DM Outbound → ожидание DM → cleanup",
+        "Использование Job Lifecycle Manager для управления статусами",
+        "Использование Warning Collector для агрегации warnings",
+        "Публикация COMPLETED или COMPLETED_WITH_WARNINGS в зависимости от наличия warnings",
+        "Cleanup временных артефактов после завершения",
+        "Написаны unit-тесты с mock-зависимостями"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/processing/... — тесты проходят",
+        "Шаг 2: проверить полный happy path: command → COMPLETED",
+        "Шаг 3: проверить happy path с warnings: command → COMPLETED_WITH_WARNINGS",
+        "Шаг 4: проверить, что артефакты переданы в DM Outbound Adapter",
+        "Шаг 5: проверить, что temporary storage очищен после завершения"
+      ],
+      "dependencies": ["TASK-019", "TASK-020", "TASK-022", "TASK-024", "TASK-026", "TASK-027", "TASK-028", "TASK-029", "TASK-031", "TASK-032", "TASK-033"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-036",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Processing Pipeline Orchestrator — обработка ошибок, retry и таймаутов",
+      "acceptance_criteria": [
+        "REJECTED при ошибке валидации (Input Validator, Source File Fetcher) → публикация ProcessingFailedEvent с is_retryable=false",
+        "Retry для retryable-ошибок с настраиваемой retry-политикой",
+        "FAILED при non-retryable ошибках или исчерпании retry + запись в DLQ → публикация ProcessingFailedEvent с is_retryable=false",
+        "TIMED_OUT при превышении 120 секунд → публикация ProcessingFailedEvent с is_retryable=true",
+        "ProcessingFailedEvent содержит error_code, error_message, failed_at_stage, is_retryable",
+        "Cleanup на каждом терминальном пути",
+        "Написаны unit-тесты для каждого сценария ошибки"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/processing/... — тесты проходят",
+        "Шаг 2: проверить REJECTED при невалидном размере файла → ProcessingFailedEvent с is_retryable=false",
+        "Шаг 3: проверить retry при retryable-ошибке OCR",
+        "Шаг 4: проверить FAILED при исчерпании retry → ProcessingFailedEvent с is_retryable=false",
+        "Шаг 5: проверить TIMED_OUT при превышении 120 секунд → ProcessingFailedEvent с is_retryable=true",
+        "Шаг 6: проверить, что cleanup вызывается на каждом терминальном пути",
+        "Шаг 7: проверить, что ProcessingFailedEvent содержит корректный failed_at_stage и is_retryable"
+      ],
+      "dependencies": ["TASK-035"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-037",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Comparison Pipeline Orchestrator — happy path: сравнение версий документа",
+      "acceptance_criteria": [
+        "Оркестрация: DM Outbound (2 запроса semantic tree) → Pending Response Registry → ожидание ответов → Version Comparison Engine → DM Outbound (результат) → ожидание подтверждения (DocumentVersionDiffPersisted)",
+        "Использование Job Lifecycle Manager для статусов",
+        "Публикация COMPLETED при успехе (после получения DocumentVersionDiffPersisted)",
+        "Написаны unit-тесты с mock-зависимостями"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/comparison/... — тесты проходят",
+        "Шаг 2: проверить полный happy path: command → оба semantic tree получены → diff → DocumentVersionDiffPersisted → COMPLETED",
+        "Шаг 3: проверить, что результат diff передан в DM"
+      ],
+      "dependencies": ["TASK-019", "TASK-021", "TASK-030", "TASK-032", "TASK-033", "TASK-034"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-038",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Comparison Pipeline Orchestrator — обработка ошибок и таймаутов",
+      "acceptance_criteria": [
+        "FAILED при таймауте ожидания ответа от DM → публикация ComparisonFailedEvent с is_retryable=true",
+        "FAILED при ошибке DM (version not found) → публикация ComparisonFailedEvent с is_retryable=false",
+        "FAILED при ошибке comparison engine → публикация ComparisonFailedEvent с is_retryable=false",
+        "FAILED при DocumentVersionDiffPersistFailed → публикация ComparisonFailedEvent, is_retryable берётся из события",
+        "TIMED_OUT при превышении общего таймаута задачи → публикация ComparisonFailedEvent с is_retryable=true",
+        "ComparisonFailedEvent содержит error_code, error_message, failed_at_stage, is_retryable",
+        "Cleanup при всех терминальных статусах",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/comparison/... — тесты проходят",
+        "Шаг 2: проверить FAILED при таймауте ожидания одного из semantic tree → ComparisonFailedEvent",
+        "Шаг 3: проверить FAILED при version not found → ComparisonFailedEvent с is_retryable=false",
+        "Шаг 4: проверить TIMED_OUT → ComparisonFailedEvent с is_retryable=true",
+        "Шаг 5: проверить FAILED при DocumentVersionDiffPersistFailed"
+      ],
+      "dependencies": ["TASK-037"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-039",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Main entry point — DI, запуск, graceful shutdown, readiness/liveness probes",
+      "acceptance_criteria": [
+        "Создание всех компонентов с DI (dependency injection вручную или через wire)",
+        "Загрузка конфигурации из env",
+        "Инициализация подключений: брокер, KV-store, Object Storage, OCR healthcheck, observability",
+        "Подписка Command Consumer и DM Inbound Adapter на топики",
+        "Graceful shutdown по SIGTERM/SIGINT: остановка потребления, ожидание завершения текущих задач, закрытие подключений",
+        "HTTP endpoint для readiness/liveness probes",
+        "Написаны тесты на startup/shutdown"
+      ],
+      "test_steps": [
+        "Шаг 1: go build ./cmd/dp-worker/ — бинарник собирается",
+        "Шаг 2: проверить, что приложение стартует с тестовой конфигурацией",
+        "Шаг 3: проверить graceful shutdown по SIGTERM",
+        "Шаг 4: проверить /health и /ready endpoints"
+      ],
+      "dependencies": ["TASK-007", "TASK-017", "TASK-035", "TASK-036", "TASK-037", "TASK-038"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-040",
+      "category": "integration",
+      "priority": "high",
+      "description": "Integration test — processing pipeline end-to-end с mock-инфраструктурой",
+      "acceptance_criteria": [
+        "E2E-тест полного pipeline обработки: публикация команды → обработка → артефакты в DM → COMPLETED",
+        "Все внешние зависимости замокированы (broker, OCR, Object Storage, KV-store)",
+        "Проверка полного цикла статусов: QUEUED → IN_PROGRESS → COMPLETED",
+        "Проверка формата артефактов, отправленных в DM",
+        "Проверка cleanup после завершения"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -tags=integration ./... — интеграционные тесты проходят",
+        "Шаг 2: проверить, что все события статуса опубликованы в правильном порядке",
+        "Шаг 3: проверить, что артефакты содержат все обязательные поля",
+        "Шаг 4: проверить, что временные артефакты удалены"
+      ],
+      "dependencies": ["TASK-039"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-041",
+      "category": "integration",
+      "priority": "medium",
+      "description": "Integration test — comparison pipeline end-to-end с mock-инфраструктурой",
+      "acceptance_criteria": [
+        "E2E-тест сравнения версий: публикация команды → запрос semantic trees → diff → результат в DM → COMPLETED",
+        "Все внешние зависимости замокированы",
+        "Проверка корреляции ответов от DM",
+        "Проверка формата VersionDiffResult"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -tags=integration ./... — интеграционные тесты проходят",
+        "Шаг 2: проверить, что оба semantic tree запрошены",
+        "Шаг 3: проверить, что diff содержит текстовый и структурный компоненты",
+        "Шаг 4: проверить правильный статус COMPLETED"
+      ],
+      "dependencies": ["TASK-039"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-042",
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "Dockerfile и конфигурация для сборки контейнера",
+      "acceptance_criteria": [
+        "Multi-stage Dockerfile: builder (Go build) → production (минимальный образ)",
+        "Health check endpoint в Dockerfile",
+        "Документация переменных окружения в .env.example",
+        "Docker image собирается и запускается",
+        "Написана цель make docker-build в Makefile"
+      ],
+      "test_steps": [
+        "Шаг 1: make docker-build — образ собирается без ошибок",
+        "Шаг 2: docker run с тестовым .env — контейнер стартует и отвечает на /health",
+        "Шаг 3: проверить размер образа (< 50 МБ)",
+        "Шаг 4: проверить, что .env.example содержит все обязательные переменные"
+      ],
+      "dependencies": ["TASK-039"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-043",
+      "category": "security",
+      "priority": "high",
+      "description": "Валидация безопасности: file_url, размер файла, sanitization входных данных",
+      "acceptance_criteria": [
+        "Валидация file_url: только HTTP/HTTPS, запрет внутренних IP (SSRF-защита)",
+        "Ограничение размера тела ответа при скачивании (защита от zip-бомб)",
+        "Sanitization всех строковых полей команд (job_id, document_id) от инъекций",
+        "Проверка Content-Type ответа при скачивании",
+        "Написаны unit-тесты на каждый вектор атаки"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -run Security ./... — тесты проходят",
+        "Шаг 2: проверить отклонение file_url с internal IP (127.0.0.1, 10.x.x.x, 192.168.x.x)",
+        "Шаг 3: проверить отклонение file_url с протоколом file://",
+        "Шаг 4: проверить sanitization job_id с спецсимволами"
+      ],
+      "dependencies": ["TASK-022", "TASK-023"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-044",
+      "category": "security",
+      "priority": "high",
+      "description": "Аудит и журналирование действий (NFR-3.4, раздел 9 ТЗ)",
+      "acceptance_criteria": [
+        "Логирование загрузки договоров (job_id, document_id, organization_id, user_id, timestamp)",
+        "Логирование запуска проверок и их результатов",
+        "Логирование ошибок обработки с контекстом",
+        "Логирование изменений в Idempotency Guard",
+        "Structured logging с обязательными полями для каждого типа события",
+        "Все логи содержат correlation_id для трейсинга"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./... — тесты проходят",
+        "Шаг 2: проверить, что при обработке задачи пишутся логи с job_id и document_id",
+        "Шаг 3: проверить, что при ошибке пишется лог с описанием и stage",
+        "Шаг 4: проверить наличие correlation_id во всех логах pipeline"
+      ],
+      "dependencies": ["TASK-012", "TASK-035"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-045",
+      "category": "functional",
+      "priority": "low",
+      "description": "PDF-утилита — декодирование CMap/ToUnicode для корректного извлечения кириллицы из embedded-шрифтов",
+      "acceptance_criteria": [
+        "Парсинг ToUnicode CMap таблиц из PDF-объектов шрифтов",
+        "Маппинг glyph-индексов в Unicode-символы при извлечении текста",
+        "Поддержка Type1, TrueType и CIDFont шрифтов с кириллическими кодировками",
+        "Корректное извлечение кириллического текста из PDF, созданных в MS Word, LibreOffice, Google Docs",
+        "Написаны unit-тесты с реальными PDF-файлами, содержащими кириллицу в разных шрифтах"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/pdf/... — тесты проходят",
+        "Шаг 2: проверить извлечение кириллицы из PDF с embedded TrueType шрифтом",
+        "Шаг 3: проверить извлечение кириллицы из PDF с Type1 шрифтом",
+        "Шаг 4: проверить, что PDF без ToUnicode CMap возвращает warning (а не мусор)"
+      ],
+      "dependencies": ["TASK-014"],
+      "status": "pending"
+    }
+  ]
+}

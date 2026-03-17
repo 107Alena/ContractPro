@@ -546,7 +546,9 @@
         "Шаг 3: подать scan-PDF → проверить, что OCR вызывается"
       ],
       "dependencies": ["TASK-006", "TASK-014"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-18",
+      "summary": "Adapter в internal/engine/ocr/adapter.go. Struct с ocrService (OCRServicePort) и storage (TempStoragePort). NewAdapter() конструктор. Process(ctx, storageKey, isTextPDF): isTextPDF=true → OCRRawArtifact{Status: not_applicable} без вызова OCR; isTextPDF=false → storage.Download + ocrService.Recognize → OCRRawArtifact{Status: applicable, RawText: text}. Ошибки: StorageError (retryable) при Download, OCRError (retryability preserved) при Recognize. Defer reader.Close(). Проверка ctx.Err() между Download и Recognize. 7 тестов с -race: text-PDF skip, scan-PDF success, storage error, OCR error, OCR retryable error, context cancelled, reader closed."
     },
     {
       "id": "TASK-026",

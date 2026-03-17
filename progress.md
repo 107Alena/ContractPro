@@ -595,3 +595,40 @@
 - Высокоприоритетные с выполненными зависимостями: TASK-008..012 (инфраструктура), TASK-021 (pending response registry), TASK-025 (OCR adapter), TASK-027 (text extraction), TASK-030 (version comparison)
 - При DI: `pdf.NewUtil()` — без параметров, stateless, thread-safe
 - Потребители: engine/fetcher (IsValidPDF + Analyze), engine/textextract (ExtractText), engine/ocr (использует FetchResult.IsTextPDF)
+
+### TASK-025 — OCR Integration Adapter: определение необходимости OCR и маршрутизация
+**Статус:** done
+**Дата:** 2026-03-18
+
+**План реализации (согласован):**
+1. Создать `internal/engine/ocr/adapter.go`:
+   - Struct `Adapter` с полями `ocrService port.OCRServicePort` и `storage port.TempStoragePort`
+   - Конструктор `NewAdapter(ocrService, storage)`
+   - Метод `Process(ctx, storageKey, isTextPDF)`:
+     - `isTextPDF=true` → `OCRRawArtifact{Status: not_applicable}`, OCR не вызывается
+     - `isTextPDF=false` → `storage.Download` → `ocrService.Recognize` → `OCRRawArtifact{Status: applicable, RawText: text}`
+   - Обработка ошибок: StorageError (retryable), OCRError (retryability из underlying error)
+   - Defer `reader.Close()`, проверка `ctx.Err()` между Download и Recognize
+2. Создать `internal/engine/ocr/adapter_test.go`:
+   - Mock-и для OCRServicePort и TempStoragePort
+   - 7 тестов: text-PDF skip, scan-PDF success, storage error, OCR error, OCR retryable error, context cancelled, reader closed
+
+**Ключевые решения:**
+- Adapter не реализует port-интерфейс — нет отдельного OCR adapter порта, вызывается напрямую оркестратором
+- `isTextPDF` приходит из `FetchResult.IsTextPDF` (определяется pdf-утилитой в TASK-014)
+- Retryability из underlying error сохраняется через `port.IsRetryable(err)` → передаётся в `port.NewOCRError`
+- StorageError создаётся с cause для unwrap-chain
+- Проверка `ctx.Err()` между Download и Recognize — early exit при отмене контекста
+- TASK-026 добавит rate limiter, warnings, retry — здесь базовая маршрутизация
+
+**Summary:**
+- Созданы 2 файла: adapter.go (60 строк), adapter_test.go (262 строки)
+- 7 тестов, все проходят с -race
+- go test, go vet — без ошибок
+- Общее количество тестов в проекте: 283 (model: 124 + port: 55 + config: 11 + lifecycle: 13 + validator: 10 + warning: 7 + structure: 14 + semantictree: 17 + pdf: 25 + ocr: 7)
+
+**Заметки для следующей итерации:**
+- TASK-025✅ разблокирует: TASK-026 (OCR с rate limiter: TASK-011, TASK-025✅)
+- Высокоприоритетные с выполненными зависимостями: TASK-008..012 (инфраструктура), TASK-021 (pending response registry: TASK-005✅, TASK-006✅), TASK-027 (text extraction: TASK-004✅, TASK-006✅, TASK-014✅), TASK-030 (version comparison: TASK-004✅, TASK-006✅)
+- При DI в main.go: `ocr.NewAdapter(ocrClient, tempStorage)` — принимает оба инфраструктурных порта
+- Оркестратор вызывает: `adapter.Process(ctx, fetchResult.StorageKey, fetchResult.IsTextPDF)`

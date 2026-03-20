@@ -673,3 +673,46 @@
 - Eligible задачи (high, deps met): TASK-008..012 (инфраструктура), TASK-021 (pending response registry), TASK-030 (version comparison: TASK-004✅, TASK-006✅)
 - При DI в main.go: `textextract.NewExtractor(pdfUtil, tempStorage)` — pdfUtil = `pdf.NewUtil()`
 - Оркестратор вызывает: `textExtractor.Extract(ctx, fetchResult.StorageKey, &ocrResult)` — результат передаётся в structExtractor.Extract() и treeBuilder.Build()
+
+### TASK-030 — Version Comparison Engine
+**Статус:** done
+**Дата:** 2026-03-21
+
+**План реализации (согласован):**
+1. Создать `internal/engine/comparison/comparer.go`:
+   - Struct `Comparer` без полей (stateless, zero-dependency)
+   - Конструктор `NewComparer()`
+   - Метод `Compare(ctx, baseTree, targetTree)` → `(*VersionDiffResult, error)`
+   - Compile-time проверка `var _ port.VersionComparisonPort = (*Comparer)(nil)`
+2. Внутренняя структура `nodeInfo` (node, path, parentID, childIdx)
+3. Алгоритм:
+   - `buildIndex(tree)` — DFS-обход, построение map[string]*nodeInfo с путями
+   - `computeStructuralDiffs(baseIndex, targetIndex)` — 3 прохода: removed, added, moved
+   - `computeTextDiffs(baseIndex, targetIndex)` — 3 прохода: removed, added, modified content
+   - `nodeLabel(node)` — сегмент пути на русском языке
+4. Создать `internal/engine/comparison/comparer_test.go`:
+   - 27 тестов: все сценарии, edge cases, paths, deep structures
+
+**Ключевые решения:**
+- Сопоставление узлов по ID — семантические ID (section-1, clause-1.1) стабильны между версиями, не нужен fuzzy matching
+- "Moved" моделируется как DiffTypeModified с Description "узел перемещён" — три DiffType достаточно для v1
+- Пустые слайсы `[]TextDiffEntry{}` вместо nil — JSON сериализуется как `[]`, не `null`
+- Сортировка diff-записей по Type+NodeID/Path для детерминированного вывода в тестах
+- Без внешних diff-библиотек — дерево маленькое (сотни узлов), O(n) достаточно
+- Пути на русском: "Раздел N / Пункт N.N / Приложение N / Реквизиты: Имя / Текст"
+- nodeLabel fallbacks: number → title → generic label (для section без метаданных)
+
+**Summary:**
+- Созданы 2 файла: comparer.go (273 строки), comparer_test.go
+- Удалён .gitkeep из internal/engine/comparison/
+- Реализует VersionComparisonPort из domain/port/engine.go
+- 27 тестов, все проходят с -race
+- go test ./... — все тесты проекта проходят (13 пакетов)
+- Общее количество тестов в проекте: 328 (model: 124 + port: 55 + config: 11 + lifecycle: 13 + validator: 10 + warning: 7 + structure: 14 + semantictree: 17 + pdf: 25 + ocr: 7 + textextract: 18 + comparison: 27)
+
+**Заметки для следующей итерации:**
+- TASK-030✅ разблокирует: TASK-037 (Comparison Pipeline Orchestrator — deps: TASK-019✅, TASK-021, TASK-030✅, TASK-032, TASK-033, TASK-034)
+- Все 6 engine-компонентов завершены: validator✅, fetcher (ожидает TASK-023), ocr✅, textextract✅, structure✅, semantictree✅, comparison✅
+- Eligible задачи (high, deps met): TASK-008..012 (инфраструктура), TASK-021 (pending response registry)
+- При DI в main.go: `comparison.NewComparer()` — без параметров, stateless
+- Comparison Pipeline Orchestrator вызывает: `comparer.Compare(ctx, baseSemanticTree, targetSemanticTree)` — оба дерева получены через DMTreeRequesterPort

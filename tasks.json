@@ -664,7 +664,9 @@
         "Шаг 4: сравнить документы с изменённым пунктом → diff показывает изменение"
       ],
       "dependencies": ["TASK-004", "TASK-006"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-21",
+      "summary": "Comparer в internal/engine/comparison/comparer.go. Stateless struct, конструктор NewComparer(). Compare(ctx, baseTree, targetTree) реализует VersionComparisonPort. Алгоритм: buildIndex() — DFS-обход дерева, построение map[string]*nodeInfo (узел + путь + parentID + childIdx). Три прохода structural diff: removed (в base, нет в target), added (в target, нет в base), modified/moved (parentID или childIdx изменился). Три прохода text diff: removed/added/modified для контентных узлов (Content != \"\"). Пути на русском: «Раздел N / Пункт N.N / Приложение N / Реквизиты: Имя». Сортировка diff-записей по Type+NodeID/Path для детерминированного вывода. Пустые слайсы (не nil) для корректной JSON-сериализации. Compile-time проверка var _ VersionComparisonPort. 27 тестов с -race: identical trees, added/removed section, modified clause content, added/removed clause, added appendix, moved node, empty/nil base/target trees, both empty, context cancellation, path strings (6 подтестов), multiple changes, party details changed, appendix content modified, structural-only/text-only changes, DocumentID from base, nil roots, empty slices not nil, deep nested structure, nodeLabel fallbacks (7 подтестов), content appearing in existing node."
     },
     {
       "id": "TASK-031",

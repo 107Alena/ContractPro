@@ -632,3 +632,44 @@
 - Высокоприоритетные с выполненными зависимостями: TASK-008..012 (инфраструктура), TASK-021 (pending response registry: TASK-005✅, TASK-006✅), TASK-027 (text extraction: TASK-004✅, TASK-006✅, TASK-014✅), TASK-030 (version comparison: TASK-004✅, TASK-006✅)
 - При DI в main.go: `ocr.NewAdapter(ocrClient, tempStorage)` — принимает оба инфраструктурных порта
 - Оркестратор вызывает: `adapter.Process(ctx, fetchResult.StorageKey, fetchResult.IsTextPDF)`
+
+### TASK-027 — Text Extraction & Normalization Engine
+**Статус:** done
+**Дата:** 2026-03-21
+
+**План реализации (согласован):**
+1. Создать `internal/engine/textextract/extractor.go`:
+   - Интерфейс `PDFTextExtractor` (удовлетворяется `*pdf.Util`) для DI и тестирования
+   - Struct `Extractor` с `pdfExtractor PDFTextExtractor` и `storage port.TempStoragePort`
+   - Конструктор `NewExtractor(pdfExtractor, storage)`
+   - Compile-time проверка `var _ port.TextExtractionPort = (*Extractor)(nil)`
+2. Метод `Extract(ctx, storageKey, ocrResult)`:
+   - PDF-путь (ocrResult nil/not_applicable): `storage.Download` → `io.ReadAll` → `pdfExtractor.ExtractText`
+   - OCR-путь (ocrResult.Status == applicable): split `RawText` по `\f` на страницы
+   - Нормализация: NFC → cleanText (garbage removal) → TrimSpace
+   - Warnings: `TEXT_EXTRACTION_EMPTY_PAGE` per page, `TEXT_EXTRACTION_ALL_PAGES_EMPTY` aggregate
+3. Создать `internal/engine/textextract/extractor_test.go`:
+   - 18 тестов: оба пути, ошибки, нормализация, warnings, reader cleanup, context cancellation
+
+**Ключевые решения:**
+- `PDFTextExtractor` интерфейс — consumer-side interface для `*pdf.Util`, позволяет мокать без генерации реальных PDF в тестах
+- `io.ReadAll` для конвертации `ReadCloser → ReadSeeker` — безопасно при лимите 20 МБ
+- OCR текст делится по `\f` (form-feed) — OCR-сервисы часто вставляют его между страницами; если `\f` нет — одна страница
+- Пустые страницы — warnings, не errors (паттерн structure extractor)
+- `storageKey` как `DocumentID` — единственный идентификатор на этом этапе pipeline
+- `strconv.Itoa` для номера страницы в warning message (стандартная библиотека)
+- Garbage filter: C0/C1 control chars (кроме \t\n\r), DEL, zero-width (U+200B..U+200F), BOM (U+FEFF), replacement (U+FFFD), directional markers (U+202A..U+202E, U+2066..U+2069), word joiner (U+2060)
+- Зависимость `golang.org/x/text` промотирована из indirect в direct (уже была в go.sum через pdfcpu)
+
+**Summary:**
+- Созданы 2 файла: extractor.go (195 строк), extractor_test.go (370 строк)
+- Реализует TextExtractionPort из domain/port/engine.go
+- 18 тестов, все проходят с -race
+- go test ./... — все 301 тестов проекта проходят
+- go mod tidy — зависимости обновлены
+
+**Заметки для следующей итерации:**
+- TASK-027✅ разблокирует: TASK-035 (processing orchestrator — один из 11 deps)
+- Eligible задачи (high, deps met): TASK-008..012 (инфраструктура), TASK-021 (pending response registry), TASK-030 (version comparison: TASK-004✅, TASK-006✅)
+- При DI в main.go: `textextract.NewExtractor(pdfUtil, tempStorage)` — pdfUtil = `pdf.NewUtil()`
+- Оркестратор вызывает: `textExtractor.Extract(ctx, fetchResult.StorageKey, &ocrResult)` — результат передаётся в structExtractor.Extract() и treeBuilder.Build()

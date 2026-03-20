@@ -594,7 +594,9 @@
         "Шаг 5: проверить нормализацию unicode"
       ],
       "dependencies": ["TASK-004", "TASK-006", "TASK-014"],
-      "status": "pending"
+      "status": "done",
+      "completed_date": "2026-03-21",
+      "implementation_notes": "Extractor struct with PDFTextExtractor interface and TempStoragePort dependencies in internal/engine/textextract/extractor.go. Two extraction paths: PDF path (storage.Download → io.ReadAll → pdfExtractor.ExtractText) and OCR path (split RawText by \\f into pages). Normalization pipeline: NFC via golang.org/x/text/unicode/norm → garbage char removal (C0/C1 control, zero-width, BOM, directional markers, replacement char) → TrimSpace. Warnings: TEXT_EXTRACTION_EMPTY_PAGE per empty page, TEXT_EXTRACTION_ALL_PAGES_EMPTY aggregate. Errors: StorageError (retryable) for download failures, ExtractionError (non-retryable) for PDF parsing. Context cancellation check between Download and ExtractText. Defer reader.Close(). 18 tests with -race."
     },
     {
       "id": "TASK-028",

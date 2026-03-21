@@ -806,3 +806,38 @@
 - Eligible задачи (critical, deps met): TASK-024 (deps: TASK-014✅, TASK-023✅)
 - Eligible задачи (high, deps met): TASK-008 (broker), TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-021 (pending response registry), TASK-031 (temp artifact storage)
 - При DI в main.go: `httpdownloader.NewDownloader(cfg.Limits.JobTimeout)`, `fetcher.NewFetcher(httpDl, storageClient, cfg.Limits.MaxFileSize)`
+
+### TASK-024 — Source File Fetcher: валидация скачанного файла (PDF, страниц ≤ 100)
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации (согласован с code-architect):**
+1. Подход: буферизация в памяти (max 20MB, bounded limitedReader) → валидация → Upload
+2. Consumer-side интерфейс PDFAnalyzer в fetcher.go (IsValidPDF + Analyze), реализуется *pdf.Util
+3. Новые поля Fetcher: pdfAnalyzer PDFAnalyzer, maxPages int
+4. Поток: download → Content-Length early reject → limitedReader → buffer → IsValidPDF → Analyze → pageCount check → Upload
+5. На ошибке валидации файл НЕ загружается в storage → cleanup не нужен
+6. Ошибки: INVALID_FORMAT (не PDF / corrupted), TOO_MANY_PAGES (> limit) — уже определены в port/errors.go
+
+**Изменённые файлы:**
+1. `internal/engine/fetcher/fetcher.go` — PDFAnalyzer interface, обновлён Fetcher struct и NewFetcher, переписан Fetch body (buffer → validate → upload)
+2. `internal/engine/fetcher/fetcher_test.go` — mockPDFAnalyzer, validPDFAnalyzer helper, обновлены все существующие тесты, добавлены 12 новых тестов
+
+**По результатам code-review исправлено:**
+- W-2: io.Copy context errors (Canceled/DeadlineExceeded) passthrough raw вместо SERVICE_UNAVAILABLE
+- W-3: Seek failure перед upload → SERVICE_UNAVAILABLE вместо INVALID_FORMAT
+- S-1: Pre-allocate buffer по Content-Length hint
+- S-5: Добавлен тест read error during streaming → SERVICE_UNAVAILABLE
+- S-6: Добавлен тест context canceled during streaming → raw context.Canceled passthrough
+
+**Summary:**
+- Fetcher теперь буферизирует → валидирует PDF формат и число страниц → загружает в storage
+- FetchResult заполняет PageCount и IsTextPDF из pdf.Analyze
+- 32 теста fetcher: 26 Fetch subtests + 4 classifyDownloadError + 3 limitedReader
+- Все 16 пакетов PASS с -race, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-024✅ разблокирует: TASK-035 (Processing Pipeline Orchestrator — но нужны ещё TASK-026, TASK-031, TASK-032, TASK-033)
+- При DI в main.go: `fetcher.NewFetcher(httpDl, storageClient, pdf.NewUtil(), cfg.Limits.MaxFileSize, cfg.Limits.MaxPages)`
+- Eligible задачи (high, deps met): TASK-008 (broker), TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-021 (pending response registry), TASK-031 (temp artifact storage), TASK-043 (security validation)
+- Нет больше критических задач с выполненными зависимостями

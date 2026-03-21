@@ -531,7 +531,9 @@
         "Шаг 4: проверить отклонение PDF > 100 страниц"
       ],
       "dependencies": ["TASK-014", "TASK-023"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Валидация скачанного файла в Fetcher. Подход: буферизация в памяти (max 20MB) → IsValidPDF (magic bytes) → Analyze (pageCount + isTextPDF) → pageCount ≤ maxPages → Upload. Consumer-side интерфейс PDFAnalyzer (IsValidPDF + Analyze) в fetcher.go, реализуется *pdf.Util. Новые поля Fetcher: pdfAnalyzer PDFAnalyzer, maxPages int. При невалидном PDF → INVALID_FORMAT (non-retryable), при превышении страниц → TOO_MANY_PAGES (non-retryable). На ошибке валидации файл НЕ загружается в storage (cleanup не требуется). Pre-allocate buffer по Content-Length hint. Context errors при streaming passthrough raw. FetchResult теперь заполняет PageCount и IsTextPDF из pdf.Analyze. 32 теста с -race: 26 Fetch subtests (14 existing updated + 12 new: invalid PDF, corrupted PDF, page count exceeds/at limit, scan/text PDF, no storage interaction, content integrity, error message, read error streaming, context cancel streaming), 4 classifyDownloadError, 3 limitedReader. 16 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-025",

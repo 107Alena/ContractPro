@@ -1,38 +1,60 @@
 package fetcher
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
+	pdfpkg "contractpro/document-processing/internal/pdf"
 )
 
+// PDFAnalyzer provides PDF format validation and metadata extraction.
+// This is a consumer-side interface — the fetcher depends on the behavior,
+// not on the concrete pdf.Util type.
+type PDFAnalyzer interface {
+	IsValidPDF(r io.Reader) bool
+	Analyze(r io.ReadSeeker) (*pdfpkg.Info, error)
+}
+
 // Fetcher implements SourceFileFetcherPort — downloads a PDF by URL,
-// validates file size during streaming, and saves the file to temporary storage.
+// validates file size, PDF format, and page count, then saves the file
+// to temporary storage.
 type Fetcher struct {
 	downloader  port.SourceFileDownloaderPort
 	storage     port.TempStoragePort
+	pdfAnalyzer PDFAnalyzer
 	maxFileSize int64
+	maxPages    int
 }
 
 // NewFetcher creates a Fetcher with the given dependencies.
 // maxFileSize is the maximum allowed file size in bytes (typically 20 MB).
-func NewFetcher(downloader port.SourceFileDownloaderPort, storage port.TempStoragePort, maxFileSize int64) *Fetcher {
+// maxPages is the maximum allowed page count (typically 100).
+func NewFetcher(
+	downloader port.SourceFileDownloaderPort,
+	storage port.TempStoragePort,
+	pdfAnalyzer PDFAnalyzer,
+	maxFileSize int64,
+	maxPages int,
+) *Fetcher {
 	return &Fetcher{
 		downloader:  downloader,
 		storage:     storage,
+		pdfAnalyzer: pdfAnalyzer,
 		maxFileSize: maxFileSize,
+		maxPages:    maxPages,
 	}
 }
 
 // Fetch downloads the source file from cmd.FileURL, validates its size,
-// and uploads it to temporary storage under key "{job_id}/source.pdf".
-// Returns a FetchResult with the storage key and actual file size.
-// PageCount and IsTextPDF are left at zero values (TASK-024 scope).
+// PDF format, and page count, then uploads it to temporary storage under
+// key "{job_id}/source.pdf".
+// Returns a FetchResult with the storage key, actual file size, page count,
+// and text/scan classification.
 func (f *Fetcher) Fetch(ctx context.Context, cmd model.ProcessDocumentCommand) (*port.FetchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -51,34 +73,72 @@ func (f *Fetcher) Fetch(ctx context.Context, cmd model.ProcessDocumentCommand) (
 		)
 	}
 
-	storageKey := fmt.Sprintf("%s/source.pdf", cmd.JobID)
-
+	// Stream the download through limitedReader into an in-memory buffer.
+	// Max file size is 20 MB so buffering is safe.
 	limited := &limitedReader{
 		r:     body,
 		limit: f.maxFileSize,
 	}
 
-	uploadErr := f.storage.Upload(ctx, storageKey, limited)
+	var buf bytes.Buffer
+	if contentLength > 0 && contentLength <= f.maxFileSize {
+		buf.Grow(int(contentLength))
+	}
+	if _, err := io.Copy(&buf, limited); err != nil {
+		// Pass through context errors raw (consistent with classifyDownloadError).
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, port.NewServiceUnavailableError("failed to read source file", err)
+	}
 
-	// If we detected size exceeded during streaming, clean up and return FILE_TOO_LARGE
-	// regardless of whether upload succeeded or failed.
+	// If size was exceeded during streaming, reject without uploading.
 	if limited.exceeded {
-		// Best-effort cleanup with a short timeout to avoid blocking indefinitely.
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = f.storage.Delete(cleanupCtx, storageKey)
 		return nil, port.NewFileTooLargeError(
 			fmt.Sprintf("file size exceeds limit %d bytes during streaming", f.maxFileSize),
 		)
 	}
 
-	if uploadErr != nil {
-		return nil, port.NewStorageError("failed to upload source file to temporary storage", uploadErr)
+	// Validate PDF format (magic bytes check).
+	reader := bytes.NewReader(buf.Bytes())
+	if !f.pdfAnalyzer.IsValidPDF(reader) {
+		return nil, port.NewInvalidFormatError("file is not a valid PDF")
+	}
+
+	// Analyze PDF: page count and text/scan classification.
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
+		return nil, port.NewInvalidFormatError(
+			fmt.Sprintf("failed to seek PDF reader: %v", err),
+		)
+	}
+	info, err := f.pdfAnalyzer.Analyze(reader)
+	if err != nil {
+		return nil, port.NewInvalidFormatError(
+			fmt.Sprintf("failed to analyze PDF: %v", err),
+		)
+	}
+
+	// Validate page count.
+	if info.PageCount > f.maxPages {
+		return nil, port.NewTooManyPagesError(
+			fmt.Sprintf("page count %d exceeds limit %d", info.PageCount, f.maxPages),
+		)
+	}
+
+	// Upload validated content to temporary storage.
+	storageKey := fmt.Sprintf("%s/source.pdf", cmd.JobID)
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
+		return nil, port.NewServiceUnavailableError("failed to seek PDF reader before upload", err)
+	}
+	if err := f.storage.Upload(ctx, storageKey, reader); err != nil {
+		return nil, port.NewStorageError("failed to upload source file to temporary storage", err)
 	}
 
 	return &port.FetchResult{
 		StorageKey: storageKey,
 		FileSize:   limited.bytesRead,
+		PageCount:  info.PageCount,
+		IsTextPDF:  info.IsTextPDF,
 	}, nil
 }
 

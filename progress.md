@@ -716,3 +716,48 @@
 - Eligible задачи (high, deps met): TASK-008..012 (инфраструктура), TASK-021 (pending response registry)
 - При DI в main.go: `comparison.NewComparer()` — без параметров, stateless
 - Comparison Pipeline Orchestrator вызывает: `comparer.Compare(ctx, baseSemanticTree, targetSemanticTree)` — оба дерева получены через DMTreeRequesterPort
+
+### TASK-010 — Инфраструктурный клиент Yandex Object Storage
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации:**
+1. Создать `internal/infra/objectstorage/client.go`:
+   - S3API consumer-side interface (5 методов: PutObject, GetObject, DeleteObject, ListObjectsV2, DeleteObjects)
+   - Client struct с s3 (S3API) + bucket (string)
+   - NewClient(cfg StorageConfig) — aws-sdk-go-v2 S3 client, static credentials, custom endpoint, path-style
+   - Upload → PutObject, Download → GetObject, Delete → DeleteObject, DeleteByPrefix → paginated List + batch Delete
+2. Создать `internal/infra/objectstorage/errors.go`:
+   - mapError(err, operation) — context errors pass through, S3 errors → DomainError с правильным retryable
+   - nonRetryableCodes: NoSuchKey, NoSuchBucket, AccessDenied, InvalidBucketName, NotFound
+3. Создать `internal/infra/objectstorage/client_test.go`:
+   - mockS3 struct с function fields (паттерн из textextract)
+   - 28 тестов покрывающих все методы и ошибки
+
+**Ключевые решения:**
+- Библиотека: aws-sdk-go-v2 (модулярный, Yandex Object Storage полностью S3-совместим)
+- Consumer-side S3API interface — инверсия зависимостей для тестирования (паттерн PDFTextExtractor)
+- Retryable vs non-retryable ошибки: NoSuchKey, AccessDenied, NoSuchBucket → non-retryable; InternalError, ServiceUnavailable → retryable; network errors → retryable
+- DeleteByPrefix: пагинация (1000 ключей/страница), batch delete с проверкой per-object errors, пустой prefix → ошибка (защита от удаления всего бакета)
+- Download: nil Body guard (защита от panic на мisbehaving S3 endpoint)
+- Context errors (Canceled, DeadlineExceeded) pass through raw — паттерн из textextract/ocr
+
+**По результатам code-review исправлено:**
+- Critical: проверка per-object errors в DeleteObjects response (silent data loss)
+- Critical: nil Body guard в Download
+- Warning: валидация пустого prefix в DeleteByPrefix
+- Warning: дифференциация retryable/non-retryable ошибок (NoSuchKey, AccessDenied)
+- Warning: убрано дублирование дефолтного региона (config уже устанавливает)
+
+**Summary:**
+- Созданы 3 файла: client.go, errors.go, client_test.go
+- Удалён .gitkeep из internal/infra/objectstorage/
+- Реализует TempStoragePort из domain/port/outbound.go
+- 28 тестов, все проходят с -race
+- Новые зависимости: aws-sdk-go-v2, aws-sdk-go-v2/credentials, aws-sdk-go-v2/service/s3, smithy-go
+- go test ./... — все тесты проекта проходят (14 пакетов)
+
+**Заметки для следующей итерации:**
+- TASK-010✅ разблокирует: TASK-023 (critical — Source File Fetcher), TASK-031 (high — Temp Artifact Storage Adapter)
+- Eligible задачи (high, deps met): TASK-008 (broker), TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-021 (pending response registry)
+- При DI в main.go: `objectstorage.NewClient(cfg.Storage)` — возвращает *Client, реализует TempStoragePort

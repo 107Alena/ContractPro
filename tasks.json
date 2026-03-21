@@ -221,7 +221,9 @@
         "Шаг 3: проверить DeleteByPrefix удаляет все ключи с данным префиксом"
       ],
       "dependencies": ["TASK-001", "TASK-007"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Client в internal/infra/objectstorage/client.go. Реализует TempStoragePort через S3-совместимый API (aws-sdk-go-v2). S3API consumer-side interface (PutObject, GetObject, DeleteObject, ListObjectsV2, DeleteObjects). NewClient(cfg StorageConfig) — создаёт s3.Client со static credentials, custom endpoint, path-style addressing. Upload → PutObject, Download → GetObject (с nil Body guard), Delete → DeleteObject (idempotent), DeleteByPrefix → paginated ListObjectsV2 + batch DeleteObjects (с проверкой per-object errors и empty prefix guard). mapError в errors.go: context errors pass through raw, NoSuchKey/AccessDenied/NoSuchBucket → non-retryable StorageError, InternalError/ServiceUnavailable → retryable StorageError, unknown/network → retryable. Compile-time check var _ TempStoragePort = (*Client)(nil). 28 тестов с -race: Upload (success, S3 error, context cancelled, body passthrough 1MB), Download (success, NoSuchKey, AccessDenied, context cancelled, nil body), Delete (success, idempotent, S3 error), DeleteByPrefix (zero objects, single page, multi-page pagination, list error, delete error, context cancelled, empty prefix, partial delete errors), Interface compliance, mapError (context.Canceled, DeadlineExceeded, NoSuchKey, APIError, unknown, retryable InternalError, non-retryable AccessDenied). Зависимости: aws-sdk-go-v2, aws-sdk-go-v2/credentials, aws-sdk-go-v2/service/s3, smithy-go."
     },
     {
       "id": "TASK-011",

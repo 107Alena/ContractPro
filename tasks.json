@@ -508,7 +508,9 @@
         "Шаг 4: проверить обработку HTTP 404"
       ],
       "dependencies": ["TASK-006", "TASK-010"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Engine: Fetcher в internal/engine/fetcher/fetcher.go. Реализует SourceFileFetcherPort. Struct с downloader (SourceFileDownloaderPort), storage (TempStoragePort), maxFileSize (int64). NewFetcher(downloader, storage, maxFileSize) конструктор. Fetch(ctx, cmd): ctx.Err() check → downloader.Download → Content-Length early reject → limitedReader (cap read buffer до limit-bytesRead+1, exceeded flag + io.EOF) → storage.Upload с key {job_id}/source.pdf → exceeded check с cleanup (Delete с 5s timeout) → FetchResult{StorageKey, FileSize}. classifyDownloadError: errors.Is context passthrough, DomainError passthrough, unknown → SERVICE_UNAVAILABLE. Compile-time check var _ SourceFileFetcherPort = (*Fetcher)(nil). Infra: Downloader в internal/infra/httpdownloader/downloader.go. Реализует SourceFileDownloaderPort. http.Client с custom Transport (MaxIdleConns=10, MaxIdleConnsPerHost=5, IdleConnTimeout=90s, TLSHandshakeTimeout=10s), max 3 redirects, User-Agent: ContractPro-DP/1.0. Download(ctx, fileURL): NewRequestWithContext → client.Do → status 200 OK → body + ContentLength. HTTP status classification: 404/403→FILE_NOT_FOUND, 408/429/502/503/504→SERVICE_UNAVAILABLE, 4xx→VALIDATION_ERROR, 5xx→SERVICE_UNAVAILABLE. Context errors passthrough. Invalid URL→VALIDATION_ERROR. 17 тестов fetcher (14 Fetch subtests + 4 classifyDownloadError + 3 limitedReader), 13 тестов downloader (httptest.Server). Все 16 пакетов PASS с -race, go vet clean."
     },
     {
       "id": "TASK-024",

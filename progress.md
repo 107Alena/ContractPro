@@ -761,3 +761,48 @@
 - TASK-010✅ разблокирует: TASK-023 (critical — Source File Fetcher), TASK-031 (high — Temp Artifact Storage Adapter)
 - Eligible задачи (high, deps met): TASK-008 (broker), TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-021 (pending response registry)
 - При DI в main.go: `objectstorage.NewClient(cfg.Storage)` — возвращает *Client, реализует TempStoragePort
+
+### TASK-023 — Source File Fetcher — скачивание PDF по URL
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации:**
+1. Создать `internal/engine/fetcher/fetcher.go` (engine layer):
+   - Fetcher struct с downloader (SourceFileDownloaderPort), storage (TempStoragePort), maxFileSize (int64)
+   - NewFetcher(downloader, storage, maxFileSize) конструктор с DI
+   - Fetch(ctx, cmd): ctx check → download → Content-Length early reject → limitedReader → Upload → cleanup on exceeded
+   - limitedReader: cap read buffer для точного enforcement (max 1 byte overshoot)
+   - classifyDownloadError: errors.Is context passthrough, DomainError passthrough, unknown → SERVICE_UNAVAILABLE
+2. Создать `internal/infra/httpdownloader/downloader.go` (infra layer):
+   - Downloader struct с http.Client (custom Transport, timeout, max 3 redirects)
+   - Download(ctx, fileURL): HTTP GET → status classification → body + ContentLength
+   - User-Agent: ContractPro-DP/1.0
+3. Создать тесты: fetcher_test.go (17 тестов), downloader_test.go (13 тестов)
+
+**Ключевые решения:**
+- Два слоя: engine (Fetcher = orchestration + size enforcement) и infra (HTTPDownloader = transport + HTTP error classification)
+- limitedReader с capped buffer (limit - bytesRead + 1) — max 1 byte overshoot вместо целого buffer (32KB)
+- Content-Length early reject: если сервер объявил размер > лимита, не читаем body
+- Cleanup при exceeded: Delete с context.WithTimeout(5s) для защиты от зависания
+- HTTP Transport: MaxIdleConns=10, MaxIdleConnsPerHost=5, IdleConnTimeout=90s, TLSHandshakeTimeout=10s
+- Storage key format: {job_id}/source.pdf
+- PageCount и IsTextPDF = zero values (scope TASK-024)
+
+**По результатам code-review исправлено:**
+- Critical: limitedReader пропускал до buffer-size байт сверх лимита → cap read buffer
+- Warning: classifyDownloadError == → errors.Is для wrapped context errors
+- Warning: cleanup Delete без timeout → context.WithTimeout(5s)
+- Warning: нет User-Agent → "ContractPro-DP/1.0"
+- Warning: shared DefaultTransport → dedicated http.Transport с pool settings
+- Warning: добавлены тесты boundary (exactly at limit) и Content-Length lie
+
+**Summary:**
+- Созданы 4 файла: fetcher.go, fetcher_test.go, downloader.go, downloader_test.go
+- 17 тестов fetcher + 13 тестов downloader = 30 новых тестов
+- Все 16 пакетов PASS с -race, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-023✅ разблокирует: TASK-024 (critical — Source File Fetcher validation), TASK-043 (high — Security validation)
+- Eligible задачи (critical, deps met): TASK-024 (deps: TASK-014✅, TASK-023✅)
+- Eligible задачи (high, deps met): TASK-008 (broker), TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-021 (pending response registry), TASK-031 (temp artifact storage)
+- При DI в main.go: `httpdownloader.NewDownloader(cfg.Limits.JobTimeout)`, `fetcher.NewFetcher(httpDl, storageClient, cfg.Limits.MaxFileSize)`

@@ -1,6 +1,7 @@
 ---
 name: golang-pro
 description: Go language expert for writing idiomatic Go code with goroutines, channels, interfaces, and proper error handling. Use for Go development, concurrency patterns, and performance optimization.
+color: red
 model: opus
 tools: '*'
 ---

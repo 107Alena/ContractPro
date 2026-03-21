@@ -183,7 +183,9 @@
         "Шаг 3: проверить graceful shutdown"
       ],
       "dependencies": ["TASK-001", "TASK-007"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Client в internal/infra/broker/client.go. RabbitMQ клиент с amqp091-go. Consumer-side интерфейсы AMQPAPI (Connection) + AMQPChannelAPI (Channel), wrapper-адаптеры amqpConnWrapper/amqpChanWrapper. Publish(ctx, topic, []byte) с RLock на весь publish call (TOCTOU-safe), persistent delivery, application/json. Subscribe(topic, MessageHandler) — QueueDeclare (durable=true) + Consume + consumer goroutine с auto ack/nack. MessageHandler func(ctx, body) error — cancelCtx для graceful handler cancellation при shutdown. Reconnect: exponential backoff 1s→30s с 25% jitter, IsClosed() check после NotifyClose (W-2 fix), close old conn/pubCh при swap (W-3 fix), re-subscribe всех подписок. Close() idempotent: close(done) → cancelFn() → close pubCh → close conn → wg.Wait(). Ошибки: mapError с context passthrough, AMQP codes → ErrCodeBrokerFailed (404/403/406 non-retryable, остальные retryable), unknown → NewBrokerError retryable. Топики уже определены в BrokerConfig (15 констант). 23 теста с -race: 4 Publish (success, channel error, context cancelled, nil channel), 4 Subscribe (success + message delivery, QueueDeclareError, handler error → Nack, handler success → Ack), 2 Close (graceful shutdown, idempotent), 6 mapError (AMQP, DeadlineExceeded, unknown, NotFound non-retryable, AccessRefused non-retryable, Canceled), 1 interface compliance, 3 backoffDelay (exponential growth, caps at max, non-negative), 2 reconnect (dial-fail-then-succeed + re-subscribe, stops-on-done), 1 cancel-context-on-close. 17 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-009",

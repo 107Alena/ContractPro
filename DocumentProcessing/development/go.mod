@@ -9,6 +9,7 @@ require (
 	github.com/aws/smithy-go v1.24.2
 	github.com/joho/godotenv v1.5.1
 	github.com/pdfcpu/pdfcpu v0.11.1
+	github.com/rabbitmq/amqp091-go v1.10.0
 	golang.org/x/text v0.30.0
 )
 

@@ -841,3 +841,56 @@
 - При DI в main.go: `fetcher.NewFetcher(httpDl, storageClient, pdf.NewUtil(), cfg.Limits.MaxFileSize, cfg.Limits.MaxPages)`
 - Eligible задачи (high, deps met): TASK-008 (broker), TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-021 (pending response registry), TASK-031 (temp artifact storage), TASK-043 (security validation)
 - Нет больше критических задач с выполненными зависимостями
+
+### TASK-008 — Инфраструктурный клиент брокера сообщений
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации (согласован):**
+1. Создать `internal/infra/broker/client.go`:
+   - Consumer-side интерфейсы: AMQPAPI (Connection-level), AMQPChannelAPI (Channel-level)
+   - Wrapper-адаптеры: amqpConnWrapper, amqpChanWrapper
+   - Client struct: conn, pubCh, mu (RWMutex), subs, done, wg, dialFn, cancelCtx/cancelFn
+   - Publish(ctx, topic, payload) — RLock на весь publish call
+   - Subscribe(topic, handler) — QueueDeclare + Consume + consumer goroutine
+   - Close() — idempotent graceful shutdown
+2. Создать `internal/infra/broker/errors.go`:
+   - mapError: context passthrough, AMQP codes → DomainError, unknown → retryable
+3. Создать `internal/infra/broker/reconnect.go`:
+   - reconnectLoop: NotifyClose watcher + IsClosed() check
+   - reconnectWithBackoff: exponential backoff 1s→30s, 25% jitter, close old resources, re-subscribe
+4. Создать `internal/infra/broker/client_test.go`:
+   - Mock AMQP (function-field mocks, no external libs)
+   - Publish/Subscribe/Close/MapError/Backoff/Reconnect тесты
+
+**Ключевые решения:**
+- 2 consumer-side интерфейса (AMQPAPI + AMQPChannelAPI) — матчит двухуровневую модель RabbitMQ
+- MessageHandler func(ctx, body) error — callback с auto ack/nack
+- cancelCtx для graceful handler cancellation при Close()
+- RLock held for entire Publish — предотвращает TOCTOU race с reconnect
+- IsClosed() check после NotifyClose — ловит edge case потерянного notification
+- Close old conn/pubCh на reconnect — предотвращает fd leak
+- backoffDelay с bit-shift вместо math.Pow, capped at attempt=5
+
+**Review findings fixed:**
+- W-1: TOCTOU race в Publish — hold RLock for entire call
+- W-2: Missed close notification — IsClosed() check
+- W-3: FD leak on reconnect — close old resources
+- S-2: context.Background() → cancelCtx для graceful handler cancellation
+- S-3: Re-subscribe errors captured
+- S-5: backoffDelay overflow — cap + bit-shift
+- S-6: Added 6 reconnect/backoff tests
+- N-1: Sanitized broker address from error
+- N-3: Comments for non-retryable AMQP codes
+
+**Summary:**
+- 4 файла: client.go, errors.go, reconnect.go, client_test.go
+- 23 теста с -race: Publish (4), Subscribe (4+1 cancel-ctx), Close (2), mapError (6), interface (1), backoffDelay (3), reconnect (2)
+- Все 17 пакетов PASS, go vet clean, make build/test/lint OK
+- Зависимость: github.com/rabbitmq/amqp091-go v1.10.0
+
+**Заметки для следующей итерации:**
+- TASK-008✅ разблокирует: TASK-015 (Command Consumer), TASK-032 (Event Publisher), TASK-033 (DM Outbound), TASK-034 (DM Inbound)
+- При DI в main.go: `brokerClient, err := broker.NewClient(cfg.Broker)` → inject в publisher/consumer adapters
+- Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-021 (pending response registry), TASK-031 (temp artifact storage), TASK-043 (security validation)
+- Новые eligible задачи благодаря TASK-008: TASK-015 (deps: TASK-005✅, TASK-006✅, TASK-008✅), TASK-032 (deps: TASK-005✅, TASK-006✅, TASK-008✅), TASK-033 (deps: TASK-005✅, TASK-006✅, TASK-008✅)

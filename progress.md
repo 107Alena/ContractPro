@@ -1115,3 +1115,52 @@
 - При реализации TASK-036: shared *warning.Collector НЕ safe для concurrent HandleProcessDocument calls (TODO в коде). Нужно либо per-job collectors, либо scope by job ID
 - WAITING_DM_CONFIRMATION — no-op placeholder, будет реализован в TASK-034 (DM Inbound Adapter)
 - Готовые задачи для следующей итерации: TASK-036 (critical), TASK-009 (high, KV-store), TASK-012 (high, Observability), TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry)
+
+### TASK-036 — Processing Pipeline Orchestrator: обработка ошибок, retry и таймаутов
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации (согласован):**
+1. Добавить classifyError — классификация ошибок в терминальный статус:
+   - context.DeadlineExceeded → TIMED_OUT (is_retryable=true)
+   - Validation/format codes (VALIDATION_ERROR, FILE_TOO_LARGE, TOO_MANY_PAGES, INVALID_FORMAT, FILE_NOT_FOUND) → REJECTED (is_retryable=false)
+   - Всё остальное → FAILED (is_retryable=false, retries уже исчерпаны)
+2. Добавить retryStep — retry с exponential backoff:
+   - maxRetries и backoffBase в Orchestrator struct
+   - time.NewTimer + Stop (без timer leak)
+   - Только для retryable ошибок (port.IsRetryable)
+   - Respects context cancellation между retries
+3. Извлечь runPipeline — happy path с retryStep на fetcher/OCR/DM sender
+4. Добавить handlePipelineError — обработка ошибок:
+   - context.Background() для side-effects (jobCtx может быть expired)
+   - TransitionJob → PublishProcessingFailed → DeleteByPrefix (всё best-effort)
+   - Возвращает оригинальный pipelineErr
+5. Обновить HandleProcessDocument: runPipeline → handlePipelineError на ошибке
+6. Обновить NewOrchestrator: +maxRetries, +backoffBase
+
+**Ключевые решения:**
+- retryStep применяется только к fetcher, OCR, DM sender — validator/textextract/structextract/treebuilder не дают retryable ошибок
+- handlePipelineError использует context.Background() — при TIMED_OUT jobCtx уже expired
+- is_retryable в ProcessingFailedEvent: false для FAILED (DP исчерпал retries), true только для TIMED_OUT (upstream может пере-отправить)
+- Cleanup в handlePipelineError — явный вызов, документирован double-cleanup с LifecycleManager (idempotent)
+- rejectedCodes map — все validation/format errors ведут к REJECTED статусу
+
+**Summary:**
+- classifyError, retryStep, runPipeline, handlePipelineError добавлены в orchestrator.go
+- maxRetries int + backoffBase time.Duration в Orchestrator struct
+- 34 теста с -race (18 existing updated + 16 new):
+  - REJECTED: 5 variants (validation, file too large, invalid format, too many pages, file not found)
+  - Retry: OCR success after retry, exhausted retries → FAILED
+  - TIMED_OUT: DeadlineExceeded → ProcessingFailedEvent(is_retryable=true)
+  - FAILED: non-retryable extraction, broker retries exhausted
+  - Cleanup: на каждом терминальном пути (REJECTED, FAILED, TIMED_OUT)
+  - ProcessingFailedEvent: все поля проверены
+  - classifyError: 12-case table-driven
+  - retryStep: ctx cancellation
+- Code review: 0 critical, 5 warnings fixed (classifyError comment, timer leak, double cleanup doc, is_retryable semantics)
+- 21 пакет PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-036✅ разблокирует TASK-039 (main entry point, но зависит ещё от TASK-017, TASK-037, TASK-038)
+- Готовые задачи (pending, все deps done): TASK-009 (high, KV-store), TASK-012 (high, Observability), TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security)
+- shared *warning.Collector по-прежнему не safe для concurrent calls — при параллельной обработке нужен per-job collector

@@ -825,7 +825,9 @@
         "Шаг 7: проверить, что ProcessingFailedEvent содержит корректный failed_at_stage и is_retryable"
       ],
       "dependencies": ["TASK-035"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Orchestrator в internal/application/processing/orchestrator.go расширен полной обработкой ошибок, retry и таймаутов. Новые функции: classifyError (DeadlineExceeded→TIMED_OUT, validation/format→REJECTED, остальные→FAILED), retryStep (exponential backoff с time.NewTimer, ctx cancellation), runPipeline (извлечённый happy path с retryStep на fetcher/OCR/DM sender), handlePipelineError (transition→publish ProcessingFailedEvent→cleanup, всё best-effort с context.Background()). Struct расширен maxRetries int и backoffBase time.Duration с defaults. rejectedCodes map: VALIDATION_ERROR, FILE_TOO_LARGE, TOO_MANY_PAGES, INVALID_FORMAT, FILE_NOT_FOUND. 34 теста с -race: 18 existing (updated для проверки ProcessingFailedEvent) + 16 new (5 REJECTED variants, 2 retry success/exhaustion, 1 TIMED_OUT, 2 FAILED variants, 3 cleanup paths, 1 event fields, 1 classifyError table 12 subtests, 1 retryStep ctx cancel). Code review: 0 critical, 5 warnings fixed (classifyError comment, timer leak, double cleanup doc, is_retryable semantics). 21 пакет PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-037",

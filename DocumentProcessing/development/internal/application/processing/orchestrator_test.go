@@ -193,6 +193,37 @@ func (m *mockDMSender) SendDiffResult(_ context.Context, _ model.DocumentVersion
 	return nil
 }
 
+// callCountOCRProcessor counts invocations and fails until failUntil is reached.
+type callCountOCRProcessor struct {
+	callCount     int
+	failUntil     int
+	err           error
+	successResult *model.OCRRawArtifact
+}
+
+func (m *callCountOCRProcessor) Process(_ context.Context, _ string, _ bool) (*model.OCRRawArtifact, error) {
+	m.callCount++
+	if m.callCount <= m.failUntil {
+		return nil, m.err
+	}
+	return m.successResult, nil
+}
+
+// callCountDMSender counts invocations and always returns err.
+type callCountDMSender struct {
+	callCount int
+	err       error
+}
+
+func (m *callCountDMSender) SendArtifacts(_ context.Context, _ model.DocumentProcessingArtifactsReady) error {
+	m.callCount++
+	return m.err
+}
+
+func (m *callCountDMSender) SendDiffResult(_ context.Context, _ model.DocumentVersionDiffReady) error {
+	return nil
+}
+
 // --- Helpers ---
 
 func defaultCmd() model.ProcessDocumentCommand {
@@ -214,6 +245,15 @@ func defaultFetchResult() *port.FetchResult {
 		PageCount:  5,
 		IsTextPDF:  true,
 		FileSize:   1024,
+	}
+}
+
+func scannedFetchResult() *port.FetchResult {
+	return &port.FetchResult{
+		StorageKey: "job-1/source.pdf",
+		PageCount:  3,
+		IsTextPDF:  false,
+		FileSize:   2048,
 	}
 }
 
@@ -299,10 +339,71 @@ func (d *testDeps) buildOrchestrator() *Orchestrator {
 		d.tempStorage,
 		d.publisher,
 		d.dmSender,
+		1,
+		time.Millisecond,
 	)
 }
 
-// --- Tests ---
+func (d *testDeps) buildOrchestratorWithRetry(maxRetries int, backoff time.Duration) *Orchestrator {
+	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, d.wc, 10, 1, time.Second)
+	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil)
+	return NewOrchestrator(
+		lm,
+		d.wc,
+		d.validator,
+		d.fetcher,
+		ocrAdapter,
+		d.textExtractor,
+		d.structExtract,
+		d.treeBuilder,
+		d.tempStorage,
+		d.publisher,
+		d.dmSender,
+		maxRetries,
+		backoff,
+	)
+}
+
+func (d *testDeps) buildOrchestratorWithOCR(ocrProc port.OCRProcessorPort, maxRetries int, backoff time.Duration) *Orchestrator {
+	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil)
+	return NewOrchestrator(
+		lm,
+		d.wc,
+		d.validator,
+		d.fetcher,
+		ocrProc,
+		d.textExtractor,
+		d.structExtract,
+		d.treeBuilder,
+		d.tempStorage,
+		d.publisher,
+		d.dmSender,
+		maxRetries,
+		backoff,
+	)
+}
+
+func (d *testDeps) buildOrchestratorWithDMSender(sender port.DMArtifactSenderPort, maxRetries int, backoff time.Duration) *Orchestrator {
+	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, d.wc, 10, 1, time.Second)
+	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil)
+	return NewOrchestrator(
+		lm,
+		d.wc,
+		d.validator,
+		d.fetcher,
+		ocrAdapter,
+		d.textExtractor,
+		d.structExtract,
+		d.treeBuilder,
+		d.tempStorage,
+		d.publisher,
+		sender,
+		maxRetries,
+		backoff,
+	)
+}
+
+// --- Tests: Happy Path ---
 
 func TestHappyPathTextPDF_NoWarnings(t *testing.T) {
 	deps := newTestDeps()
@@ -314,19 +415,19 @@ func TestHappyPathTextPDF_NoWarnings(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	// Verify status transitions: QUEUED → IN_PROGRESS, then IN_PROGRESS → COMPLETED.
+	// Verify status transitions: QUEUED -> IN_PROGRESS, then IN_PROGRESS -> COMPLETED.
 	if len(deps.publisher.statusChanged) != 2 {
 		t.Fatalf("expected 2 StatusChangedEvents, got %d", len(deps.publisher.statusChanged))
 	}
 
 	first := deps.publisher.statusChanged[0]
 	if first.OldStatus != model.StatusQueued || first.NewStatus != model.StatusInProgress {
-		t.Errorf("first transition: expected QUEUED→IN_PROGRESS, got %s→%s", first.OldStatus, first.NewStatus)
+		t.Errorf("first transition: expected QUEUED->IN_PROGRESS, got %s->%s", first.OldStatus, first.NewStatus)
 	}
 
 	second := deps.publisher.statusChanged[1]
 	if second.OldStatus != model.StatusInProgress || second.NewStatus != model.StatusCompleted {
-		t.Errorf("second transition: expected IN_PROGRESS→COMPLETED, got %s→%s", second.OldStatus, second.NewStatus)
+		t.Errorf("second transition: expected IN_PROGRESS->COMPLETED, got %s->%s", second.OldStatus, second.NewStatus)
 	}
 
 	// Verify ProcessingCompletedEvent.
@@ -538,6 +639,8 @@ func TestHappyPathScannedPDF_OCRWarnings(t *testing.T) {
 	}
 }
 
+// --- Tests: Existing Error Cases (updated to verify failure event, terminal status, cleanup) ---
+
 func TestValidationError_ReturnsError(t *testing.T) {
 	deps := newTestDeps()
 	deps.validator.err = port.NewValidationError("document_id is required")
@@ -558,9 +661,12 @@ func TestValidationError_ReturnsError(t *testing.T) {
 		t.Errorf("expected error code %s, got %s", port.ErrCodeValidation, domErr.Code)
 	}
 
-	// Verify the lifecycle transition still happened (QUEUED → IN_PROGRESS).
-	if len(deps.publisher.statusChanged) != 1 {
-		t.Fatalf("expected 1 StatusChangedEvent (QUEUED→IN_PROGRESS), got %d", len(deps.publisher.statusChanged))
+	// Verify the lifecycle transition happened: QUEUED -> IN_PROGRESS, then IN_PROGRESS -> REJECTED.
+	if len(deps.publisher.statusChanged) != 2 {
+		t.Fatalf("expected 2 StatusChangedEvents (QUEUED->IN_PROGRESS + IN_PROGRESS->REJECTED), got %d", len(deps.publisher.statusChanged))
+	}
+	if deps.publisher.statusChanged[1].NewStatus != model.StatusRejected {
+		t.Errorf("expected terminal status REJECTED, got %s", deps.publisher.statusChanged[1].NewStatus)
 	}
 
 	// No completion event should be published.
@@ -568,9 +674,26 @@ func TestValidationError_ReturnsError(t *testing.T) {
 		t.Error("no ProcessingCompletedEvent should be published on validation error")
 	}
 
+	// Verify ProcessingFailedEvent.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	failed := deps.publisher.processingFailed[0]
+	if failed.Status != model.StatusRejected {
+		t.Errorf("expected REJECTED in failed event, got %s", failed.Status)
+	}
+	if failed.IsRetryable {
+		t.Error("expected IsRetryable=false for validation error")
+	}
+
 	// No artifacts sent to DM.
 	if len(deps.dmSender.sentArtifacts) != 0 {
 		t.Error("no artifacts should be sent to DM on validation error")
+	}
+
+	// Verify cleanup was called.
+	if len(deps.tempStorage.deletedPrefixes) < 1 {
+		t.Error("expected cleanup to be called on error path")
 	}
 }
 
@@ -594,6 +717,19 @@ func TestFetchError_ReturnsError(t *testing.T) {
 	if domErr.Code != port.ErrCodeFileNotFound {
 		t.Errorf("expected error code %s, got %s", port.ErrCodeFileNotFound, domErr.Code)
 	}
+
+	// Verify ProcessingFailedEvent was published.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusRejected {
+		t.Errorf("expected REJECTED for FILE_NOT_FOUND, got %s", deps.publisher.processingFailed[0].Status)
+	}
+
+	// Verify cleanup was called.
+	if len(deps.tempStorage.deletedPrefixes) < 1 {
+		t.Error("expected cleanup to be called on error path")
+	}
 }
 
 func TestTextExtractionError_ReturnsError(t *testing.T) {
@@ -615,6 +751,19 @@ func TestTextExtractionError_ReturnsError(t *testing.T) {
 	}
 	if domErr.Code != port.ErrCodeExtractionFailed {
 		t.Errorf("expected error code %s, got %s", port.ErrCodeExtractionFailed, domErr.Code)
+	}
+
+	// Verify ProcessingFailedEvent was published with FAILED status.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusFailed {
+		t.Errorf("expected FAILED for EXTRACTION_FAILED, got %s", deps.publisher.processingFailed[0].Status)
+	}
+
+	// Verify cleanup was called.
+	if len(deps.tempStorage.deletedPrefixes) < 1 {
+		t.Error("expected cleanup to be called on error path")
 	}
 }
 
@@ -638,6 +787,14 @@ func TestStructureExtractionError_ReturnsError(t *testing.T) {
 	if domErr.Code != port.ErrCodeExtractionFailed {
 		t.Errorf("expected error code %s, got %s", port.ErrCodeExtractionFailed, domErr.Code)
 	}
+
+	// Verify ProcessingFailedEvent was published with FAILED status.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusFailed {
+		t.Errorf("expected FAILED, got %s", deps.publisher.processingFailed[0].Status)
+	}
 }
 
 func TestSemanticTreeBuildError_ReturnsError(t *testing.T) {
@@ -656,6 +813,11 @@ func TestSemanticTreeBuildError_ReturnsError(t *testing.T) {
 	var domErr *port.DomainError
 	if !errors.As(err, &domErr) {
 		t.Fatalf("expected DomainError, got %T: %v", err, err)
+	}
+
+	// Verify ProcessingFailedEvent was published.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
 	}
 }
 
@@ -682,6 +844,19 @@ func TestDMSendError_ReturnsError(t *testing.T) {
 	// No completion event should be published.
 	if len(deps.publisher.processingCompleted) != 0 {
 		t.Error("no ProcessingCompletedEvent should be published on DM send error")
+	}
+
+	// Verify ProcessingFailedEvent was published with FAILED status.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusFailed {
+		t.Errorf("expected FAILED for BROKER_FAILED, got %s", deps.publisher.processingFailed[0].Status)
+	}
+
+	// Verify cleanup was called.
+	if len(deps.tempStorage.deletedPrefixes) < 1 {
+		t.Error("expected cleanup to be called on error path")
 	}
 }
 
@@ -728,6 +903,8 @@ func TestPublishCompletedError_ReturnsError(t *testing.T) {
 		deps.tempStorage,
 		specialPub,
 		deps.dmSender,
+		1,
+		time.Millisecond,
 	)
 
 	cmd := defaultCmd()
@@ -919,6 +1096,8 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 				asTempStorage(args[8]),
 				asPublisher(args[9]),
 				asDMSender(args[10]),
+				1,
+				time.Millisecond,
 			)
 		})
 	}
@@ -1032,6 +1211,11 @@ func TestOCRError_ReturnsError(t *testing.T) {
 	if len(deps.publisher.processingCompleted) != 0 {
 		t.Error("no ProcessingCompletedEvent should be published on OCR error")
 	}
+
+	// Verify ProcessingFailedEvent was published.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
 }
 
 func TestContextCancellation_ReturnsError(t *testing.T) {
@@ -1061,6 +1245,8 @@ func TestContextCancellation_ReturnsError(t *testing.T) {
 		deps.tempStorage,
 		deps.publisher,
 		deps.dmSender,
+		1,
+		time.Millisecond,
 	)
 	cmd := defaultCmd()
 
@@ -1119,5 +1305,531 @@ func TestPipelineStageProgression(t *testing.T) {
 	lastStage := deps.publisher.statusChanged[len(deps.publisher.statusChanged)-1].Stage
 	if lastStage != string(model.ProcessingStageCleanup) {
 		t.Errorf("last event stage: expected %s, got %s", model.ProcessingStageCleanup, lastStage)
+	}
+}
+
+// --- Tests: REJECTED status ---
+
+func TestRejected_ValidationError(t *testing.T) {
+	deps := newTestDeps()
+	deps.validator.err = port.NewValidationError("missing field")
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Verify terminal status is REJECTED.
+	found := false
+	for _, sc := range deps.publisher.statusChanged {
+		if sc.NewStatus == model.StatusRejected {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected REJECTED status transition")
+	}
+
+	// Verify ProcessingFailedEvent.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	failed := deps.publisher.processingFailed[0]
+	if failed.Status != model.StatusRejected {
+		t.Errorf("expected REJECTED, got %s", failed.Status)
+	}
+	if failed.IsRetryable {
+		t.Error("expected IsRetryable=false for REJECTED")
+	}
+	if failed.ErrorCode != port.ErrCodeValidation {
+		t.Errorf("expected error code %s, got %s", port.ErrCodeValidation, failed.ErrorCode)
+	}
+}
+
+func TestRejected_FileTooLarge(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewFileTooLargeError("file exceeds 20 MB")
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusRejected {
+		t.Errorf("expected REJECTED, got %s", deps.publisher.processingFailed[0].Status)
+	}
+}
+
+func TestRejected_InvalidFormat(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewInvalidFormatError("not a PDF")
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusRejected {
+		t.Errorf("expected REJECTED, got %s", deps.publisher.processingFailed[0].Status)
+	}
+}
+
+func TestRejected_TooManyPages(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewTooManyPagesError("exceeds 100 pages")
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusRejected {
+		t.Errorf("expected REJECTED, got %s", deps.publisher.processingFailed[0].Status)
+	}
+}
+
+func TestRejected_FileNotFound(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewFileNotFoundError("file not found", errors.New("404"))
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusRejected {
+		t.Errorf("expected REJECTED, got %s", deps.publisher.processingFailed[0].Status)
+	}
+}
+
+// --- Tests: Retry logic ---
+
+func TestRetry_OCRRetryableError_ThenSuccess(t *testing.T) {
+	deps := newTestDeps()
+	// Configure scanned PDF so OCR actually runs.
+	deps.fetcher.result = scannedFetchResult()
+
+	ocrProc := &callCountOCRProcessor{
+		failUntil: 1,
+		err:       port.NewOCRError("OCR rate limit", true, errors.New("429")),
+		successResult: &model.OCRRawArtifact{
+			Status:  model.OCRStatusApplicable,
+			RawText: "Договор поставки товаров между ООО Ромашка и ООО Василёк от 01.01.2026",
+		},
+	}
+
+	orch := deps.buildOrchestratorWithOCR(ocrProc, 3, time.Millisecond)
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("expected no error after retry success, got: %v", err)
+	}
+
+	if ocrProc.callCount != 2 {
+		t.Errorf("expected 2 OCR calls (1 fail + 1 success), got %d", ocrProc.callCount)
+	}
+
+	// Verify pipeline completed.
+	if len(deps.publisher.processingCompleted) != 1 {
+		t.Fatalf("expected 1 ProcessingCompletedEvent, got %d", len(deps.publisher.processingCompleted))
+	}
+}
+
+func TestRetry_ExhaustedRetries_Failed(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = scannedFetchResult()
+
+	ocrProc := &callCountOCRProcessor{
+		failUntil: 100, // always fail
+		err:       port.NewOCRError("OCR rate limit", true, errors.New("429")),
+	}
+
+	orch := deps.buildOrchestratorWithOCR(ocrProc, 2, time.Millisecond)
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error after exhausted retries, got nil")
+	}
+
+	if ocrProc.callCount != 2 {
+		t.Errorf("expected 2 OCR calls (maxRetries=2), got %d", ocrProc.callCount)
+	}
+
+	// Verify terminal status is FAILED (not REJECTED or TIMED_OUT).
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusFailed {
+		t.Errorf("expected FAILED, got %s", deps.publisher.processingFailed[0].Status)
+	}
+}
+
+// --- Tests: Timeout ---
+
+func TestTimedOut_DeadlineExceeded(t *testing.T) {
+	deps := newTestDeps()
+	// Fetcher returns context.DeadlineExceeded.
+	deps.fetcher.result = nil
+	deps.fetcher.err = context.DeadlineExceeded
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected DeadlineExceeded, got: %v", err)
+	}
+
+	// Verify ProcessingFailedEvent with TIMED_OUT and is_retryable=true.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	failed := deps.publisher.processingFailed[0]
+	if failed.Status != model.StatusTimedOut {
+		t.Errorf("expected TIMED_OUT, got %s", failed.Status)
+	}
+	if !failed.IsRetryable {
+		t.Error("expected IsRetryable=true for TIMED_OUT")
+	}
+}
+
+// --- Tests: FAILED status ---
+
+func TestFailed_NonRetryableError(t *testing.T) {
+	deps := newTestDeps()
+	deps.textExtractor.text = nil
+	deps.textExtractor.err = port.NewExtractionError("extraction failed", errors.New("parse error"))
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Verify FAILED status.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	failed := deps.publisher.processingFailed[0]
+	if failed.Status != model.StatusFailed {
+		t.Errorf("expected FAILED, got %s", failed.Status)
+	}
+	if failed.IsRetryable {
+		t.Error("expected IsRetryable=false for non-retryable error")
+	}
+}
+
+func TestFailed_BrokerError_RetriesExhausted(t *testing.T) {
+	deps := newTestDeps()
+
+	dmSender := &callCountDMSender{
+		err: port.NewBrokerError("broker unavailable", errors.New("connection refused")),
+	}
+
+	orch := deps.buildOrchestratorWithDMSender(dmSender, 2, time.Millisecond)
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error after exhausted retries, got nil")
+	}
+
+	if dmSender.callCount != 2 {
+		t.Errorf("expected 2 DM sender calls (maxRetries=2), got %d", dmSender.callCount)
+	}
+
+	// Verify terminal status is FAILED.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	if deps.publisher.processingFailed[0].Status != model.StatusFailed {
+		t.Errorf("expected FAILED, got %s", deps.publisher.processingFailed[0].Status)
+	}
+}
+
+// --- Tests: Cleanup on error paths ---
+
+func TestCleanup_OnRejected(t *testing.T) {
+	deps := newTestDeps()
+	deps.validator.err = port.NewValidationError("bad input")
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	// Verify cleanup was called.
+	if len(deps.tempStorage.deletedPrefixes) < 1 {
+		t.Error("expected cleanup to be called on REJECTED path")
+	}
+	found := false
+	for _, p := range deps.tempStorage.deletedPrefixes {
+		if p == "job-1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected cleanup prefix job-1, got %v", deps.tempStorage.deletedPrefixes)
+	}
+}
+
+func TestCleanup_OnFailed(t *testing.T) {
+	deps := newTestDeps()
+	deps.textExtractor.text = nil
+	deps.textExtractor.err = port.NewExtractionError("failed", errors.New("err"))
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	if len(deps.tempStorage.deletedPrefixes) < 1 {
+		t.Error("expected cleanup to be called on FAILED path")
+	}
+}
+
+func TestCleanup_OnTimedOut(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = context.DeadlineExceeded
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	if len(deps.tempStorage.deletedPrefixes) < 1 {
+		t.Error("expected cleanup to be called on TIMED_OUT path")
+	}
+}
+
+// --- Tests: ProcessingFailedEvent field completeness ---
+
+func TestProcessingFailedEvent_AllFieldsPopulated(t *testing.T) {
+	deps := newTestDeps()
+	deps.textExtractor.text = nil
+	deps.textExtractor.err = port.NewExtractionError("extraction failed", errors.New("parse error"))
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	before := time.Now().UTC()
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+	after := time.Now().UTC()
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	f := deps.publisher.processingFailed[0]
+
+	// 1. CorrelationID
+	if f.CorrelationID != "job-1" {
+		t.Errorf("CorrelationID: expected job-1, got %s", f.CorrelationID)
+	}
+	// 2. Timestamp
+	if f.Timestamp.Before(before) || f.Timestamp.After(after) {
+		t.Errorf("Timestamp %v outside range [%v, %v]", f.Timestamp, before, after)
+	}
+	// 3. JobID
+	if f.JobID != "job-1" {
+		t.Errorf("JobID: expected job-1, got %s", f.JobID)
+	}
+	// 4. DocumentID
+	if f.DocumentID != "doc-1" {
+		t.Errorf("DocumentID: expected doc-1, got %s", f.DocumentID)
+	}
+	// 5. Status
+	if f.Status != model.StatusFailed {
+		t.Errorf("Status: expected FAILED, got %s", f.Status)
+	}
+	// 6. ErrorCode
+	if f.ErrorCode != port.ErrCodeExtractionFailed {
+		t.Errorf("ErrorCode: expected %s, got %s", port.ErrCodeExtractionFailed, f.ErrorCode)
+	}
+	// 7. ErrorMessage
+	if f.ErrorMessage == "" {
+		t.Error("ErrorMessage should not be empty")
+	}
+	// 8. FailedAtStage
+	if f.FailedAtStage != string(model.ProcessingStageTextExtraction) {
+		t.Errorf("FailedAtStage: expected %s, got %s", model.ProcessingStageTextExtraction, f.FailedAtStage)
+	}
+	// is_retryable for non-retryable
+	if f.IsRetryable {
+		t.Error("expected IsRetryable=false for extraction error")
+	}
+}
+
+// --- Tests: classifyError ---
+
+func TestClassifyError_Table(t *testing.T) {
+	tests := []struct {
+		name            string
+		err             error
+		expectedStatus  model.JobStatus
+		expectedRetryable bool
+	}{
+		{
+			name:            "DeadlineExceeded",
+			err:             context.DeadlineExceeded,
+			expectedStatus:  model.StatusTimedOut,
+			expectedRetryable: true,
+		},
+		{
+			name:            "WrappedDeadlineExceeded",
+			err:             port.NewTimeoutError("timed out", context.DeadlineExceeded),
+			expectedStatus:  model.StatusTimedOut,
+			expectedRetryable: true,
+		},
+		{
+			name:            "ValidationError",
+			err:             port.NewValidationError("bad input"),
+			expectedStatus:  model.StatusRejected,
+			expectedRetryable: false,
+		},
+		{
+			name:            "FileTooLarge",
+			err:             port.NewFileTooLargeError("too big"),
+			expectedStatus:  model.StatusRejected,
+			expectedRetryable: false,
+		},
+		{
+			name:            "TooManyPages",
+			err:             port.NewTooManyPagesError("too many"),
+			expectedStatus:  model.StatusRejected,
+			expectedRetryable: false,
+		},
+		{
+			name:            "InvalidFormat",
+			err:             port.NewInvalidFormatError("not pdf"),
+			expectedStatus:  model.StatusRejected,
+			expectedRetryable: false,
+		},
+		{
+			name:            "FileNotFound",
+			err:             port.NewFileNotFoundError("not found", errors.New("404")),
+			expectedStatus:  model.StatusRejected,
+			expectedRetryable: false,
+		},
+		{
+			name:            "OCRError_Retryable",
+			err:             port.NewOCRError("rate limit", true, errors.New("429")),
+			expectedStatus:  model.StatusFailed,
+			expectedRetryable: false,
+		},
+		{
+			name:            "ExtractionError",
+			err:             port.NewExtractionError("failed", errors.New("err")),
+			expectedStatus:  model.StatusFailed,
+			expectedRetryable: false,
+		},
+		{
+			name:            "BrokerError",
+			err:             port.NewBrokerError("broker down", errors.New("err")),
+			expectedStatus:  model.StatusFailed,
+			expectedRetryable: false,
+		},
+		{
+			name:            "StorageError",
+			err:             port.NewStorageError("s3 down", errors.New("err")),
+			expectedStatus:  model.StatusFailed,
+			expectedRetryable: false,
+		},
+		{
+			name:            "PlainError",
+			err:             errors.New("unknown error"),
+			expectedStatus:  model.StatusFailed,
+			expectedRetryable: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, retryable := classifyError(tt.err)
+			if status != tt.expectedStatus {
+				t.Errorf("expected status %s, got %s", tt.expectedStatus, status)
+			}
+			if retryable != tt.expectedRetryable {
+				t.Errorf("expected retryable=%v, got %v", tt.expectedRetryable, retryable)
+			}
+		})
+	}
+}
+
+// --- Tests: retryStep context cancellation ---
+
+func TestRetryStep_RespectsContextCancellation(t *testing.T) {
+	o := &Orchestrator{
+		maxRetries:  5,
+		backoffBase: time.Second, // Long backoff to ensure we detect cancellation.
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	callCount := 0
+	fn := func() error {
+		callCount++
+		if callCount == 1 {
+			// Cancel context after first call — during backoff wait the context
+			// should be detected as cancelled.
+			cancel()
+		}
+		return port.NewOCRError("rate limit", true, errors.New("429"))
+	}
+
+	err := o.retryStep(ctx, fn)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+
+	// Should have been called exactly once before context cancellation
+	// stopped the retry loop.
+	if callCount != 1 {
+		t.Errorf("expected 1 call before cancellation, got %d", callCount)
 	}
 }

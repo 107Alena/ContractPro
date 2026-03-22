@@ -2,6 +2,7 @@ package processing
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -14,23 +15,29 @@ import (
 // Compile-time interface compliance check.
 var _ port.ProcessingCommandHandler = (*Orchestrator)(nil)
 
+// rejectedCodes maps error codes that result in REJECTED status.
+var rejectedCodes = map[string]bool{
+	port.ErrCodeValidation:   true,
+	port.ErrCodeFileTooLarge: true,
+	port.ErrCodeTooManyPages: true,
+	port.ErrCodeInvalidFormat: true,
+	port.ErrCodeFileNotFound:  true,
+}
+
 // Orchestrator implements port.ProcessingCommandHandler — the main orchestrator
-// that runs the full document processing pipeline (happy path).
+// that runs the full document processing pipeline with error handling and retry.
 //
 // Pipeline stages:
 //
-//	VALIDATING_INPUT → FETCHING_SOURCE_FILE (includes file format/page validation) →
-//	OCR/OCR_SKIPPED → TEXT_EXTRACTION → STRUCTURE_EXTRACTION →
-//	SEMANTIC_TREE_BUILDING → SAVING_ARTIFACTS → CLEANUP_TEMP_ARTIFACTS
+//	VALIDATING_INPUT -> FETCHING_SOURCE_FILE (includes file format/page validation) ->
+//	OCR/OCR_SKIPPED -> TEXT_EXTRACTION -> STRUCTURE_EXTRACTION ->
+//	SEMANTIC_TREE_BUILDING -> SAVING_ARTIFACTS -> CLEANUP_TEMP_ARTIFACTS
 //
 // NOTE: WAITING_DM_CONFIRMATION is currently a no-op placeholder until TASK-034
 // implements the DM Inbound Adapter.
 //
 // NOTE: The shared *warning.Collector is not safe for concurrent HandleProcessDocument
-// calls. Concurrent job processing will be addressed in TASK-036.
-//
-// Error handling and retry logic will be added in TASK-036. For now, any
-// error encountered during processing is returned immediately.
+// calls. Concurrent job processing will be addressed separately.
 type Orchestrator struct {
 	lifecycle     *lifecycle.LifecycleManager
 	warnings      *warning.Collector
@@ -43,10 +50,13 @@ type Orchestrator struct {
 	tempStorage   port.TempStoragePort
 	publisher     port.EventPublisherPort
 	dmSender      port.DMArtifactSenderPort
+	maxRetries    int
+	backoffBase   time.Duration
 }
 
 // NewOrchestrator creates an Orchestrator with all required dependencies.
 // Panics if any dependency is nil (programmer error at startup).
+// maxRetries defaults to 1 if < 1, backoffBase defaults to time.Second if <= 0.
 func NewOrchestrator(
 	lifecycle *lifecycle.LifecycleManager,
 	warnings *warning.Collector,
@@ -59,6 +69,8 @@ func NewOrchestrator(
 	tempStorage port.TempStoragePort,
 	publisher port.EventPublisherPort,
 	dmSender port.DMArtifactSenderPort,
+	maxRetries int,
+	backoffBase time.Duration,
 ) *Orchestrator {
 	if lifecycle == nil {
 		panic("processing: lifecycle manager must not be nil")
@@ -93,6 +105,12 @@ func NewOrchestrator(
 	if dmSender == nil {
 		panic("processing: dm sender must not be nil")
 	}
+	if maxRetries < 1 {
+		maxRetries = 1
+	}
+	if backoffBase <= 0 {
+		backoffBase = time.Second
+	}
 	return &Orchestrator{
 		lifecycle:     lifecycle,
 		warnings:      warnings,
@@ -105,51 +123,94 @@ func NewOrchestrator(
 		tempStorage:   tempStorage,
 		publisher:     publisher,
 		dmSender:      dmSender,
+		maxRetries:    maxRetries,
+		backoffBase:   backoffBase,
 	}
 }
 
-// HandleProcessDocument executes the full document processing pipeline.
-//
-// The method creates a ProcessingJob, transitions it through each stage,
-// and on success publishes a ProcessingCompletedEvent. This is the happy-path
-// implementation; error handling with failure events will be added in TASK-036.
-func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.ProcessDocumentCommand) error {
-	job := model.NewProcessingJob(cmd.JobID, cmd.DocumentID, cmd.FileURL)
-	job.FileName = cmd.FileName
-	job.FileSize = cmd.FileSize
-	job.MimeType = cmd.MimeType
-	job.Checksum = cmd.Checksum
-	job.OrgID = cmd.OrgID
-	job.UserID = cmd.UserID
+// classifyError determines the terminal status and event-level is_retryable flag.
+// DeadlineExceeded is checked first because it can wrap inside any DomainError
+// when the job context expires mid-operation.
+// The event is_retryable is false for FAILED because the DP service has already
+// exhausted its own retries. Only TIMED_OUT is marked retryable to signal
+// the upstream consumer that re-submission may succeed.
+func classifyError(err error) (model.JobStatus, bool) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return model.StatusTimedOut, true
+	}
 
-	o.warnings.Reset()
+	code := port.ErrorCode(err)
+	if rejectedCodes[code] {
+		return model.StatusRejected, false
+	}
 
-	// Create a job-scoped context with timeout.
-	jobCtx, cancel := o.lifecycle.NewJobContext(ctx)
-	defer cancel()
+	return model.StatusFailed, false
+}
 
-	// --- Transition: QUEUED → IN_PROGRESS ---
+// retryStep runs fn up to o.maxRetries times. On retryable errors it applies
+// exponential backoff (backoffBase * 2^attempt) while respecting context
+// cancellation. Non-retryable errors are returned immediately.
+func (o *Orchestrator) retryStep(ctx context.Context, fn func() error) error {
+	var lastErr error
+	for attempt := 0; attempt < o.maxRetries; attempt++ {
+		lastErr = fn()
+		if lastErr == nil {
+			return nil
+		}
+		if !port.IsRetryable(lastErr) {
+			return lastErr
+		}
+		// Last attempt: do not wait, just return the error.
+		if attempt == o.maxRetries-1 {
+			break
+		}
+		// Exponential backoff.
+		delay := o.backoffBase * (1 << uint(attempt))
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
+}
+
+// runPipeline executes the happy-path processing pipeline stages.
+// Retry is applied only to stages that can produce retryable errors:
+// fetcher.Fetch, ocrProcessor.Process, and dmSender.SendArtifacts.
+func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob, cmd model.ProcessDocumentCommand) error {
+	// --- Transition: QUEUED -> IN_PROGRESS ---
 	job.Stage = model.ProcessingStageValidatingInput
-	if err := o.lifecycle.TransitionJob(jobCtx, job, model.StatusInProgress); err != nil {
+	if err := o.lifecycle.TransitionJob(ctx, job, model.StatusInProgress); err != nil {
 		return err
 	}
 
 	// --- Stage 1: VALIDATING_INPUT ---
-	if err := o.validator.Validate(jobCtx, cmd); err != nil {
+	if err := o.validator.Validate(ctx, cmd); err != nil {
 		return err
 	}
 
 	// --- Stage 2: FETCHING_SOURCE_FILE (includes PDF format and page count validation) ---
 	job.Stage = model.ProcessingStageFetchingSourceFile
-	fetchResult, err := o.fetcher.Fetch(jobCtx, cmd)
-	if err != nil {
+	var fetchResult *port.FetchResult
+	if err := o.retryStep(ctx, func() error {
+		var fetchErr error
+		fetchResult, fetchErr = o.fetcher.Fetch(ctx, cmd)
+		return fetchErr
+	}); err != nil {
 		return err
 	}
 
 	// --- Stage 3: OCR ---
 	job.Stage = model.ProcessingStageOCR
-	ocrResult, err := o.ocrProcessor.Process(jobCtx, fetchResult.StorageKey, fetchResult.IsTextPDF)
-	if err != nil {
+	var ocrResult *model.OCRRawArtifact
+	if err := o.retryStep(ctx, func() error {
+		var ocrErr error
+		ocrResult, ocrErr = o.ocrProcessor.Process(ctx, fetchResult.StorageKey, fetchResult.IsTextPDF)
+		return ocrErr
+	}); err != nil {
 		return err
 	}
 	if ocrResult.Status == model.OCRStatusNotApplicable {
@@ -158,7 +219,7 @@ func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.Proc
 
 	// --- Stage 4: TEXT_EXTRACTION ---
 	job.Stage = model.ProcessingStageTextExtraction
-	extractedText, textWarnings, err := o.textExtract.Extract(jobCtx, fetchResult.StorageKey, ocrResult)
+	extractedText, textWarnings, err := o.textExtract.Extract(ctx, fetchResult.StorageKey, ocrResult)
 	if err != nil {
 		return err
 	}
@@ -168,7 +229,7 @@ func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.Proc
 
 	// --- Stage 5: STRUCTURE_EXTRACTION ---
 	job.Stage = model.ProcessingStageStructureExtract
-	structure, structWarnings, err := o.structExtract.Extract(jobCtx, extractedText)
+	structure, structWarnings, err := o.structExtract.Extract(ctx, extractedText)
 	if err != nil {
 		return err
 	}
@@ -178,7 +239,7 @@ func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.Proc
 
 	// --- Stage 6: SEMANTIC_TREE_BUILDING ---
 	job.Stage = model.ProcessingStageSemanticTree
-	semanticTree, err := o.treeBuilder.Build(jobCtx, extractedText, structure)
+	semanticTree, err := o.treeBuilder.Build(ctx, extractedText, structure)
 	if err != nil {
 		return err
 	}
@@ -201,7 +262,9 @@ func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.Proc
 		SemanticTree: *semanticTree,
 		Warnings:     allWarnings,
 	}
-	if err := o.dmSender.SendArtifacts(jobCtx, artifactsEvent); err != nil {
+	if err := o.retryStep(ctx, func() error {
+		return o.dmSender.SendArtifacts(ctx, artifactsEvent)
+	}); err != nil {
 		return err
 	}
 
@@ -209,16 +272,16 @@ func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.Proc
 	// Best-effort: artifacts have already been sent to DM. A cleanup failure
 	// should not prevent the job from completing successfully.
 	job.Stage = model.ProcessingStageCleanup
-	if err := o.tempStorage.DeleteByPrefix(jobCtx, cmd.JobID); err != nil {
+	if err := o.tempStorage.DeleteByPrefix(ctx, cmd.JobID); err != nil {
 		log.Printf("processing: cleanup failed for job %s: %v", cmd.JobID, err)
 	}
 
-	// --- Transition: IN_PROGRESS → COMPLETED / COMPLETED_WITH_WARNINGS ---
+	// --- Transition: IN_PROGRESS -> COMPLETED / COMPLETED_WITH_WARNINGS ---
 	finalStatus := model.StatusCompleted
 	if len(allWarnings) > 0 {
 		finalStatus = model.StatusCompletedWithWarnings
 	}
-	if err := o.lifecycle.TransitionJob(jobCtx, job, finalStatus); err != nil {
+	if err := o.lifecycle.TransitionJob(ctx, job, finalStatus); err != nil {
 		return err
 	}
 
@@ -234,9 +297,84 @@ func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.Proc
 		HasWarnings:  len(allWarnings) > 0,
 		WarningCount: len(allWarnings),
 	}
-	if err := o.publisher.PublishProcessingCompleted(jobCtx, completedEvent); err != nil {
+	if err := o.publisher.PublishProcessingCompleted(ctx, completedEvent); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+// handlePipelineError handles a pipeline failure: transitions the job to the
+// appropriate terminal status, publishes a ProcessingFailedEvent, and performs
+// best-effort cleanup. All side effects use context.Background() since the
+// job context may have expired (e.g. for TIMED_OUT errors).
+func (o *Orchestrator) handlePipelineError(
+	job *model.ProcessingJob,
+	cmd model.ProcessDocumentCommand,
+	pipelineErr error,
+) error {
+	terminalStatus, isRetryable := classifyError(pipelineErr)
+
+	bgCtx := context.Background()
+
+	// Transition job to terminal status (best-effort: log and continue on failure).
+	if err := o.lifecycle.TransitionJob(bgCtx, job, terminalStatus); err != nil {
+		log.Printf("processing: failed to transition job %s to %s: %v", cmd.JobID, terminalStatus, err)
+	}
+
+	// Publish ProcessingFailedEvent (best-effort: log and continue on failure).
+	failedEvent := model.ProcessingFailedEvent{
+		EventMeta: model.EventMeta{
+			CorrelationID: cmd.JobID,
+			Timestamp:     time.Now().UTC(),
+		},
+		JobID:         cmd.JobID,
+		DocumentID:    cmd.DocumentID,
+		Status:        terminalStatus,
+		ErrorCode:     port.ErrorCode(pipelineErr),
+		ErrorMessage:  pipelineErr.Error(),
+		FailedAtStage: string(job.Stage),
+		IsRetryable:   isRetryable,
+	}
+	if err := o.publisher.PublishProcessingFailed(bgCtx, failedEvent); err != nil {
+		log.Printf("processing: failed to publish ProcessingFailedEvent for job %s: %v", cmd.JobID, err)
+	}
+
+	// Cleanup temp storage (best-effort: log and continue on failure).
+	// NOTE: LifecycleManager.TransitionJob may also run cleanup on terminal status
+	// if a cleanup function was provided. DeleteByPrefix is idempotent so double
+	// cleanup is safe. In production wiring, pass nil cleanup to LifecycleManager
+	// or keep all cleanup in the orchestrator to avoid confusion.
+	if err := o.tempStorage.DeleteByPrefix(bgCtx, cmd.JobID); err != nil {
+		log.Printf("processing: cleanup failed for job %s: %v", cmd.JobID, err)
+	}
+
+	return pipelineErr
+}
+
+// HandleProcessDocument executes the full document processing pipeline.
+//
+// The method creates a ProcessingJob, transitions it through each stage,
+// and on success publishes a ProcessingCompletedEvent. On failure it
+// transitions the job to REJECTED, FAILED, or TIMED_OUT, publishes a
+// ProcessingFailedEvent, and performs best-effort cleanup.
+func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.ProcessDocumentCommand) error {
+	job := model.NewProcessingJob(cmd.JobID, cmd.DocumentID, cmd.FileURL)
+	job.FileName = cmd.FileName
+	job.FileSize = cmd.FileSize
+	job.MimeType = cmd.MimeType
+	job.Checksum = cmd.Checksum
+	job.OrgID = cmd.OrgID
+	job.UserID = cmd.UserID
+
+	o.warnings.Reset()
+
+	// Create a job-scoped context with timeout.
+	jobCtx, cancel := o.lifecycle.NewJobContext(ctx)
+	defer cancel()
+
+	if err := o.runPipeline(jobCtx, job, cmd); err != nil {
+		return o.handlePipelineError(job, cmd, err)
+	}
 	return nil
 }

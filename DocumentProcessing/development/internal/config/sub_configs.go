@@ -128,6 +128,25 @@ func loadIdempotencyConfig() IdempotencyConfig {
 	}
 }
 
+// KVStoreConfig holds Redis connection settings for the KV-store.
+type KVStoreConfig struct {
+	Address  string        // DP_KVSTORE_ADDRESS (required)
+	Password string        // DP_KVSTORE_PASSWORD (default: "")
+	DB       int           // DP_KVSTORE_DB (default: 0)
+	PoolSize int           // DP_KVSTORE_POOL_SIZE (default: 10)
+	Timeout  time.Duration // DP_KVSTORE_TIMEOUT (default: 5s)
+}
+
+func loadKVStoreConfig() KVStoreConfig {
+	return KVStoreConfig{
+		Address:  envString("DP_KVSTORE_ADDRESS", ""),
+		Password: envString("DP_KVSTORE_PASSWORD", ""),
+		DB:       envInt("DP_KVSTORE_DB", 0),
+		PoolSize: envInt("DP_KVSTORE_POOL_SIZE", 10),
+		Timeout:  envDuration("DP_KVSTORE_TIMEOUT", 5*time.Second),
+	}
+}
+
 // ObservabilityConfig holds logging, metrics, and tracing settings.
 type ObservabilityConfig struct {
 	LogLevel        string // DP_LOG_LEVEL (default: "info")

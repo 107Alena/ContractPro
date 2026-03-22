@@ -19,6 +19,7 @@ type Config struct {
 	Limits        LimitsConfig
 	Concurrency   ConcurrencyConfig
 	Idempotency   IdempotencyConfig
+	KVStore       KVStoreConfig
 	Observability ObservabilityConfig
 	HTTP          HTTPConfig
 	Retry         RetryConfig
@@ -41,6 +42,7 @@ func Load() (*Config, error) {
 		Limits:        loadLimitsConfig(),
 		Concurrency:   loadConcurrencyConfig(),
 		Idempotency:   loadIdempotencyConfig(),
+		KVStore:       loadKVStoreConfig(),
 		Observability: loadObservabilityConfig(),
 		HTTP:          loadHTTPConfig(),
 		Retry:         loadRetryConfig(),
@@ -79,6 +81,9 @@ func (c *Config) Validate() error {
 	}
 	if c.OCR.FolderID == "" {
 		missing = append(missing, "DP_OCR_FOLDER_ID")
+	}
+	if c.KVStore.Address == "" {
+		missing = append(missing, "DP_KVSTORE_ADDRESS")
 	}
 
 	if len(missing) > 0 {

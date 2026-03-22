@@ -17,6 +17,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("DP_OCR_ENDPOINT", "https://ocr.api.cloud.yandex.net")
 	t.Setenv("DP_OCR_API_KEY", "test-api-key")
 	t.Setenv("DP_OCR_FOLDER_ID", "test-folder-id")
+	t.Setenv("DP_KVSTORE_ADDRESS", "localhost:6379")
 }
 
 // --- Validation tests ---
@@ -52,6 +53,7 @@ func TestLoad_MissingSingleRequiredField(t *testing.T) {
 		{"DP_OCR_ENDPOINT", func(t *testing.T) { t.Setenv("DP_OCR_ENDPOINT", "") }},
 		{"DP_OCR_API_KEY", func(t *testing.T) { t.Setenv("DP_OCR_API_KEY", "") }},
 		{"DP_OCR_FOLDER_ID", func(t *testing.T) { t.Setenv("DP_OCR_FOLDER_ID", "") }},
+		{"DP_KVSTORE_ADDRESS", func(t *testing.T) { t.Setenv("DP_KVSTORE_ADDRESS", "") }},
 	}
 
 	for _, tc := range requiredFields {
@@ -86,6 +88,7 @@ func TestLoad_MissingMultipleRequiredFields(t *testing.T) {
 		"DP_OCR_ENDPOINT",
 		"DP_OCR_API_KEY",
 		"DP_OCR_FOLDER_ID",
+		"DP_KVSTORE_ADDRESS",
 	}
 	errMsg := err.Error()
 	for _, field := range expectedFields {
@@ -129,6 +132,11 @@ func TestLoad_DefaultValues(t *testing.T) {
 		// Retry
 		{"Retry.MaxAttempts", cfg.Retry.MaxAttempts, 3},
 		{"Retry.BackoffBase", cfg.Retry.BackoffBase, 1 * time.Second},
+		// KVStore
+		{"KVStore.Password", cfg.KVStore.Password, ""},
+		{"KVStore.DB", cfg.KVStore.DB, 0},
+		{"KVStore.PoolSize", cfg.KVStore.PoolSize, 10},
+		{"KVStore.Timeout", cfg.KVStore.Timeout, 5 * time.Second},
 		// Storage
 		{"Storage.Region", cfg.Storage.Region, "ru-central1"},
 	}
@@ -205,12 +213,32 @@ func TestLoad_OverrideValues(t *testing.T) {
 	t.Setenv("DP_RETRY_MAX_ATTEMPTS", "5")
 	t.Setenv("DP_RETRY_BACKOFF_BASE", "2s")
 	t.Setenv("DP_STORAGE_REGION", "ru-central3")
+	t.Setenv("DP_KVSTORE_ADDRESS", "redis.example.com:6380")
+	t.Setenv("DP_KVSTORE_PASSWORD", "secret")
+	t.Setenv("DP_KVSTORE_DB", "2")
+	t.Setenv("DP_KVSTORE_POOL_SIZE", "20")
+	t.Setenv("DP_KVSTORE_TIMEOUT", "10s")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if cfg.KVStore.Address != "redis.example.com:6380" {
+		t.Errorf("KVStore.Address = %q, want %q", cfg.KVStore.Address, "redis.example.com:6380")
+	}
+	if cfg.KVStore.Password != "secret" {
+		t.Errorf("KVStore.Password = %q, want %q", cfg.KVStore.Password, "secret")
+	}
+	if cfg.KVStore.DB != 2 {
+		t.Errorf("KVStore.DB = %d, want 2", cfg.KVStore.DB)
+	}
+	if cfg.KVStore.PoolSize != 20 {
+		t.Errorf("KVStore.PoolSize = %d, want 20", cfg.KVStore.PoolSize)
+	}
+	if cfg.KVStore.Timeout != 10*time.Second {
+		t.Errorf("KVStore.Timeout = %v, want 10s", cfg.KVStore.Timeout)
+	}
 	if cfg.Limits.MaxFileSize != 10485760 {
 		t.Errorf("Limits.MaxFileSize = %d, want 10485760", cfg.Limits.MaxFileSize)
 	}
@@ -354,6 +382,7 @@ func TestValidate_FullConfig(t *testing.T) {
 		Broker:  BrokerConfig{Address: "localhost:9092"},
 		Storage: StorageConfig{Endpoint: "e", Bucket: "b", AccessKey: "ak", SecretKey: "sk"},
 		OCR:     OCRConfig{Endpoint: "e", APIKey: "k", FolderID: "f"},
+		KVStore: KVStoreConfig{Address: "localhost:6379"},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error, got: %v", err)

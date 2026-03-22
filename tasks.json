@@ -204,7 +204,9 @@
         "Шаг 3: проверить конкурентный доступ"
       ],
       "dependencies": ["TASK-001", "TASK-007"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-23",
+      "summary": "Client в internal/infra/kvstore/client.go. Redis-backed KV-store клиент с go-redis/v9. Consumer-side интерфейс RedisAPI (Set, Get, Exists, Close, Ping) — dependency inversion для unit-тестирования. KVStoreConfig добавлен в config (Address required, Password, DB=0, PoolSize=10, Timeout=5s). NewClient(cfg) — создаёт redis.Client с connection pooling, Ping healthcheck при старте. Set(ctx, key, value, ttl) — SET с TTL. Get(ctx, key) — GET с ErrKeyNotFound sentinel (не DomainError). Exists(ctx, key) — EXISTS → bool. Close() — idempotent graceful shutdown (done channel + sync.Mutex). Use-after-close guard на всех операциях (non-retryable StorageError). Error mapping в errors.go: context passthrough raw, redis.Nil → ErrKeyNotFound, остальные → retryable STORAGE_FAILED. 26 тестов с -race: 4 Set (success, Redis error, context cancelled, zero TTL), 4 Get (success, key not found, Redis error, deadline exceeded), 3 Exists (present, absent, Redis error), 2 Close (graceful, idempotent), 4 mapError (canceled, deadline, Nil, unknown), 1 in-memory integration (Set→Get→Exists sequence), 1 concurrent access (50 goroutines), 3 use-after-close (Set/Get/Exists), 3 context forwarding, 1 key forwarding. 22 пакета PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-010",

@@ -1164,3 +1164,49 @@
 - TASK-036✅ разблокирует TASK-039 (main entry point, но зависит ещё от TASK-017, TASK-037, TASK-038)
 - Готовые задачи (pending, все deps done): TASK-009 (high, KV-store), TASK-012 (high, Observability), TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security)
 - shared *warning.Collector по-прежнему не safe для concurrent calls — при параллельной обработке нужен per-job collector
+
+### TASK-009 — Инфраструктурный клиент KV-store для Idempotency Guard
+**Статус:** done
+**Дата:** 2026-03-23
+
+**План реализации:**
+1. Спроектировать архитектуру KV-store клиента (code-architect): Redis как backing store, consumer-side interface RedisAPI, разделение от IdempotencyStorePort
+2. Добавить KVStoreConfig в config (Address required, Password, DB=0, PoolSize=10, Timeout=5s)
+3. Реализовать client.go: Client struct, NewClient (redis.NewClient + Ping healthcheck), Set/Get/Exists/Close
+4. Реализовать errors.go: ErrKeyNotFound sentinel, mapError (context passthrough, redis.Nil → ErrKeyNotFound, остальные → retryable STORAGE_FAILED)
+5. Написать unit-тесты с mockRedis и in-memory store
+6. Code review (code-reviewer): 0 critical, 2 warnings fixed (use-after-close guard, Close error mapping)
+
+**Ключевые решения:**
+- Redis (go-redis/v9) — connection pooling встроен, native TTL support
+- KV-клиент НЕ реализует IdempotencyStorePort — это generic KV-клиент, port реализуется в ingress/idempotency (TASK-016)
+- ErrKeyNotFound — plain error sentinel (не DomainError), чтобы "ключ не найден" не трактовалось как инфраструктурная ошибка
+- Use-after-close guard на Set/Get/Exists — non-retryable StorageError
+- mapError: context passthrough raw (consistent with broker, objectstorage, ocr)
+
+**Реализация:**
+- internal/infra/kvstore/client.go — Client struct, RedisAPI interface, NewClient, Set/Get/Exists/Close, isClosed
+- internal/infra/kvstore/errors.go — ErrKeyNotFound, mapError, errClientClosed
+- internal/infra/kvstore/client_test.go — 26 тестов с -race
+- internal/config/sub_configs.go — KVStoreConfig struct + loadKVStoreConfig()
+- internal/config/config.go — KVStore field, Load(), Validate()
+- internal/config/config_test.go — обновлены для DP_KVSTORE_ADDRESS
+- go.mod/go.sum — github.com/redis/go-redis/v9 v9.18.0
+
+**Тесты (26):**
+- Set: success, Redis error, context cancelled, zero TTL
+- Get: success, key not found (sentinel, not DomainError), Redis error, deadline exceeded
+- Exists: present, absent, Redis error
+- Close: graceful shutdown, idempotent
+- mapError: canceled, deadline, Nil, unknown
+- In-memory: Set→Get→Exists sequence
+- Concurrent: 50 goroutines
+- Use-after-close: Set/Get/Exists
+- Context forwarding: Set/Get/Exists
+- Key forwarding: Exists
+
+**Заметки для следующей итерации:**
+- TASK-009✅ разблокирует TASK-016 (Idempotency Guard)
+- TASK-016 будет реализовать IdempotencyStorePort через kvstore.Client с key prefixing и status serialization
+- Для атомарной регистрации в TASK-016 может понадобиться SetNX (Redis SETNX) — при необходимости добавить в RedisAPI
+- Готовые задачи (pending, все deps done): TASK-012 (high, Observability), TASK-015 (high, Command Consumer), TASK-016 (high, Idempotency Guard), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security)

@@ -356,7 +356,9 @@
         "Шаг 4: проверить обновление статуса при завершении задачи"
       ],
       "dependencies": ["TASK-006", "TASK-009"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-23",
+      "summary": "Store в internal/ingress/idempotency/store.go. Реализует port.IdempotencyStorePort. Consumer-side интерфейс KVStoreAPI (Get, Set, SetNX) — dependency inversion от kvstore.Client. Store struct с KVStoreAPI и TTL (из IdempotencyConfig). NewStore(kv, ttl) — panic на nil kv или ttl<=0. Key naming: \"idempotency:{jobID}\". Check(ctx, jobID): validateJobID → kv.Get → ErrKeyNotFound → IdempotencyStatusNew, val → validStatuses map (in_progress/completed), неизвестное значение → non-retryable STORAGE_FAILED. Register(ctx, jobID): validateJobID → kv.SetNX (атомарный first-writer-wins) → !acquired → NewDuplicateJobError(jobID). MarkCompleted(ctx, jobID): validateJobID → kv.Set (unconditional overwrite by design, refreshes TTL). Ошибки: kvstore.ErrKeyNotFound → IdempotencyStatusNew, context passthrough raw, DomainError passthrough от KV client, пустой jobID → VALIDATION_ERROR. kvstore расширен: RedisAPI interface + Client.SetNX (set-if-not-exists для атомарной дедупликации). Code review: 0 critical, 3 warnings fixed (empty jobID validation, SetNX concurrent test, MarkCompleted doc). 26 тестов idempotency с -race: 3 constructor (nil kv, zero TTL, negative TTL), 8 Check (new/in_progress/completed/storage error/context canceled/deadline/invalid value/key prefix), 4 Register (success/already exists/storage error/context canceled), 3 MarkCompleted (success/storage error/context canceled), 3 empty jobID (Check/Register/MarkCompleted), 1 full lifecycle (Check→Register→Check→Register dup→MarkCompleted→Check), 3 context forwarding, 1 interface compliance. 33 теста kvstore (26 existing + 7 new SetNX). 24 пакета PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-017",

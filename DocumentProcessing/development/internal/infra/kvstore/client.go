@@ -16,6 +16,7 @@ import (
 // dependency inverted and enable unit testing with a mock.
 type RedisAPI interface {
 	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd
 	Get(ctx context.Context, key string) *redis.StringCmd
 	Exists(ctx context.Context, keys ...string) *redis.IntCmd
 	Close() error
@@ -79,6 +80,20 @@ func (c *Client) Set(ctx context.Context, key string, value string, ttl time.Dur
 		return mapError(err, "Set")
 	}
 	return nil
+}
+
+// SetNX stores a key-value pair with a TTL only if the key does not already exist.
+// Returns (true, nil) if the key was set (first writer wins), (false, nil) if
+// the key already existed. This is the atomic primitive for idempotency checks.
+func (c *Client) SetNX(ctx context.Context, key string, value string, ttl time.Duration) (bool, error) {
+	if c.isClosed() {
+		return false, errClientClosed("SetNX")
+	}
+	ok, err := c.rdb.SetNX(ctx, key, value, ttl).Result()
+	if err != nil {
+		return false, mapError(err, "SetNX")
+	}
+	return ok, nil
 }
 
 // Get retrieves the value for a key. Returns ("", ErrKeyNotFound) if the key

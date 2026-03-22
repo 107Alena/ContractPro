@@ -17,6 +17,7 @@ import (
 
 type mockRedis struct {
 	setFn    func(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	setNXFn  func(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd
 	getFn    func(ctx context.Context, key string) *redis.StringCmd
 	existsFn func(ctx context.Context, keys ...string) *redis.IntCmd
 	closeFn  func() error
@@ -28,6 +29,13 @@ func (m *mockRedis) Set(ctx context.Context, key string, value interface{}, expi
 		return m.setFn(ctx, key, value, expiration)
 	}
 	return redis.NewStatusResult("OK", nil)
+}
+
+func (m *mockRedis) SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd {
+	if m.setNXFn != nil {
+		return m.setNXFn(ctx, key, value, expiration)
+	}
+	return redis.NewBoolResult(true, nil)
 }
 
 func (m *mockRedis) Get(ctx context.Context, key string) *redis.StringCmd {
@@ -70,6 +78,15 @@ func newInMemoryRedis() *mockRedis {
 			store[key] = fmt.Sprint(value)
 			mu.Unlock()
 			return redis.NewStatusResult("OK", nil)
+		},
+		setNXFn: func(_ context.Context, key string, value interface{}, _ time.Duration) *redis.BoolCmd {
+			mu.Lock()
+			defer mu.Unlock()
+			if _, exists := store[key]; exists {
+				return redis.NewBoolResult(false, nil)
+			}
+			store[key] = fmt.Sprint(value)
+			return redis.NewBoolResult(true, nil)
 		},
 		getFn: func(_ context.Context, key string) *redis.StringCmd {
 			mu.Lock()
@@ -467,6 +484,9 @@ func TestConcurrentAccess(t *testing.T) {
 			if _, err := c.Exists(ctx, key); err != nil {
 				t.Errorf("Exists(%s): %v", key, err)
 			}
+			if _, err := c.SetNX(ctx, key+":nx", "v", time.Hour); err != nil {
+				t.Errorf("SetNX(%s:nx): %v", key, err)
+			}
 		}(i)
 	}
 
@@ -615,5 +635,128 @@ func TestExists_KeyForwarding(t *testing.T) {
 	_, _ = c.Exists(context.Background(), "my-key")
 	if len(gotKeys) != 1 || gotKeys[0] != "my-key" {
 		t.Errorf("keys = %v, want [\"my-key\"]", gotKeys)
+	}
+}
+
+// --- SetNX tests ---
+
+func TestSetNX_Success(t *testing.T) {
+	var gotKey string
+	var gotValue interface{}
+	var gotTTL time.Duration
+
+	mock := &mockRedis{
+		setNXFn: func(_ context.Context, key string, value interface{}, exp time.Duration) *redis.BoolCmd {
+			gotKey = key
+			gotValue = value
+			gotTTL = exp
+			return redis.NewBoolResult(true, nil)
+		},
+	}
+
+	c := newClientWithRedis(mock)
+	ok, err := c.SetNX(context.Background(), "job:123", "in_progress", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected true (key was set), got false")
+	}
+	if gotKey != "job:123" {
+		t.Errorf("key = %q, want %q", gotKey, "job:123")
+	}
+	if gotValue != "in_progress" {
+		t.Errorf("value = %v, want %q", gotValue, "in_progress")
+	}
+	if gotTTL != 24*time.Hour {
+		t.Errorf("ttl = %v, want %v", gotTTL, 24*time.Hour)
+	}
+}
+
+func TestSetNX_KeyAlreadyExists(t *testing.T) {
+	mock := &mockRedis{
+		setNXFn: func(_ context.Context, _ string, _ interface{}, _ time.Duration) *redis.BoolCmd {
+			return redis.NewBoolResult(false, nil)
+		},
+	}
+
+	c := newClientWithRedis(mock)
+	ok, err := c.SetNX(context.Background(), "job:123", "in_progress", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected false (key already existed), got true")
+	}
+}
+
+func TestSetNX_RedisError(t *testing.T) {
+	mock := &mockRedis{
+		setNXFn: func(_ context.Context, _ string, _ interface{}, _ time.Duration) *redis.BoolCmd {
+			return redis.NewBoolResult(false, errors.New("connection refused"))
+		},
+	}
+
+	c := newClientWithRedis(mock)
+	_, err := c.SetNX(context.Background(), "key", "val", time.Minute)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if port.ErrorCode(err) != port.ErrCodeStorageFailed {
+		t.Errorf("error code = %q, want %q", port.ErrorCode(err), port.ErrCodeStorageFailed)
+	}
+	if !port.IsRetryable(err) {
+		t.Error("expected retryable error")
+	}
+}
+
+func TestSetNX_ContextCancelled(t *testing.T) {
+	mock := &mockRedis{
+		setNXFn: func(_ context.Context, _ string, _ interface{}, _ time.Duration) *redis.BoolCmd {
+			return redis.NewBoolResult(false, context.Canceled)
+		},
+	}
+
+	c := newClientWithRedis(mock)
+	_, err := c.SetNX(context.Background(), "key", "val", time.Minute)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+	if port.IsDomainError(err) {
+		t.Error("context.Canceled should not be wrapped as DomainError")
+	}
+}
+
+func TestSetNX_ContextForwarding(t *testing.T) {
+	type ctxKey struct{}
+	expectedVal := "test-value"
+
+	mock := &mockRedis{
+		setNXFn: func(ctx context.Context, _ string, _ interface{}, _ time.Duration) *redis.BoolCmd {
+			if v := ctx.Value(ctxKey{}); v != expectedVal {
+				t.Errorf("context value = %v, want %q", v, expectedVal)
+			}
+			return redis.NewBoolResult(true, nil)
+		},
+	}
+
+	ctx := context.WithValue(context.Background(), ctxKey{}, expectedVal)
+	c := newClientWithRedis(mock)
+	_, _ = c.SetNX(ctx, "k", "v", time.Minute)
+}
+
+func TestSetNX_AfterClose(t *testing.T) {
+	c := newClientWithRedis(&mockRedis{})
+	_ = c.Close()
+
+	_, err := c.SetNX(context.Background(), "k", "v", time.Minute)
+	if err == nil {
+		t.Fatal("expected error on SetNX after Close")
+	}
+	if port.ErrorCode(err) != port.ErrCodeStorageFailed {
+		t.Errorf("error code = %q, want %q", port.ErrorCode(err), port.ErrCodeStorageFailed)
+	}
+	if port.IsRetryable(err) {
+		t.Error("use-after-close should be non-retryable")
 	}
 }

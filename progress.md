@@ -1206,7 +1206,47 @@
 - Key forwarding: Exists
 
 **Заметки для следующей итерации:**
-- TASK-009✅ разблокирует TASK-016 (Idempotency Guard)
-- TASK-016 будет реализовать IdempotencyStorePort через kvstore.Client с key prefixing и status serialization
-- Для атомарной регистрации в TASK-016 может понадобиться SetNX (Redis SETNX) — при необходимости добавить в RedisAPI
-- Готовые задачи (pending, все deps done): TASK-012 (high, Observability), TASK-015 (high, Command Consumer), TASK-016 (high, Idempotency Guard), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security)
+- TASK-009✅ разблокирует TASK-016 (Idempotency Guard) ← реализован ниже
+
+---
+
+### TASK-016 — Idempotency Guard: проверка дедупликации задач по job_id через KV-store
+**Статус:** done
+**Дата:** 2026-03-23
+
+**План реализации:**
+1. Добавить SetNX в kvstore.RedisAPI interface и Client (атомарный set-if-not-exists)
+2. Создать Store struct в ingress/idempotency/, реализующий IdempotencyStorePort
+3. Consumer-side interface KVStoreAPI (Get/Set/SetNX) для dependency inversion
+4. Check: Get → ErrKeyNotFound → StatusNew, иначе parse value → status
+5. Register: SetNX → first-writer-wins, !acquired → DuplicateJobError
+6. MarkCompleted: Set (unconditional, refreshes TTL)
+7. Валидация пустого jobID на всех методах
+8. Unit-тесты с mock KVStoreAPI
+9. Code review и исправления
+
+**Summary:**
+Store в internal/ingress/idempotency/store.go реализует port.IdempotencyStorePort через consumer-side KVStoreAPI interface. Key naming: "idempotency:{jobID}". Register использует SetNX для атомарной дедупликации (защита от race conditions между инстансами). MarkCompleted использует unconditional Set (by design — только winner вызывает). Добавлен SetNX в kvstore.Client и RedisAPI. Валидация пустого jobID. Code review: 0 critical, 3 warnings fixed (empty jobID, SetNX в concurrent test, MarkCompleted doc).
+
+**Изменённые файлы:**
+- internal/ingress/idempotency/store.go — Store struct, NewStore, Check/Register/MarkCompleted, KVStoreAPI interface, keyFor, validateJobID
+- internal/ingress/idempotency/store_test.go — 26 тестов с -race
+- internal/infra/kvstore/client.go — SetNX добавлен в RedisAPI interface и Client
+- internal/infra/kvstore/client_test.go — 7 новых тестов SetNX (итого 33)
+
+**Тесты (26 idempotency + 7 new kvstore):**
+- Constructor: nil kv, zero TTL, negative TTL
+- Check: new (ErrKeyNotFound), in_progress, completed, storage error, context canceled, deadline, invalid value, key prefix
+- Register: success, already exists (DuplicateJobError), storage error, context canceled
+- MarkCompleted: success, storage error, context canceled
+- Empty jobID: Check/Register/MarkCompleted
+- Full lifecycle: Check→Register→Check→Register dup→MarkCompleted→Check
+- Context forwarding: Check/Register/MarkCompleted
+- Interface compliance
+- kvstore SetNX: success, key exists, Redis error, context canceled, context forwarding, after close
+
+**Заметки для следующей итерации:**
+- TASK-016✅ разблокирует TASK-017 (Ingress Layer Integration: Consumer → Idempotency Guard → Concurrency Limiter → dispatch)
+- TASK-017 зависит от TASK-013 (Concurrency Limiter), TASK-015 (Command Consumer), TASK-016 (Idempotency Guard ✅)
+- TASK-013 зависит от TASK-012 (Observability SDK) — следующий блокер на критическом пути к TASK-039
+- Готовые задачи (pending, все deps done): TASK-012 (high, Observability), TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security)

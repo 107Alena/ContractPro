@@ -1002,3 +1002,40 @@
 - TASK-035 (critical, Processing Pipeline Orchestrator) теперь заблокирована только TASK-026 (→TASK-011) — все остальные зависимости done
 - При DI: `storage.NewAdapter(s3Client, "")` или `storage.NewAdapter(s3Client, "dp/")` если bucket shared
 - Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-015 (command consumer), TASK-021 (pending response registry), TASK-043 (security)
+
+### TASK-011 — Инфраструктурный клиент Yandex Cloud Vision OCR
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации:**
+1. Создать consumer-side интерфейс `HTTPAPI` (Do method) в `internal/infra/ocr/client.go`
+2. Реализовать `Client` struct с HTTPAPI, endpoint, apiKey, folderID
+3. `NewClient(cfg OCRConfig)` — production http.Client с Transport (MaxIdleConns=10, TLSHandshakeTimeout=10s), Timeout=120s
+4. `Recognize(ctx, pdfData)`: io.ReadAll → base64 → JSON marshal recognizeRequest → POST `/ocr/v1/recognizeText` → JSON decode recognizeResponse → fullText
+5. Headers: Authorization: Api-Key, x-folder-id, Content-Type: application/json
+6. Error response body limited to 1024 bytes + drain remainder for connection reuse
+7. Error mapping в errors.go: mapError (context passthrough, network → retryable), mapHTTPStatus (429/5xx → retryable, 4xx → non-retryable)
+8. 22 unit-теста с httptest.NewServer
+
+**Ключевые решения:**
+- Consumer-side HTTPAPI interface — паттерн как S3API в objectstorage
+- PDF читается полностью в память (io.ReadAll) — ограничено InputValidator до 20 MB, пиковая нагрузка ~50 MB/job (raw + base64 + JSON)
+- HTTP timeout 120s — safety net, context от оркестратора служит основным таймаутом
+- Error body в error message — для диагностики, ограничен 1024 bytes
+- Drain response body на error path (io.Copy(io.Discard)) — для переиспользования TCP connections
+- t.Errorf вместо t.Fatalf в httptest handlers — корректное поведение из не-test goroutines
+- Нет retry/rate limiting — это ответственность TASK-026 (engine/ocr adapter)
+
+**Summary:**
+- Созданы 3 файла: client.go, errors.go, client_test.go в `internal/infra/ocr/`
+- Реализует `OCRServicePort` из domain/port/outbound.go
+- Yandex Cloud Vision OCR API v2: POST /ocr/v1/recognizeText, PDF→base64→JSON→fullText
+- 22 теста (включая 7 HTTP status subtests), все проходят с -race
+- code-reviewer: Approve with notes (W-1 drain body, W-7 t.Fatalf→t.Errorf, N-10 reader error test — все исправлены)
+- 21 пакет PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-011✅ разблокирует: TASK-026 (OCR Integration Adapter с rate limiter)
+- TASK-026✅ → разблокирует TASK-035 (critical, Processing Pipeline Orchestrator) — последний блокер на critical path
+- Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-012 (observability), TASK-015 (command consumer), TASK-021 (pending response registry), TASK-026 (OCR rate limiter — TASK-011✅+TASK-025✅), TASK-043 (security)
+- При DI: `ocr.NewClient(cfg.OCR)` — возвращает *Client реализующий OCRServicePort

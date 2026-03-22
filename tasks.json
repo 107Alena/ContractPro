@@ -245,7 +245,9 @@
         "Шаг 3: проверить обработку HTTP 500 (server error)"
       ],
       "dependencies": ["TASK-001", "TASK-007"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Client в internal/infra/ocr/client.go. Реализует OCRServicePort через HTTP API Yandex Cloud Vision OCR v2. Consumer-side интерфейс HTTPAPI (Do method) — dependency inversion от http.Client. Client struct с HTTPAPI, endpoint (cfg.Endpoint + /ocr/v1/recognizeText), apiKey, folderID. NewClient(cfg OCRConfig) — создаёт http.Client с Transport (MaxIdleConns=10, MaxIdleConnsPerHost=5, IdleConnTimeout=90s, TLSHandshakeTimeout=10s), Timeout=120s. Recognize(ctx, pdfData): io.ReadAll → base64.StdEncoding.EncodeToString → JSON marshal recognizeRequest{mimeType: application/pdf, languageCodes: [ru, en], content: base64} → http.NewRequestWithContext POST → headers (Authorization: Api-Key, x-folder-id, Content-Type: application/json) → http.Do → status check → JSON decode recognizeResponse → fullText. Error body limited to 1024 bytes + drain remainder (io.Copy(io.Discard)) for connection reuse. Error mapping в errors.go: mapError — context errors passthrough raw, network/unknown → retryable OCR_FAILED. mapHTTPStatus — 429/>=500 → retryable, other → non-retryable. Compile-time check var _ OCRServicePort = (*Client)(nil). 22 теста с -race: success (3: normal, request format validation, empty text), HTTP status errors (7 subtests: 400/401/403 non-retryable, 429/500/502/503 retryable), context errors (2: canceled, deadline exceeded — raw passthrough, not DomainError), connection refused (1: retryable), response parsing (2: invalid JSON non-retryable, missing fullText zero value), input edge cases (2: empty reader, 1MB large input), reader error (1: retryable), interface compliance (1), mapError unit (3: canceled, deadline, network), mapHTTPStatus unit (5: 429, 500, 400, 401, body in message). 21 пакет PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-012",

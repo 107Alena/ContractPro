@@ -894,3 +894,45 @@
 - При DI в main.go: `brokerClient, err := broker.NewClient(cfg.Broker)` → inject в publisher/consumer adapters
 - Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-021 (pending response registry), TASK-031 (temp artifact storage), TASK-043 (security validation)
 - Новые eligible задачи благодаря TASK-008: TASK-015 (deps: TASK-005✅, TASK-006✅, TASK-008✅), TASK-032 (deps: TASK-005✅, TASK-006✅, TASK-008✅), TASK-033 (deps: TASK-005✅, TASK-006✅, TASK-008✅)
+
+### TASK-032 — Event Publisher: публикация статусных событий и событий завершения
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации (согласован):**
+1. Создать `internal/egress/publisher/publisher.go`:
+   - Consumer-side интерфейс BrokerPublisher (Publish method) — dependency inversion
+   - Publisher struct с BrokerPublisher и topicMap (5 топиков)
+   - NewPublisher(broker, cfg) с nil-guard и empty-topic validation (panic)
+   - publishJSON DRY-helper: json.Marshal → broker.Publish
+   - 5 методов: PublishStatusChanged, PublishProcessingCompleted, PublishProcessingFailed, PublishComparisonCompleted, PublishComparisonFailed
+2. Создать `internal/egress/publisher/publisher_test.go`:
+   - mockBroker + ctxCapturingBroker
+   - Topic routing, JSON format, round-trip, error handling, constructor validation
+
+**Ключевые решения:**
+- BrokerPublisher — 1-method consumer-side interface (Go idiom: define interfaces at consumer)
+- topicMap вместо хранения полного BrokerConfig — минимальная зависимость
+- Marshal errors → non-retryable DomainError (deterministic programming error, не retry)
+- Broker errors passthrough (уже DomainError из broker.Client)
+- Context errors passthrough raw (errors.Is semantics для orchestrator)
+- Panic в конструкторе при nil broker или пустом топике (startup-time config error)
+- Concurrency safety doc comment на BrokerPublisher
+
+**Review findings fixed:**
+- W-1: Marshal errors non-retryable (не NewBrokerError, а DomainError{Retryable: false})
+- S-1: nil broker panic в конструкторе
+- S-2: empty topic validation panic
+- S-3: Context forwarding test
+- N-3: Concurrency safety doc comment
+
+**Summary:**
+- 2 файла: publisher.go, publisher_test.go
+- 24 теста с -race: interface compliance (1), correct topic routing (5), JSON format (5), round-trip (5), broker error (1), context.Canceled (1), context.DeadlineExceeded (1), marshal error (1), nil broker panic (1), empty topic panic (1), context forwarding (1), omitempty stage (1)
+- Все 18 пакетов PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-032✅ разблокирует: участвует в deps TASK-035 (Processing Pipeline) и TASK-037 (Comparison Pipeline)
+- Remaining blockers для TASK-035: TASK-026 (OCR rate limiter, blocked by TASK-011), TASK-031 (temp artifact storage), TASK-033 (DM outbound)
+- Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-015 (command consumer), TASK-021 (pending response registry), TASK-031 (temp artifact storage), TASK-033 (DM outbound), TASK-043 (security)
+- При DI: `publisher.NewPublisher(brokerClient, cfg.Broker)` — returns *Publisher implementing EventPublisherPort

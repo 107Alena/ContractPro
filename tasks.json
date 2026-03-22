@@ -718,7 +718,9 @@
         "Шаг 5: проверить, что ComparisonFailedEvent содержит error_code, error_message, failed_at_stage, is_retryable"
       ],
       "dependencies": ["TASK-005", "TASK-006", "TASK-008"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Publisher в internal/egress/publisher/publisher.go. Реализует EventPublisherPort. Consumer-side интерфейс BrokerPublisher (Publish method) — dependency inversion от broker.Client. Publisher struct с BrokerPublisher и topicMap (5 топиков из config.BrokerConfig). publishJSON DRY-helper: json.Marshal → broker.Publish. 5 методов: PublishStatusChanged (dp.events.status-changed), PublishProcessingCompleted (dp.events.processing-completed), PublishProcessingFailed (dp.events.processing-failed), PublishComparisonCompleted (dp.events.comparison-completed), PublishComparisonFailed (dp.events.comparison-failed). JSON-сериализация всех event-типов с EventMeta (correlation_id, timestamp). Ошибки: marshal errors → non-retryable DomainError (ErrCodeBrokerFailed, Retryable: false), broker errors → passthrough, context errors → passthrough raw. Защита: nil broker panic, empty topic panic в конструкторе. Doc comment concurrency safety на BrokerPublisher. Compile-time check var _ EventPublisherPort = (*Publisher)(nil). 24 теста с -race: interface compliance (1), correct topic routing (5), JSON format field presence (5), full round-trip (5), broker error passthrough (1), context.Canceled passthrough (1), context.DeadlineExceeded passthrough (1), marshal error non-retryable (1), nil broker panic (1), empty topic panic (1), context forwarding (1), omitempty stage (1). 18 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-033",

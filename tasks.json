@@ -740,7 +740,9 @@
         "Шаг 3: проверить, что correlation_id передаётся в GetSemanticTreeRequest"
       ],
       "dependencies": ["TASK-005", "TASK-006", "TASK-008"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Sender в internal/egress/dm/sender.go. Реализует DMArtifactSenderPort и DMTreeRequesterPort. Consumer-side интерфейс BrokerPublisher (Publish method) — dependency inversion от broker.Client. Sender struct с BrokerPublisher и topicMap (3 топика из config.BrokerConfig). publishJSON DRY-helper: json.Marshal → broker.Publish. 3 метода: SendArtifacts (dp.artifacts.processing-ready), SendDiffResult (dp.artifacts.diff-ready), RequestSemanticTree (dp.requests.semantic-tree). JSON-сериализация всех event/request-типов с EventMeta (correlation_id, timestamp). Ошибки: marshal errors → non-retryable DomainError (ErrCodeBrokerFailed, Retryable: false), broker errors → passthrough, context errors → passthrough raw. Защита: nil broker panic, empty topic panic в конструкторе (детерминированный порядок валидации через slice). Compile-time checks var _ DMArtifactSenderPort = (*Sender)(nil), var _ DMTreeRequesterPort = (*Sender)(nil). 22 теста с -race: interface compliance (1), correct topic routing (3), JSON format (3), full round-trip (3), broker error passthrough (1), context.Canceled passthrough (1), context.DeadlineExceeded passthrough (1), marshal error non-retryable (1), nil broker panic (1), empty topic panics (3), context forwarding (1), omitempty warnings (1), warnings present (1), empty diffs present (1). 19 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-034",

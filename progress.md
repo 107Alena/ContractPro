@@ -936,3 +936,42 @@
 - Remaining blockers для TASK-035: TASK-026 (OCR rate limiter, blocked by TASK-011), TASK-031 (temp artifact storage), TASK-033 (DM outbound)
 - Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-015 (command consumer), TASK-021 (pending response registry), TASK-031 (temp artifact storage), TASK-033 (DM outbound), TASK-043 (security)
 - При DI: `publisher.NewPublisher(brokerClient, cfg.Broker)` — returns *Publisher implementing EventPublisherPort
+
+### TASK-033 — DM Outbound Adapter
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации (согласован с code-architect):**
+1. Создать `internal/egress/dm/sender.go`:
+   - Consumer-side `BrokerPublisher` интерфейс (своя копия, не импорт из publisher)
+   - `Sender` struct реализует ОБА порта: `DMArtifactSenderPort` и `DMTreeRequesterPort`
+   - `topicMap` с 3 топиками: artifactsReady, semanticTreeReq, diffReady
+   - `publishJSON` DRY-helper: json.Marshal → broker.Publish
+   - 3 метода: SendArtifacts, SendDiffResult, RequestSemanticTree
+   - Constructor panic на nil broker и пустые топики (детерминированный порядок)
+2. Создать `internal/egress/dm/sender_test.go`:
+   - 22 теста: interface compliance, topic routing, JSON format, round-trip, errors, marshal, constructor, context forwarding, omitempty
+3. Удалить `.gitkeep`
+
+**Ключевые решения:**
+- Один struct для двух портов: общая зависимость (broker) + одинаковый паттерн (marshal+publish)
+- Повторение BrokerPublisher interface в своём пакете (Go interface-at-consumer idiom)
+- Marshal errors → non-retryable DomainError (ErrCodeBrokerFailed), consistent с publisher
+- Детерминированный порядок валидации топиков (slice вместо map) — улучшение по ревью
+
+**Review findings:**
+- S-1: Map iteration order → deterministic slice (applied)
+- S-2: ErrCodeBrokerFailed для marshal — consistent, не меняем
+- N-1..N-3: нитпики, не требуют действий
+
+**Summary:**
+- 2 файла: sender.go (~95 LOC), sender_test.go (~500 LOC)
+- 22 теста с -race
+- Все 19 пакетов PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-033✅ разблокирует: участвует в deps TASK-035 (Processing Pipeline) и TASK-037 (Comparison Pipeline)
+- Remaining blockers для TASK-035: TASK-026 (OCR rate limiter, blocked by TASK-011), TASK-031 (temp artifact storage)
+- Remaining blockers для TASK-037: TASK-021 (pending response registry), TASK-034 (DM inbound, blocked by TASK-021)
+- Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-015 (command consumer), TASK-021 (pending response registry), TASK-031 (temp artifact storage), TASK-043 (security)
+- При DI: `dm.NewSender(brokerClient, cfg.Broker)` — returns *Sender implementing DMArtifactSenderPort + DMTreeRequesterPort

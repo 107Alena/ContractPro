@@ -1039,3 +1039,40 @@
 - TASK-026✅ → разблокирует TASK-035 (critical, Processing Pipeline Orchestrator) — последний блокер на critical path
 - Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-012 (observability), TASK-015 (command consumer), TASK-021 (pending response registry), TASK-026 (OCR rate limiter — TASK-011✅+TASK-025✅), TASK-043 (security)
 - При DI: `ocr.NewClient(cfg.OCR)` — возвращает *Client реализующий OCRServicePort
+
+### TASK-026 — OCR Integration Adapter: rate limiter, warnings, retry (FR-1.2.1, FR-1.2.2)
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации:**
+1. Расширить `Adapter` struct в `internal/engine/ocr/adapter.go`:
+   - Добавить `*warning.Collector`, `rpsLimit`, `maxAttempts`, `backoffBase`
+   - Встроить token bucket rate limiter (mu, tokens, capacity, lastRefill)
+2. Обновить `NewAdapter` конструктор — принимает 6 параметров вместо 2
+3. Обновить `Process` — добавить retry loop с:
+   - `acquireToken(ctx)` — блокирующее ожидание токена rate limiter
+   - Exponential backoff между попытками (backoffBase * 2^(attempt-1))
+   - Re-download PDF из storage на каждый retry (reader consumed)
+4. Добавить `checkWarnings(rawText)` — OCR_PARTIAL_RECOGNITION / OCR_LOW_QUALITY
+5. Написать 26 тестов (обновить 7 существующих + 19 новых)
+6. Code review: исправить nil warnings panic, backoff/re-download ordering, shift overflow
+
+**Ключевые решения:**
+- Token bucket rate limiter встроен в adapter (не отдельный компонент) — простота, единственный потребитель
+- `*warning.Collector` инжектится через конструктор (shared между stages pipeline)
+- Reader re-download на retry вместо буферизации в памяти — экономия до 100MB (5 jobs × 20MB)
+- Backoff ПЕРЕД re-download — не занимаем connection pool во время ожидания
+- Warnings mutually exclusive: empty → partial, short → low quality
+- Shift cap=30 в backoff для защиты от overflow при больших maxAttempts
+
+**Summary:**
+- Обновлены 2 файла: `adapter.go` (232 строки), `adapter_test.go` (948 строк)
+- 26 тестов с -race: all PASS
+- code-reviewer: 2 critical fixes applied (nil panic, backoff ordering), 1 warning fix (shift overflow)
+- 21 пакет PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-026✅ разблокирует TASK-035 (critical, Processing Pipeline Orchestrator) — это был последний блокер!
+- TASK-035 deps: TASK-019✅, TASK-020✅, TASK-022✅, TASK-024✅, TASK-026✅, TASK-027✅, TASK-028✅, TASK-029✅, TASK-031✅, TASK-032✅, TASK-033✅ — ВСЕ DONE
+- Следующий приоритет: TASK-035 (critical, Processing Pipeline Orchestrator happy path)
+- При DI: `ocr.NewAdapter(ocrClient, storageAdapter, warningCollector, cfg.OCR.RPSLimit, cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase)`

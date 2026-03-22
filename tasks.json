@@ -581,7 +581,9 @@
         "Шаг 4: проверить, что rate limiter ограничивает вызовы"
       ],
       "dependencies": ["TASK-011", "TASK-025"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Adapter в internal/engine/ocr/adapter.go расширен rate limiter, retry и warnings. Struct: +warnings (*warning.Collector), +rpsLimit, +maxAttempts, +backoffBase, token bucket (mu, tokens, capacity, lastRefill). NewAdapter(ocrService, storage, warnings, rpsLimit, maxAttempts, backoffBase) — panic на nil warnings, defaults rpsLimit=10, maxAttempts=1. Process: text-PDF → skip; scan-PDF → download → retry loop: acquireToken (token bucket rate limiter, blocking с ctx cancellation) → Recognize → success: checkWarnings → return. Retryable error: backoff (exponential, cap shift=30) → re-download → next attempt. Non-retryable: immediate return. Exhausted: retryable error с 'after N attempts'. checkWarnings: empty/whitespace → OCR_PARTIAL_RECOGNITION, non-empty <50 runes → OCR_LOW_QUALITY (mutually exclusive). Token bucket: refill() continuous capacity/sec, acquireToken(ctx) blocking loop с time.After + ctx.Done. Code review fixes: nil warnings panic, backoff before re-download (connection pool), backoff shift cap. 26 тестов с -race: 7 existing updated + 3 rate limiter (immediate, ctx cancel, concurrent) + 6 retry (succeed 2nd, exhausted, non-retryable no retry, re-download fails, ctx cancel during backoff, reader closed on retry) + 6 warnings (partial empty, whitespace, low quality, normal no warn, textPDF no warn, empty not both) + 4 edge (maxAttempts=1, retry+warning, defaults, nil panic). 21 пакет PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-027",

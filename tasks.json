@@ -797,7 +797,9 @@
         "Шаг 5: проверить, что temporary storage очищен после завершения"
       ],
       "dependencies": ["TASK-019", "TASK-020", "TASK-022", "TASK-024", "TASK-026", "TASK-027", "TASK-028", "TASK-029", "TASK-031", "TASK-032", "TASK-033"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Orchestrator в internal/application/processing/orchestrator.go. Реализует port.ProcessingCommandHandler. Struct с 11 зависимостями: *lifecycle.LifecycleManager, *warning.Collector (shared с OCR adapter), port.InputValidatorPort, port.SourceFileFetcherPort, port.OCRProcessorPort (новый интерфейс, заменяет concrete *ocr.Adapter), port.TextExtractionPort, port.StructureExtractionPort, port.SemanticTreeBuilderPort, port.TempStoragePort, port.EventPublisherPort, port.DMArtifactSenderPort. NewOrchestrator — panic на nil deps. HandleProcessDocument: NewProcessingJob → warnings.Reset() → jobCtx с timeout → QUEUED→IN_PROGRESS (stage VALIDATING_INPUT) → Validate → Fetch (includes PDF/page validation) → OCR Process (stage OCR/OCR_SKIPPED) → Text Extract + warnings → Structure Extract + warnings → Semantic Tree Build → collect allWarnings once → SendArtifacts to DM → cleanup best-effort (log, don't fail) → COMPLETED/COMPLETED_WITH_WARNINGS → PublishProcessingCompleted. OCRProcessorPort добавлен в port/engine.go, compile-time check в ocr/adapter.go. Nil checks добавлены в LifecycleManager. Cleanup best-effort: после отправки артефактов в DM ошибка cleanup не блокирует completion. Warnings собираются один раз и используются для artifacts и completion event. 18 тестов с -race: 4 happy path (text PDF no warnings, text PDF with warnings, scanned PDF OCR applied, scanned PDF OCR warnings), 8 error paths (validation, fetch, text extraction, structure extraction, tree build, DM send, OCR error, context cancellation), 1 cleanup best-effort, 1 artifacts content, 1 command fields copied, 1 nil panics (11 subtests), 1 publish error, 1 stage progression. 21 пакет PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-036",

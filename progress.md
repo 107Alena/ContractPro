@@ -1076,3 +1076,42 @@
 - TASK-035 deps: TASK-019✅, TASK-020✅, TASK-022✅, TASK-024✅, TASK-026✅, TASK-027✅, TASK-028✅, TASK-029✅, TASK-031✅, TASK-032✅, TASK-033✅ — ВСЕ DONE
 - Следующий приоритет: TASK-035 (critical, Processing Pipeline Orchestrator happy path)
 - При DI: `ocr.NewAdapter(ocrClient, storageAdapter, warningCollector, cfg.OCR.RPSLimit, cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase)`
+
+### TASK-035 — Processing Pipeline Orchestrator: happy path
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации (согласован):**
+1. Изучить все 11 зависимостей: ports (inbound, engine, outbound), lifecycle manager, warning collector, engine components (validator, fetcher, ocr adapter, text extractor, structure extractor, semantic tree builder), egress adapters (temp storage, event publisher, DM sender)
+2. Спроектировать Orchestrator struct с 11 зависимостями, определить HandleProcessDocument pipeline flow
+3. Добавить OCRProcessorPort в port/engine.go — для замены concrete *ocr.Adapter зависимости (hexagonal architecture)
+4. Реализовать Orchestrator: 9 pipeline stages + status transitions + warning collection + artifact sending
+5. Shared *warning.Collector между OCR adapter и orchestrator (Reset per job)
+6. Cleanup best-effort (log and continue, не блокировать completion)
+7. Warnings собираются один раз и используются для artifacts и completion event
+8. Добавить nil checks в LifecycleManager конструктор
+9. 18 unit-тестов: happy paths, error paths, edge cases
+
+**Summary:**
+- Orchestrator в `internal/application/processing/orchestrator.go` (210 строк)
+- Реализует `port.ProcessingCommandHandler` interface
+- 11 зависимостей: lifecycle, warnings (shared), validator, fetcher, ocrProcessor, textExtract, structExtract, treeBuilder, tempStorage, publisher, dmSender
+- Pipeline: NewProcessingJob → Reset warnings → jobCtx timeout → QUEUED→IN_PROGRESS → Validate → Fetch → OCR/OCR_SKIPPED → Text Extract → Structure Extract → Semantic Tree → allWarnings once → SendArtifacts → Cleanup (best-effort) → COMPLETED/COMPLETED_WITH_WARNINGS → PublishProcessingCompleted
+- **OCRProcessorPort** новый интерфейс в port/engine.go — Process(ctx, storageKey, isTextPDF) (*OCRRawArtifact, error)
+  - Compile-time check `var _ port.OCRProcessorPort = (*Adapter)(nil)` в ocr/adapter.go
+- **Shared warning.Collector**: OCR adapter и orchestrator используют один и тот же *warning.Collector, Reset() в начале каждого job
+- **Best-effort cleanup**: после отправки артефактов в DM ошибка DeleteByPrefix логируется, но не останавливает pipeline
+- **Nil checks** добавлены в LifecycleManager (publisher, idempotency)
+- 18 тестов (1.0s с -race):
+  - Happy paths: text PDF no warnings → COMPLETED, text PDF with warnings → COMPLETED_WITH_WARNINGS, scanned PDF OCR → applicable, scanned PDF OCR low quality → OCR_LOW_QUALITY warning captured
+  - Error paths: validation, fetch, text extraction, structure extraction, tree build, DM send, OCR error, context cancellation
+  - Edge: cleanup best-effort, artifacts content, command fields copied, nil panics (11 subtests), publish error, stage progression
+- 21 пакет PASS, go vet clean, make build/test/lint OK
+- code-reviewer applied: OCRProcessorPort interface, best-effort cleanup, single warning collection, LifecycleManager nil checks, OCR error test, context cancellation test
+
+**Заметки для следующей итерации:**
+- TASK-035✅ разблокирует TASK-036 (critical, Processing Pipeline Orchestrator — error handling, retry, timeouts)
+- TASK-036 deps: только TASK-035✅ — можно начинать
+- При реализации TASK-036: shared *warning.Collector НЕ safe для concurrent HandleProcessDocument calls (TODO в коде). Нужно либо per-job collectors, либо scope by job ID
+- WAITING_DM_CONFIRMATION — no-op placeholder, будет реализован в TASK-034 (DM Inbound Adapter)
+- Готовые задачи для следующей итерации: TASK-036 (critical), TASK-009 (high, KV-store), TASK-012 (high, Observability), TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry)

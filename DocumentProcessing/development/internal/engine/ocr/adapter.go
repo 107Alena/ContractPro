@@ -13,6 +13,9 @@ import (
 	"contractpro/document-processing/internal/domain/port"
 )
 
+// Compile-time interface compliance check.
+var _ port.OCRProcessorPort = (*Adapter)(nil)
+
 // Warning code constants emitted by the OCR adapter.
 const (
 	WarnPartialRecognition = "OCR_PARTIAL_RECOGNITION"

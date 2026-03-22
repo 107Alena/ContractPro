@@ -55,6 +55,15 @@ type SemanticTreeBuilderPort interface {
 	Build(ctx context.Context, text *model.ExtractedText, structure *model.DocumentStructure) (*model.SemanticTree, error)
 }
 
+// OCRProcessorPort routes PDFs through OCR when needed (FR-1.2.1, FR-1.2.2).
+// For text-based PDFs: returns OCRRawArtifact with status not_applicable, skipping OCR.
+// For scanned PDFs: sends to OCR service with rate limiting and retry.
+// Implemented by: OCR Integration Adapter (engine layer).
+// Used by: Processing Pipeline Orchestrator.
+type OCRProcessorPort interface {
+	Process(ctx context.Context, storageKey string, isTextPDF bool) (*model.OCRRawArtifact, error)
+}
+
 // VersionComparisonPort compares two document versions by their semantic trees,
 // producing text-level and structural diffs (FR-5.3.1, FR-5.3.2).
 // Implemented by: Version Comparison Engine (engine layer).

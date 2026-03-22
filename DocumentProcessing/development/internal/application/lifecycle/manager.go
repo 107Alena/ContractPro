@@ -34,13 +34,19 @@ type LifecycleManager struct {
 }
 
 // NewLifecycleManager creates a LifecycleManager.
-// cleanup may be nil if no cleanup is needed.
+// Panics if publisher or idempotency is nil. cleanup may be nil if no cleanup is needed.
 func NewLifecycleManager(
 	publisher port.EventPublisherPort,
 	idempotency port.IdempotencyStorePort,
 	jobTimeout time.Duration,
 	cleanup CleanupFunc,
 ) *LifecycleManager {
+	if publisher == nil {
+		panic("lifecycle: publisher must not be nil")
+	}
+	if idempotency == nil {
+		panic("lifecycle: idempotency store must not be nil")
+	}
 	return &LifecycleManager{
 		publisher:   publisher,
 		idempotency: idempotency,

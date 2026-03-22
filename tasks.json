@@ -693,7 +693,9 @@
         "Шаг 3: проверить cleanup по префиксу"
       ],
       "dependencies": ["TASK-006", "TASK-010"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-22",
+      "summary": "Adapter в internal/egress/storage/adapter.go. Реализует TempStoragePort через delegation к StorageClient consumer-side interface (Upload, Download, Delete, DeleteByPrefix). Adapter struct с client (StorageClient) и keyPrefix (string). NewAdapter(client, keyPrefix) конструктор — panic на nil client. fullKey helper: keyPrefix + callerKey. 4 метода: Upload, Download, Delete, DeleteByPrefix — каждый валидирует non-empty key/prefix (→ non-retryable DomainError с ErrCodeStorageFailed), затем делегирует client с prefixed key. Client errors passthrough (mapping уже в objectstorage.Client). Empty prefix в DeleteByPrefix — safety guard против удаления всего bucket. Compile-time check var _ TempStoragePort = (*Adapter)(nil). 19 тестов с -race: interface compliance (1), constructor nil panic (1), Upload success/key-prefixing/empty-prefix/empty-key/client-error/context-canceled (6), Download success/empty-key/client-error (3), Delete success/empty-key/client-error (3), DeleteByPrefix success/empty-prefix/client-error (3), context forwarding (1), data passthrough (1). 20 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-032",

@@ -975,3 +975,30 @@
 - Remaining blockers для TASK-037: TASK-021 (pending response registry), TASK-034 (DM inbound, blocked by TASK-021)
 - Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-015 (command consumer), TASK-021 (pending response registry), TASK-031 (temp artifact storage), TASK-043 (security)
 - При DI: `dm.NewSender(brokerClient, cfg.Broker)` — returns *Sender implementing DMArtifactSenderPort + DMTreeRequesterPort
+
+### TASK-031 — Temporary Artifact Storage Adapter
+**Статус:** done
+**Дата:** 2026-03-22
+
+**План реализации:**
+1. Создать consumer-side интерфейс `StorageClient` (Upload, Download, Delete, DeleteByPrefix) в `internal/egress/storage/adapter.go`
+2. Реализовать `Adapter` struct с delegation к `StorageClient` и key prefixing (`keyPrefix + callerKey`)
+3. Валидация empty key/prefix → non-retryable DomainError (ErrCodeStorageFailed)
+4. Client errors passthrough без дополнительного wrapping
+5. 19 unit-тестов с mock storage
+
+**Summary:**
+- Adapter в `internal/egress/storage/adapter.go` — реализует `TempStoragePort` через thin delegation к `StorageClient` consumer-side interface
+- `StorageClient` interface: 4 метода, совпадает с `TempStoragePort`, реализуется `objectstorage.Client`
+- Key prefixing: `NewAdapter(client, keyPrefix)` — `fullKey(key) = keyPrefix + key`. Позволяет multi-tenant/env-scoped namespaces
+- Empty key/prefix валидация: non-retryable `DomainError` (programming error). Empty prefix в `DeleteByPrefix` — safety guard
+- Constructor panic на nil client (паттерн publisher/sender)
+- Compile-time check `var _ TempStoragePort = (*Adapter)(nil)`
+- 19 тестов: interface (1), constructor panic (1), upload 6, download 3, delete 3, deleteByPrefix 3, context forwarding (1), data passthrough (1)
+- code-reviewer: Approve (N-1..N-4 nits, N-3 исправлен — concurrency doc wording)
+- 20 пакетов PASS -race, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-035 (critical, Processing Pipeline Orchestrator) теперь заблокирована только TASK-026 (→TASK-011) — все остальные зависимости done
+- При DI: `storage.NewAdapter(s3Client, "")` или `storage.NewAdapter(s3Client, "dp/")` если bucket shared
+- Eligible задачи (high, deps met): TASK-009 (KV-store), TASK-011 (OCR client), TASK-012 (observability), TASK-015 (command consumer), TASK-021 (pending response registry), TASK-043 (security)

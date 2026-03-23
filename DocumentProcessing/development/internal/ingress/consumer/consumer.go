@@ -9,7 +9,6 @@ import (
 
 	"contractpro/document-processing/internal/config"
 	"contractpro/document-processing/internal/domain/model"
-	"contractpro/document-processing/internal/domain/port"
 	"contractpro/document-processing/internal/infra/observability"
 )
 
@@ -22,12 +21,20 @@ type BrokerSubscriber interface {
 	Subscribe(topic string, handler func(ctx context.Context, body []byte) error) error
 }
 
+// CommandDispatcher is the consumer-side interface for dispatching validated
+// commands through the ingress pipeline (idempotency + concurrency + handler).
+//
+// Satisfied by: *dispatcher.Dispatcher
+type CommandDispatcher interface {
+	DispatchProcessDocument(ctx context.Context, cmd model.ProcessDocumentCommand) error
+	DispatchCompareVersions(ctx context.Context, cmd model.CompareVersionsCommand) error
+}
+
 // Consumer subscribes to inbound command topics and dispatches deserialized
 // commands to the appropriate application-layer handler.
 type Consumer struct {
 	broker     BrokerSubscriber
-	processing port.ProcessingCommandHandler
-	comparison port.ComparisonCommandHandler
+	dispatcher CommandDispatcher
 	logger     *observability.Logger
 
 	topicProcessDocument string
@@ -37,24 +44,20 @@ type Consumer struct {
 	startErr  error
 }
 
-// NewConsumer creates a Consumer wired to the given broker, handlers, and
+// NewConsumer creates a Consumer wired to the given broker, dispatcher, and
 // topic names from the broker configuration.
 // Panics if any required dependency is nil (programmer error at startup).
 func NewConsumer(
 	broker BrokerSubscriber,
-	processing port.ProcessingCommandHandler,
-	comparison port.ComparisonCommandHandler,
+	dispatcher CommandDispatcher,
 	logger *observability.Logger,
 	brokerCfg config.BrokerConfig,
 ) *Consumer {
 	if broker == nil {
 		panic("consumer: broker must not be nil")
 	}
-	if processing == nil {
-		panic("consumer: processing handler must not be nil")
-	}
-	if comparison == nil {
-		panic("consumer: comparison handler must not be nil")
+	if dispatcher == nil {
+		panic("consumer: dispatcher must not be nil")
 	}
 	if logger == nil {
 		panic("consumer: logger must not be nil")
@@ -67,8 +70,7 @@ func NewConsumer(
 	}
 	return &Consumer{
 		broker:               broker,
-		processing:           processing,
-		comparison:           comparison,
+		dispatcher:           dispatcher,
 		logger:               logger.With("component", "consumer"),
 		topicProcessDocument: brokerCfg.TopicProcessDocument,
 		topicCompareVersions: brokerCfg.TopicCompareVersions,
@@ -77,8 +79,9 @@ func NewConsumer(
 
 // Start subscribes to the process-document and compare-versions topics.
 // It is idempotent: repeated calls return the result of the first attempt.
-// On partial failure (first subscription succeeds, second fails), the caller
-// must shut down the broker to clean up the active subscription.
+// After a failed Start(), the Consumer is unusable; callers must create a new
+// Consumer. On partial failure (first subscription succeeds, second fails),
+// the caller must shut down the broker to clean up the active subscription.
 func (c *Consumer) Start() error {
 	c.startOnce.Do(func() {
 		if err := c.broker.Subscribe(c.topicProcessDocument, c.handleProcessDocument); err != nil {
@@ -106,6 +109,7 @@ func (c *Consumer) handleProcessDocument(ctx context.Context, body []byte) error
 		c.logger.Error(ctx, "failed to unmarshal process document command",
 			"error", err,
 			"raw_size", len(body),
+			"raw_preview", rawPreview(body),
 		)
 		return nil
 	}
@@ -126,8 +130,8 @@ func (c *Consumer) handleProcessDocument(ctx context.Context, body []byte) error
 
 	c.logger.Info(ctx, "received process document command")
 
-	if err := c.processing.HandleProcessDocument(ctx, cmd); err != nil {
-		c.logger.Warn(ctx, "process document handler returned error", "error", err)
+	if err := c.dispatcher.DispatchProcessDocument(ctx, cmd); err != nil {
+		c.logger.Warn(ctx, "dispatch process document returned error", "error", err)
 		return nil
 	}
 
@@ -144,6 +148,7 @@ func (c *Consumer) handleCompareVersions(ctx context.Context, body []byte) error
 		c.logger.Error(ctx, "failed to unmarshal compare versions command",
 			"error", err,
 			"raw_size", len(body),
+			"raw_preview", rawPreview(body),
 		)
 		return nil
 	}
@@ -164,10 +169,21 @@ func (c *Consumer) handleCompareVersions(ctx context.Context, body []byte) error
 
 	c.logger.Info(ctx, "received compare versions command")
 
-	if err := c.comparison.HandleCompareVersions(ctx, cmd); err != nil {
-		c.logger.Warn(ctx, "compare versions handler returned error", "error", err)
+	if err := c.dispatcher.DispatchCompareVersions(ctx, cmd); err != nil {
+		c.logger.Warn(ctx, "dispatch compare versions returned error", "error", err)
 		return nil
 	}
 
 	return nil
+}
+
+// rawPreview returns a truncated string preview of a raw message body for
+// logging. This aids debugging of malformed messages without risking massive
+// log entries.
+func rawPreview(body []byte) string {
+	const maxPreview = 200
+	if len(body) <= maxPreview {
+		return string(body)
+	}
+	return string(body[:maxPreview]) + "..."
 }

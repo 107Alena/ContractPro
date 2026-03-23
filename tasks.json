@@ -386,7 +386,9 @@
         "Шаг 4: заполнить все слоты и отправить команду → проверить nack"
       ],
       "dependencies": ["TASK-013", "TASK-015", "TASK-016"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-23",
+      "summary": "Dispatcher в internal/ingress/dispatcher/dispatcher.go. Отдельный пакет-координатор ingress pipeline (SRP). Consumer-side interface CommandDispatcher (DispatchProcessDocument, DispatchCompareVersions) определён в consumer.go — dependency inversion pattern. Dispatcher struct с 5 зависимостями: port.IdempotencyStorePort, port.ConcurrencyLimiterPort, port.ProcessingCommandHandler, port.ComparisonCommandHandler, observability.Logger. NewDispatcher — panic на nil deps. Общий runPipeline(ctx, jobID, handler func() error): (1) Register (atomic SetNX, first-writer-wins) — DuplicateJobError → log info, skip; other error → log error, skip. (2) Acquire(ctx) — error → MarkCompleted cleanup (release idempotency lock, не блокировать job на 24h TTL) → return nil. (3) defer Release() → handler dispatch. (4) MarkCompleted best-effort. Always return nil (ack). Consumer модифицирован: inject Dispatcher вместо прямых handler-ов, rawPreview(body) для debugging malformed messages, Start() godoc обновлён. Compile-time check var _ consumer.CommandDispatcher = (*Dispatcher)(nil) в _test.go. Code review: 1 critical fixed (C-1: Acquire failure → MarkCompleted cleanup), 4 warnings fixed (compile-time check, DRY runPipeline, Start docs, raw preview), 3 suggestions implemented (ctx propagation test, concurrent dispatch test, cleanup error test). 27 тестов dispatcher с -race: 5 constructor panics, 2 happy path (process+compare), 2 duplicate job, 2 register error, 2 acquire timeout/cancelled (+MarkCompleted verification), 2 handler error (MarkCompleted+Release still called), 2 MarkCompleted error, 2 all fields passthrough, 4 release behavior, 1 acquire cleanup error, 1 context propagation, 1 concurrent stress (50 goroutines). 28 тестов consumer (обновлены: mockDispatcher). 28 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-018",

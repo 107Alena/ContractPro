@@ -1371,3 +1371,42 @@ Semaphore в `internal/infra/concurrency/limiter.go`. Channel-based (buffered `c
 - Готовые задачи (pending, все deps done): TASK-017 (high, Ingress Integration), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security), TASK-044 (high, Audit logging)
 - Критический путь: TASK-017 → TASK-039 (Main Entry Point, через TASK-037/038)
 - TASK-021 также на критическом пути: TASK-021 → TASK-034 → TASK-037 → TASK-039
+
+### TASK-017 — Интеграция Ingress-слоя: Consumer → Idempotency Guard → Concurrency Limiter → dispatch
+**Статус:** done
+**Дата:** 2026-03-23
+
+**План реализации (согласован):**
+1. Создать `internal/ingress/dispatcher/dispatcher.go` — координатор ingress pipeline (SRP)
+2. Consumer-side interface `CommandDispatcher` в consumer.go (dependency inversion)
+3. Dispatcher: `runPipeline(ctx, jobID, handler)` — общий поток:
+   - Register (atomic SetNX) → DuplicateJobError → skip
+   - Acquire(ctx) → error → MarkCompleted cleanup → return nil
+   - defer Release() → handler dispatch
+   - MarkCompleted best-effort
+4. Модифицировать consumer.go: inject Dispatcher вместо прямых handler-ов
+5. Модифицировать consumer_test.go: mockDispatcher
+6. Написать dispatcher_test.go: полное покрытие
+
+**Ключевые решения:**
+- Отдельный пакет dispatcher (не inline в consumer) — SRP, тестируемость
+- Register (atomic SetNX) вместо Check+Register — нет TOCTOU race condition
+- MarkCompleted всегда после handler (retry управляется оркестратором внутренне)
+- Always return nil (ack) — даже при Acquire timeout
+- При Acquire failure — MarkCompleted cleanup чтобы не блокировать job на 24h TTL
+
+**Code review:**
+- 1 critical: C-1 Acquire failure → MarkCompleted cleanup (не блокировать job на 24h)
+- 4 warnings: compile-time check, DRY runPipeline, Start docs, rawPreview(body)
+- 3 suggestions: ctx propagation test, concurrent dispatch test, cleanup error test
+
+**Summary:**
+- 2 новых файла: dispatcher.go, dispatcher_test.go
+- 2 изменённых файла: consumer.go, consumer_test.go
+- 27 тестов dispatcher, 28 тестов consumer (обновлены)
+- 28 пакетов PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-017✅ разблокирует TASK-039 (Main Entry Point) — но TASK-039 ещё ждёт TASK-037/038
+- Готовые задачи (pending, все deps done): TASK-021 (high, Pending Response Registry), TASK-043 (high, Security), TASK-044 (high, Audit logging)
+- Критический путь: TASK-021 → TASK-034 → TASK-037 → TASK-038 → TASK-039

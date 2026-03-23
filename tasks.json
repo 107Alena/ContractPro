@@ -338,7 +338,9 @@
         "Шаг 4: проверить маршрутизацию на processing и comparison handlers"
       ],
       "dependencies": ["TASK-005", "TASK-006", "TASK-008"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-23",
+      "summary": "Consumer в internal/ingress/consumer/consumer.go. Consumer-side интерфейс BrokerSubscriber (Subscribe method с inlined function signature) — dependency inversion от broker.Client. Consumer struct с BrokerSubscriber, port.ProcessingCommandHandler, port.ComparisonCommandHandler, observability.Logger, topic names из config.BrokerConfig. NewConsumer — panic на nil deps + empty topic names. Start() идемпотентен (sync.Once) — подписка на оба топика. handleProcessDocument: JSON unmarshal → validateProcessDocumentCommand (batch: job_id, document_id, file_url с TrimSpace) → WithJobContext → dispatch → always return nil (prevent poison-pill requeue). handleCompareVersions: аналогично для CompareVersionsCommand (batch: job_id, document_id, base_version_id, target_version_id). Невалидные/malformed сообщения acked + logged. Handler errors logged at Warn + acked. validate.go: 2 pure validation functions с batch error collection → port.NewValidationError. Code review: 0 critical, 4 warnings fixed (empty topic guard, idempotent Start, partial subscription documented, FileURL scheme deferred to TASK-043). 38 тестов с -race: 6 constructor panics (4 nil deps + 2 empty topics), 3 Start (both topics, failure, idempotent), 6 handleProcessDocument (valid, invalid JSON, missing fields, handler error, all fields copied, empty body), 5 handleCompareVersions (valid, invalid JSON, missing fields, handler error, all fields copied), 1 integration Start+dispatch, 2 context enrichment (process + compare), 1 partial subscribe failure, 2 nil body, 12 validation (6 process + 6 compare: valid, missing individual fields, multiple missing, whitespace-only). 27 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-016",

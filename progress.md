@@ -1326,3 +1326,48 @@ Semaphore в `internal/infra/concurrency/limiter.go`. Channel-based (buffered `c
 - Готовые задачи (pending, все deps done): TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security), TASK-044 (high, Audit logging)
 - TASK-015 + TASK-013✅ + TASK-016✅ → разблокируют TASK-017 → TASK-039
 - Критический путь к Main Entry Point: TASK-015 → TASK-017 → ... → TASK-039
+
+### TASK-015 — Command Consumer
+**Статус:** done
+**Дата:** 2026-03-23
+
+**План реализации (согласован):**
+1. Создать `internal/ingress/consumer/consumer.go`:
+   - Consumer-side интерфейс `BrokerSubscriber` (dependency inversion)
+   - `Consumer` struct с BrokerSubscriber, ProcessingCommandHandler, ComparisonCommandHandler, Logger
+   - `NewConsumer()` — panic на nil deps и empty topic names
+   - `Start()` — идемпотентный (sync.Once), подписка на оба топика
+   - `handleProcessDocument()` — unmarshal → validate → context enrichment → dispatch → always nil
+   - `handleCompareVersions()` — аналогично
+2. Создать `internal/ingress/consumer/validate.go`:
+   - `validateProcessDocumentCommand()` — batch validation: job_id, document_id, file_url
+   - `validateCompareVersionsCommand()` — batch validation: job_id, document_id, base_version_id, target_version_id
+   - TrimSpace для защиты от whitespace-only значений
+   - Aggregated error listing all missing fields
+3. Тесты: 38 тестов с -race
+
+**Ключевые решения:**
+- Always return nil после dispatch (prevent poison-pill requeue loops) — handler управляет failure semantics
+- Invalid/malformed messages → ack + log error (не возвращать в очередь)
+- Handler errors → ack + log warn (handler уже опубликовал failure events)
+- Batch validation (collect all missing fields) для удобства отладки
+- sync.Once для идемпотентного Start() (защита от двойной подписки)
+- Context enrichment через observability.WithJobContext перед dispatch
+
+**Code review результаты:**
+- 0 critical, 4 warnings fixed:
+  - W-1: Empty topic names guard в конструкторе → FIXED: panic
+  - W-2: Idempotent Start → FIXED: sync.Once
+  - W-3: Partial subscription failure → FIXED: документирован в godoc
+  - W-4: FileURL scheme validation → DEFERRED: покрывается TASK-043
+
+**Summary:**
+- 2 файла: consumer.go (Consumer struct, BrokerSubscriber interface, Start, handlers), validate.go (2 validation functions)
+- 38 тестов: 6 constructor panics, 3 Start, 6 process handler, 5 compare handler, 1 integration, 2 context enrichment, 1 partial failure, 2 nil body, 12 validation
+- 27 пакетов PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-015✅ разблокирует TASK-017 (Ingress Integration) — все deps done: TASK-013✅, TASK-015✅, TASK-016✅
+- Готовые задачи (pending, все deps done): TASK-017 (high, Ingress Integration), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security), TASK-044 (high, Audit logging)
+- Критический путь: TASK-017 → TASK-039 (Main Entry Point, через TASK-037/038)
+- TASK-021 также на критическом пути: TASK-021 → TASK-034 → TASK-037 → TASK-039

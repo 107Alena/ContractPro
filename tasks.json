@@ -268,7 +268,9 @@
         "Шаг 3: проверить, что метрики регистрируются без конфликтов"
       ],
       "dependencies": ["TASK-001", "TASK-007"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-23",
+      "summary": "SDK в internal/infra/observability/. 5 файлов + 5 тестовых. Logger: slog (stdlib) wrapper с auto-extraction JobContext из context — Info/Warn/Error/Debug с JSON output (job_id, document_id, correlation_id, stage автоматически). With() для component-scoped логгеров, Slog() escape hatch. parseLevel: debug/info/warn/warning/error, default info. Metrics: prometheus/client_golang с dedicated Registry (не global). 5 метрик: dp_job_duration_seconds (HistogramVec, labels: status, buckets: 0.5-120s), dp_job_status_total (CounterVec, labels: status), dp_ocr_duration_seconds (HistogramVec, labels: ocr_status, buckets: 0.5-60s), dp_concurrent_jobs_active (Gauge), dp_file_size_bytes (Histogram, buckets: 100KB-20MB). Tracer: OpenTelemetry + OTLP/HTTP exporter, no-op fallback через noop.NewTracerProvider(). sync.Once для global OTel provider/propagator. W3C TraceContext + Baggage propagation. Configurable insecure transport. Context: JobContext struct, WithJobContext/JobContextFrom/WithStage для context propagation. SDK composite: New(ctx, cfg) → *SDK{Logger, Metrics, Tracer}, Shutdown(ctx). Config: добавлены TracingEnabled bool, TracingInsecure bool, envBool helper. Code review: 2 critical fixed (insecure transport configurable, sync.Once global state), 2 warnings fixed (warning alias, SetTracerProvider). 39 тестов observability + 5 тестов envBool config — все с -race. 25 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-013",

@@ -149,16 +149,20 @@ func loadKVStoreConfig() KVStoreConfig {
 
 // ObservabilityConfig holds logging, metrics, and tracing settings.
 type ObservabilityConfig struct {
-	LogLevel        string // DP_LOG_LEVEL (default: "info")
-	MetricsPort     int    // DP_METRICS_PORT (default: 9090)
-	TracingEndpoint string // DP_TRACING_ENDPOINT (default: "")
+	LogLevel         string // DP_LOG_LEVEL (default: "info")
+	MetricsPort      int    // DP_METRICS_PORT (default: 9090)
+	TracingEnabled   bool   // DP_TRACING_ENABLED (default: false)
+	TracingEndpoint  string // DP_TRACING_ENDPOINT (default: "")
+	TracingInsecure  bool   // DP_TRACING_INSECURE (default: false)
 }
 
 func loadObservabilityConfig() ObservabilityConfig {
 	return ObservabilityConfig{
-		LogLevel:        envString("DP_LOG_LEVEL", "info"),
-		MetricsPort:     envInt("DP_METRICS_PORT", 9090),
-		TracingEndpoint: envString("DP_TRACING_ENDPOINT", ""),
+		LogLevel:         envString("DP_LOG_LEVEL", "info"),
+		MetricsPort:      envInt("DP_METRICS_PORT", 9090),
+		TracingEnabled:   envBool("DP_TRACING_ENABLED", false),
+		TracingEndpoint:  envString("DP_TRACING_ENDPOINT", ""),
+		TracingInsecure:  envBool("DP_TRACING_INSECURE", false),
 	}
 }
 

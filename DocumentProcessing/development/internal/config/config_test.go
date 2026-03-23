@@ -388,3 +388,85 @@ func TestValidate_FullConfig(t *testing.T) {
 		t.Errorf("expected no error, got: %v", err)
 	}
 }
+
+// --- envBool tests ---
+
+func TestEnvBool_validValues(t *testing.T) {
+	tests := []struct {
+		name       string
+		envValue   string
+		defaultVal bool
+		want       bool
+	}{
+		{"true", "true", false, true},
+		{"TRUE", "TRUE", false, true},
+		{"1", "1", false, true},
+		{"false", "false", true, false},
+		{"FALSE", "FALSE", true, false},
+		{"0", "0", true, false},
+		{"t", "t", false, true},
+		{"f", "f", true, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("DP_TEST_BOOL", tc.envValue)
+			got := envBool("DP_TEST_BOOL", tc.defaultVal)
+			if got != tc.want {
+				t.Errorf("envBool(%q, %v) = %v, want %v", tc.envValue, tc.defaultVal, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnvBool_emptyFallsBackToDefault(t *testing.T) {
+	// Do not set DP_TEST_BOOL_EMPTY at all.
+	got := envBool("DP_TEST_BOOL_EMPTY", true)
+	if !got {
+		t.Errorf("envBool with unset var should return default true, got false")
+	}
+
+	got = envBool("DP_TEST_BOOL_EMPTY", false)
+	if got {
+		t.Errorf("envBool with unset var should return default false, got true")
+	}
+}
+
+func TestEnvBool_invalidFallsBackToDefault(t *testing.T) {
+	t.Setenv("DP_TEST_BOOL_INVALID", "not-a-bool")
+
+	got := envBool("DP_TEST_BOOL_INVALID", true)
+	if !got {
+		t.Errorf("envBool with invalid value should return default true, got false")
+	}
+
+	got = envBool("DP_TEST_BOOL_INVALID", false)
+	if got {
+		t.Errorf("envBool with invalid value should return default false, got true")
+	}
+}
+
+func TestLoad_TracingEnabled_envBoolIntegration(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DP_TRACING_ENABLED", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Observability.TracingEnabled {
+		t.Error("TracingEnabled should be true when DP_TRACING_ENABLED=true")
+	}
+}
+
+func TestLoad_TracingEnabled_defaultFalse(t *testing.T) {
+	setRequiredEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Observability.TracingEnabled {
+		t.Error("TracingEnabled should default to false")
+	}
+}

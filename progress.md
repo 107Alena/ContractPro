@@ -1250,3 +1250,37 @@ Store в internal/ingress/idempotency/store.go реализует port.Idempoten
 - TASK-017 зависит от TASK-013 (Concurrency Limiter), TASK-015 (Command Consumer), TASK-016 (Idempotency Guard ✅)
 - TASK-013 зависит от TASK-012 (Observability SDK) — следующий блокер на критическом пути к TASK-039
 - Готовые задачи (pending, все deps done): TASK-012 (high, Observability), TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security)
+
+---
+
+### TASK-012 — Observability SDK — структурированное логирование, метрики, трейсинг
+**Статус:** done
+**Дата:** 2026-03-23
+
+**План реализации:**
+1. Спроектировать архитектуру (code-architect): 5 файлов в `internal/infra/observability/`
+2. Реализовать context.go — JobContext propagation через context.Context
+3. Реализовать logger.go — slog wrapper с auto-extraction JobContext
+4. Реализовать metrics.go — Prometheus metrics с dedicated Registry
+5. Реализовать tracer.go — OpenTelemetry + OTLP/HTTP с no-op fallback
+6. Реализовать observability.go — SDK composite (New/Shutdown)
+7. Обновить config — TracingEnabled, TracingInsecure, envBool
+8. Написать unit-тесты (39 observability + 5 config)
+9. Code review + исправления
+
+**Summary:**
+SDK в `internal/infra/observability/`. **Logger**: slog (stdlib) wrapper, JSON output на stderr, auto-extraction JobContext из ctx (job_id, document_id, correlation_id, stage), With() для component-scoped логгеров. **Metrics**: prometheus/client_golang с dedicated Registry — dp_job_duration_seconds (HistogramVec), dp_job_status_total (CounterVec), dp_ocr_duration_seconds (HistogramVec), dp_concurrent_jobs_active (Gauge), dp_file_size_bytes (Histogram). **Tracer**: OTel + OTLP/HTTP exporter, no-op fallback, sync.Once для global provider/propagator, W3C TraceContext + Baggage, configurable insecure transport. **Context**: JobContext struct, WithJobContext/JobContextFrom/WithStage. **SDK composite**: New(ctx, cfg) → *SDK{Logger, Metrics, Tracer}. Code review: 2 critical fixed (configurable insecure transport, sync.Once for global state), 2 warnings fixed (warning alias, SetTracerProvider).
+
+**Тесты (39 observability + 5 config = 44 всего):**
+- Context: round-trip, empty ctx zero-value, WithStage preserves fields, WithStage on empty ctx, overwrite, multiple WithStage
+- Logger: parseLevel (11 subtests), non-nil, JSON output, all levels, JobContext extraction, partial context, empty context, With child, With+JobContext, Slog, level filtering (2)
+- Metrics: create without panic, Registry non-nil, all metrics observed (5 subtests), no registration conflicts, Gather metric names, Gather before observation, multiple label values
+- Tracer: disabled=noop, empty endpoint=noop, both=noop, StartSpan no panic, SpanFromContext, SpanFromContext background, Shutdown no error, Shutdown multiple, Enabled table-driven (3 subtests)
+- SDK: all components non-nil, tracing disabled, tracing+empty endpoint, Shutdown, Shutdown multiple, different log levels (5 subtests), metrics registry accessible
+- Config: envBool valid values (8 subtests), empty falls back, invalid falls back, Load TracingEnabled, default false
+
+**Заметки для следующей итерации:**
+- TASK-012✅ разблокирует TASK-013 (Concurrency Limiter) → TASK-017 → TASK-039
+- TASK-012✅ также разблокирует TASK-044 (Audit logging)
+- Готовые задачи (pending, все deps done): TASK-013 (high, Concurrency Limiter — deps: TASK-001✅, TASK-007✅, TASK-012✅), TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security)
+- TASK-013 на критическом пути к TASK-039 через TASK-017

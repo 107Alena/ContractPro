@@ -1453,3 +1453,64 @@ Semaphore в `internal/infra/concurrency/limiter.go`. Channel-based (buffered `c
 - TASK-021✅ разблокирует TASK-034 (DM Inbound Adapter)
 - Готовые задачи (pending, все deps done): TASK-034 (high, DM Inbound Adapter), TASK-043 (high, Security), TASK-044 (high, Audit logging)
 - Критический путь: TASK-034 → TASK-037 → TASK-038 → TASK-039
+
+### TASK-034 — DM Inbound Adapter: подписка и корреляция ответов от Document Management
+**Статус:** done
+**Дата:** 2026-03-24
+
+**План реализации (согласован с code-architect):**
+1. Изучить зависимости: модели событий (5 DM→DP events), порты (DMResponseHandler, PendingResponseRegistryPort), broker client (Subscribe), pending response registry (Receive/ReceiveError), существующие паттерны (consumer, sender)
+2. Спроектировать Receiver struct в egress/dm/ рядом с sender.go:
+   - BrokerSubscriber consumer-side interface
+   - DMResponseHandler для 4 event types (artifacts persisted/failed, diff persisted/failed)
+   - PendingResponseRegistryPort для SemanticTreeProvided (correlation-based dispatch)
+   - Start() с sync.Once для 5 подписок
+3. Реализовать receiver.go: Receiver struct, NewReceiver, Start(), 5 handlers
+4. Реализовать validate.go: 5 валидаторов (по одной на тип события)
+5. Написать тесты: receiver_test.go + validate_test.go
+6. Code review, исправления, полная проверка
+
+**Ключевые решения:**
+- Файлы в `internal/egress/dm/` рядом с sender.go — симметричная пара (sender→DM, receiver←DM)
+- SemanticTreeProvided → registry.Receive/ReceiveError напрямую, минуя DMResponseHandler — correlation-based async dispatch через PendingResponseRegistryPort
+- Если SemanticTree.Root == nil → registry.ReceiveError (пустое дерево = ошибка версии)
+- Остальные 4 события → handler.Handle* (DMResponseHandler port для orchestrators)
+- BrokerSubscriber повторена локально (Go consumer-side interface idiom, как в consumer и sender)
+- rawPreview дублирована (отдельные Go packages, нет shared utils)
+- Все handlers return nil (no requeue) — poison-pill prevention, ошибки логируются
+- PersistFailed-события содержат is_retryable — передаётся handler для управления retry-логикой
+- correlation_id в JobContext для structured logging во всех 5 handlers
+- dmTopicMap (отдельный от sender's topicMap, т.к. в одном package)
+
+**Code review (code-reviewer):**
+- 0 critical issues
+- W1 (rawPreview duplication) — следуем установленному паттерну проекта
+- W2 (BrokerSubscriber duplication) — Go idiom: define interface at consumer
+- W3 (HandleSemanticTreeProvided в DMResponseHandler unused by Receiver) — не меняем port, не входит в скоуп
+- W4 (correlation_id not validated for 4 events) — для них он информационный, не маршрутизационный
+- S6 (boundary test) — добавлен TestRawPreview_ExactBoundary
+
+**Summary:**
+- 4 новых файла: receiver.go, validate.go, receiver_test.go, validate_test.go
+- receiver.go: Receiver struct (BrokerSubscriber, DMResponseHandler, PendingResponseRegistryPort, Logger, dmTopicMap), NewReceiver (panic-on-nil), Start() (sync.Once, 5 subscriptions), 5 handlers, rawPreview
+- validate.go: 5 validators (validateArtifactsPersisted, validateArtifactsPersistFailed, validateSemanticTreeProvided, validateDiffPersisted, validateDiffPersistFailed)
+- 65 тестов в dm package (45 receiver + 20 validation):
+  - Constructor: 4 nil panics + 5 empty topic panics (subtests)
+  - Start: 5 subscriptions, failure, idempotent, partial failure
+  - handleArtifactsPersisted: valid, invalid JSON, missing fields, handler error, empty body, nil body
+  - handleArtifactsPersistFailed: valid, invalid JSON, missing error_message, handler error
+  - handleSemanticTreeProvided: valid→registry.Receive, empty tree→registry.ReceiveError, invalid JSON, missing correlation_id, missing version_id, registry receive error, registry receive error error
+  - handleDiffPersisted: valid, invalid JSON, missing fields, handler error
+  - handleDiffPersistFailed: valid, invalid JSON, missing error_message, handler error
+  - Integration: Start + dispatch all 5 events through broker handlers
+  - Context enrichment: artifacts persisted, diff persist failed
+  - rawPreview: short, truncated, empty, nil, exact boundary (200 bytes)
+  - Validation: valid, missing fields, all missing, whitespace-only (per event type)
+- 28 пакетов PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-034✅ разблокирует TASK-037 (Comparison Pipeline Orchestrator — happy path)
+- TASK-037 deps: TASK-019✅, TASK-021✅, TASK-030✅, TASK-032✅, TASK-033✅, TASK-034✅ — ВСЕ DONE
+- Готовые задачи (pending, все deps done): TASK-037 (medium, Comparison Pipeline happy path), TASK-043 (high, Security), TASK-044 (high, Audit logging)
+- Критический путь: TASK-037 → TASK-038 → TASK-039 → TASK-040/041/042
+- При DI: `dm.NewReceiver(brokerClient, dmResponseHandler, pendingRegistry, logger, cfg.Broker)` → .Start()

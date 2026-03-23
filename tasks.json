@@ -788,7 +788,9 @@
         "Шаг 6: проверить обработку DocumentVersionDiffPersistFailed с is_retryable"
       ],
       "dependencies": ["TASK-005", "TASK-006", "TASK-008", "TASK-021"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-24",
+      "summary": "Receiver в internal/egress/dm/receiver.go. Подписка на 5 DM response топиков (dm.responses.artifacts-persisted/persist-failed, semantic-tree-provided, diff-persisted/persist-failed). BrokerSubscriber consumer-side interface, Start() с sync.Once (idempotent, fail-fast при ошибке подписки). 5 handler методов: handleArtifactsPersisted/PersistFailed → handler.Handle* (DMResponseHandler port), handleSemanticTreeProvided → registry.Receive/ReceiveError (PendingResponseRegistryPort, correlation-based dispatch), handleDiffPersisted/PersistFailed → handler.Handle*. Все handlers return nil (no requeue), structured logging с JobContext (job_id, document_id, correlation_id). SemanticTreeProvided: если Root == nil → registry.ReceiveError, иначе → registry.Receive. Обработка is_retryable из PersistFailed-событий передаётся в handler. validate.go: 5 валидаторов (required fields per event type). Constructor panic-on-nil для broker/handler/registry/logger + panic на пустые topics. 65 тестов в dm package (45 receiver + 20 validation): конструктор panics, Start (5 subscriptions, failure, idempotent, partial failure), каждый handler (valid, invalid JSON, missing fields, handler/registry error returns nil, empty/nil body), integration Start+dispatch all 5 events, context enrichment, rawPreview (short/truncated/empty/nil/boundary). 28 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-035",

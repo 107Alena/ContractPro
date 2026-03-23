@@ -291,7 +291,9 @@
         "Шаг 4: проверить cancellation через context"
       ],
       "dependencies": ["TASK-001", "TASK-007", "TASK-012"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-23",
+      "summary": "Semaphore в internal/infra/concurrency/limiter.go. Реализует port.ConcurrencyLimiterPort. Channel-based semaphore (buffered chan struct{}, cap=maxJobs). New(maxJobs, metrics, logger) — panic на nil metrics/logger, maxJobs<1 → 1. Acquire(ctx): fast path (non-blocking select с default) → slow path (blocking select с ctx.Done). Fast path пропускает waiting metric. Slow path: waiting.Inc → defer waiting.Dec → select sem/ctx.Done. Context errors passthrough raw. Release(): select <-sem с default guard (mismatched release → warn log, не паника). Метрики: dp_concurrent_jobs_active (existing Gauge, Inc на Acquire, Dec на Release), dp_concurrent_jobs_waiting (new Gauge в observability/metrics.go, Inc/Dec только в slow path). Compile-time check var _ ConcurrencyLimiterPort = (*Semaphore)(nil). Без Close() — нет ресурсов, shutdown через context cancellation в Acquire. Code review: 0 critical, 4 warnings (waiting gauge approximation documented, nil-safety fixed, double-release documented, time.Sleep in tests accepted). 21 тест с -race: 3 constructor (zero, negative, configured + 2 nil panics), 1 interface compliance, 3 happy path (immediate, cycle, exactly max), 1 blocking (blocks then unblocks), 3 context (canceled, deadline exceeded, already cancelled), 1 fast-path cancelled ctx, 4 metrics (active inc/dec, waiting inc blocking, waiting dec on cancel), 1 concurrent stress (50 goroutines × 100 iterations, max≤5, gauge drift check), 2 edge (release without acquire: no panic, gauge unchanged). 26 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-014",

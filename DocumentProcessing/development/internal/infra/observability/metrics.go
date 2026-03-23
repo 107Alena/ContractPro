@@ -18,6 +18,10 @@ type Metrics struct {
 	// ConcurrentJobsActive tracks how many jobs are executing right now.
 	ConcurrentJobsActive prometheus.Gauge
 
+	// ConcurrentJobsWaiting tracks how many goroutines are blocked waiting
+	// for a processing slot in the concurrency limiter.
+	ConcurrentJobsWaiting prometheus.Gauge
+
 	// FileSizeBytes records the size of incoming PDF files.
 	FileSizeBytes prometheus.Histogram
 
@@ -52,6 +56,11 @@ func NewMetrics() *Metrics {
 			Help: "Number of document processing jobs currently in progress.",
 		}),
 
+		ConcurrentJobsWaiting: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "dp_concurrent_jobs_waiting",
+			Help: "Number of goroutines waiting to acquire a processing slot.",
+		}),
+
 		FileSizeBytes: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "dp_file_size_bytes",
 			Help:    "Size of incoming PDF files in bytes.",
@@ -66,6 +75,7 @@ func NewMetrics() *Metrics {
 		m.JobStatusTotal,
 		m.OCRDuration,
 		m.ConcurrentJobsActive,
+		m.ConcurrentJobsWaiting,
 		m.FileSizeBytes,
 	)
 

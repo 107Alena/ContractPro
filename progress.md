@@ -1284,3 +1284,45 @@ SDK в `internal/infra/observability/`. **Logger**: slog (stdlib) wrapper, JSON 
 - TASK-012✅ также разблокирует TASK-044 (Audit logging)
 - Готовые задачи (pending, все deps done): TASK-013 (high, Concurrency Limiter — deps: TASK-001✅, TASK-007✅, TASK-012✅), TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security)
 - TASK-013 на критическом пути к TASK-039 через TASK-017
+
+### TASK-013 — Concurrency Limiter
+**Статус:** done
+**Дата:** 2026-03-23
+
+**План реализации (согласован):**
+1. Добавить метрику `dp_concurrent_jobs_waiting` (Gauge) в `observability/metrics.go`
+2. Создать `internal/infra/concurrency/limiter.go`:
+   - Semaphore struct с buffered channel (cap=maxJobs)
+   - New(maxJobs, metrics, logger) конструктор с nil-safety
+   - Acquire(ctx): fast path (non-blocking) + slow path (blocking + ctx cancellation)
+   - Release(): channel receive с default guard для mismatched release
+3. Создать `internal/infra/concurrency/limiter_test.go`:
+   - Тесты конструктора, blocking, context cancellation, metrics, concurrent stress
+4. Обновить тесты observability для новой метрики
+5. Code review и исправления
+
+**Ключевые решения:**
+- Channel-based semaphore (идиоматичный Go) вместо sync-based
+- Два этапа Acquire: fast path (не трогает waiting metric) + slow path (Inc/Dec waiting)
+- Context errors passthrough raw (не DomainError) — паттерн из kvstore/broker
+- Без Close() — нет ресурсов, shutdown через context cancellation
+- Release с default guard: mismatched release → warn (не panic) для production safety
+
+**Summary:**
+Semaphore в `internal/infra/concurrency/limiter.go`. Channel-based (buffered `chan struct{}`). `New()` с nil-safety (panic на nil metrics/logger), maxJobs<1 → 1. `Acquire(ctx)`: fast path non-blocking → slow path с waiting gauge + ctx.Done. `Release()`: channel drain с default guard. Метрики: `dp_concurrent_jobs_active` (existing), `dp_concurrent_jobs_waiting` (new). Code review: 0 critical, 4 warnings (waiting gauge approximation, nil-safety fixed, double-release documented, time.Sleep in tests).
+
+**Тесты (21 с -race):**
+- Constructor: zero→1, negative→1, configured, nil metrics panic, nil logger panic
+- Interface compliance
+- Happy path: immediate, cycle, exactly max concurrent
+- Blocking: blocks then unblocks on Release
+- Context: canceled, deadline exceeded, already cancelled, fast-path cancelled ctx succeeds
+- Metrics: active inc/dec, waiting inc blocking, waiting dec on cancel
+- Stress: 50 goroutines × 100 iterations, max≤5 enforced, final gauges=0
+- Edge: release without acquire (no panic, gauge unchanged)
+
+**Заметки для следующей итерации:**
+- TASK-013✅ разблокирует TASK-017 (Ingress Integration)
+- Готовые задачи (pending, все deps done): TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security), TASK-044 (high, Audit logging)
+- TASK-015 + TASK-013✅ + TASK-016✅ → разблокируют TASK-017 → TASK-039
+- Критический путь к Main Entry Point: TASK-015 → TASK-017 → ... → TASK-039

@@ -56,6 +56,12 @@ func TestMetrics_allMetricsCanBeObserved(t *testing.T) {
 		m.ConcurrentJobsActive.Dec()
 	})
 
+	t.Run("ConcurrentJobsWaiting", func(t *testing.T) {
+		t.Parallel()
+		m.ConcurrentJobsWaiting.Inc()
+		m.ConcurrentJobsWaiting.Dec()
+	})
+
 	t.Run("FileSizeBytes", func(t *testing.T) {
 		t.Parallel()
 		m.FileSizeBytes.Observe(1048576)
@@ -90,6 +96,7 @@ func TestMetrics_Gather_containsExpectedMetricNames(t *testing.T) {
 	m.JobStatusTotal.WithLabelValues("COMPLETED").Inc()
 	m.OCRDuration.WithLabelValues("applicable").Observe(0.5)
 	m.ConcurrentJobsActive.Inc()
+	m.ConcurrentJobsWaiting.Inc()
 	m.FileSizeBytes.Observe(1024)
 
 	families, err := m.Registry().Gather()
@@ -98,11 +105,12 @@ func TestMetrics_Gather_containsExpectedMetricNames(t *testing.T) {
 	}
 
 	expectedNames := map[string]bool{
-		"dp_job_duration_seconds":   false,
-		"dp_job_status_total":       false,
-		"dp_ocr_duration_seconds":   false,
-		"dp_concurrent_jobs_active": false,
-		"dp_file_size_bytes":        false,
+		"dp_job_duration_seconds":    false,
+		"dp_job_status_total":        false,
+		"dp_ocr_duration_seconds":    false,
+		"dp_concurrent_jobs_active":  false,
+		"dp_concurrent_jobs_waiting": false,
+		"dp_file_size_bytes":         false,
 	}
 
 	for _, fam := range families {

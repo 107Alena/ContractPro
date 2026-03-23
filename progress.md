@@ -1410,3 +1410,46 @@ Semaphore в `internal/infra/concurrency/limiter.go`. Channel-based (buffered `c
 - TASK-017✅ разблокирует TASK-039 (Main Entry Point) — но TASK-039 ещё ждёт TASK-037/038
 - Готовые задачи (pending, все deps done): TASK-021 (high, Pending Response Registry), TASK-043 (high, Security), TASK-044 (high, Audit logging)
 - Критический путь: TASK-021 → TASK-034 → TASK-037 → TASK-038 → TASK-039
+
+### TASK-021 — Pending Response Registry
+**Статус:** done
+**Дата:** 2026-03-24
+
+**План реализации (согласован с code-architect):**
+1. Добавить `ErrCodeDMVersionNotFound` и `NewDMVersionNotFoundError` в `port/errors.go`
+2. Добавить `PendingResponse` struct и `PendingResponseRegistryPort` interface в `port/outbound.go`
+3. Создать `internal/application/pendingresponse/registry.go`:
+   - `Registry` struct: `sync.Mutex` + `map[string]*entry` + reverse index `map[string]string`
+   - `entry` struct: expected set, responses map, done channel, `sync.Once` для close
+   - `Register`: batch-валидация (empty/dup/in-use), no-mutation-on-error
+   - `AwaitAll`: select done/ctx.Done, sorted responses, cleanup on return
+   - `Receive`: deep copy SemanticTree, idempotent, close done on last
+   - `ReceiveError`: nil-error guard, idempotent
+   - `Cancel`: idempotent, unblocks AwaitAll, cleanup
+4. Создать `internal/application/pendingresponse/registry_test.go`: 40 тестов с -race
+5. Прогнать все тесты, go vet, make targets
+
+**Ключевые решения:**
+- Пакет `internal/application/pendingresponse/` — application-layer логика координации (параллельно с lifecycle, warning)
+- Таймаут через caller's context — не internal timeout (следуя паттерну всех port-методов)
+- Single `sync.Mutex` + per-entry `done` channel + `sync.Once` — проще чем RWMutex + per-entry Mutex
+- Deep copy SemanticTree в Receive (deepCopyTree/deepCopyNode) — защита от мутации shared Root/*SemanticNode
+- `PendingResponse` в port пакете (рядом с interface), не в application пакете — избегаем циклических зависимостей
+- Empty slice (не nil) для JSON-совместимости
+- Sorted by CorrelationID для детерминизма
+
+**Code review (code-reviewer):**
+- 1 critical fixed: C-1 — shallow copy SemanticTree → deep copy (Root pointer + Children + Metadata maps shared)
+- 2 warnings fixed: W-3 — nil error guard в ReceiveError, W-4 — empty slice вместо nil
+- 1 warning documented: W-2 — Cancel-vs-AwaitAll ambiguity (nil error + empty responses при Cancel)
+
+**Summary:**
+- 2 новых файла: registry.go, registry_test.go
+- 2 изменённых файла: port/outbound.go, port/errors.go
+- 40 тестов: interface compliance (1), constructor (1), Register (8), Receive (4), ReceiveError (4), AwaitAll (7), Cancel (4), lifecycle (2), concurrent (5), edge (4)
+- 28 пакетов PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-021✅ разблокирует TASK-034 (DM Inbound Adapter)
+- Готовые задачи (pending, все deps done): TASK-034 (high, DM Inbound Adapter), TASK-043 (high, Security), TASK-044 (high, Audit logging)
+- Критический путь: TASK-034 → TASK-037 → TASK-038 → TASK-039

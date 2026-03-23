@@ -20,6 +20,7 @@ const (
 	ErrCodeServiceUnavailable  = "SERVICE_UNAVAILABLE"
 	ErrCodeDuplicateJob        = "DUPLICATE_JOB"
 	ErrCodeConcurrencyLimit    = "CONCURRENCY_LIMIT"
+	ErrCodeDMVersionNotFound   = "DM_VERSION_NOT_FOUND"
 )
 
 // DomainError represents a typed domain error with machine-readable code
@@ -115,6 +116,17 @@ func NewConcurrencyLimitError() *DomainError {
 		Code:      ErrCodeConcurrencyLimit,
 		Message:   "no available processing slots",
 		Retryable: true,
+	}
+}
+
+// NewDMVersionNotFoundError creates a non-retryable error when DM reports
+// that a requested document version does not exist.
+func NewDMVersionNotFoundError(versionID string, cause error) *DomainError {
+	return &DomainError{
+		Code:      ErrCodeDMVersionNotFound,
+		Message:   fmt.Sprintf("version %s not found in document management", versionID),
+		Retryable: false,
+		Cause:     cause,
 	}
 }
 

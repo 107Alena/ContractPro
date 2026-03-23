@@ -86,3 +86,25 @@ type ConcurrencyLimiterPort interface {
 	Acquire(ctx context.Context) error
 	Release()
 }
+
+// PendingResponse holds one correlated response from Document Management.
+// Tree is non-nil on success; Err is non-nil on failure. Exactly one is set.
+type PendingResponse struct {
+	CorrelationID string
+	Tree          *model.SemanticTree
+	Err           error
+}
+
+// PendingResponseRegistryPort tracks and correlates asynchronous responses
+// from Document Management during the comparison pipeline.
+// Implemented by: Pending Response Registry (application layer).
+// Used by: Comparison Pipeline Orchestrator (Register, AwaitAll, Cancel),
+//
+//	DM Inbound Adapter (Receive, ReceiveError).
+type PendingResponseRegistryPort interface {
+	Register(jobID string, correlationIDs []string) error
+	AwaitAll(ctx context.Context, jobID string) ([]PendingResponse, error)
+	Receive(correlationID string, tree model.SemanticTree) error
+	ReceiveError(correlationID string, err error) error
+	Cancel(jobID string)
+}

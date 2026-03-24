@@ -862,7 +862,9 @@
         "Шаг 3: проверить, что результат diff передан в DM"
       ],
       "dependencies": ["TASK-019", "TASK-021", "TASK-030", "TASK-032", "TASK-033", "TASK-034"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-24",
+      "summary": "Orchestrator в internal/application/comparison/orchestrator.go. Реализует port.ComparisonCommandHandler. 6-стадийный pipeline: VALIDATING_INPUT (transition QUEUED→IN_PROGRESS + validateCompareCommand: пустые поля, base≠target) → REQUESTING_SEMANTIC_TREES (Register BEFORE send, 2x RequestSemanticTree с retry, Cancel на ошибку) → WAITING_DM_RESPONSE (AwaitAll, извлечение base/target деревьев по correlationID, defensive nil check) → EXECUTING_DIFF (comparer.Compare) → SAVING_COMPARISON_RESULT (SendDiffResult с retry, confirmCorrID) → WAITING_DM_CONFIRMATION (второй Register/AwaitAll цикл для diff persist). Correlation IDs: {jobID}:base:{versionID}, {jobID}:target:{versionID}, {jobID}:diff-confirm. classifyError: DeadlineExceeded/Canceled→TIMED_OUT retryable, VALIDATION/DM_VERSION_NOT_FOUND→REJECTED, default→FAILED. handlePipelineError: terminal status guard (skip transition if already terminal), best-effort registry.Cancel, ComparisonFailedEvent publish. Code review: 2 critical fixed (context.Canceled handling, COMPLETED→FAILED inconsistency guard), 5 warnings fixed (input validation, unused var, terminal guard). 40 тестов с -race: 8 constructor, 8 classifyError (incl context.Canceled), 8 happy path, 11 error handling, 2 handlePipelineError, 5 retryStep, 6 validation, 1 terminal guard, 3 integration. 29 пакетов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-038",

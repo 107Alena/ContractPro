@@ -1165,6 +1165,60 @@
 - Готовые задачи (pending, все deps done): TASK-009 (high, KV-store), TASK-012 (high, Observability), TASK-015 (high, Command Consumer), TASK-021 (high, Pending Response Registry), TASK-043 (high, Security)
 - shared *warning.Collector по-прежнему не safe для concurrent calls — при параллельной обработке нужен per-job collector
 
+### TASK-037 — Comparison Pipeline Orchestrator: happy path
+**Статус:** done
+**Дата:** 2026-03-24
+
+**План реализации (согласован с code-architect):**
+1. Создать `internal/application/comparison/orchestrator.go` — реализация `port.ComparisonCommandHandler`
+2. Orchestrator struct: 7 зависимостей (lifecycle, warnings, treeReq, dmSender, registry, comparer, publisher) + maxRetries, backoffBase
+3. `HandleCompareVersions` → `runPipeline` (6 стадий) → `handlePipelineError` (error handling)
+4. 6-стадийный pipeline:
+   - VALIDATING_INPUT — transition QUEUED→IN_PROGRESS + validateCompareCommand
+   - REQUESTING_SEMANTIC_TREES — Register BEFORE send (race protection), 2x RequestSemanticTree с retryStep, Cancel при ошибке
+   - WAITING_DM_RESPONSE — AwaitAll блокирует до получения обоих деревьев
+   - EXECUTING_DIFF — comparer.Compare(baseTree, targetTree)
+   - SAVING_COMPARISON_RESULT — SendDiffResult с retryStep
+   - WAITING_DM_CONFIRMATION — второй Register/AwaitAll цикл для DocumentVersionDiffPersisted
+5. Correlation ID формат: `{jobID}:base:{versionID}`, `{jobID}:target:{versionID}`, `{jobID}:diff-confirm`
+6. classifyError: DeadlineExceeded/Canceled→TIMED_OUT, VALIDATION/DM_VERSION_NOT_FOUND→REJECTED, default→FAILED
+7. handlePipelineError: terminal status guard + registry.Cancel + ComparisonFailedEvent
+8. validateCompareCommand: пустые поля, base_version_id ≠ target_version_id
+
+**Ключевые решения:**
+- Два цикла Register/AwaitAll: первый для semantic trees, второй для diff persist confirmation. Между циклами первый cleanup автоматически (AwaitAll очищает entry). Второй использует `{jobID}:diff-confirm` как единственный correlationID
+- Register BEFORE send — критически важно: если DM ответит до registry.Register, ответ будет потерян
+- context.Canceled обработан (в отличие от processing orchestrator) — маппинг на TIMED_OUT/retryable
+- Terminal status guard в handlePipelineError: если job уже COMPLETED (а потом PublishComparisonCompleted провалился), не пытаемся COMPLETED→FAILED
+- Retry только на RequestSemanticTree и SendDiffResult — AwaitAll и Compare не имеют retryable ошибок
+- Для diff confirm confirmation: registry.Receive вызывается с пустым SemanticTree{} — оркестратор проверяет только resp.Err == nil
+- validateCompareCommand — базовая валидация полей команды, отсутствующая в processing orchestrator
+
+**Code review (code-reviewer):**
+- 2 critical fixed: context.Canceled→TIMED_OUT; handlePipelineError terminal status guard
+- 5 warnings addressed: input validation added, unbounded bgCtx documented, unused variable removed, shared collector documented, mock improvements noted
+- 5 suggestions noted for future: code deduplication across orchestrators, structured logging, per-method mock errors
+
+**Summary:**
+- orchestrator.go: Orchestrator struct, NewOrchestrator, HandleCompareVersions, runPipeline, handlePipelineError, classifyError, retryStep, validateCompareCommand
+- orchestrator_test.go: 40 тестов с -race:
+  - Constructor: 8 (7 nil panics + defaults)
+  - classifyError: 8 table-driven (DeadlineExceeded, Canceled, WrappedCanceled, Validation, DMVersionNotFound, Broker, Generic, WrappedDeadlineExceeded)
+  - Happy path: 8 (completed, warnings, correlation IDs, register order, tree routing, diff result, cmd fields, confirm cycle)
+  - Error handling: 11 (base req, target req, await timeout, DM_VERSION_NOT_FOUND, comparer, diff send, confirmation, nil tree, register, transition, publish completed)
+  - handlePipelineError: 2 (field completeness, registry cancel)
+  - retryStep: 5 (success, non-retryable, context cancel, exhaust retries, retry then success)
+  - Input validation: 6 (4 empty fields, same versions, valid)
+  - Integration: 4 (stage progression, version IDs, no completion on error, warnings reset, terminal guard)
+- 29 пакетов PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-037✅ разблокирует TASK-038 (comparison error handling/timeouts)
+- TASK-038 разблокирует TASK-039 (critical — main entry point)
+- Pending tasks с all deps done: TASK-038 (medium), TASK-043 (high, security), TASK-044 (high, audit), TASK-045 (low, PDF CMap)
+- Для TASK-038: handlePipelineError уже реализован в TASK-037 — нужно добавить specific error scenarios и подробные тесты для каждого failure mode
+- DM Receiver (receiver.go) маршрутизирует DiffPersisted/DiffPersistFailed через DMResponseHandler, НЕ через registry напрямую — wiring (TASK-039) должен обеспечить bridge
+
 ### TASK-009 — Инфраструктурный клиент KV-store для Idempotency Guard
 **Статус:** done
 **Дата:** 2026-03-23

@@ -96,14 +96,16 @@ func (m *mockIdempotency) MarkCompleted(_ context.Context, jobID string) error {
 
 // mockTreeRequester records RequestSemanticTree calls.
 type mockTreeRequester struct {
-	mu       sync.Mutex
-	requests []model.GetSemanticTreeRequest
-	err      error
+	mu        sync.Mutex
+	requests  []model.GetSemanticTreeRequest
+	callCount int
+	err       error
 }
 
 func (m *mockTreeRequester) RequestSemanticTree(_ context.Context, req model.GetSemanticTreeRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.callCount++
 	if m.err != nil {
 		return m.err
 	}
@@ -501,7 +503,7 @@ func TestClassifyError_Table(t *testing.T) {
 			name:              "BrokerFailed",
 			err:               port.NewBrokerError("broker down", errors.New("err")),
 			expectedStatus:    model.StatusFailed,
-			expectedRetryable: false,
+			expectedRetryable: true,
 		},
 		{
 			name:              "GenericError",
@@ -526,6 +528,24 @@ func TestClassifyError_Table(t *testing.T) {
 			err:               port.NewTimeoutError("timed out", context.DeadlineExceeded),
 			expectedStatus:    model.StatusTimedOut,
 			expectedRetryable: true,
+		},
+		{
+			name:              "StorageFailed_Retryable",
+			err:               port.NewStorageError("storage down", errors.New("err")),
+			expectedStatus:    model.StatusFailed,
+			expectedRetryable: true,
+		},
+		{
+			name:              "DiffPersistFailed_Retryable",
+			err:               port.NewDMDiffPersistFailedError("DM failed to persist", true, nil),
+			expectedStatus:    model.StatusFailed,
+			expectedRetryable: true,
+		},
+		{
+			name:              "DiffPersistFailed_NonRetryable",
+			err:               port.NewDMDiffPersistFailedError("DM failed to persist", false, nil),
+			expectedStatus:    model.StatusFailed,
+			expectedRetryable: false,
 		},
 	}
 
@@ -1715,5 +1735,347 @@ func TestWarningsResetBetweenCalls(t *testing.T) {
 	second := deps.publisher.statusChanged[1]
 	if second.NewStatus != model.StatusCompleted {
 		t.Errorf("expected COMPLETED (warnings should be reset), got %s", second.NewStatus)
+	}
+}
+
+// --- Helper types: TASK-038 ---
+
+// blockingRegistry embeds mockRegistry but overrides AwaitAll to block until
+// the context is cancelled, simulating a real timeout scenario.
+type blockingRegistry struct {
+	*mockRegistry
+}
+
+func (m *blockingRegistry) AwaitAll(ctx context.Context, jobID string) ([]port.PendingResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// cleanupRecorder records cleanup invocations in a thread-safe manner.
+type cleanupRecorder struct {
+	mu     sync.Mutex
+	called bool
+	jobID  string
+}
+
+func (r *cleanupRecorder) cleanup(_ context.Context, jobID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.called = true
+	r.jobID = jobID
+	return nil
+}
+
+func (r *cleanupRecorder) wasCalled() (bool, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.called, r.jobID
+}
+
+// --- Tests: TASK-038 Error Handling and Timeouts ---
+
+func TestError_DiffPersistFailed_RetryablePassthrough(t *testing.T) {
+	deps := newTestDeps()
+	cmd := defaultCompareCmd()
+	baseCorrID := fmt.Sprintf("%s:base:%s", cmd.JobID, cmd.BaseVersionID)
+	targetCorrID := fmt.Sprintf("%s:target:%s", cmd.JobID, cmd.TargetVersionID)
+	confirmCorrID := cmd.JobID + ":diff-confirm"
+
+	// First AwaitAll: trees returned successfully.
+	// Second AwaitAll: confirmation returns DiffPersistFailed with retryable=true.
+	deps.registry.awaitResponses = [][]port.PendingResponse{
+		{
+			{CorrelationID: baseCorrID, Tree: defaultBaseTree()},
+			{CorrelationID: targetCorrID, Tree: defaultTargetTree()},
+		},
+		{
+			{CorrelationID: confirmCorrID, Err: port.NewDMDiffPersistFailedError("DM storage failed", true, nil)},
+		},
+	}
+	deps.registry.awaitCallCount = 0
+
+	orch := deps.build()
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Verify ComparisonFailedEvent.
+	if len(deps.publisher.comparisonFailed) != 1 {
+		t.Fatalf("expected 1 ComparisonFailedEvent, got %d", len(deps.publisher.comparisonFailed))
+	}
+	failed := deps.publisher.comparisonFailed[0]
+	if failed.Status != model.StatusFailed {
+		t.Errorf("expected FAILED, got %s", failed.Status)
+	}
+	if !failed.IsRetryable {
+		t.Error("expected IsRetryable=true for retryable DiffPersistFailed")
+	}
+	if failed.FailedAtStage != string(model.ComparisonStageWaitingConfirm) {
+		t.Errorf("expected FailedAtStage=%s, got %s", model.ComparisonStageWaitingConfirm, failed.FailedAtStage)
+	}
+}
+
+func TestError_DiffPersistFailed_NonRetryablePassthrough(t *testing.T) {
+	deps := newTestDeps()
+	cmd := defaultCompareCmd()
+	baseCorrID := fmt.Sprintf("%s:base:%s", cmd.JobID, cmd.BaseVersionID)
+	targetCorrID := fmt.Sprintf("%s:target:%s", cmd.JobID, cmd.TargetVersionID)
+	confirmCorrID := cmd.JobID + ":diff-confirm"
+
+	// First AwaitAll: trees returned successfully.
+	// Second AwaitAll: confirmation returns DiffPersistFailed with retryable=false.
+	deps.registry.awaitResponses = [][]port.PendingResponse{
+		{
+			{CorrelationID: baseCorrID, Tree: defaultBaseTree()},
+			{CorrelationID: targetCorrID, Tree: defaultTargetTree()},
+		},
+		{
+			{CorrelationID: confirmCorrID, Err: port.NewDMDiffPersistFailedError("permanent DM failure", false, nil)},
+		},
+	}
+	deps.registry.awaitCallCount = 0
+
+	orch := deps.build()
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Verify ComparisonFailedEvent.
+	if len(deps.publisher.comparisonFailed) != 1 {
+		t.Fatalf("expected 1 ComparisonFailedEvent, got %d", len(deps.publisher.comparisonFailed))
+	}
+	failed := deps.publisher.comparisonFailed[0]
+	if failed.Status != model.StatusFailed {
+		t.Errorf("expected FAILED, got %s", failed.Status)
+	}
+	if failed.IsRetryable {
+		t.Error("expected IsRetryable=false for non-retryable DiffPersistFailed")
+	}
+}
+
+func TestError_BrokerError_RetryableAfterExhaustion(t *testing.T) {
+	deps := newTestDeps()
+	deps.treeReq.err = port.NewBrokerError("broker down", errors.New("err"))
+
+	orch := deps.buildWithRetry(2, time.Millisecond)
+	cmd := defaultCompareCmd()
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error after retry exhaustion, got nil")
+	}
+
+	// Verify ComparisonFailedEvent.
+	if len(deps.publisher.comparisonFailed) != 1 {
+		t.Fatalf("expected 1 ComparisonFailedEvent, got %d", len(deps.publisher.comparisonFailed))
+	}
+	failed := deps.publisher.comparisonFailed[0]
+	if failed.Status != model.StatusFailed {
+		t.Errorf("expected FAILED, got %s", failed.Status)
+	}
+	if !failed.IsRetryable {
+		t.Error("expected IsRetryable=true for retryable BrokerError after exhaustion")
+	}
+
+	// Verify the tree requester was called exactly 2 times (2 retries exhausted).
+	deps.treeReq.mu.Lock()
+	callCount := deps.treeReq.callCount
+	deps.treeReq.mu.Unlock()
+
+	if callCount != 2 {
+		t.Errorf("expected 2 calls (maxRetries=2), got %d", callCount)
+	}
+
+	var domErr *port.DomainError
+	if !errors.As(err, &domErr) {
+		t.Fatalf("expected DomainError, got %T: %v", err, err)
+	}
+	if domErr.Code != port.ErrCodeBrokerFailed {
+		t.Errorf("expected error code %s, got %s", port.ErrCodeBrokerFailed, domErr.Code)
+	}
+}
+
+func TestError_JobContextTimeout(t *testing.T) {
+	deps := newTestDeps()
+
+	// Use a blocking registry that blocks until context cancellation.
+	blocking := &blockingRegistry{mockRegistry: deps.registry}
+
+	// Create lifecycle manager with very short timeout (5ms).
+	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 5*time.Millisecond, nil)
+	orch := NewOrchestrator(
+		lm,
+		deps.wc,
+		deps.treeReq,
+		deps.dmSender,
+		blocking,
+		deps.comparer,
+		deps.publisher,
+		1,
+		time.Millisecond,
+	)
+	cmd := defaultCompareCmd()
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+
+	// Verify ComparisonFailedEvent with TIMED_OUT.
+	if len(deps.publisher.comparisonFailed) != 1 {
+		t.Fatalf("expected 1 ComparisonFailedEvent, got %d", len(deps.publisher.comparisonFailed))
+	}
+	failed := deps.publisher.comparisonFailed[0]
+	if failed.Status != model.StatusTimedOut {
+		t.Errorf("expected TIMED_OUT, got %s", failed.Status)
+	}
+	if !failed.IsRetryable {
+		t.Error("expected IsRetryable=true for TIMED_OUT")
+	}
+}
+
+func TestError_CleanupCalledOnFailure(t *testing.T) {
+	deps := newTestDeps()
+	deps.comparer.result = nil
+	deps.comparer.err = port.NewExtractionError("comparison failed", errors.New("tree mismatch"))
+
+	recorder := &cleanupRecorder{}
+	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 120*time.Second, recorder.cleanup)
+	orch := NewOrchestrator(
+		lm,
+		deps.wc,
+		deps.treeReq,
+		deps.dmSender,
+		deps.registry,
+		deps.comparer,
+		deps.publisher,
+		1,
+		time.Millisecond,
+	)
+	cmd := defaultCompareCmd()
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Verify cleanup was called with the correct jobID.
+	called, jobID := recorder.wasCalled()
+	if !called {
+		t.Error("expected cleanup to be called on pipeline failure")
+	}
+	if jobID != cmd.JobID {
+		t.Errorf("expected cleanup jobID=%s, got %s", cmd.JobID, jobID)
+	}
+}
+
+func TestError_CleanupCalledOnTimeout(t *testing.T) {
+	deps := newTestDeps()
+
+	blocking := &blockingRegistry{mockRegistry: deps.registry}
+
+	recorder := &cleanupRecorder{}
+	// Short timeout to trigger TIMED_OUT.
+	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 5*time.Millisecond, recorder.cleanup)
+	orch := NewOrchestrator(
+		lm,
+		deps.wc,
+		deps.treeReq,
+		deps.dmSender,
+		blocking,
+		deps.comparer,
+		deps.publisher,
+		1,
+		time.Millisecond,
+	)
+	cmd := defaultCompareCmd()
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+
+	// Verify cleanup was called.
+	called, jobID := recorder.wasCalled()
+	if !called {
+		t.Error("expected cleanup to be called on timeout")
+	}
+	if jobID != cmd.JobID {
+		t.Errorf("expected cleanup jobID=%s, got %s", cmd.JobID, jobID)
+	}
+}
+
+func TestError_FailedEventFieldsForDiffPersistFailed(t *testing.T) {
+	deps := newTestDeps()
+	cmd := defaultCompareCmd()
+	baseCorrID := fmt.Sprintf("%s:base:%s", cmd.JobID, cmd.BaseVersionID)
+	targetCorrID := fmt.Sprintf("%s:target:%s", cmd.JobID, cmd.TargetVersionID)
+	confirmCorrID := cmd.JobID + ":diff-confirm"
+
+	// First AwaitAll: trees returned successfully.
+	// Second AwaitAll: confirmation returns DiffPersistFailed.
+	deps.registry.awaitResponses = [][]port.PendingResponse{
+		{
+			{CorrelationID: baseCorrID, Tree: defaultBaseTree()},
+			{CorrelationID: targetCorrID, Tree: defaultTargetTree()},
+		},
+		{
+			{CorrelationID: confirmCorrID, Err: port.NewDMDiffPersistFailedError("DM persist error", true, nil)},
+		},
+	}
+	deps.registry.awaitCallCount = 0
+
+	orch := deps.build()
+
+	before := time.Now().UTC()
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	after := time.Now().UTC()
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if len(deps.publisher.comparisonFailed) != 1 {
+		t.Fatalf("expected 1 ComparisonFailedEvent, got %d", len(deps.publisher.comparisonFailed))
+	}
+	f := deps.publisher.comparisonFailed[0]
+
+	// 1. CorrelationID
+	if f.CorrelationID != cmd.JobID {
+		t.Errorf("CorrelationID: expected %s, got %s", cmd.JobID, f.CorrelationID)
+	}
+	// 2. Timestamp
+	if f.Timestamp.Before(before) || f.Timestamp.After(after) {
+		t.Errorf("Timestamp %v outside range [%v, %v]", f.Timestamp, before, after)
+	}
+	// 3. JobID
+	if f.JobID != cmd.JobID {
+		t.Errorf("JobID: expected %s, got %s", cmd.JobID, f.JobID)
+	}
+	// 4. DocumentID
+	if f.DocumentID != cmd.DocumentID {
+		t.Errorf("DocumentID: expected %s, got %s", cmd.DocumentID, f.DocumentID)
+	}
+	// 5. Status
+	if f.Status != model.StatusFailed {
+		t.Errorf("Status: expected FAILED, got %s", f.Status)
+	}
+	// 6. ErrorCode
+	if f.ErrorCode != port.ErrCodeDMDiffPersistFailed {
+		t.Errorf("ErrorCode: expected %s, got %s", port.ErrCodeDMDiffPersistFailed, f.ErrorCode)
+	}
+	// 7. ErrorMessage
+	if f.ErrorMessage == "" {
+		t.Error("ErrorMessage should not be empty")
+	}
+	// 8. FailedAtStage
+	if f.FailedAtStage != string(model.ComparisonStageWaitingConfirm) {
+		t.Errorf("FailedAtStage: expected %s, got %s", model.ComparisonStageWaitingConfirm, f.FailedAtStage)
+	}
+	// 9. IsRetryable
+	if !f.IsRetryable {
+		t.Error("expected IsRetryable=true for retryable DiffPersistFailed")
 	}
 }

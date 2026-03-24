@@ -21,6 +21,7 @@ const (
 	ErrCodeDuplicateJob        = "DUPLICATE_JOB"
 	ErrCodeConcurrencyLimit    = "CONCURRENCY_LIMIT"
 	ErrCodeDMVersionNotFound   = "DM_VERSION_NOT_FOUND"
+	ErrCodeDMDiffPersistFailed = "DM_DIFF_PERSIST_FAILED"
 )
 
 // DomainError represents a typed domain error with machine-readable code
@@ -126,6 +127,17 @@ func NewDMVersionNotFoundError(versionID string, cause error) *DomainError {
 		Code:      ErrCodeDMVersionNotFound,
 		Message:   fmt.Sprintf("version %s not found in document management", versionID),
 		Retryable: false,
+		Cause:     cause,
+	}
+}
+
+// NewDMDiffPersistFailedError creates an error for DM diff persist failures.
+// The retryable flag is taken directly from the DM event's is_retryable field.
+func NewDMDiffPersistFailedError(msg string, retryable bool, cause error) *DomainError {
+	return &DomainError{
+		Code:      ErrCodeDMDiffPersistFailed,
+		Message:   msg,
+		Retryable: retryable,
 		Cause:     cause,
 	}
 }

@@ -114,6 +114,20 @@ func TestConstructors(t *testing.T) {
 			wantRetryable: true,
 			wantHasCause:  false,
 		},
+		{
+			name:          "NewDMDiffPersistFailedError_retryable",
+			err:           NewDMDiffPersistFailedError("DM storage failed", true, cause),
+			wantCode:      ErrCodeDMDiffPersistFailed,
+			wantRetryable: true,
+			wantHasCause:  true,
+		},
+		{
+			name:          "NewDMDiffPersistFailedError_non_retryable",
+			err:           NewDMDiffPersistFailedError("permanent failure", false, nil),
+			wantCode:      ErrCodeDMDiffPersistFailed,
+			wantRetryable: false,
+			wantHasCause:  false,
+		},
 	}
 
 	for _, tt := range tests {

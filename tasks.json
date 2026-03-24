@@ -889,7 +889,9 @@
         "Шаг 5: проверить FAILED при DocumentVersionDiffPersistFailed"
       ],
       "dependencies": ["TASK-037"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-24",
+      "summary": "classifyError fix: propagate is_retryable from DomainError.Retryable вместо hardcoded false для FAILED status. Новый error code ErrCodeDMDiffPersistFailed + NewDMDiffPersistFailedError конструктор в port/errors.go. Для FAILED: BrokerError/StorageError → is_retryable=true (upstream может ретраить), ExtractionError → is_retryable=false, DiffPersistFailed → is_retryable берётся из DM события. TIMED_OUT (DeadlineExceeded/Canceled) → is_retryable=true. REJECTED (validation/DM_VERSION_NOT_FOUND) → is_retryable=false. Cleanup через lifecycle TransitionJob (CleanupFunc) + registry.Cancel в handlePipelineError. 7 новых тестов: DiffPersistFailed retryable/non-retryable passthrough, BrokerError retryable after retry exhaustion, реальный job context timeout через blockingRegistry, cleanup verification on failure/timeout, полная проверка ComparisonFailedEvent полей. 3 новых classifyError table cases. Code review: 0 critical, 3 warnings fixed (errors_test.go constructors, callCount в mock). 29 пакетов PASS с -race, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-039",

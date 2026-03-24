@@ -102,9 +102,9 @@ func NewOrchestrator(
 // classifyError determines the terminal status and event-level is_retryable flag.
 // Context errors (DeadlineExceeded, Canceled) are checked first because they can
 // wrap inside any DomainError when the job context expires or is cancelled.
-// The event is_retryable is false for FAILED because the DP service has already
-// exhausted its own retries. Only TIMED_OUT is marked retryable to signal
-// the upstream consumer that re-submission may succeed.
+// For FAILED, is_retryable is derived from the DomainError's Retryable flag,
+// which allows external error sources (e.g., DM's DiffPersistFailed with
+// is_retryable) to propagate retryability to the upstream consumer.
 func classifyError(err error) (model.JobStatus, bool) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return model.StatusTimedOut, true
@@ -118,7 +118,7 @@ func classifyError(err error) (model.JobStatus, bool) {
 		return model.StatusRejected, false
 	}
 
-	return model.StatusFailed, false
+	return model.StatusFailed, port.IsRetryable(err)
 }
 
 // validateCompareCommand checks that the comparison command has all required

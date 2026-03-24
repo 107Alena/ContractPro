@@ -1219,6 +1219,51 @@
 - Для TASK-038: handlePipelineError уже реализован в TASK-037 — нужно добавить specific error scenarios и подробные тесты для каждого failure mode
 - DM Receiver (receiver.go) маршрутизирует DiffPersisted/DiffPersistFailed через DMResponseHandler, НЕ через registry напрямую — wiring (TASK-039) должен обеспечить bridge
 
+### TASK-038 — Comparison Pipeline Orchestrator: обработка ошибок и таймаутов
+**Статус:** done
+**Дата:** 2026-03-24
+
+**План реализации (согласован с code-architect):**
+1. Gap analysis: classifyError hardcodes `is_retryable=false` для FAILED, но AC#4 требует passthrough из DomainError
+2. Fix classifyError: `return model.StatusFailed, port.IsRetryable(err)` вместо hardcoded false
+3. Добавить ErrCodeDMDiffPersistFailed + NewDMDiffPersistFailedError в port/errors.go
+4. Добавить 7 новых тестов + 3 table cases + fix существующего BrokerFailed case
+5. Code review → fix warnings → финальная проверка
+
+**Ключевые решения:**
+- `classifyError` теперь пропускает `is_retryable` из DomainError.Retryable для FAILED status. Это корректно для всех случаев:
+  - BrokerError (Retryable=true) → (FAILED, true) — upstream может ретраить позже
+  - StorageError (Retryable=true) → (FAILED, true)
+  - ExtractionError (Retryable=false) → (FAILED, false) — детерминистическая ошибка
+  - DiffPersistFailed от DM → is_retryable берётся из DM события через конструктор NewDMDiffPersistFailedError
+- Для plain `errors.New()` (non-DomainError), `port.IsRetryable()` возвращает false — безопасный default
+- Cleanup через lifecycle TransitionJob (CleanupFunc runs on terminal) + registry.Cancel в handlePipelineError
+- blockingRegistry для тестирования реального context timeout
+
+**Code review (code-reviewer):**
+- 0 critical
+- 3 warnings fixed: W-1 added NewDMDiffPersistFailedError tests in errors_test.go, W-2 added callCount to mockTreeRequester for retry verification, W-3 contract change documented
+- 4 suggestions noted: timeout aggressiveness (5ms), blockingRegistry delegation comment, field completeness duplication, non-DomainError wrap case
+
+**Summary:**
+- orchestrator.go: classifyError fix (1 line: `port.IsRetryable(err)` вместо hardcoded `false`), обновлён godoc comment
+- port/errors.go: ErrCodeDMDiffPersistFailed + NewDMDiffPersistFailedError(msg, retryable, cause)
+- orchestrator_test.go: 3 новых classifyError table cases + 7 новых тестов:
+  - DiffPersistFailed retryable/non-retryable passthrough (2)
+  - BrokerError retryable after retry exhaustion
+  - Real job context timeout via blockingRegistry
+  - Cleanup on failure / cleanup on timeout (2)
+  - Full ComparisonFailedEvent field completeness for DiffPersistFailed
+- errors_test.go: 2 новых constructor tests для NewDMDiffPersistFailedError
+- mockTreeRequester: добавлен callCount для точной верификации retry count
+- 29 пакетов PASS с -race, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-038✅ разблокирует TASK-039 (critical — main entry point, DI, graceful shutdown)
+- Все зависимости TASK-039 теперь done: TASK-007, TASK-017, TASK-035, TASK-036, TASK-037, TASK-038
+- Pending tasks с all deps done: TASK-039 (critical), TASK-043 (high, security), TASK-044 (high, audit), TASK-045 (low, PDF CMap)
+- DM Receiver маршрутизирует DiffPersistFailed через DMResponseHandler — wiring в TASK-039 должен bridge к registry через NewDMDiffPersistFailedError
+
 ### TASK-009 — Инфраструктурный клиент KV-store для Idempotency Guard
 **Статус:** done
 **Дата:** 2026-03-23

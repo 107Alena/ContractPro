@@ -1659,3 +1659,54 @@ Semaphore в `internal/infra/concurrency/limiter.go`. Channel-based (buffered `c
 - Pending задачи с выполненными deps: TASK-040 (high), TASK-041 (medium), TASK-042 (medium), TASK-043 (high, Security), TASK-044 (high, Audit logging)
 - dmResponseHandler — placeholder, нужно заменить на реальную диспетчеризацию когда orchestrators реализуют DM response методы
 - warningCollector shared между jobs — потенциальная проблема при concurrent processing (S4 из review)
+
+### TASK-040 — Integration test — processing pipeline end-to-end с mock-инфраструктурой
+**Статус:** done
+**Дата:** 2026-03-25
+**Summary:** E2E интеграционные тесты processing pipeline. Тестовая инфраструктура + 7 тестов
+покрывающих все acceptance criteria: happy path, warnings, validation rejection, retry,
+idempotency, malformed input, artifact format.
+
+**План реализации:**
+1. Изучение кодовой базы (Explore agent) — Orchestrator, Consumer, Dispatcher, все port interfaces
+2. Проектирование архитектуры тестов (code-architect):
+   - Архитектура: captureBroker → real Consumer → real Dispatcher → real Orchestrator
+   - Mock только infrastructure: broker subscribe, idempotency KV, temp storage, event publisher, DM sender
+   - Stubs для engine: fetcher, OCR, text extract, structure extract, tree builder, validator
+   - Build tag: `//go:build integration`
+3. Реализация (golang-pro):
+   - `internal/integration/testinfra.go` — 13 типов инфраструктуры, testHarness, newTestHarness(t, ...harnessOption)
+   - `internal/integration/processing_pipeline_test.go` — 7 test functions
+4. Code review (code-reviewer) — 2 critical + 5 warnings найдены и исправлены:
+   - C1 FIXED: sync.Mutex добавлен на все stubs (stubOCR, stubTextExtract, stubStructExtract, stubTreeBuilder, stubValidator)
+   - C2 FIXED: warning.Collector экспонирован на testHarness
+   - W3 FIXED: newTestHarness принимает *testing.T вместо panic
+   - W4 FIXED: Test 4 использует withMaxRetries(2) option вместо дублирования wiring
+   - W5 FIXED: maxRetries=1 документирован комментарием
+   - W7 FIXED: deliverToTopic возвращает error при отсутствии handler
+   - W11 FIXED: topic string вынесен в константу testTopicProcessDocument
+
+**Файлы:**
+- `internal/integration/testinfra.go` (новый) — тестовая инфраструктура
+- `internal/integration/processing_pipeline_test.go` (новый) — 7 интеграционных тестов
+
+**Тесты:**
+1. TestProcessingPipeline_HappyPath_TextPDF — полный pipeline QUEUED→IN_PROGRESS→COMPLETED
+2. TestProcessingPipeline_HappyPath_WithWarnings — COMPLETED_WITH_WARNINGS
+3. TestProcessingPipeline_ValidationRejected — REJECTED + ProcessingFailedEvent
+4. TestProcessingPipeline_FetchError_Failed — retry exhaustion maxRetries=2
+5. TestProcessingPipeline_DuplicateJob_Skipped — idempotency guard
+6. TestProcessingPipeline_InvalidJSON_Acknowledged — zero side effects
+7. TestProcessingPipeline_ArtifactFormat_Complete — rich structure verification
+
+**Результаты тестирования:**
+- 7 integration тестов PASS с -race
+- 31 пакет PASS (go test -count=1 -race ./...)
+- go vet clean (с и без integration tag)
+- make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-040✅ завершена. Pending задачи: TASK-041 (integration comparison, medium), TASK-042 (Dockerfile, medium), TASK-043 (Security, high), TASK-044 (Audit, high)
+- Integration тесты запускаются: `go test -tags integration -v ./internal/integration/`
+- Harness поддерживает harnessOption pattern для кастомизации (withMaxRetries и т.д.)
+- Warning collector shared — не использовать harness для concurrent job submissions

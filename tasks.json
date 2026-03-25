@@ -945,7 +945,9 @@
         "Шаг 4: проверить, что временные артефакты удалены"
       ],
       "dependencies": ["TASK-039"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-25",
+      "summary": "Integration test suite в internal/integration/. 2 файла: testinfra.go (тестовая инфраструктура: captureBroker, recordingPublisher, memoryIdempotencyStore, recordingTempStorage, recordingDMSender, 6 engine stubs с sync.Mutex, noopComparisonHandler, testHarness + harnessOption pattern, newTestHarness(t) с полной DI wiring: real Consumer → Dispatcher → Orchestrator, mock infra), processing_pipeline_test.go (7 тестов с //go:build integration). Тесты: (1) HappyPath_TextPDF — полный pipeline QUEUED→IN_PROGRESS→COMPLETED, артефакты в DM, cleanup, idempotency, (2) HappyPath_WithWarnings — COMPLETED_WITH_WARNINGS, warnings в артефактах, (3) ValidationRejected — REJECTED + ProcessingFailedEvent, (4) FetchError_Failed — retry exhaustion с maxRetries=2, (5) DuplicateJob_Skipped — idempotency guard, (6) InvalidJSON_Acknowledged — zero side effects, (7) ArtifactFormat_Complete — rich structure с 2 секциями, appendix, party details, semantic tree. Code review: 2 critical fixed (mutex consistency, warning collector на harness), 5 warnings fixed (t.Fatal вместо panic, harnessOption, topic constants, deliverToTopic error). 7 integration тестов PASS с -race. 31 пакет PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-041",

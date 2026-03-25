@@ -2,11 +2,11 @@ package lifecycle
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
+	"contractpro/document-processing/internal/infra/observability"
 )
 
 // ManagedJob is implemented by ProcessingJob and ComparisonJob.
@@ -31,15 +31,17 @@ type LifecycleManager struct {
 	idempotency port.IdempotencyStorePort
 	jobTimeout  time.Duration
 	cleanup     CleanupFunc
+	logger      *observability.Logger
 }
 
 // NewLifecycleManager creates a LifecycleManager.
-// Panics if publisher or idempotency is nil. cleanup may be nil if no cleanup is needed.
+// Panics if publisher, idempotency, or logger is nil. cleanup may be nil if no cleanup is needed.
 func NewLifecycleManager(
 	publisher port.EventPublisherPort,
 	idempotency port.IdempotencyStorePort,
 	jobTimeout time.Duration,
 	cleanup CleanupFunc,
+	logger *observability.Logger,
 ) *LifecycleManager {
 	if publisher == nil {
 		panic("lifecycle: publisher must not be nil")
@@ -47,11 +49,15 @@ func NewLifecycleManager(
 	if idempotency == nil {
 		panic("lifecycle: idempotency store must not be nil")
 	}
+	if logger == nil {
+		panic("lifecycle: logger must not be nil")
+	}
 	return &LifecycleManager{
 		publisher:   publisher,
 		idempotency: idempotency,
 		jobTimeout:  jobTimeout,
 		cleanup:     cleanup,
+		logger:      logger.With("component", "lifecycle"),
 	}
 }
 
@@ -65,6 +71,8 @@ func (m *LifecycleManager) TransitionJob(ctx context.Context, job ManagedJob, ne
 	if err := meta.TransitionTo(newStatus); err != nil {
 		return err
 	}
+
+	m.logger.Info(ctx, "job status transition", "old_status", string(oldStatus), "new_status", string(newStatus))
 
 	event := model.StatusChangedEvent{
 		EventMeta: model.EventMeta{
@@ -83,9 +91,10 @@ func (m *LifecycleManager) TransitionJob(ctx context.Context, job ManagedJob, ne
 	}
 
 	if newStatus.IsTerminal() {
+		m.logger.Info(ctx, "job reached terminal status", "terminal_status", string(newStatus))
 		if m.cleanup != nil {
 			if err := m.cleanup(ctx, meta.JobID); err != nil {
-				log.Printf("lifecycle: cleanup error for job %s: %v", meta.JobID, err)
+				m.logger.Warn(ctx, "cleanup error", "error", err)
 			}
 		}
 		if err := m.idempotency.MarkCompleted(ctx, meta.JobID); err != nil {

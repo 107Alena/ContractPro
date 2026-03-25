@@ -1748,3 +1748,41 @@ idempotency, malformed input, artifact format.
 - CIDR list дублирован между engine/validator и infra/httpdownloader (hexagonal constraint: engine не импортирует infra и наоборот). При изменении менять оба файла!
 - Validator теперь принимает 3й параметр Resolver (nil → net.DefaultResolver в production)
 - Для тестов httpdownloader используйте newDownloader(timeout, nil) — без SSRF control
+
+---
+
+### TASK-044 — Аудит и журналирование действий (NFR-3.4, раздел 9 ТЗ)
+**Статус:** done
+**Дата:** 2026-03-26
+**Приоритет:** high | **Категория:** security/audit
+**Зависимости:** TASK-012 (done), TASK-035 (done)
+
+**План реализации:**
+1. Расширить `JobContext` полями `OrgID` и `UserID` для полного аудит-контекста
+2. Обновить `withJobAttrs()` в Logger для эмиссии `org_id`/`user_id` в structured logs
+3. Установить `CorrelationID = JobID` на входе в consumer (ingress boundary)
+4. Внедрить `observability.Logger` как dependency injection во все application-layer компоненты
+5. Заменить все `log.Printf` на structured JSON логи через `slog`
+6. Добавить stage-by-stage логирование через `WithStage()` в оба пайплайна
+7. Обновить все тесты под новые конструкторы
+
+**Summary:**
+- 10 модифицированных файлов:
+  - `infra/observability/context.go`: +OrgID, +UserID в JobContext
+  - `infra/observability/logger.go`: emit org_id, user_id в withJobAttrs
+  - `ingress/consumer/consumer.go`: +CorrelationID, OrgID, UserID в WithJobContext
+  - `application/lifecycle/manager.go`: inject logger, replace log.Printf, +structured transition/cleanup/terminal logs
+  - `application/processing/orchestrator.go`: inject logger, replace 4x log.Printf, +8 stage logs, +entry/completion/error logs
+  - `application/comparison/orchestrator.go`: inject logger, replace 2x log.Printf, +6 stage logs, +entry/completion/error logs
+  - `app/app.go`: pass obs.Logger to 3 constructors
+  - `consumer/consumer_test.go`: +CorrelationID/OrgID/UserID assertions in context enrichment tests
+  - `lifecycle/manager_test.go`, `processing/orchestrator_test.go`, `comparison/orchestrator_test.go`, `integration/testinfra.go`: updated constructors
+- Code review fixes: W2 (removed file_url from log to prevent pre-signed URL credential leak), W3 (added CorrelationID/OrgID/UserID assertions in consumer tests)
+- 31 пакет PASS с -race, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-044✅ завершена. Pending задачи: TASK-041 (integration comparison, medium), TASK-042 (Dockerfile, medium), TASK-045 (PDF CMap, low)
+- `observability.Logger` теперь обязательный параметр в конструкторах LifecycleManager, ProcessingOrchestrator, ComparisonOrchestrator
+- Для тестов используйте `nopLogger()` → `observability.NewLogger("error")` для подавления шума
+- `handlePipelineError` использует `context.Background()` с enriched JobContext, т.к. job context может быть expired
+- Warning collector не thread-safe — concurrent job processing потребует отдельного решения

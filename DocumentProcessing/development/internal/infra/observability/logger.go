@@ -73,6 +73,12 @@ func withJobAttrs(ctx context.Context, args []any) []any {
 	if jc.CorrelationID != "" {
 		prefix = append(prefix, slog.String("correlation_id", jc.CorrelationID))
 	}
+	if jc.OrgID != "" {
+		prefix = append(prefix, slog.String("org_id", jc.OrgID))
+	}
+	if jc.UserID != "" {
+		prefix = append(prefix, slog.String("user_id", jc.UserID))
+	}
 	if jc.Stage != "" {
 		prefix = append(prefix, slog.String("stage", jc.Stage))
 	}

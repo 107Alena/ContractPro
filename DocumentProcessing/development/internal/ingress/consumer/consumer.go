@@ -126,8 +126,11 @@ func (c *Consumer) handleProcessDocument(ctx context.Context, body []byte) error
 	}
 
 	ctx = observability.WithJobContext(ctx, observability.JobContext{
-		JobID:      cmd.JobID,
-		DocumentID: cmd.DocumentID,
+		JobID:         cmd.JobID,
+		DocumentID:    cmd.DocumentID,
+		CorrelationID: cmd.JobID,
+		OrgID:         cmd.OrgID,
+		UserID:        cmd.UserID,
 	})
 
 	c.logger.Info(ctx, "received process document command")
@@ -167,8 +170,11 @@ func (c *Consumer) handleCompareVersions(ctx context.Context, body []byte) error
 	}
 
 	ctx = observability.WithJobContext(ctx, observability.JobContext{
-		JobID:      cmd.JobID,
-		DocumentID: cmd.DocumentID,
+		JobID:         cmd.JobID,
+		DocumentID:    cmd.DocumentID,
+		CorrelationID: cmd.JobID,
+		OrgID:         cmd.OrgID,
+		UserID:        cmd.UserID,
 	})
 
 	c.logger.Info(ctx, "received compare versions command")

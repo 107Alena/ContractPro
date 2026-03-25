@@ -12,6 +12,7 @@ import (
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
 	"contractpro/document-processing/internal/engine/ocr"
+	"contractpro/document-processing/internal/infra/observability"
 )
 
 // --- Mocks ---
@@ -226,6 +227,8 @@ func (m *callCountDMSender) SendDiffResult(_ context.Context, _ model.DocumentVe
 
 // --- Helpers ---
 
+func nopLogger() *observability.Logger { return observability.NewLogger("error") }
+
 func defaultCmd() model.ProcessDocumentCommand {
 	return model.ProcessDocumentCommand{
 		JobID:      "job-1",
@@ -326,7 +329,7 @@ func newTestDeps() *testDeps {
 
 func (d *testDeps) buildOrchestrator() *Orchestrator {
 	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, d.wc, 10, 1, time.Second)
-	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
 		d.wc,
@@ -339,6 +342,7 @@ func (d *testDeps) buildOrchestrator() *Orchestrator {
 		d.tempStorage,
 		d.publisher,
 		d.dmSender,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)
@@ -346,7 +350,7 @@ func (d *testDeps) buildOrchestrator() *Orchestrator {
 
 func (d *testDeps) buildOrchestratorWithRetry(maxRetries int, backoff time.Duration) *Orchestrator {
 	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, d.wc, 10, 1, time.Second)
-	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
 		d.wc,
@@ -359,13 +363,14 @@ func (d *testDeps) buildOrchestratorWithRetry(maxRetries int, backoff time.Durat
 		d.tempStorage,
 		d.publisher,
 		d.dmSender,
+		nopLogger(),
 		maxRetries,
 		backoff,
 	)
 }
 
 func (d *testDeps) buildOrchestratorWithOCR(ocrProc port.OCRProcessorPort, maxRetries int, backoff time.Duration) *Orchestrator {
-	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
 		d.wc,
@@ -378,6 +383,7 @@ func (d *testDeps) buildOrchestratorWithOCR(ocrProc port.OCRProcessorPort, maxRe
 		d.tempStorage,
 		d.publisher,
 		d.dmSender,
+		nopLogger(),
 		maxRetries,
 		backoff,
 	)
@@ -385,7 +391,7 @@ func (d *testDeps) buildOrchestratorWithOCR(ocrProc port.OCRProcessorPort, maxRe
 
 func (d *testDeps) buildOrchestratorWithDMSender(sender port.DMArtifactSenderPort, maxRetries int, backoff time.Duration) *Orchestrator {
 	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, d.wc, 10, 1, time.Second)
-	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
 		d.wc,
@@ -398,6 +404,7 @@ func (d *testDeps) buildOrchestratorWithDMSender(sender port.DMArtifactSenderPor
 		d.tempStorage,
 		d.publisher,
 		sender,
+		nopLogger(),
 		maxRetries,
 		backoff,
 	)
@@ -890,7 +897,7 @@ func TestPublishCompletedError_ReturnsError(t *testing.T) {
 	// PublishStatusChanged. To achieve this we use a specialized publisher mock.
 	specialPub := &completionFailPublisher{}
 	ocrAdapter := ocr.NewAdapter(deps.ocrService, deps.tempStorage, deps.wc, 10, 1, time.Second)
-	lm := lifecycle.NewLifecycleManager(specialPub, deps.idempotency, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(specialPub, deps.idempotency, 120*time.Second, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
 		deps.wc,
@@ -903,6 +910,7 @@ func TestPublishCompletedError_ReturnsError(t *testing.T) {
 		deps.tempStorage,
 		specialPub,
 		deps.dmSender,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)
@@ -1047,7 +1055,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 	pub := &mockPublisher{}
 	idem := &mockIdempotency{}
 	wc := warning.NewCollector()
-	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 	ocrAdapter := ocr.NewAdapter(&mockOCRService{}, &mockTempStorage{}, wc, 10, 1, time.Second)
 
 	validArgs := []interface{}{
@@ -1062,13 +1070,14 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 		&mockTempStorage{},
 		pub,
 		&mockDMSender{},
+		nopLogger(),
 	}
 
 	// Test that passing nil for each dependency panics.
 	depNames := []string{
 		"lifecycle", "warnings", "validator", "fetcher", "ocrProcessor",
 		"textExtract", "structExtract", "treeBuilder",
-		"tempStorage", "publisher", "dmSender",
+		"tempStorage", "publisher", "dmSender", "logger",
 	}
 
 	for i, name := range depNames {
@@ -1096,6 +1105,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 				asTempStorage(args[8]),
 				asPublisher(args[9]),
 				asDMSender(args[10]),
+				asLogger(args[11]),
 				1,
 				time.Millisecond,
 			)
@@ -1181,6 +1191,13 @@ func asDMSender(v interface{}) port.DMArtifactSenderPort {
 	return v.(port.DMArtifactSenderPort)
 }
 
+func asLogger(v interface{}) *observability.Logger {
+	if v == nil {
+		return nil
+	}
+	return v.(*observability.Logger)
+}
+
 func TestOCRError_ReturnsError(t *testing.T) {
 	deps := newTestDeps()
 
@@ -1229,7 +1246,7 @@ func TestContextCancellation_ReturnsError(t *testing.T) {
 	// respects context cancellation.
 	wc := warning.NewCollector()
 	ocrAdapter := ocr.NewAdapter(deps.ocrService, deps.tempStorage, wc, 10, 1, time.Second)
-	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 120*time.Second, nil, nopLogger())
 
 	// Use a fetcher that checks context and returns cancel error.
 	cancelFetcher := &contextAwareFetcher{result: defaultFetchResult()}
@@ -1245,6 +1262,7 @@ func TestContextCancellation_ReturnsError(t *testing.T) {
 		deps.tempStorage,
 		deps.publisher,
 		deps.dmSender,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)

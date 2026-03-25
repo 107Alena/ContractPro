@@ -12,6 +12,7 @@ import (
 	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
+	"contractpro/document-processing/internal/infra/observability"
 )
 
 // --- Mocks ---
@@ -315,8 +316,10 @@ func newTestDeps() *testDeps {
 	}
 }
 
+func nopLogger() *observability.Logger { return observability.NewLogger("error") }
+
 func (d *testDeps) build() *Orchestrator {
-	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
 		d.wc,
@@ -325,13 +328,14 @@ func (d *testDeps) build() *Orchestrator {
 		d.registry,
 		d.comparer,
 		d.publisher,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)
 }
 
 func (d *testDeps) buildWithRetry(maxRetries int, backoff time.Duration) *Orchestrator {
-	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
 		d.wc,
@@ -340,6 +344,7 @@ func (d *testDeps) buildWithRetry(maxRetries int, backoff time.Duration) *Orches
 		d.registry,
 		d.comparer,
 		d.publisher,
+		nopLogger(),
 		maxRetries,
 		backoff,
 	)
@@ -351,7 +356,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 	pub := &mockPublisher{}
 	idem := &mockIdempotency{}
 	wc := warning.NewCollector()
-	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 
 	validArgs := []interface{}{
 		lm,
@@ -361,11 +366,12 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 		newMockRegistry(),
 		&mockComparer{result: defaultDiffResult()},
 		pub,
+		nopLogger(),
 	}
 
 	depNames := []string{
 		"lifecycle", "warnings", "treeRequester", "dmSender",
-		"registry", "comparer", "publisher",
+		"registry", "comparer", "publisher", "logger",
 	}
 
 	for i, name := range depNames {
@@ -388,6 +394,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 				asRegistry(args[4]),
 				asComparer(args[5]),
 				asPublisher(args[6]),
+				asLogger(args[7]),
 				1,
 				time.Millisecond,
 			)
@@ -399,7 +406,7 @@ func TestNewOrchestrator_Defaults(t *testing.T) {
 	deps := newTestDeps()
 	pub := deps.publisher
 	idem := deps.idempotency
-	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 
 	// maxRetries < 1 defaults to 1, backoffBase <= 0 defaults to time.Second.
 	orch := NewOrchestrator(
@@ -410,6 +417,7 @@ func TestNewOrchestrator_Defaults(t *testing.T) {
 		deps.registry,
 		deps.comparer,
 		pub,
+		nopLogger(),
 		0,
 		0,
 	)
@@ -470,6 +478,13 @@ func asPublisher(v interface{}) port.EventPublisherPort {
 		return nil
 	}
 	return v.(port.EventPublisherPort)
+}
+
+func asLogger(v interface{}) *observability.Logger {
+	if v == nil {
+		return nil
+	}
+	return v.(*observability.Logger)
 }
 
 // --- Tests: classifyError ---
@@ -645,7 +660,7 @@ func TestHappyPath_WithWarnings(t *testing.T) {
 	}
 	pub := deps.publisher
 	idem := deps.idempotency
-	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
 		deps.wc,
@@ -654,6 +669,7 @@ func TestHappyPath_WithWarnings(t *testing.T) {
 		deps.registry,
 		warningComparer,
 		pub,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)
@@ -723,7 +739,7 @@ func TestHappyPath_RegisterBeforeRequestSemanticTree(t *testing.T) {
 
 	pub := deps.publisher
 	idem := deps.idempotency
-	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
 		deps.wc,
@@ -732,6 +748,7 @@ func TestHappyPath_RegisterBeforeRequestSemanticTree(t *testing.T) {
 		deps.registry,
 		deps.comparer,
 		pub,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)
@@ -772,7 +789,7 @@ func TestHappyPath_TreesRoutedToComparer(t *testing.T) {
 	cc := &capturingComparer{result: defaultDiffResult()}
 	pub := deps.publisher
 	idem := deps.idempotency
-	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
 		deps.wc,
@@ -781,6 +798,7 @@ func TestHappyPath_TreesRoutedToComparer(t *testing.T) {
 		deps.registry,
 		cc,
 		pub,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)
@@ -1012,7 +1030,7 @@ func TestError_TargetTreeRequestError(t *testing.T) {
 
 	pub := deps.publisher
 	idem := deps.idempotency
-	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil)
+	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
 		deps.wc,
@@ -1021,6 +1039,7 @@ func TestError_TargetTreeRequestError(t *testing.T) {
 		deps.registry,
 		deps.comparer,
 		pub,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)
@@ -1904,7 +1923,7 @@ func TestError_JobContextTimeout(t *testing.T) {
 	blocking := &blockingRegistry{mockRegistry: deps.registry}
 
 	// Create lifecycle manager with very short timeout (5ms).
-	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 5*time.Millisecond, nil)
+	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 5*time.Millisecond, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
 		deps.wc,
@@ -1913,6 +1932,7 @@ func TestError_JobContextTimeout(t *testing.T) {
 		blocking,
 		deps.comparer,
 		deps.publisher,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)
@@ -1942,7 +1962,7 @@ func TestError_CleanupCalledOnFailure(t *testing.T) {
 	deps.comparer.err = port.NewExtractionError("comparison failed", errors.New("tree mismatch"))
 
 	recorder := &cleanupRecorder{}
-	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 120*time.Second, recorder.cleanup)
+	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 120*time.Second, recorder.cleanup, nopLogger())
 	orch := NewOrchestrator(
 		lm,
 		deps.wc,
@@ -1951,6 +1971,7 @@ func TestError_CleanupCalledOnFailure(t *testing.T) {
 		deps.registry,
 		deps.comparer,
 		deps.publisher,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)
@@ -1978,7 +1999,7 @@ func TestError_CleanupCalledOnTimeout(t *testing.T) {
 
 	recorder := &cleanupRecorder{}
 	// Short timeout to trigger TIMED_OUT.
-	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 5*time.Millisecond, recorder.cleanup)
+	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 5*time.Millisecond, recorder.cleanup, nopLogger())
 	orch := NewOrchestrator(
 		lm,
 		deps.wc,
@@ -1987,6 +2008,7 @@ func TestError_CleanupCalledOnTimeout(t *testing.T) {
 		blocking,
 		deps.comparer,
 		deps.publisher,
+		nopLogger(),
 		1,
 		time.Millisecond,
 	)

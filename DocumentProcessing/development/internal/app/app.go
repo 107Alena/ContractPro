@@ -151,7 +151,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	}
 
 	lifecycleMgr := lifecycle.NewLifecycleManager(
-		eventPublisher, idempotencyStore, cfg.Limits.JobTimeout, cleanupFunc,
+		eventPublisher, idempotencyStore, cfg.Limits.JobTimeout, cleanupFunc, obs.Logger,
 	)
 
 	procOrch := processing.NewOrchestrator(
@@ -159,6 +159,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		inputValidator, fileFetcher, ocrAdapter,
 		textExtractor, structExtractor, treeBuilder,
 		tempStorage, eventPublisher, dmSender,
+		obs.Logger,
 		cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase,
 	)
 
@@ -166,6 +167,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		lifecycleMgr, warningCollector,
 		dmSender, dmSender, pendingRegistry, versionComparer,
 		eventPublisher,
+		obs.Logger,
 		cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase,
 	)
 

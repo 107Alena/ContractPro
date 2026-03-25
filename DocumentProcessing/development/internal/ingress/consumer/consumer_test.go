@@ -83,6 +83,8 @@ func validProcessCmd() model.ProcessDocumentCommand {
 		FileName:   "contract.pdf",
 		FileSize:   1024,
 		MimeType:   "application/pdf",
+		OrgID:      "org-42",
+		UserID:     "user-99",
 	}
 }
 
@@ -92,6 +94,8 @@ func validCompareCmd() model.CompareVersionsCommand {
 		DocumentID:      "doc-456",
 		BaseVersionID:   "v1",
 		TargetVersionID: "v2",
+		OrgID:           "org-42",
+		UserID:          "user-99",
 	}
 }
 
@@ -452,6 +456,15 @@ func TestHandleProcessDocument_ContextEnrichment(t *testing.T) {
 	if jc.DocumentID != cmd.DocumentID {
 		t.Errorf("context document_id = %q, want %q", jc.DocumentID, cmd.DocumentID)
 	}
+	if jc.CorrelationID != cmd.JobID {
+		t.Errorf("context correlation_id = %q, want %q", jc.CorrelationID, cmd.JobID)
+	}
+	if jc.OrgID != cmd.OrgID {
+		t.Errorf("context org_id = %q, want %q", jc.OrgID, cmd.OrgID)
+	}
+	if jc.UserID != cmd.UserID {
+		t.Errorf("context user_id = %q, want %q", jc.UserID, cmd.UserID)
+	}
 }
 
 func TestHandleCompareVersions_ContextEnrichment(t *testing.T) {
@@ -472,6 +485,15 @@ func TestHandleCompareVersions_ContextEnrichment(t *testing.T) {
 	}
 	if jc.DocumentID != cmd.DocumentID {
 		t.Errorf("context document_id = %q, want %q", jc.DocumentID, cmd.DocumentID)
+	}
+	if jc.CorrelationID != cmd.JobID {
+		t.Errorf("context correlation_id = %q, want %q", jc.CorrelationID, cmd.JobID)
+	}
+	if jc.OrgID != cmd.OrgID {
+		t.Errorf("context org_id = %q, want %q", jc.OrgID, cmd.OrgID)
+	}
+	if jc.UserID != cmd.UserID {
+		t.Errorf("context user_id = %q, want %q", jc.UserID, cmd.UserID)
 	}
 }
 

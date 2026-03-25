@@ -3,13 +3,13 @@ package processing
 import (
 	"context"
 	"errors"
-	"log"
 	"time"
 
 	"contractpro/document-processing/internal/application/lifecycle"
 	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
+	"contractpro/document-processing/internal/infra/observability"
 )
 
 // Compile-time interface compliance check.
@@ -51,6 +51,7 @@ type Orchestrator struct {
 	tempStorage   port.TempStoragePort
 	publisher     port.EventPublisherPort
 	dmSender      port.DMArtifactSenderPort
+	logger        *observability.Logger
 	maxRetries    int
 	backoffBase   time.Duration
 }
@@ -70,6 +71,7 @@ func NewOrchestrator(
 	tempStorage port.TempStoragePort,
 	publisher port.EventPublisherPort,
 	dmSender port.DMArtifactSenderPort,
+	logger *observability.Logger,
 	maxRetries int,
 	backoffBase time.Duration,
 ) *Orchestrator {
@@ -106,6 +108,9 @@ func NewOrchestrator(
 	if dmSender == nil {
 		panic("processing: dm sender must not be nil")
 	}
+	if logger == nil {
+		panic("processing: logger must not be nil")
+	}
 	if maxRetries < 1 {
 		maxRetries = 1
 	}
@@ -124,6 +129,7 @@ func NewOrchestrator(
 		tempStorage:   tempStorage,
 		publisher:     publisher,
 		dmSender:      dmSender,
+		logger:        logger.With("component", "processing"),
 		maxRetries:    maxRetries,
 		backoffBase:   backoffBase,
 	}
@@ -184,6 +190,8 @@ func (o *Orchestrator) retryStep(ctx context.Context, fn func() error) error {
 func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob, cmd model.ProcessDocumentCommand) error {
 	// --- Transition: QUEUED -> IN_PROGRESS ---
 	job.Stage = model.ProcessingStageValidatingInput
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	if err := o.lifecycle.TransitionJob(ctx, job, model.StatusInProgress); err != nil {
 		return err
 	}
@@ -195,6 +203,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 
 	// --- Stage 2: FETCHING_SOURCE_FILE (includes PDF format and page count validation) ---
 	job.Stage = model.ProcessingStageFetchingSourceFile
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	var fetchResult *port.FetchResult
 	if err := o.retryStep(ctx, func() error {
 		var fetchErr error
@@ -206,6 +216,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 
 	// --- Stage 3: OCR ---
 	job.Stage = model.ProcessingStageOCR
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	var ocrResult *model.OCRRawArtifact
 	if err := o.retryStep(ctx, func() error {
 		var ocrErr error
@@ -220,6 +232,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 
 	// --- Stage 4: TEXT_EXTRACTION ---
 	job.Stage = model.ProcessingStageTextExtraction
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	extractedText, textWarnings, err := o.textExtract.Extract(ctx, fetchResult.StorageKey, ocrResult)
 	if err != nil {
 		return err
@@ -230,6 +244,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 
 	// --- Stage 5: STRUCTURE_EXTRACTION ---
 	job.Stage = model.ProcessingStageStructureExtract
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	structure, structWarnings, err := o.structExtract.Extract(ctx, extractedText)
 	if err != nil {
 		return err
@@ -240,6 +256,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 
 	// --- Stage 6: SEMANTIC_TREE_BUILDING ---
 	job.Stage = model.ProcessingStageSemanticTree
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	semanticTree, err := o.treeBuilder.Build(ctx, extractedText, structure)
 	if err != nil {
 		return err
@@ -250,6 +268,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 
 	// --- Stage 7: SAVING_ARTIFACTS (send to DM) ---
 	job.Stage = model.ProcessingStageSavingArtifacts
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	artifactsEvent := model.DocumentProcessingArtifactsReady{
 		EventMeta: model.EventMeta{
 			CorrelationID: cmd.JobID,
@@ -273,8 +293,10 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 	// Best-effort: artifacts have already been sent to DM. A cleanup failure
 	// should not prevent the job from completing successfully.
 	job.Stage = model.ProcessingStageCleanup
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	if err := o.tempStorage.DeleteByPrefix(ctx, cmd.JobID); err != nil {
-		log.Printf("processing: cleanup failed for job %s: %v", cmd.JobID, err)
+		o.logger.Warn(ctx, "cleanup failed", "error", err)
 	}
 
 	// --- Transition: IN_PROGRESS -> COMPLETED / COMPLETED_WITH_WARNINGS ---
@@ -302,6 +324,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 		return err
 	}
 
+	o.logger.Info(ctx, "processing pipeline completed", "status", string(finalStatus), "warning_count", len(allWarnings))
+
 	return nil
 }
 
@@ -317,10 +341,26 @@ func (o *Orchestrator) handlePipelineError(
 	terminalStatus, isRetryable := classifyError(pipelineErr)
 
 	bgCtx := context.Background()
+	bgCtx = observability.WithJobContext(bgCtx, observability.JobContext{
+		JobID:         cmd.JobID,
+		DocumentID:    cmd.DocumentID,
+		CorrelationID: cmd.JobID,
+		OrgID:         cmd.OrgID,
+		UserID:        cmd.UserID,
+		Stage:         string(job.Stage),
+	})
+
+	o.logger.Error(bgCtx, "processing pipeline failed",
+		"terminal_status", string(terminalStatus),
+		"error_code", port.ErrorCode(pipelineErr),
+		"error", pipelineErr,
+		"failed_at_stage", string(job.Stage),
+		"is_retryable", isRetryable,
+	)
 
 	// Transition job to terminal status (best-effort: log and continue on failure).
 	if err := o.lifecycle.TransitionJob(bgCtx, job, terminalStatus); err != nil {
-		log.Printf("processing: failed to transition job %s to %s: %v", cmd.JobID, terminalStatus, err)
+		o.logger.Error(bgCtx, "failed to transition job to terminal status", "terminal_status", string(terminalStatus), "error", err)
 	}
 
 	// Publish ProcessingFailedEvent (best-effort: log and continue on failure).
@@ -338,7 +378,7 @@ func (o *Orchestrator) handlePipelineError(
 		IsRetryable:   isRetryable,
 	}
 	if err := o.publisher.PublishProcessingFailed(bgCtx, failedEvent); err != nil {
-		log.Printf("processing: failed to publish ProcessingFailedEvent for job %s: %v", cmd.JobID, err)
+		o.logger.Error(bgCtx, "failed to publish ProcessingFailedEvent", "error", err)
 	}
 
 	// Cleanup temp storage (best-effort: log and continue on failure).
@@ -347,7 +387,7 @@ func (o *Orchestrator) handlePipelineError(
 	// cleanup is safe. In production wiring, pass nil cleanup to LifecycleManager
 	// or keep all cleanup in the orchestrator to avoid confusion.
 	if err := o.tempStorage.DeleteByPrefix(bgCtx, cmd.JobID); err != nil {
-		log.Printf("processing: cleanup failed for job %s: %v", cmd.JobID, err)
+		o.logger.Warn(bgCtx, "cleanup failed in error handler", "error", err)
 	}
 
 	return pipelineErr
@@ -367,6 +407,8 @@ func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.Proc
 	job.Checksum = cmd.Checksum
 	job.OrgID = cmd.OrgID
 	job.UserID = cmd.UserID
+
+	o.logger.Info(ctx, "processing pipeline started", "file_name", cmd.FileName, "file_size", cmd.FileSize, "mime_type", cmd.MimeType)
 
 	o.warnings.Reset()
 

@@ -456,7 +456,11 @@ func newTestHarness(t *testing.T, opts ...harnessOption) *testHarness {
 	}
 
 	warningCollector := warning.NewCollector()
-	lifecycleMgr := lifecycle.NewLifecycleManager(publisher, idempotency, 30*time.Second, nil)
+
+	logger := observability.NewLogger("error")
+	metrics := observability.NewMetrics()
+
+	lifecycleMgr := lifecycle.NewLifecycleManager(publisher, idempotency, 30*time.Second, nil, logger)
 
 	orchestrator := processing.NewOrchestrator(
 		lifecycleMgr,
@@ -470,14 +474,12 @@ func newTestHarness(t *testing.T, opts ...harnessOption) *testHarness {
 		tempStorage,
 		publisher,
 		dmSender,
+		logger,
 		cfg.maxRetries,
 		cfg.backoffBase,
 	)
 
 	compOrch := &noopComparisonHandler{}
-
-	logger := observability.NewLogger("error")
-	metrics := observability.NewMetrics()
 	limiter := concurrency.New(5, metrics, logger)
 
 	disp := dispatcher.NewDispatcher(idempotency, limiter, orchestrator, compOrch, logger)

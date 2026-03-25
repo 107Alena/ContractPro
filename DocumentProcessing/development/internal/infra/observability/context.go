@@ -13,6 +13,8 @@ type JobContext struct {
 	DocumentID    string
 	CorrelationID string
 	Stage         string
+	OrgID         string
+	UserID        string
 }
 
 // WithJobContext returns a new context carrying the given JobContext.

@@ -1033,7 +1033,9 @@
         "Шаг 4: проверить наличие correlation_id во всех логах pipeline"
       ],
       "dependencies": ["TASK-012", "TASK-035"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-26",
+      "summary": "Structured logging с observability.Logger внедрён во все application-layer компоненты (lifecycle, processing orchestrator, comparison orchestrator, consumer). Все log.Printf заменены на structured JSON логи через slog. JobContext расширен полями OrgID и UserID для аудита. CorrelationID=JobID устанавливается на входе в consumer. Каждый stage pipeline логируется с WithStage(). Ошибки логируются с error_code, terminal_status, failed_at_stage, is_retryable. Все 31 пакет тестов проходят с -race."
     },
     {
       "id": "TASK-045",

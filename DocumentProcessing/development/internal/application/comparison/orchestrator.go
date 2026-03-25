@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"contractpro/document-processing/internal/application/lifecycle"
 	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
+	"contractpro/document-processing/internal/infra/observability"
 )
 
 // Compile-time interface compliance check.
@@ -41,6 +41,7 @@ type Orchestrator struct {
 	registry    port.PendingResponseRegistryPort
 	comparer    port.VersionComparisonPort
 	publisher   port.EventPublisherPort
+	logger      *observability.Logger
 	maxRetries  int
 	backoffBase time.Duration
 }
@@ -56,6 +57,7 @@ func NewOrchestrator(
 	registry port.PendingResponseRegistryPort,
 	comparer port.VersionComparisonPort,
 	publisher port.EventPublisherPort,
+	logger *observability.Logger,
 	maxRetries int,
 	backoffBase time.Duration,
 ) *Orchestrator {
@@ -80,6 +82,9 @@ func NewOrchestrator(
 	if publisher == nil {
 		panic("comparison: publisher must not be nil")
 	}
+	if logger == nil {
+		panic("comparison: logger must not be nil")
+	}
 	if maxRetries < 1 {
 		maxRetries = 1
 	}
@@ -94,6 +99,7 @@ func NewOrchestrator(
 		registry:    registry,
 		comparer:    comparer,
 		publisher:   publisher,
+		logger:      logger.With("component", "comparison"),
 		maxRetries:  maxRetries,
 		backoffBase: backoffBase,
 	}
@@ -182,6 +188,8 @@ func (o *Orchestrator) retryStep(ctx context.Context, fn func() error) error {
 func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob, cmd model.CompareVersionsCommand) error {
 	// --- Stage 1: VALIDATING_INPUT — Transition: QUEUED -> IN_PROGRESS ---
 	job.Stage = model.ComparisonStageValidatingInput
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	if err := o.lifecycle.TransitionJob(ctx, job, model.StatusInProgress); err != nil {
 		return err
 	}
@@ -193,6 +201,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 
 	// --- Stage 2: REQUESTING_SEMANTIC_TREES ---
 	job.Stage = model.ComparisonStageRequestingTrees
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	baseCorrID := fmt.Sprintf("%s:base:%s", cmd.JobID, cmd.BaseVersionID)
 	targetCorrID := fmt.Sprintf("%s:target:%s", cmd.JobID, cmd.TargetVersionID)
 	confirmCorrID := cmd.JobID + ":diff-confirm"
@@ -230,6 +240,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 
 	// --- Stage 3: WAITING_DM_RESPONSE ---
 	job.Stage = model.ComparisonStageWaitingDM
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	responses, err := o.registry.AwaitAll(ctx, cmd.JobID)
 	if err != nil {
 		return err
@@ -255,6 +267,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 
 	// --- Stage 4: EXECUTING_DIFF ---
 	job.Stage = model.ComparisonStageExecutingDiff
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	diffResult, err := o.comparer.Compare(ctx, baseTree, targetTree)
 	if err != nil {
 		return err
@@ -262,6 +276,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 
 	// --- Stage 5: SAVING_COMPARISON_RESULT ---
 	job.Stage = model.ComparisonStageSavingResult
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	diffReadyEvent := model.DocumentVersionDiffReady{
 		EventMeta: model.EventMeta{
 			CorrelationID: confirmCorrID,
@@ -282,6 +298,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 
 	// --- Stage 6: WAITING_DM_CONFIRMATION ---
 	job.Stage = model.ComparisonStageWaitingConfirm
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
 	if err := o.registry.Register(cmd.JobID, []string{confirmCorrID}); err != nil {
 		return err
 	}
@@ -323,6 +341,8 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 		return err
 	}
 
+	o.logger.Info(ctx, "comparison pipeline completed", "status", string(finalStatus), "text_diff_count", len(diffResult.TextDiffs), "structural_diff_count", len(diffResult.StructuralDiffs))
+
 	return nil
 }
 
@@ -338,13 +358,29 @@ func (o *Orchestrator) handlePipelineError(
 	terminalStatus, isRetryable := classifyError(pipelineErr)
 
 	bgCtx := context.Background()
+	bgCtx = observability.WithJobContext(bgCtx, observability.JobContext{
+		JobID:         cmd.JobID,
+		DocumentID:    cmd.DocumentID,
+		CorrelationID: cmd.JobID,
+		OrgID:         cmd.OrgID,
+		UserID:        cmd.UserID,
+		Stage:         string(job.Stage),
+	})
+
+	o.logger.Error(bgCtx, "comparison pipeline failed",
+		"terminal_status", string(terminalStatus),
+		"error_code", port.ErrorCode(pipelineErr),
+		"error", pipelineErr,
+		"failed_at_stage", string(job.Stage),
+		"is_retryable", isRetryable,
+	)
 
 	// Transition job to terminal status (best-effort: log and continue on failure).
 	// Skip if job is already in a terminal status (e.g. COMPLETED was set before
 	// PublishComparisonCompleted failed) to avoid inconsistent state.
 	if !job.Status.IsTerminal() {
 		if err := o.lifecycle.TransitionJob(bgCtx, job, terminalStatus); err != nil {
-			log.Printf("comparison: failed to transition job %s to %s: %v", cmd.JobID, terminalStatus, err)
+			o.logger.Error(bgCtx, "failed to transition job to terminal status", "terminal_status", string(terminalStatus), "error", err)
 		}
 	}
 
@@ -366,7 +402,7 @@ func (o *Orchestrator) handlePipelineError(
 		IsRetryable:   isRetryable,
 	}
 	if err := o.publisher.PublishComparisonFailed(bgCtx, failedEvent); err != nil {
-		log.Printf("comparison: failed to publish ComparisonFailedEvent for job %s: %v", cmd.JobID, err)
+		o.logger.Error(bgCtx, "failed to publish ComparisonFailedEvent", "error", err)
 	}
 
 	return pipelineErr
@@ -382,6 +418,8 @@ func (o *Orchestrator) HandleCompareVersions(ctx context.Context, cmd model.Comp
 	job := model.NewComparisonJob(cmd.JobID, cmd.DocumentID, cmd.BaseVersionID, cmd.TargetVersionID)
 	job.OrgID = cmd.OrgID
 	job.UserID = cmd.UserID
+
+	o.logger.Info(ctx, "comparison pipeline started", "base_version_id", cmd.BaseVersionID, "target_version_id", cmd.TargetVersionID)
 
 	o.warnings.Reset()
 

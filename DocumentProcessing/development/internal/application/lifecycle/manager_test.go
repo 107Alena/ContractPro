@@ -8,6 +8,7 @@ import (
 
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
+	"contractpro/document-processing/internal/infra/observability"
 )
 
 // --- Mocks ---
@@ -88,6 +89,8 @@ func (m *mockIdempotency) MarkCompleted(_ context.Context, jobID string) error {
 
 // --- Helpers ---
 
+func nopLogger() *observability.Logger { return observability.NewLogger("error") }
+
 func newProcessingJob() *model.ProcessingJob {
 	return model.NewProcessingJob("job-1", "doc-1", "https://example.com/file.pdf")
 }
@@ -97,7 +100,7 @@ func newComparisonJob() *model.ComparisonJob {
 }
 
 func newManager(pub *mockPublisher, idem *mockIdempotency, cleanup CleanupFunc) *LifecycleManager {
-	return NewLifecycleManager(pub, idem, 120*time.Second, cleanup)
+	return NewLifecycleManager(pub, idem, 120*time.Second, cleanup, nopLogger())
 }
 
 // --- Tests ---
@@ -368,7 +371,7 @@ func TestIdempotencyError(t *testing.T) {
 func TestNewJobContext(t *testing.T) {
 	pub := &mockPublisher{}
 	idem := &mockIdempotency{}
-	mgr := NewLifecycleManager(pub, idem, 50*time.Millisecond, nil)
+	mgr := NewLifecycleManager(pub, idem, 50*time.Millisecond, nil, nopLogger())
 
 	ctx, cancel := mgr.NewJobContext(context.Background())
 	defer cancel()

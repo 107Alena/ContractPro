@@ -914,7 +914,17 @@
         "Шаг 4: проверить /health и /ready endpoints"
       ],
       "dependencies": ["TASK-007", "TASK-017", "TASK-035", "TASK-036", "TASK-037", "TASK-038"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-25",
+      "implementation_notes": [
+        "cmd/dp-worker/main.go — thin entry point with signal.NotifyContext, delegates to internal/app",
+        "internal/app/app.go — App struct with New() (manual DI wiring of all components), Run(), Shutdown() with sync.Once",
+        "internal/app/dmhandler.go — composite DMResponseHandler placeholder (logs events, will be wired to orchestrators later)",
+        "internal/infra/health/handler.go — /healthz (liveness, always 200), /readyz (readiness, atomic bool flag)",
+        "brokerSubscribeAdapter bridges broker.MessageHandler named type to consumer/dm interfaces",
+        "Shutdown order: not-ready → broker.Close (drains handlers) → HTTP → KV → observability",
+        "12 tests: 5 health handler + 7 app shutdown (order, errors, nil-safety, idempotency, HTTP server)"
+      ]
     },
     {
       "id": "TASK-040",

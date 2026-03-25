@@ -1613,3 +1613,49 @@ Semaphore в `internal/infra/concurrency/limiter.go`. Channel-based (buffered `c
 - Готовые задачи (pending, все deps done): TASK-037 (medium, Comparison Pipeline happy path), TASK-043 (high, Security), TASK-044 (high, Audit logging)
 - Критический путь: TASK-037 → TASK-038 → TASK-039 → TASK-040/041/042
 - При DI: `dm.NewReceiver(brokerClient, dmResponseHandler, pendingRegistry, logger, cfg.Broker)` → .Start()
+
+---
+
+### TASK-039 — Main entry point — DI, запуск, graceful shutdown, readiness/liveness probes
+**Статус:** done
+**Дата:** 2026-03-25
+**Summary:** Реализован полный main entry point для dp-worker сервиса. Ручной DI wiring
+всех компонентов, graceful shutdown, HTTP health/readiness probes.
+
+**План реализации:**
+1. Изучение существующей кодовой базы (Explore agent) — конструкторы, зависимости
+2. Проектирование архитектуры (code-architect) — App struct в internal/app/, shutdown order
+3. Реализация (golang-pro):
+   - `internal/infra/health/handler.go` — /healthz (liveness, always 200), /readyz (readiness, atomic bool)
+   - `internal/app/app.go` — App struct, New() (DI wiring 8 групп), Run(), Shutdown() с sync.Once
+   - `internal/app/dmhandler.go` — composite DMResponseHandler (placeholder, логирует события)
+   - `cmd/dp-worker/main.go` — thin shell: signal.NotifyContext → config.Load → app.New → app.Run
+4. Тестирование: 5 тестов health handler + 7 тестов app shutdown
+5. Code review (code-reviewer) — 4 warnings исправлены:
+   - W1: sync.Once для идемпотентного Shutdown
+   - W2: использование входящего ctx вместо context.Background() в dmhandler
+   - W4: рефакторинг main() — os.Exit(run()) для корректного выполнения defers
+
+**Ключевые решения:**
+- App struct в internal/app/ (не cmd/) — тестируемо без main package tricks
+- Consumer-side interfaces (brokerCloser, kvCloser, obsShutdowner) — mock injection в тестах
+- brokerSubscribeAdapter — мост между broker.MessageHandler (named type) и func(ctx, []byte) error
+- Shutdown order: not-ready → broker.Close (drains in-flight) → HTTP → KV → observability
+- Ready flag (atomic.Bool) вместо dependency pinging — проще для worker-сервиса
+- DI wiring в 8 группах по порядку зависимостей (bottom-up)
+
+**Файлы:**
+- `cmd/dp-worker/main.go` (изменён)
+- `internal/app/app.go` (новый)
+- `internal/app/app_test.go` (новый)
+- `internal/app/dmhandler.go` (новый)
+- `internal/infra/health/handler.go` (новый)
+- `internal/infra/health/handler_test.go` (новый)
+
+**Результаты тестирования:** 31 пакет PASS (включая -race), go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-039✅ разблокирует: TASK-040 (integration test processing), TASK-041 (integration test comparison), TASK-042 (Dockerfile)
+- Pending задачи с выполненными deps: TASK-040 (high), TASK-041 (medium), TASK-042 (medium), TASK-043 (high, Security), TASK-044 (high, Audit logging)
+- dmResponseHandler — placeholder, нужно заменить на реальную диспетчеризацию когда orchestrators реализуют DM response методы
+- warningCollector shared между jobs — потенциальная проблема при concurrent processing (S4 из review)

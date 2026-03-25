@@ -114,6 +114,8 @@ func (c *Consumer) handleProcessDocument(ctx context.Context, body []byte) error
 		return nil
 	}
 
+	sanitizeProcessDocumentCommand(&cmd)
+
 	if err := validateProcessDocumentCommand(cmd); err != nil {
 		c.logger.Error(ctx, "invalid process document command",
 			"error", err,
@@ -152,6 +154,8 @@ func (c *Consumer) handleCompareVersions(ctx context.Context, body []byte) error
 		)
 		return nil
 	}
+
+	sanitizeCompareVersionsCommand(&cmd)
 
 	if err := validateCompareVersionsCommand(cmd); err != nil {
 		c.logger.Error(ctx, "invalid compare versions command",

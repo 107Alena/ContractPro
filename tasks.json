@@ -1009,7 +1009,9 @@
         "Шаг 4: проверить sanitization job_id с спецсимволами"
       ],
       "dependencies": ["TASK-022", "TASK-023"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-25",
+      "summary": "2-layer SSRF protection + Content-Type validation + string sanitization. Layer 1 (engine/validator/ssrf.go): ValidateURLSecurity — scheme check (http/https only), DNS-resolved IP check against 9 blocked CIDR ranges (0.0.0.0/8, 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, ::1/128, fc00::/7, fe80::/10), injectable Resolver interface for testability, DNS failure → block (prevent DNS rebinding). Layer 2 (infra/httpdownloader/ssrf.go): connection-time ssrfControl via net.Dialer Control function — inspects resolved IP at TCP connect time, defense-in-depth against DNS rebinding. Content-Type validation: downloader checks response Content-Type header, accepts application/pdf + application/octet-stream, rejects text/html etc, empty allowed (S3 presigned URLs). Redirect scheme check in CheckRedirect. Sanitization (ingress/consumer/validate.go): sanitizeString removes null bytes, %00, C0/C1 control chars (preserves \\t\\n\\r), path traversal in loop until stable (handles ....//), trims whitespace. Applied to all string fields of both command types before validation. New error code SSRF_BLOCKED (non-retryable → REJECTED). rejectedCodes updated in processing orchestrator. Code review: 2 critical fixed (DNS rebinding prevention, 0.0.0.0/8 CIDR), 2 warnings fixed (path traversal loop, redirect scheme check). 32 пакета PASS с -race (incl integration), go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-044",

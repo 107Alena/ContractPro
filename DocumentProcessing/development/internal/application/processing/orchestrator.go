@@ -22,6 +22,7 @@ var rejectedCodes = map[string]bool{
 	port.ErrCodeTooManyPages: true,
 	port.ErrCodeInvalidFormat: true,
 	port.ErrCodeFileNotFound:  true,
+	port.ErrCodeSSRFBlocked:   true,
 }
 
 // Orchestrator implements port.ProcessingCommandHandler — the main orchestrator

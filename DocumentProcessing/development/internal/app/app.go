@@ -137,7 +137,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 
 	// --- Group 4: Engine components ---
 	pdfUtil := pdf.NewUtil()
-	inputValidator := validator.NewValidator(cfg.Limits.MaxFileSize, "application/pdf")
+	inputValidator := validator.NewValidator(cfg.Limits.MaxFileSize, "application/pdf", nil)
 	fileFetcher := fetcher.NewFetcher(downloader, tempStorage, pdfUtil, cfg.Limits.MaxFileSize, cfg.Limits.MaxPages)
 	ocrAdapter := engineocr.NewAdapter(ocrCli, tempStorage, warningCollector, cfg.OCR.RPSLimit, cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase)
 	textExtractor := textextract.NewExtractor(pdfUtil, tempStorage)

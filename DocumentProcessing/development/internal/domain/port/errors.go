@@ -22,6 +22,7 @@ const (
 	ErrCodeConcurrencyLimit    = "CONCURRENCY_LIMIT"
 	ErrCodeDMVersionNotFound   = "DM_VERSION_NOT_FOUND"
 	ErrCodeDMDiffPersistFailed = "DM_DIFF_PERSIST_FAILED"
+	ErrCodeSSRFBlocked         = "SSRF_BLOCKED"
 )
 
 // DomainError represents a typed domain error with machine-readable code
@@ -140,6 +141,12 @@ func NewDMDiffPersistFailedError(msg string, retryable bool, cause error) *Domai
 		Retryable: retryable,
 		Cause:     cause,
 	}
+}
+
+// NewSSRFBlockedError creates a non-retryable error when a URL targets
+// a blocked network (loopback, private, link-local) or uses a non-HTTP scheme.
+func NewSSRFBlockedError(msg string) *DomainError {
+	return &DomainError{Code: ErrCodeSSRFBlocked, Message: msg, Retryable: false}
 }
 
 // --- Helpers ---

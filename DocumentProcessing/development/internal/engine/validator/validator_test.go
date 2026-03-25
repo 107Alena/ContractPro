@@ -13,6 +13,13 @@ const (
 	testAllowedMimeType = "application/pdf"
 )
 
+// testResolver returns public IPs for all hosts used in tests.
+var testResolver = &mockResolver{
+	hosts: map[string][]string{
+		"storage.example.com": {"93.184.216.34"},
+	},
+}
+
 func validCommand() model.ProcessDocumentCommand {
 	return model.ProcessDocumentCommand{
 		JobID:      "job-1",
@@ -24,14 +31,14 @@ func validCommand() model.ProcessDocumentCommand {
 }
 
 func TestValidate(t *testing.T) {
-	v := NewValidator(testMaxFileSize, testAllowedMimeType)
+	v := NewValidator(testMaxFileSize, testAllowedMimeType, testResolver)
 	ctx := context.Background()
 
 	tests := []struct {
-		name         string
-		modify       func(*model.ProcessDocumentCommand)
-		wantErr      bool
-		wantErrCode  string
+		name        string
+		modify      func(*model.ProcessDocumentCommand)
+		wantErr     bool
+		wantErrCode string
 	}{
 		{
 			name:    "valid command with all fields",
@@ -102,6 +109,39 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr:     true,
 			wantErrCode: port.ErrCodeValidation,
+		},
+		// SSRF protection tests.
+		{
+			name: "file_url with ftp scheme blocked",
+			modify: func(cmd *model.ProcessDocumentCommand) {
+				cmd.FileURL = "ftp://storage.example.com/file.pdf"
+			},
+			wantErr:     true,
+			wantErrCode: port.ErrCodeSSRFBlocked,
+		},
+		{
+			name: "file_url with loopback IP blocked",
+			modify: func(cmd *model.ProcessDocumentCommand) {
+				cmd.FileURL = "https://127.0.0.1/file.pdf"
+			},
+			wantErr:     true,
+			wantErrCode: port.ErrCodeSSRFBlocked,
+		},
+		{
+			name: "file_url with private IP 10.0.0.1 blocked",
+			modify: func(cmd *model.ProcessDocumentCommand) {
+				cmd.FileURL = "https://10.0.0.1/file.pdf"
+			},
+			wantErr:     true,
+			wantErrCode: port.ErrCodeSSRFBlocked,
+		},
+		{
+			name: "file_url with cloud metadata IP blocked",
+			modify: func(cmd *model.ProcessDocumentCommand) {
+				cmd.FileURL = "http://169.254.169.254/latest/meta-data/"
+			},
+			wantErr:     true,
+			wantErrCode: port.ErrCodeSSRFBlocked,
 		},
 	}
 

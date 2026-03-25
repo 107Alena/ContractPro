@@ -1710,3 +1710,41 @@ idempotency, malformed input, artifact format.
 - Integration тесты запускаются: `go test -tags integration -v ./internal/integration/`
 - Harness поддерживает harnessOption pattern для кастомизации (withMaxRetries и т.д.)
 - Warning collector shared — не использовать harness для concurrent job submissions
+
+### TASK-043 — Валидация безопасности: file_url, SSRF, sanitization
+**Статус:** done
+**Дата:** 2026-03-25
+
+**План реализации (согласован с code-architect):**
+1. Добавить ErrCodeSSRFBlocked + NewSSRFBlockedError в port/errors.go
+2. Создать engine/validator/ssrf.go: ValidateURLSecurity (scheme check + DNS-resolved IP check)
+   - Injectable Resolver interface для тестируемости DNS lookups
+   - 9 blocked CIDR ranges: 0.0.0.0/8, 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, ::1/128, fc00::/7, fe80::/10
+3. Интегрировать SSRF check в engine/validator/validator.go (правило 3 после file_url non-empty)
+4. Создать infra/httpdownloader/ssrf.go: connection-time SSRF guard через net.Dialer Control
+5. Обновить infra/httpdownloader/downloader.go: SSRF DialContext + Content-Type check + redirect scheme check
+6. Добавить sanitization в ingress/consumer/validate.go: sanitizeString (null bytes, %00, path traversal loop, C0/C1 control chars)
+7. Вызвать sanitization в consumer.go перед validation
+8. Добавить ErrCodeSSRFBlocked в rejectedCodes processing orchestrator
+
+**Ключевые решения:**
+- 2-layer SSRF: pre-download ValidateURLSecurity (validator) + connection-time ssrfControl (downloader DialContext)
+- DNS failure → block (not allow): предотвращение DNS rebinding (code review fix C1)
+- 0.0.0.0/8 в blocked CIDRs: Linux routes 0.0.0.0 to loopback (code review fix C2)
+- Path traversal: loop until stable (handles ....// nested patterns) (code review fix W2)
+- Redirect scheme check in CheckRedirect (code review fix W3)
+- Content-Type: accept application/pdf + application/octet-stream, reject text/* etc., empty allowed
+- newDownloader(timeout, nil) for tests (httptest.Server binds 127.0.0.1, would be blocked by ssrfControl)
+- Sanitization at trust boundary (consumer layer, before validation and dispatch)
+
+**Summary:**
+- 3 новых файла: engine/validator/ssrf.go, engine/validator/ssrf_test.go, infra/httpdownloader/ssrf.go
+- 8 модифицированных файлов: port/errors.go, validator.go + test, downloader.go + test, consumer validate.go + consumer.go + validate_test.go, processing orchestrator, app.go
+- Code review: 2 critical fixed (C1: DNS rebinding, C2: 0.0.0.0/8), 2 warnings fixed (W2: nested path traversal, W3: redirect scheme)
+- 32 пакета PASS с -race (включая integration), go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-043✅ завершена. Pending задачи: TASK-041 (integration comparison, medium), TASK-042 (Dockerfile, medium), TASK-044 (Audit, high), TASK-045 (PDF CMap, low)
+- CIDR list дублирован между engine/validator и infra/httpdownloader (hexagonal constraint: engine не импортирует infra и наоборот). При изменении менять оба файла!
+- Validator теперь принимает 3й параметр Resolver (nil → net.DefaultResolver в production)
+- Для тестов httpdownloader используйте newDownloader(timeout, nil) — без SSRF control

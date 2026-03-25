@@ -198,6 +198,115 @@ func TestValidateCompareVersionsCommand_WhitespaceOnly(t *testing.T) {
 	}
 }
 
+// --- sanitizeString ---
+
+func TestSanitizeString(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"normal_text", "hello world", "hello world"},
+		{"empty_string", "", ""},
+		{"null_byte", "job\x00id", "jobid"},
+		{"percent_encoded_null", "job%00id", "jobid"},
+		{"path_traversal_forward", "../../etc/passwd", "etc/passwd"},
+		{"path_traversal_backslash", "..\\..\\windows\\system32", "windows\\system32"},
+		{"mixed_path_traversal", "../config/../secret", "config/secret"},
+		{"nested_path_traversal", "....//etc/passwd", "etc/passwd"},
+		{"double_nested_backslash", "....\\\\windows\\system32", "windows\\system32"},
+		{"c0_control_chars", "abc\x01\x02\x03def", "abcdef"},
+		{"preserves_tab_newline", "line1\tline2\nline3\r", "line1\tline2\nline3"},
+		{"trims_whitespace", "  hello  ", "hello"},
+		{"null_and_whitespace", "  \x00  ", ""},
+		{"cyrillic_preserved", "документ-123", "документ-123"},
+		{"special_chars_preserved", "file@name#1$2", "file@name#1$2"},
+		{"url_preserved", "https://example.com/file.pdf?token=abc", "https://example.com/file.pdf?token=abc"},
+		{"uuid_preserved", "550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440000"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeString(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeString(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeProcessDocumentCommand(t *testing.T) {
+	cmd := model.ProcessDocumentCommand{
+		JobID:      "job\x00-1",
+		DocumentID: "../doc-1",
+		FileURL:    "https://example.com/file.pdf",
+		OrgID:      "org\x01-1",
+		UserID:     "user%00-1",
+		FileName:   "../../etc/passwd",
+		MimeType:   "application/pdf",
+		Checksum:   "abc\x00def",
+	}
+
+	sanitizeProcessDocumentCommand(&cmd)
+
+	if cmd.JobID != "job-1" {
+		t.Errorf("JobID = %q, want %q", cmd.JobID, "job-1")
+	}
+	if cmd.DocumentID != "doc-1" {
+		t.Errorf("DocumentID = %q, want %q", cmd.DocumentID, "doc-1")
+	}
+	if cmd.FileURL != "https://example.com/file.pdf" {
+		t.Errorf("FileURL = %q, want unchanged", cmd.FileURL)
+	}
+	if cmd.OrgID != "org-1" {
+		t.Errorf("OrgID = %q, want %q", cmd.OrgID, "org-1")
+	}
+	if cmd.UserID != "user-1" {
+		t.Errorf("UserID = %q, want %q", cmd.UserID, "user-1")
+	}
+	if cmd.FileName != "etc/passwd" {
+		t.Errorf("FileName = %q, want %q", cmd.FileName, "etc/passwd")
+	}
+	if cmd.MimeType != "application/pdf" {
+		t.Errorf("MimeType = %q, want unchanged", cmd.MimeType)
+	}
+	if cmd.Checksum != "abcdef" {
+		t.Errorf("Checksum = %q, want %q", cmd.Checksum, "abcdef")
+	}
+}
+
+func TestSanitizeCompareVersionsCommand(t *testing.T) {
+	cmd := model.CompareVersionsCommand{
+		JobID:           "job\x00-1",
+		DocumentID:      "../doc-1",
+		BaseVersionID:   "v1%00",
+		TargetVersionID: "v2\x01\x02",
+		OrgID:           "  org  ",
+		UserID:          "user\x00",
+	}
+
+	sanitizeCompareVersionsCommand(&cmd)
+
+	if cmd.JobID != "job-1" {
+		t.Errorf("JobID = %q, want %q", cmd.JobID, "job-1")
+	}
+	if cmd.DocumentID != "doc-1" {
+		t.Errorf("DocumentID = %q, want %q", cmd.DocumentID, "doc-1")
+	}
+	if cmd.BaseVersionID != "v1" {
+		t.Errorf("BaseVersionID = %q, want %q", cmd.BaseVersionID, "v1")
+	}
+	if cmd.TargetVersionID != "v2" {
+		t.Errorf("TargetVersionID = %q, want %q", cmd.TargetVersionID, "v2")
+	}
+	if cmd.OrgID != "org" {
+		t.Errorf("OrgID = %q, want %q", cmd.OrgID, "org")
+	}
+	if cmd.UserID != "user" {
+		t.Errorf("UserID = %q, want %q", cmd.UserID, "user")
+	}
+}
+
 // --- helper ---
 
 func assertValidationError(t *testing.T, err error) {

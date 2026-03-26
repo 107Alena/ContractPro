@@ -1786,3 +1786,43 @@ idempotency, malformed input, artifact format.
 - Для тестов используйте `nopLogger()` → `observability.NewLogger("error")` для подавления шума
 - `handlePipelineError` использует `context.Background()` с enriched JobContext, т.к. job context может быть expired
 - Warning collector не thread-safe — concurrent job processing потребует отдельного решения
+
+### TASK-041 — Integration test — comparison pipeline end-to-end
+**Статус:** done
+**Дата:** 2026-03-26
+**Приоритет:** medium | **Категория:** integration
+**Зависимости:** TASK-039 (done)
+
+**План реализации:**
+1. Изучить существующую тестовую инфраструктуру (testinfra.go, processing_pipeline_test.go)
+2. Изучить comparison pipeline orchestrator, pendingresponse registry, version comparer
+3. Спроектировать тестовую инфраструктуру для comparison pipeline (code-architect)
+4. Реализовать mock-типы: treeRequesterMock (синхронная доставка деревьев), confirmingDMSender (async DM confirmation)
+5. Реализовать comparisonHarness с real Registry и real Comparer
+6. Написать 6 интеграционных тестов
+7. Провести code review (code-reviewer)
+
+**Ключевые решения:**
+- Real `pendingresponse.Registry` вместо mock — тестирует реальную координацию Register/AwaitAll/Receive
+- Real `comparison.Comparer` — валидирует формат diff output end-to-end
+- Синхронная доставка деревьев в `treeRequesterMock` — Register вызывается ДО RequestSemanticTree
+- Async confirmation в `confirmingDMSender` через goroutine + 10ms delay — SendDiffResult ДО Register для confirmation
+- Отдельный `comparisonHarness` от `testHarness` — разные зависимости пайплайнов
+
+**Summary:**
+- 2 файла: testinfra.go (расширен), comparison_pipeline_test.go (новый)
+- Добавлены в testinfra.go: noopProcessingHandler, treeRequesterMock, confirmingDMSender, comparisonHarness, newComparisonHarness, default helpers (defaultCompareCommand, defaultBaseTree, defaultTargetTree, baseCorrelationID, targetCorrelationID)
+- 6 тестов:
+  1. HappyPath: полный pipeline → COMPLETED, 2 tree requests, diff с TextDiffs+StructuralDiffs
+  2. ValidationError_SameVersionIDs: base==target → REJECTED (ErrCodeValidation)
+  3. DMTreeError_VersionNotFound: DM ошибка → REJECTED (ErrCodeDMVersionNotFound)
+  4. DuplicateJob_Skipped: idempotency guard
+  5. InvalidJSON_Acknowledged: no side effects
+  6. DiffFormat_Complete: diff format validation, event meta checks
+- Все 13 integration tests pass (6 новых + 7 существующих), go test -race clean
+- 32 пакета unit tests pass, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-041✅ завершена. Pending задачи: TASK-042 (Dockerfile, medium), TASK-045 (PDF CMap, low)
+- Для comparison integration tests используется отдельный comparisonHarness (не testHarness)
+- Деревья по умолчанию: base (1 section, 1 clause), target (1 section с измененным clause + added section-2) → гарантированно TextDiffs + StructuralDiffs

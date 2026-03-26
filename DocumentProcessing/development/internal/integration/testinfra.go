@@ -12,12 +12,15 @@ import (
 	"testing"
 	"time"
 
+	compapp "contractpro/document-processing/internal/application/comparison"
 	"contractpro/document-processing/internal/application/lifecycle"
+	"contractpro/document-processing/internal/application/pendingresponse"
 	"contractpro/document-processing/internal/application/processing"
 	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/config"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
+	compengine "contractpro/document-processing/internal/engine/comparison"
 	"contractpro/document-processing/internal/infra/concurrency"
 	"contractpro/document-processing/internal/infra/observability"
 	"contractpro/document-processing/internal/ingress/consumer"
@@ -27,6 +30,10 @@ import (
 // testTopicProcessDocument is the topic used for process-document commands
 // in integration tests, defined once to prevent typos.
 const testTopicProcessDocument = "dp.commands.process-document"
+
+// testTopicCompareVersions is the topic used for compare-versions commands
+// in integration tests, defined once to prevent typos.
+const testTopicCompareVersions = "dp.commands.compare-versions"
 
 // ---------------------------------------------------------------------------
 // 1. captureBroker — implements consumer.BrokerSubscriber
@@ -591,4 +598,304 @@ func defaultSemanticTree() *model.SemanticTree {
 			},
 		},
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 16. noopProcessingHandler — implements port.ProcessingCommandHandler
+// ---------------------------------------------------------------------------
+
+var _ port.ProcessingCommandHandler = (*noopProcessingHandler)(nil)
+
+type noopProcessingHandler struct{}
+
+func (n *noopProcessingHandler) HandleProcessDocument(_ context.Context, _ model.ProcessDocumentCommand) error {
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 17. treeRequesterMock — implements port.DMTreeRequesterPort
+// ---------------------------------------------------------------------------
+
+var _ port.DMTreeRequesterPort = (*treeRequesterMock)(nil)
+
+// treeRequesterMock simulates the DM tree request/response cycle.
+// When RequestSemanticTree is called, it records the request and immediately
+// delivers the pre-configured tree (or error) to the pending response registry.
+type treeRequesterMock struct {
+	mu       sync.Mutex
+	registry port.PendingResponseRegistryPort
+	trees    map[string]model.SemanticTree // correlationID → tree to deliver
+	errors   map[string]error              // correlationID → error to deliver
+	requests []model.GetSemanticTreeRequest
+	reqErr   error // if set, RequestSemanticTree returns this error immediately
+}
+
+func (m *treeRequesterMock) RequestSemanticTree(_ context.Context, req model.GetSemanticTreeRequest) error {
+	m.mu.Lock()
+	m.requests = append(m.requests, req)
+	reqErr := m.reqErr
+	errForCID := m.errors[req.EventMeta.CorrelationID]
+	tree, hasTree := m.trees[req.EventMeta.CorrelationID]
+	m.mu.Unlock()
+
+	if reqErr != nil {
+		return reqErr
+	}
+
+	// Deliver tree or error synchronously via the registry.
+	if errForCID != nil {
+		return m.registry.ReceiveError(req.EventMeta.CorrelationID, errForCID)
+	}
+	if hasTree {
+		return m.registry.Receive(req.EventMeta.CorrelationID, tree)
+	}
+
+	// No tree configured — deliver an empty tree.
+	return m.registry.Receive(req.EventMeta.CorrelationID, model.SemanticTree{})
+}
+
+// ---------------------------------------------------------------------------
+// 18. confirmingDMSender — implements port.DMArtifactSenderPort
+// ---------------------------------------------------------------------------
+
+var _ port.DMArtifactSenderPort = (*confirmingDMSender)(nil)
+
+// confirmingDMSender records sent artifacts and diffs. On SendDiffResult, it
+// spawns a goroutine that confirms the diff via the pending response registry
+// after a short delay, simulating DM's asynchronous confirmation.
+type confirmingDMSender struct {
+	mu            sync.Mutex
+	registry      port.PendingResponseRegistryPort
+	sentArtifacts []model.DocumentProcessingArtifactsReady
+	sentDiffs     []model.DocumentVersionDiffReady
+	confirmErr    error // if set, ReceiveError is called instead of Receive
+	sendErr       error // if set, SendDiffResult returns this error immediately
+}
+
+func (d *confirmingDMSender) SendArtifacts(_ context.Context, event model.DocumentProcessingArtifactsReady) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.sentArtifacts = append(d.sentArtifacts, event)
+	return nil
+}
+
+func (d *confirmingDMSender) SendDiffResult(_ context.Context, event model.DocumentVersionDiffReady) error {
+	d.mu.Lock()
+	d.sentDiffs = append(d.sentDiffs, event)
+	sendErr := d.sendErr
+	confirmErr := d.confirmErr
+	registry := d.registry
+	d.mu.Unlock()
+
+	if sendErr != nil {
+		return sendErr
+	}
+
+	// Simulate async DM confirmation after a short delay.
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		if confirmErr != nil {
+			_ = registry.ReceiveError(event.CorrelationID, confirmErr)
+		} else {
+			_ = registry.Receive(event.CorrelationID, model.SemanticTree{})
+		}
+	}()
+
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 19. comparisonHarness
+// ---------------------------------------------------------------------------
+
+type comparisonHarness struct {
+	broker      *captureBroker
+	publisher   *recordingPublisher
+	idempotency *memoryIdempotencyStore
+	treeReq     *treeRequesterMock
+	dmSender    *confirmingDMSender
+	registry    *pendingresponse.Registry
+	warnings    *warning.Collector
+}
+
+// ---------------------------------------------------------------------------
+// 20. newComparisonHarness
+// ---------------------------------------------------------------------------
+
+// newComparisonHarness creates a harness wired for the comparison pipeline.
+// It uses a real pendingresponse.Registry, real comparison.Comparer, and
+// mock/stub implementations for broker, publisher, DM tree requester, and
+// DM artifact sender. Default trees are pre-configured for the default
+// compare command's correlation IDs.
+func newComparisonHarness(t *testing.T, opts ...harnessOption) *comparisonHarness {
+	t.Helper()
+
+	cfg := harnessConfig{
+		maxRetries:  1,
+		backoffBase: time.Millisecond,
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	publisher := &recordingPublisher{}
+	idempotency := newMemoryIdempotencyStore()
+	registry := pendingresponse.New()
+
+	// Pre-configure default trees keyed by correlation ID.
+	defaultCmd := defaultCompareCommand()
+	baseCorrID := baseCorrelationID(defaultCmd)
+	targetCorrID := targetCorrelationID(defaultCmd)
+
+	treeReq := &treeRequesterMock{
+		registry: registry,
+		trees: map[string]model.SemanticTree{
+			baseCorrID:   *defaultBaseTree(),
+			targetCorrID: *defaultTargetTree(),
+		},
+		errors: make(map[string]error),
+	}
+
+	dmSender := &confirmingDMSender{
+		registry: registry,
+	}
+
+	warningCollector := warning.NewCollector()
+	logger := observability.NewLogger("error")
+	metrics := observability.NewMetrics()
+
+	comparer := compengine.NewComparer()
+
+	lifecycleMgr := lifecycle.NewLifecycleManager(publisher, idempotency, 30*time.Second, nil, logger)
+
+	compOrch := compapp.NewOrchestrator(
+		lifecycleMgr,
+		warningCollector,
+		treeReq,
+		dmSender,
+		registry,
+		comparer,
+		publisher,
+		logger,
+		cfg.maxRetries,
+		cfg.backoffBase,
+	)
+
+	procHandler := &noopProcessingHandler{}
+	limiter := concurrency.New(5, metrics, logger)
+
+	disp := dispatcher.NewDispatcher(idempotency, limiter, procHandler, compOrch, logger)
+
+	broker := &captureBroker{}
+	brokerCfg := config.BrokerConfig{
+		TopicProcessDocument: testTopicProcessDocument,
+		TopicCompareVersions: testTopicCompareVersions,
+	}
+
+	cons := consumer.NewConsumer(broker, disp, logger, brokerCfg)
+	if err := cons.Start(); err != nil {
+		t.Fatalf("newComparisonHarness: consumer.Start failed: %v", err)
+	}
+
+	return &comparisonHarness{
+		broker:      broker,
+		publisher:   publisher,
+		idempotency: idempotency,
+		treeReq:     treeReq,
+		dmSender:    dmSender,
+		registry:    registry,
+		warnings:    warningCollector,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 21. Comparison default helpers
+// ---------------------------------------------------------------------------
+
+func defaultCompareCommand() model.CompareVersionsCommand {
+	return model.CompareVersionsCommand{
+		JobID:           "job-comp-1",
+		DocumentID:      "doc-comp-1",
+		BaseVersionID:   "v1",
+		TargetVersionID: "v2",
+	}
+}
+
+func defaultBaseTree() *model.SemanticTree {
+	return &model.SemanticTree{
+		DocumentID: "doc-comp-1",
+		Root: &model.SemanticNode{
+			ID:   "root",
+			Type: model.NodeTypeRoot,
+			Children: []*model.SemanticNode{
+				{
+					ID:      "section-1",
+					Type:    model.NodeTypeSection,
+					Content: "Предмет договора",
+					Metadata: map[string]string{
+						"number": "1",
+						"title":  "Предмет договора",
+					},
+					Children: []*model.SemanticNode{
+						{
+							ID:      "clause-1.1",
+							Type:    model.NodeTypeClause,
+							Content: "Поставщик обязуется передать товар.",
+							Metadata: map[string]string{
+								"number": "1.1",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func defaultTargetTree() *model.SemanticTree {
+	return &model.SemanticTree{
+		DocumentID: "doc-comp-1",
+		Root: &model.SemanticNode{
+			ID:   "root",
+			Type: model.NodeTypeRoot,
+			Children: []*model.SemanticNode{
+				{
+					ID:      "section-1",
+					Type:    model.NodeTypeSection,
+					Content: "Предмет договора",
+					Metadata: map[string]string{
+						"number": "1",
+						"title":  "Предмет договора",
+					},
+					Children: []*model.SemanticNode{
+						{
+							ID:      "clause-1.1",
+							Type:    model.NodeTypeClause,
+							Content: "Поставщик обязуется передать товар и оборудование.",
+							Metadata: map[string]string{
+								"number": "1.1",
+							},
+						},
+					},
+				},
+				{
+					ID:      "section-2",
+					Type:    model.NodeTypeSection,
+					Content: "Цена и порядок расчётов",
+					Metadata: map[string]string{
+						"number": "2",
+						"title":  "Цена и порядок расчётов",
+					},
+				},
+			},
+		},
+	}
+}
+
+func baseCorrelationID(cmd model.CompareVersionsCommand) string {
+	return fmt.Sprintf("%s:base:%s", cmd.JobID, cmd.BaseVersionID)
+}
+
+func targetCorrelationID(cmd model.CompareVersionsCommand) string {
+	return fmt.Sprintf("%s:target:%s", cmd.JobID, cmd.TargetVersionID)
 }

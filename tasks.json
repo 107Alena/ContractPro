@@ -967,7 +967,9 @@
         "Шаг 4: проверить правильный статус COMPLETED"
       ],
       "dependencies": ["TASK-039"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-26",
+      "summary": "6 интеграционных тестов comparison pipeline в comparison_pipeline_test.go: HappyPath (полный pipeline с real Comparer и Registry → COMPLETED, 2 tree requests, diff с TextDiffs+StructuralDiffs, idempotency marked), ValidationError_SameVersionIDs (base==target → REJECTED, ErrCodeValidation), DMTreeError_VersionNotFound (DM ошибка → REJECTED, ErrCodeDMVersionNotFound), DuplicateJob_Skipped (idempotency guard), InvalidJSON_Acknowledged (no side effects), DiffFormat_Complete (diff format validation, event meta checks). Тестовая инфраструктура: treeRequesterMock (синхронная доставка деревьев через registry.Receive), confirmingDMSender (async confirmation через goroutine с 10ms delay), comparisonHarness с real pendingresponse.Registry и real comparison.Comparer. Все 13 integration tests pass (6 новых + 7 существующих), go test -race clean, go vet clean."
     },
     {
       "id": "TASK-042",

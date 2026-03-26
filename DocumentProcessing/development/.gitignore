@@ -1,0 +1,9 @@
+# Compiled binary
+dp-worker
+
+# Environment files (may contain secrets)
+.env
+
+# Test coverage
+coverage.out
+coverage.html

@@ -1826,3 +1826,40 @@ idempotency, malformed input, artifact format.
 - TASK-041✅ завершена. Pending задачи: TASK-042 (Dockerfile, medium), TASK-045 (PDF CMap, low)
 - Для comparison integration tests используется отдельный comparisonHarness (не testHarness)
 - Деревья по умолчанию: base (1 section, 1 clause), target (1 section с измененным clause + added section-2) → гарантированно TextDiffs + StructuralDiffs
+
+### TASK-042 — Dockerfile и конфигурация для сборки контейнера
+**Статус:** done
+**Дата:** 2026-03-26
+
+**План реализации:**
+1. Спроектировать Dockerfile, .env.example, .dockerignore, make target (code-architect)
+2. Создать multi-stage Dockerfile: golang:1.26.1-alpine (builder) → alpine:3.21 (production)
+3. Создать .env.example с документацией всех переменных окружения (из sub_configs.go)
+4. Создать .dockerignore для минимизации build context
+5. Добавить docker-build target в Makefile
+6. Создать .gitignore для исключения бинарника dp-worker
+7. Code review и применение фиксов
+
+**Ключевые решения:**
+- Alpine вместо scratch/distroless — нужен wget для HEALTHCHECK
+- CGO_ENABLED=0 + -s -w -trimpath → статический бинарник ~20MB, образ ~28-32MB
+- Non-root user dpworker (без home, без пароля, /sbin/nologin)
+- HEALTHCHECK по /readyz (не /healthz) — для Docker Compose/Swarm readiness
+- start-period=30s — время на подключение к RabbitMQ/Redis
+- EXPOSE 8080 (health) + 9090 (metrics)
+- IMAGE_TAG из git describe --tags --always --dirty
+
+**Summary:**
+- 5 файлов создано/обновлено: Dockerfile, .env.example, .dockerignore, .gitignore, Makefile
+- Dockerfile: 2-stage build, non-root user, HEALTHCHECK /readyz, EXPOSE 8080+9090
+- .env.example: 9 required (DP_BROKER_ADDRESS, DP_STORAGE_*, DP_OCR_*, DP_KVSTORE_ADDRESS) + ~20 optional с дефолтами, 15 broker topic overrides (закомментированы)
+- .dockerignore: dp-worker, .env, *_test.go, .git, IDE, *.md
+- Makefile: docker-build target с contractpro/dp-worker:$(IMAGE_TAG):latest dual-tagging
+- .gitignore: dp-worker, .env, coverage.out/html
+- Code review fixes: /readyz вместо /healthz, start-period 30s, абсолютный ENTRYPOINT, placeholder credentials
+- 32 пакета unit tests pass, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- TASK-042✅ завершена. Единственная pending задача: TASK-045 (PDF CMap/ToUnicode, low priority)
+- Docker build не был запущен в CI sandbox — требуется ручная проверка: `make docker-build` + `docker images contractpro/dp-worker`
+- При переезде на Kubernetes HEALTHCHECK можно убрать (k8s использует свои probes)

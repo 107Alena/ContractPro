@@ -990,7 +990,9 @@
         "Шаг 4: проверить, что .env.example содержит все обязательные переменные"
       ],
       "dependencies": ["TASK-039"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-26",
+      "summary": "Multi-stage Dockerfile (golang:1.26.1-alpine → alpine:3.21): CGO_ENABLED=0, -s -w -trimpath для статического бинарника (~20MB), non-root user dpworker, HEALTHCHECK wget --spider /readyz (--start-period=30s), EXPOSE 8080 + 9090. .env.example: 9 required переменных (DP_BROKER_ADDRESS, DP_STORAGE_*, DP_OCR_*, DP_KVSTORE_ADDRESS) + ~20 optional с дефолтами, 15 broker topic overrides. .dockerignore: исключены dp-worker бинарник, .env, *_test.go, .git, IDE, docs. Makefile: docker-build target с contractpro/dp-worker:$(IMAGE_TAG) + :latest. .gitignore добавлен для исключения dp-worker бинарника. Code review: HEALTHCHECK переключён с /healthz на /readyz, start-period увеличен до 30s, ENTRYPOINT абсолютный путь, placeholder credentials в .env.example. Все 32 пакета тестов PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-043",

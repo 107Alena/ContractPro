@@ -1060,7 +1060,9 @@
         "Шаг 4: проверить, что PDF без ToUnicode CMap возвращает warning (а не мусор)"
       ],
       "dependencies": ["TASK-014"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-26",
+      "summary": "CMap/ToUnicode декодирование для кириллицы из PDF с embedded-шрифтами. 4 новых файла + модификация pdf.go. encoding.go: статические таблицы WinAnsiEncoding (CP1252), MacRomanEncoding, glyphToUnicode (Adobe Glyph List: afii10017-afii10048 uppercase А-Я, afii10049-afii10080 lowercase а-я, Iocyrillic/iocyrillic для Ё/ё, afii10081-afii10110 extended Cyrillic, uniXXXX format support, Latin/punct/symbols). encodingTable() и parseDifferencesArray() с поддержкой /uniXXXX glyph names. cmap.go: ToUnicode CMap парсер — parseCodeSpaceRanges, parseBFChars, parseBFRanges (simple range + array form), bfCharMap (map[uint32][]rune для O(1) lookup), Decode() с codeSpaceRange-based byte width, default 2-byte для Identity-H. Защита от << dictionary operators в extractHexTokens. fontcodec.go: fontCodec struct (приоритет: ToUnicode CMap → Differences → BaseEncoding → identity fallback), buildFontCodec() (читает /Subtype, /BaseFont, /ToUnicode stream через pdfcpu sd.Decode(), /Encoding name/dict + /Differences, Type0/CID с Identity-H/V), buildPageFonts() (page dict → Resources → Font → codecs), extractDescendantToUnicode для Type0, isStandard14Font (14 core fonts). pdf.go: ExtractionWarning struct, ExtractTextWithWarnings() метод, extractTextFromPage() возвращает warnings, parseContentStreamWithFonts() — font-aware parser: Tf operator tracking, literal strings (nested paren depth), hex strings <XXXX>, TJ array с hex, FindStringSubmatchIndex (single regex call), decodePDFString рефакторнут через decodePDFStringToBytes (единое декодирование + octal). Code review: 3 critical fixed (afii mapping docs, << guard, decodePDFString→decodePDFStringToBytes), 4 high fixed (bfCharMap O(1), single regex call, \f whitespace, placeholder cleanup). 87 тестов (22 existing + 65 new): cmap (22), encoding (15), fontcodec (16), contentparser (34). 31 пакет PASS, go vet clean, make build/test/lint OK."
     }
   ]
 }

@@ -1863,3 +1863,37 @@ idempotency, malformed input, artifact format.
 - TASK-042✅ завершена. Единственная pending задача: TASK-045 (PDF CMap/ToUnicode, low priority)
 - Docker build не был запущен в CI sandbox — требуется ручная проверка: `make docker-build` + `docker images contractpro/dp-worker`
 - При переезде на Kubernetes HEALTHCHECK можно убрать (k8s использует свои probes)
+
+### TASK-045 — PDF-утилита: CMap/ToUnicode декодирование кириллицы
+**Статус:** done
+**Дата:** 2026-03-26
+
+**План реализации (согласован с code-architect):**
+1. Создать `encoding.go` — статические таблицы WinAnsiEncoding (CP1252), MacRomanEncoding, glyphToUnicode (Adobe Glyph List с полным покрытием Cyrillic afii10017-afii10110 + Iocyrillic/iocyrillic + uniXXXX), encodingTable(), parseDifferencesArray()
+2. Создать `cmap.go` — парсер ToUnicode CMap (begincodespacerange, beginbfchar, beginbfrange + array form), cmapTable с O(1) bfCharMap, Decode() с byte-width из codeSpaceRanges
+3. Создать `fontcodec.go` — fontCodec (приоритет: CMap → Differences → Encoding → identity), buildFontCodec() через pdfcpu (ToUnicode stream, /Encoding dict, Type0/CID), buildPageFonts()
+4. Модифицировать `pdf.go` — ExtractionWarning тип, ExtractTextWithWarnings() метод, parseContentStreamWithFonts() с Tf tracking, hex strings <XXXX>, TJ array support, decodePDFString → decodePDFStringToBytes (octal fix)
+5. Написать тесты: cmap_test.go (22), encoding_test.go (15), fontcodec_test.go (16), contentparser_test.go (34)
+6. Code review + исправления: O(1) bfCharMap, single regex call, << guard, \f whitespace, octal unification
+
+**Ключевые решения:**
+- Приоритетная цепочка декодирования: ToUnicode CMap → Differences → BaseEncoding → identity fallback
+- bfCharMap как map[uint32][]rune для O(1) lookup (вместо O(n) linear scan)
+- decodePDFString рефакторнут через decodePDFStringToBytes (единая точка декодирования escape sequences включая octal)
+- Обратная совместимость: все 22 существующих теста проходят без изменений
+- Для standard 14 fonts (Helvetica, Courier, Times) buildFontCodec возвращает nil (no codec needed)
+- Hex strings <XXXX> поддержаны для CID шрифтов (MS Word, Google Docs Cyrillic)
+- glyphToUnicode: afii10017-afii10048 (А-Я), afii10049-afii10080 (а-я) — convention from Russian PDF generators
+
+**Summary:**
+- 4 новых файла: encoding.go, cmap.go, fontcodec.go + 4 тестовых файла
+- 1 модифицированный файл: pdf.go (ExtractionWarning, ExtractTextWithWarnings, font-aware parser)
+- 87 тестов (22 existing + 65 new), все проходят с -race
+- Code review: 3 critical + 4 high warnings исправлены
+- 31 пакет PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- ВСЕ 45 задач Document Processing выполнены (TASK-001..TASK-045 done)
+- Для полного end-to-end тестирования кириллицы: разместить реальные PDF (Word, LibreOffice) в internal/pdf/data/ и расширить real_pdf_test.go
+- textextract.Extractor может быть обновлён для использования ExtractTextWithWarnings и propagation font warnings через pipeline
+- hexToRunes ограничен 16-bit Unicode (BMP); supplementary characters (emoji, CJK ext) потребуют UTF-16 surrogate pair поддержки

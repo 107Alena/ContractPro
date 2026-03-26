@@ -494,7 +494,7 @@ func newTestHarness(t *testing.T, opts ...harnessOption) *testHarness {
 	broker := &captureBroker{}
 	brokerCfg := config.BrokerConfig{
 		TopicProcessDocument: testTopicProcessDocument,
-		TopicCompareVersions: "dp.commands.compare-versions",
+		TopicCompareVersions: testTopicCompareVersions,
 	}
 
 	cons := consumer.NewConsumer(broker, disp, logger, brokerCfg)

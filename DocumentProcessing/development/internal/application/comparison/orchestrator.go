@@ -290,9 +290,17 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 		TextDiffs:       diffResult.TextDiffs,
 		StructuralDiffs: diffResult.StructuralDiffs,
 	}
+
+	// Register confirmation BEFORE sending diff, so that an async DM
+	// confirmation arriving immediately after publish is accepted by
+	// the registry (same pattern as tree requests in Stage 2).
+	if err := o.registry.Register(cmd.JobID, []string{confirmCorrID}); err != nil {
+		return err
+	}
 	if err := o.retryStep(ctx, func() error {
 		return o.dmSender.SendDiffResult(ctx, diffReadyEvent)
 	}); err != nil {
+		o.registry.Cancel(cmd.JobID)
 		return err
 	}
 
@@ -300,9 +308,6 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 	job.Stage = model.ComparisonStageWaitingConfirm
 	ctx = observability.WithStage(ctx, string(job.Stage))
 	o.logger.Info(ctx, "pipeline stage started")
-	if err := o.registry.Register(cmd.JobID, []string{confirmCorrID}); err != nil {
-		return err
-	}
 	confirmResponses, err := o.registry.AwaitAll(ctx, cmd.JobID)
 	if err != nil {
 		return err

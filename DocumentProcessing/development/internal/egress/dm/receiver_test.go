@@ -194,6 +194,7 @@ func validArtifactsPersistFailedEvent() model.DocumentProcessingArtifactsPersist
 		EventMeta:    testReceiverMeta(),
 		JobID:        "job-apf-1",
 		DocumentID:   "doc-apf-1",
+		ErrorCode:    "STORAGE_QUOTA_EXCEEDED",
 		ErrorMessage: "storage quota exceeded",
 		IsRetryable:  true,
 	}
@@ -235,6 +236,7 @@ func validDiffPersistFailedEvent() model.DocumentVersionDiffPersistFailed {
 		EventMeta:    model.EventMeta{CorrelationID: "job-dpf-1:diff-confirm", Timestamp: testReceiverTimestamp()},
 		JobID:        "job-dpf-1",
 		DocumentID:   "doc-dpf-1",
+		ErrorCode:    "DISK_FULL",
 		ErrorMessage: "disk full",
 		IsRetryable:  false,
 	}
@@ -523,6 +525,9 @@ func TestHandleArtifactsPersistFailed_ValidEvent(t *testing.T) {
 	}
 	if handler.lastArtifactsPersistFailed.JobID != event.JobID {
 		t.Errorf("job_id = %q, want %q", handler.lastArtifactsPersistFailed.JobID, event.JobID)
+	}
+	if handler.lastArtifactsPersistFailed.ErrorCode != event.ErrorCode {
+		t.Errorf("error_code = %q, want %q", handler.lastArtifactsPersistFailed.ErrorCode, event.ErrorCode)
 	}
 	if handler.lastArtifactsPersistFailed.ErrorMessage != event.ErrorMessage {
 		t.Errorf("error_message = %q, want %q", handler.lastArtifactsPersistFailed.ErrorMessage, event.ErrorMessage)

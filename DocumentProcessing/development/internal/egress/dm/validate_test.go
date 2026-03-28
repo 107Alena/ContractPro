@@ -66,10 +66,23 @@ func TestValidateArtifactsPersistFailed_Valid(t *testing.T) {
 	event := model.DocumentProcessingArtifactsPersistFailed{
 		JobID:        "job-1",
 		DocumentID:   "doc-1",
+		ErrorCode:    "STORAGE_ERROR",
 		ErrorMessage: "error",
 	}
 	if err := validateArtifactsPersistFailed(event); err != nil {
 		t.Errorf("expected nil, got: %v", err)
+	}
+}
+
+func TestValidateArtifactsPersistFailed_ValidWithoutErrorCode(t *testing.T) {
+	event := model.DocumentProcessingArtifactsPersistFailed{
+		JobID:        "job-1",
+		DocumentID:   "doc-1",
+		ErrorMessage: "error",
+		// ErrorCode omitted — backwards compatible
+	}
+	if err := validateArtifactsPersistFailed(event); err != nil {
+		t.Errorf("expected nil (error_code is optional), got: %v", err)
 	}
 }
 
@@ -185,10 +198,24 @@ func TestValidateDiffPersistFailed_Valid(t *testing.T) {
 		EventMeta:    model.EventMeta{CorrelationID: "corr-1"},
 		JobID:        "job-1",
 		DocumentID:   "doc-1",
+		ErrorCode:    "DISK_FULL",
 		ErrorMessage: "disk full",
 	}
 	if err := validateDiffPersistFailed(event); err != nil {
 		t.Errorf("expected nil, got: %v", err)
+	}
+}
+
+func TestValidateDiffPersistFailed_ValidWithoutErrorCode(t *testing.T) {
+	event := model.DocumentVersionDiffPersistFailed{
+		EventMeta:    model.EventMeta{CorrelationID: "corr-1"},
+		JobID:        "job-1",
+		DocumentID:   "doc-1",
+		ErrorMessage: "disk full",
+		// ErrorCode omitted — backwards compatible
+	}
+	if err := validateDiffPersistFailed(event); err != nil {
+		t.Errorf("expected nil (error_code is optional), got: %v", err)
 	}
 }
 

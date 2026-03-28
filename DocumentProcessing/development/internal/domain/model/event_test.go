@@ -140,6 +140,7 @@ func TestDocumentProcessingArtifactsPersistFailed_JSONRoundTrip(t *testing.T) {
 		EventMeta:    testEventMeta,
 		JobID:        "job-1",
 		DocumentID:   "doc-1",
+		ErrorCode:    "STORAGE_QUOTA_EXCEEDED",
 		ErrorMessage: "storage unavailable",
 		IsRetryable:  true,
 	}
@@ -154,11 +155,64 @@ func TestDocumentProcessingArtifactsPersistFailed_JSONRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 
+	if restored.ErrorCode != original.ErrorCode {
+		t.Errorf("ErrorCode = %q, want %q", restored.ErrorCode, original.ErrorCode)
+	}
 	if restored.ErrorMessage != original.ErrorMessage {
 		t.Errorf("ErrorMessage = %q, want %q", restored.ErrorMessage, original.ErrorMessage)
 	}
 	if restored.IsRetryable != original.IsRetryable {
 		t.Errorf("IsRetryable = %v, want %v", restored.IsRetryable, original.IsRetryable)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, ok := m["error_code"]; !ok {
+		t.Error("JSON missing key error_code")
+	}
+}
+
+func TestDocumentProcessingArtifactsPersistFailed_JSONOmitsEmptyErrorCode(t *testing.T) {
+	event := DocumentProcessingArtifactsPersistFailed{
+		EventMeta:    testEventMeta,
+		JobID:        "job-1",
+		DocumentID:   "doc-1",
+		ErrorMessage: "storage unavailable",
+		IsRetryable:  true,
+		// ErrorCode intentionally empty
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	if _, exists := raw["error_code"]; exists {
+		t.Error("error_code should be omitted when empty")
+	}
+}
+
+func TestDocumentProcessingArtifactsPersistFailed_JSONBackwardsCompatibility(t *testing.T) {
+	// Simulate old DM payload without error_code field.
+	payload := `{"correlation_id":"corr-1","timestamp":"2026-03-15T14:30:00Z","job_id":"job-1","document_id":"doc-1","error_message":"old DM version","is_retryable":false}`
+
+	var event DocumentProcessingArtifactsPersistFailed
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	if event.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty (backwards compat)", event.ErrorCode)
+	}
+	if event.ErrorMessage != "old DM version" {
+		t.Errorf("ErrorMessage = %q, want %q", event.ErrorMessage, "old DM version")
 	}
 }
 
@@ -303,6 +357,7 @@ func TestDocumentVersionDiffPersistFailed_JSONRoundTrip(t *testing.T) {
 		EventMeta:    testEventMeta,
 		JobID:        "job-1",
 		DocumentID:   "doc-1",
+		ErrorCode:    "WRITE_CONFLICT",
 		ErrorMessage: "write conflict",
 		IsRetryable:  false,
 	}
@@ -317,11 +372,64 @@ func TestDocumentVersionDiffPersistFailed_JSONRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 
+	if restored.ErrorCode != original.ErrorCode {
+		t.Errorf("ErrorCode = %q, want %q", restored.ErrorCode, original.ErrorCode)
+	}
 	if restored.ErrorMessage != original.ErrorMessage {
 		t.Errorf("ErrorMessage = %q, want %q", restored.ErrorMessage, original.ErrorMessage)
 	}
 	if restored.IsRetryable != original.IsRetryable {
 		t.Errorf("IsRetryable = %v, want %v", restored.IsRetryable, original.IsRetryable)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, ok := m["error_code"]; !ok {
+		t.Error("JSON missing key error_code")
+	}
+}
+
+func TestDocumentVersionDiffPersistFailed_JSONOmitsEmptyErrorCode(t *testing.T) {
+	event := DocumentVersionDiffPersistFailed{
+		EventMeta:    testEventMeta,
+		JobID:        "job-1",
+		DocumentID:   "doc-1",
+		ErrorMessage: "write conflict",
+		IsRetryable:  false,
+		// ErrorCode intentionally empty
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	if _, exists := raw["error_code"]; exists {
+		t.Error("error_code should be omitted when empty")
+	}
+}
+
+func TestDocumentVersionDiffPersistFailed_JSONBackwardsCompatibility(t *testing.T) {
+	// Simulate old DM payload without error_code field.
+	payload := `{"correlation_id":"corr-1","timestamp":"2026-03-15T14:30:00Z","job_id":"job-1","document_id":"doc-1","error_message":"old DM version","is_retryable":true}`
+
+	var event DocumentVersionDiffPersistFailed
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	if event.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty (backwards compat)", event.ErrorCode)
+	}
+	if event.ErrorMessage != "old DM version" {
+		t.Errorf("ErrorMessage = %q, want %q", event.ErrorMessage, "old DM version")
 	}
 }
 

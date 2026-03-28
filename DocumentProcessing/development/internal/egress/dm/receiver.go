@@ -201,6 +201,7 @@ func (r *Receiver) handleArtifactsPersistFailed(ctx context.Context, body []byte
 	})
 
 	r.logger.Warn(ctx, "received artifacts persist failed event",
+		"error_code", event.ErrorCode,
 		"error_message", event.ErrorMessage,
 		"is_retryable", event.IsRetryable,
 	)
@@ -354,6 +355,7 @@ func (r *Receiver) handleDiffPersistFailed(ctx context.Context, body []byte) err
 	})
 
 	r.logger.Warn(ctx, "received diff persist failed event",
+		"error_code", event.ErrorCode,
 		"error_message", event.ErrorMessage,
 		"is_retryable", event.IsRetryable,
 	)

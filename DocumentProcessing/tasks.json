@@ -1256,7 +1256,17 @@
         "Шаг 3: проверить JSON round-trip для ArtifactsPersistFailed и DiffPersistFailed с error_code"
       ],
       "dependencies": ["TASK-005", "TASK-034"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-28",
+      "summary": "ErrorCode string `json:\"error_code,omitempty\"` добавлен в DocumentProcessingArtifactsPersistFailed и DocumentVersionDiffPersistFailed (перед ErrorMessage, по аналогии с ProcessingFailedEvent). Поле опциональное для обратной совместимости со старыми версиями DM. receiver.go: логирование error_code в handleArtifactsPersistFailed и handleDiffPersistFailed. dmhandler.go: логирование error_code + добавлен is_retryable в HandleDiffPersistFailed (W-1 fix). validate.go: без изменений (error_code не валидируется). 6 новых тестов: round-trip с ErrorCode, omitempty, backwards compatibility. 2 теста на опциональность error_code в validate_test.go. 32 пакета PASS с -race, go vet clean, make build/test/lint OK. Code review: 0 critical, 2 warnings (1 fixed: is_retryable в dmhandler, 1 by-design: DM error_code для логов, не для DomainError).",
+      "changes": [
+        "internal/domain/model/event.go — ErrorCode field in both PersistFailed structs",
+        "internal/egress/dm/receiver.go — error_code logging in 2 handlers",
+        "internal/app/dmhandler.go — error_code logging + is_retryable fix in HandleDiffPersistFailed",
+        "internal/domain/model/event_test.go — 6 new tests (round-trip, omitempty, backwards compat)",
+        "internal/egress/dm/receiver_test.go — ErrorCode in helpers + assertion",
+        "internal/egress/dm/validate_test.go — 2 new tests for optional error_code"
+      ]
     },
     {
       "id": "TASK-054",

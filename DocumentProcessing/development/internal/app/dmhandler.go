@@ -50,6 +50,7 @@ func (h *dmResponseHandler) HandleArtifactsPersistFailed(ctx context.Context, ev
 	h.logger.Warn(ctx, "artifacts persist failed by DM",
 		"job_id", event.JobID,
 		"document_id", event.DocumentID,
+		"error_code", event.ErrorCode,
 		"error", event.ErrorMessage,
 		"is_retryable", event.IsRetryable,
 	)
@@ -84,6 +85,11 @@ func (h *dmResponseHandler) HandleDiffPersisted(ctx context.Context, event model
 // correlation-based dispatch to the comparison pipeline.
 func (h *dmResponseHandler) HandleDiffPersistFailed(ctx context.Context, event model.DocumentVersionDiffPersistFailed) error {
 	h.logger.Warn(ctx, "diff persist failed (unexpected in composite handler)",
-		"job_id", event.JobID, "document_id", event.DocumentID, "error", event.ErrorMessage)
+		"job_id", event.JobID,
+		"document_id", event.DocumentID,
+		"error_code", event.ErrorCode,
+		"error", event.ErrorMessage,
+		"is_retryable", event.IsRetryable,
+	)
 	return nil
 }

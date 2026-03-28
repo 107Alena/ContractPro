@@ -63,6 +63,7 @@ type DocumentProcessingArtifactsPersistFailed struct {
 	EventMeta
 	JobID        string `json:"job_id"`
 	DocumentID   string `json:"document_id"`
+	ErrorCode    string `json:"error_code,omitempty"`
 	ErrorMessage string `json:"error_message"`
 	IsRetryable  bool   `json:"is_retryable"`
 }
@@ -91,6 +92,7 @@ type DocumentVersionDiffPersistFailed struct {
 	EventMeta
 	JobID        string `json:"job_id"`
 	DocumentID   string `json:"document_id"`
+	ErrorCode    string `json:"error_code,omitempty"`
 	ErrorMessage string `json:"error_message"`
 	IsRetryable  bool   `json:"is_retryable"`
 }

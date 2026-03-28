@@ -1063,6 +1063,198 @@
       "status": "done",
       "completed_at": "2026-03-26",
       "summary": "CMap/ToUnicode декодирование для кириллицы из PDF с embedded-шрифтами. 4 новых файла + модификация pdf.go. encoding.go: статические таблицы WinAnsiEncoding (CP1252), MacRomanEncoding, glyphToUnicode (Adobe Glyph List: afii10017-afii10048 uppercase А-Я, afii10049-afii10080 lowercase а-я, Iocyrillic/iocyrillic для Ё/ё, afii10081-afii10110 extended Cyrillic, uniXXXX format support, Latin/punct/symbols). encodingTable() и parseDifferencesArray() с поддержкой /uniXXXX glyph names. cmap.go: ToUnicode CMap парсер — parseCodeSpaceRanges, parseBFChars, parseBFRanges (simple range + array form), bfCharMap (map[uint32][]rune для O(1) lookup), Decode() с codeSpaceRange-based byte width, default 2-byte для Identity-H. Защита от << dictionary operators в extractHexTokens. fontcodec.go: fontCodec struct (приоритет: ToUnicode CMap → Differences → BaseEncoding → identity fallback), buildFontCodec() (читает /Subtype, /BaseFont, /ToUnicode stream через pdfcpu sd.Decode(), /Encoding name/dict + /Differences, Type0/CID с Identity-H/V), buildPageFonts() (page dict → Resources → Font → codecs), extractDescendantToUnicode для Type0, isStandard14Font (14 core fonts). pdf.go: ExtractionWarning struct, ExtractTextWithWarnings() метод, extractTextFromPage() возвращает warnings, parseContentStreamWithFonts() — font-aware parser: Tf operator tracking, literal strings (nested paren depth), hex strings <XXXX>, TJ array с hex, FindStringSubmatchIndex (single regex call), decodePDFString рефакторнут через decodePDFStringToBytes (единое декодирование + octal). Code review: 3 critical fixed (afii mapping docs, << guard, decodePDFString→decodePDFStringToBytes), 4 high fixed (bfCharMap O(1), single regex call, \f whitespace, placeholder cleanup). 87 тестов (22 existing + 65 new): cmap (22), encoding (15), fontcodec (16), contentparser (34). 31 пакет PASS, go vet clean, make build/test/lint OK."
+    },
+    {
+      "id": "TASK-046",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Processing Pipeline: ожидание DM-подтверждения сохранения артефактов (WAITING_DM_CONFIRMATION)",
+      "acceptance_criteria": [
+        "Processing Orchestrator после отправки DocumentProcessingArtifactsReady переходит в стадию WAITING_DM_CONFIRMATION и ожидает ответ от DM",
+        "При получении DocumentProcessingArtifactsPersisted — pipeline продолжает к cleanup и COMPLETED",
+        "При получении DocumentProcessingArtifactsPersistFailed с is_retryable=true — retry отправки артефактов",
+        "При получении DocumentProcessingArtifactsPersistFailed с is_retryable=false — FAILED, cleanup",
+        "Используется PendingResponseRegistry (или аналогичный механизм) для корреляции ответа по correlation_id",
+        "DM Receiver (dm/receiver.go) маршрутизирует ArtifactsPersisted/ArtifactsPersistFailed в Registry",
+        "dmResponseHandler обновлён для интеграции с processing orchestrator",
+        "Таймаут job context корректно прерывает ожидание → TIMED_OUT",
+        "Написаны unit-тесты на happy path и failure path"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/processing/... — тесты проходят",
+        "Шаг 2: go test ./internal/egress/dm/... — тесты проходят",
+        "Шаг 3: go test ./internal/app/... — тесты проходят",
+        "Шаг 4: проверить, что processing pipeline НЕ завершается COMPLETED до получения DM confirmation",
+        "Шаг 5: проверить, что ArtifactsPersistFailed с is_retryable=false → FAILED",
+        "Шаг 6: проверить, что таймаут при ожидании DM → TIMED_OUT"
+      ],
+      "dependencies": ["TASK-035", "TASK-036", "TASK-034"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-047",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Comparison Pipeline: маршрутизация DiffPersisted/DiffPersistFailed из DM Receiver в PendingResponseRegistry",
+      "acceptance_criteria": [
+        "dm/receiver.go при получении DocumentVersionDiffPersisted вызывает registry.Receive(correlationID, SemanticTree{}) для разблокировки AwaitAll",
+        "dm/receiver.go при получении DocumentVersionDiffPersistFailed вызывает registry.ReceiveError(correlationID, err) для пробрасывания ошибки",
+        "Comparison Orchestrator корректно обрабатывает ошибку из DiffPersistFailed (retry или FAILED в зависимости от is_retryable)",
+        "Написаны unit-тесты: DiffPersisted → pipeline завершается COMPLETED; DiffPersistFailed → pipeline завершается FAILED",
+        "Integration test (comparison_pipeline_test) обновлён для проверки полного flow включая DM confirmation"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/dm/... — тесты проходят",
+        "Шаг 2: go test ./internal/application/comparison/... — тесты проходят",
+        "Шаг 3: проверить, что comparison pipeline НЕ зависает на WAITING_DM_CONFIRMATION при получении DiffPersisted",
+        "Шаг 4: проверить, что DiffPersistFailed с is_retryable=false → FAILED"
+      ],
+      "dependencies": ["TASK-037", "TASK-038", "TASK-034"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-048",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Per-job Warning Collector — устранение race condition при конкурентной обработке задач",
+      "acceptance_criteria": [
+        "Каждый вызов HandleProcessDocument/HandleCompareVersions использует собственный экземпляр warning.Collector",
+        "Warning Collector не разделяется между конкурентными задачами",
+        "Оркестраторы создают Collector для каждой задачи (либо через фабрику, либо через локальную переменную)",
+        "Удалён вызов Reset() из оркестраторов (не нужен при per-job collector)",
+        "Engine-компоненты (OCR Adapter, Text Extractor, Structure Extractor) получают collector через параметр метода или через контекст вместо поля struct",
+        "Все существующие тесты продолжают проходить",
+        "Написан тест на конкурентную обработку двух задач с разными warnings — каждая задача видит только свои warnings"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./... — все тесты проходят",
+        "Шаг 2: написать тест: запустить 2 concurrent HandleProcessDocument, каждый с разными warnings — убедиться что warnings не смешиваются",
+        "Шаг 3: go vet ./... — без предупреждений"
+      ],
+      "dependencies": ["TASK-020", "TASK-035", "TASK-037"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-049",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Prometheus /metrics HTTP endpoint — экспонировать метрики через HTTP-сервер",
+      "acceptance_criteria": [
+        "В app.go создан второй HTTP-сервер на порту DP_METRICS_PORT (default 9090) с endpoint /metrics",
+        "Endpoint использует promhttp.HandlerFor(obs.Metrics.Registry()) из библиотеки prometheus/client_golang",
+        "Metrics-сервер запускается в App.Run() и останавливается в App.Shutdown()",
+        "Добавлена зависимость github.com/prometheus/client_golang/prometheus/promhttp в go.mod",
+        "Написан unit-тест: GET /metrics возвращает 200 и содержит dp_job_duration_seconds",
+        "Dockerfile EXPOSE обновлён для метрик-порта"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/app/... — тесты проходят",
+        "Шаг 2: go test ./internal/infra/health/... — тесты проходят",
+        "Шаг 3: проверить, что /metrics endpoint возвращает Prometheus-формат с зарегистрированными метриками",
+        "Шаг 4: make build — компилируется без ошибок"
+      ],
+      "dependencies": ["TASK-012", "TASK-039"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-050",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "DLQ (Dead Letter Queue) — порт, адаптер, конфигурация для failed-сообщений",
+      "acceptance_criteria": [
+        "Определён DLQPort в port/outbound.go: SendToDLQ(ctx, jobID, originalMessage, errorInfo) error",
+        "Реализован DLQ-адаптер через broker (публикация в настраиваемый DLQ-топик)",
+        "Добавлена конфигурация: DP_BROKER_TOPIC_DLQ (default: dp.dlq)",
+        "Processing Orchestrator при исчерпании retry записывает сообщение в DLQ перед переходом в FAILED",
+        "Comparison Orchestrator аналогично записывает в DLQ при исчерпании retry",
+        "DLQ-сообщение содержит: job_id, document_id, error_code, error_message, failed_at_stage, original_command, timestamp",
+        "Написаны unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/processing/... — тесты проходят",
+        "Шаг 2: go test ./internal/application/comparison/... — тесты проходят",
+        "Шаг 3: проверить, что при исчерпании retry сообщение попадает в DLQ-топик",
+        "Шаг 4: make build — компилируется без ошибок"
+      ],
+      "dependencies": ["TASK-035", "TASK-037", "TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-051",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Processing Pipeline: выделить стадию VALIDATING_FILE после FETCHING_SOURCE_FILE",
+      "acceptance_criteria": [
+        "Processing Orchestrator выставляет job.Stage = ProcessingStageValidatingFile после скачивания файла, перед валидацией формата/размера/страниц",
+        "Логи и events содержат корректную стадию VALIDATING_FILE при ошибке валидации файла (не FETCHING_SOURCE_FILE)",
+        "failed_at_stage в ProcessingFailedEvent точно отражает стадию: FETCHING_SOURCE_FILE для ошибок скачивания, VALIDATING_FILE для ошибок формата/размера/страниц",
+        "Может потребоваться рефакторинг Fetcher.Fetch() на два этапа (download + validate) или выставление стадии внутри оркестратора между вызовами",
+        "Написаны unit-тесты на корректность failed_at_stage"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/processing/... — тесты проходят",
+        "Шаг 2: проверить, что ошибка 'file too large' (фактическая) → failed_at_stage = VALIDATING_FILE",
+        "Шаг 3: проверить, что ошибка 'download failed' → failed_at_stage = FETCHING_SOURCE_FILE"
+      ],
+      "dependencies": ["TASK-035", "TASK-023", "TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-052",
+      "category": "functional",
+      "priority": "medium",
+      "description": "DocumentVersionDiffReady: добавить поля text_diff_count и structural_diff_count",
+      "acceptance_criteria": [
+        "В model.DocumentVersionDiffReady добавлены поля TextDiffCount int и StructuralDiffCount int с JSON-тегами text_diff_count, structural_diff_count",
+        "Comparison Orchestrator заполняет эти поля при формировании события (len(diffResult.TextDiffs), len(diffResult.StructuralDiffs))",
+        "DM Outbound Adapter (dm/sender.go) корректно сериализует новые поля",
+        "Обновлены существующие тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... — тесты проходят",
+        "Шаг 2: go test ./internal/application/comparison/... — тесты проходят",
+        "Шаг 3: проверить JSON-сериализацию DocumentVersionDiffReady содержит text_diff_count и structural_diff_count"
+      ],
+      "dependencies": ["TASK-005", "TASK-037"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-053",
+      "category": "functional",
+      "priority": "medium",
+      "description": "DocumentProcessingArtifactsPersistFailed: добавить поле error_code",
+      "acceptance_criteria": [
+        "В model.DocumentProcessingArtifactsPersistFailed добавлено поле ErrorCode string с JSON-тегом error_code",
+        "В model.DocumentVersionDiffPersistFailed аналогично добавлено ErrorCode string (для консистентности с архитектурой)",
+        "DM Receiver (dm/receiver.go) десериализует error_code из DM-ответа",
+        "Валидация в dm/validate.go обновлена (error_code может быть опциональным для обратной совместимости)",
+        "Обновлены существующие тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... — тесты проходят",
+        "Шаг 2: go test ./internal/egress/dm/... — тесты проходят",
+        "Шаг 3: проверить JSON round-trip для ArtifactsPersistFailed и DiffPersistFailed с error_code"
+      ],
+      "dependencies": ["TASK-005", "TASK-034"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-054",
+      "category": "documentation",
+      "priority": "low",
+      "description": "Обновить configuration.md — добавить KVStore и TracingInsecure переменные",
+      "acceptance_criteria": [
+        "В configuration.md добавлена секция KV Store с переменными: DP_KVSTORE_ADDRESS (required), DP_KVSTORE_PASSWORD, DP_KVSTORE_DB, DP_KVSTORE_POOL_SIZE, DP_KVSTORE_TIMEOUT",
+        "DP_KVSTORE_ADDRESS добавлена в таблицу обязательных переменных",
+        "В секцию Observability добавлена переменная DP_TRACING_INSECURE (default: false)",
+        "Пример .env файла обновлён"
+      ],
+      "test_steps": [
+        "Шаг 1: проверить, что все переменные из config/sub_configs.go отражены в configuration.md",
+        "Шаг 2: проверить, что пример .env содержит DP_KVSTORE_ADDRESS"
+      ],
+      "dependencies": ["TASK-007"],
+      "status": "pending"
     }
   ]
 }

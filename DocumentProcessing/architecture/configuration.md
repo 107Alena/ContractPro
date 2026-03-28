@@ -26,6 +26,7 @@
 | `DP_OCR_ENDPOINT` | Endpoint Yandex Cloud Vision OCR | `https://ocr.api.cloud.yandex.net` |
 | `DP_OCR_API_KEY` | API-ключ для OCR | — |
 | `DP_OCR_FOLDER_ID` | ID каталога в Yandex Cloud | — |
+| `DP_KVSTORE_ADDRESS` | Адрес Redis для KV-store (idempotency, state) | `localhost:6379` |
 
 ---
 
@@ -52,6 +53,15 @@
 |-----------|----------|-------------|
 | `DP_IDEMPOTENCY_TTL` | Время жизни ключа идемпотентности (Go duration) | `24h` |
 
+### KV Store (Redis)
+
+| Переменная | Описание | По умолчанию |
+|-----------|----------|-------------|
+| `DP_KVSTORE_PASSWORD` | Пароль для Redis | _(пусто)_ |
+| `DP_KVSTORE_DB` | Номер базы данных Redis | `0` |
+| `DP_KVSTORE_POOL_SIZE` | Размер connection pool | `10` |
+| `DP_KVSTORE_TIMEOUT` | Таймаут операций (Go duration) | `5s` |
+
 ### Retry
 
 | Переменная | Описание | По умолчанию |
@@ -71,7 +81,9 @@
 |-----------|----------|-------------|
 | `DP_LOG_LEVEL` | Уровень логирования | `info` |
 | `DP_METRICS_PORT` | Порт Prometheus-метрик | `9090` |
-| `DP_TRACING_ENDPOINT` | Endpoint для OpenTelemetry tracing | _(пусто — трейсинг выключен)_ |
+| `DP_TRACING_ENABLED` | Включить OpenTelemetry tracing | `false` |
+| `DP_TRACING_ENDPOINT` | Endpoint для OpenTelemetry tracing (OTLP/HTTP) | _(пусто — трейсинг выключен)_ |
+| `DP_TRACING_INSECURE` | Использовать HTTP вместо HTTPS для трейсинга (только для dev) | `false` |
 
 ### Object Storage
 
@@ -110,6 +122,12 @@
 | `DP_BROKER_TOPIC_DM_DIFF_PERSISTED` | `dm.responses.diff-persisted` | DocumentVersionDiffPersisted |
 | `DP_BROKER_TOPIC_DM_DIFF_PERSIST_FAILED` | `dm.responses.diff-persist-failed` | DocumentVersionDiffPersistFailed |
 
+### Dead Letter Queue
+
+| Переменная | По умолчанию | Событие |
+|-----------|-------------|---------|
+| `DP_BROKER_TOPIC_DLQ` | `dp.dlq` | Сообщения, не обработанные после исчерпания retry |
+
 ### DP → внешние потребители
 
 | Переменная | По умолчанию | Событие |
@@ -126,7 +144,7 @@
 
 ```env
 # === Обязательные ===
-DP_BROKER_ADDRESS=localhost:9092
+DP_BROKER_ADDRESS=amqp://user:password@localhost:5672/
 DP_STORAGE_ENDPOINT=https://storage.yandexcloud.net
 DP_STORAGE_BUCKET=dp-artifacts
 DP_STORAGE_ACCESS_KEY=your-access-key
@@ -134,6 +152,7 @@ DP_STORAGE_SECRET_KEY=your-secret-key
 DP_OCR_ENDPOINT=https://ocr.api.cloud.yandex.net
 DP_OCR_API_KEY=your-api-key
 DP_OCR_FOLDER_ID=your-folder-id
+DP_KVSTORE_ADDRESS=localhost:6379
 
 # === Необязательные (значения по умолчанию) ===
 # DP_LIMITS_MAX_FILE_SIZE=20971520
@@ -142,11 +161,17 @@ DP_OCR_FOLDER_ID=your-folder-id
 # DP_CONCURRENCY_MAX_JOBS=5
 # DP_OCR_RPS_LIMIT=10
 # DP_IDEMPOTENCY_TTL=24h
+# DP_KVSTORE_PASSWORD=
+# DP_KVSTORE_DB=0
+# DP_KVSTORE_POOL_SIZE=10
+# DP_KVSTORE_TIMEOUT=5s
 # DP_RETRY_MAX_ATTEMPTS=3
 # DP_RETRY_BACKOFF_BASE=1s
 # DP_HTTP_PORT=8080
 # DP_LOG_LEVEL=info
 # DP_METRICS_PORT=9090
+# DP_TRACING_ENABLED=false
 # DP_TRACING_ENDPOINT=
+# DP_TRACING_INSECURE=false
 # DP_STORAGE_REGION=ru-central1
 ```

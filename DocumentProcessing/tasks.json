@@ -1284,7 +1284,12 @@
         "Шаг 2: проверить, что пример .env содержит DP_KVSTORE_ADDRESS"
       ],
       "dependencies": ["TASK-007"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-28",
+      "summary": "В configuration.md добавлены: (1) DP_KVSTORE_ADDRESS в таблицу обязательных переменных, (2) секция KV Store (Redis) с 4 необязательными переменными (DP_KVSTORE_PASSWORD/DB/POOL_SIZE/TIMEOUT), (3) DP_TRACING_ENABLED и DP_TRACING_INSECURE в секцию Observability, (4) секция Dead Letter Queue с DP_BROKER_TOPIC_DLQ в топиках брокера, (5) обновлён пример .env файла (добавлены все новые переменные, исправлен формат DP_BROKER_ADDRESS на AMQP URI). Файл .env.example уже был актуален — изменений не потребовал. Все переменные из config/sub_configs.go теперь полностью отражены в документации.",
+      "changes": [
+        "DocumentProcessing/architecture/configuration.md — 5 additions: required table, KV Store section, Observability vars, DLQ topic, .env example"
+      ]
     }
   ]
 }

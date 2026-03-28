@@ -2050,3 +2050,32 @@ idempotency, malformed input, artifact format.
 - Pending medium: TASK-051 (VALIDATING_FILE stage), TASK-052 (diff counts), TASK-053 (error_code в PersistFailed)
 - Pending low: TASK-054 (docs)
 - Все acceptance_criteria TASK-050 выполнены
+
+---
+
+### TASK-054 — Обновить configuration.md — KVStore и TracingInsecure
+**Статус:** done
+**Дата:** 2026-03-28
+
+**План реализации:**
+1. Изучить расхождения между `internal/config/sub_configs.go` и `architecture/configuration.md`
+2. Добавить недостающие переменные в документацию
+3. Проверить `.env.example` на актуальность
+4. Верифицировать полноту: каждая env-переменная из кода отражена в документации
+
+**Выявленные расхождения (5):**
+1. `DP_KVSTORE_ADDRESS` — обязательная, отсутствовала в таблице обязательных
+2. Секция KV Store (Redis) — 4 необязательных переменных (`DP_KVSTORE_PASSWORD/DB/POOL_SIZE/TIMEOUT`) без секции
+3. `DP_TRACING_ENABLED` — в коде (ObservabilityConfig), отсутствовала в документации
+4. `DP_TRACING_INSECURE` — в коде (ObservabilityConfig), отсутствовала в документации
+5. `DP_BROKER_TOPIC_DLQ` — в коде (BrokerConfig), отсутствовала в секции топиков
+
+**Изменения:**
+- `configuration.md`: +`DP_KVSTORE_ADDRESS` в required table, +секция "KV Store (Redis)", +2 переменные в Observability, +секция "Dead Letter Queue", обновлён пример .env
+- `.env.example`: уже был актуален, без изменений
+
+**Тесты:** 32 пакета PASS, go vet clean, make build/test/lint OK (задача документационная, код не менялся)
+
+**Заметки для следующей итерации:**
+- Все 54 задачи в tasks.json завершены (status: done)
+- Документация configuration.md теперь полностью соответствует коду config/

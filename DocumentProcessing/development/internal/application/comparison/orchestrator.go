@@ -284,12 +284,14 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 			CorrelationID: confirmCorrID,
 			Timestamp:     time.Now().UTC(),
 		},
-		JobID:           cmd.JobID,
-		DocumentID:      cmd.DocumentID,
-		BaseVersionID:   cmd.BaseVersionID,
-		TargetVersionID: cmd.TargetVersionID,
-		TextDiffs:       diffResult.TextDiffs,
-		StructuralDiffs: diffResult.StructuralDiffs,
+		JobID:               cmd.JobID,
+		DocumentID:          cmd.DocumentID,
+		BaseVersionID:       cmd.BaseVersionID,
+		TargetVersionID:     cmd.TargetVersionID,
+		TextDiffs:           diffResult.TextDiffs,
+		StructuralDiffs:     diffResult.StructuralDiffs,
+		TextDiffCount:       len(diffResult.TextDiffs),
+		StructuralDiffCount: len(diffResult.StructuralDiffs),
 	}
 
 	// Register confirmation BEFORE sending diff, so that an async DM

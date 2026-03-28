@@ -862,6 +862,12 @@ func TestHappyPath_DiffResultSentToDM(t *testing.T) {
 	if len(diffEvent.StructuralDiffs) != 1 {
 		t.Errorf("expected 1 structural diff, got %d", len(diffEvent.StructuralDiffs))
 	}
+	if diffEvent.TextDiffCount != 1 {
+		t.Errorf("expected TextDiffCount=1, got %d", diffEvent.TextDiffCount)
+	}
+	if diffEvent.StructuralDiffCount != 1 {
+		t.Errorf("expected StructuralDiffCount=1, got %d", diffEvent.StructuralDiffCount)
+	}
 
 	// Verify the correlation ID follows confirmCorrID format.
 	expectedConfirmCorrID := cmd.JobID + ":diff-confirm"

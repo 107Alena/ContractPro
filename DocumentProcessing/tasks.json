@@ -1228,7 +1228,15 @@
         "Шаг 3: проверить JSON-сериализацию DocumentVersionDiffReady содержит text_diff_count и structural_diff_count"
       ],
       "dependencies": ["TASK-005", "TASK-037"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-28",
+      "changes": [
+        "internal/domain/model/event.go — добавлены поля TextDiffCount, StructuralDiffCount в DocumentVersionDiffReady",
+        "internal/application/comparison/orchestrator.go — заполнение count-полей через len(diffResult.TextDiffs/StructuralDiffs)",
+        "internal/domain/model/event_test.go — обновлён round-trip тест с count-полями и JSON-ключами",
+        "internal/egress/dm/sender_test.go — обновлён testDiffReadyEvent(), JSON format test, round-trip test",
+        "internal/application/comparison/orchestrator_test.go — добавлены проверки TextDiffCount/StructuralDiffCount в diffEvent"
+      ]
     },
     {
       "id": "TASK-053",

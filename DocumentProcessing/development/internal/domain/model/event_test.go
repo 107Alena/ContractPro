@@ -231,6 +231,8 @@ func TestDocumentVersionDiffReady_JSONRoundTrip(t *testing.T) {
 		StructuralDiffs: []StructuralDiffEntry{
 			{Type: DiffTypeAdded, NodeType: NodeTypeClause, NodeID: "clause-5"},
 		},
+		TextDiffCount:       1,
+		StructuralDiffCount: 1,
 	}
 
 	data, err := json.Marshal(original)
@@ -251,6 +253,23 @@ func TestDocumentVersionDiffReady_JSONRoundTrip(t *testing.T) {
 	}
 	if len(restored.StructuralDiffs) != 1 {
 		t.Errorf("StructuralDiffs length = %d, want 1", len(restored.StructuralDiffs))
+	}
+	if restored.TextDiffCount != 1 {
+		t.Errorf("TextDiffCount = %d, want 1", restored.TextDiffCount)
+	}
+	if restored.StructuralDiffCount != 1 {
+		t.Errorf("StructuralDiffCount = %d, want 1", restored.StructuralDiffCount)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, ok := m["text_diff_count"]; !ok {
+		t.Error("JSON missing key text_diff_count")
+	}
+	if _, ok := m["structural_diff_count"]; !ok {
+		t.Error("JSON missing key structural_diff_count")
 	}
 }
 

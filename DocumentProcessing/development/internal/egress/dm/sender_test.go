@@ -139,6 +139,8 @@ func testDiffReadyEvent() model.DocumentVersionDiffReady {
 				Description: "Section 3 removed",
 			},
 		},
+		TextDiffCount:       2,
+		StructuralDiffCount: 1,
 	}
 }
 
@@ -246,6 +248,7 @@ func TestSendDiffResult_JSONFormat(t *testing.T) {
 	for _, key := range []string{
 		"correlation_id", "timestamp", "job_id", "document_id",
 		"base_version_id", "target_version_id", "text_diffs", "structural_diffs",
+		"text_diff_count", "structural_diff_count",
 	} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("missing key %q in JSON payload", key)
@@ -406,6 +409,12 @@ func TestSendDiffResult_RoundTrip(t *testing.T) {
 	}
 	if got.StructuralDiffs[0].Description != want.StructuralDiffs[0].Description {
 		t.Errorf("StructuralDiffs[0].Description = %q, want %q", got.StructuralDiffs[0].Description, want.StructuralDiffs[0].Description)
+	}
+	if got.TextDiffCount != want.TextDiffCount {
+		t.Errorf("TextDiffCount = %d, want %d", got.TextDiffCount, want.TextDiffCount)
+	}
+	if got.StructuralDiffCount != want.StructuralDiffCount {
+		t.Errorf("StructuralDiffCount = %d, want %d", got.StructuralDiffCount, want.StructuralDiffCount)
 	}
 }
 

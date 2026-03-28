@@ -37,12 +37,14 @@ type GetSemanticTreeRequest struct {
 // two document versions and sends the diff result to DM.
 type DocumentVersionDiffReady struct {
 	EventMeta
-	JobID           string                `json:"job_id"`
-	DocumentID      string                `json:"document_id"`
-	BaseVersionID   string                `json:"base_version_id"`
-	TargetVersionID string                `json:"target_version_id"`
-	TextDiffs       []TextDiffEntry       `json:"text_diffs"`
-	StructuralDiffs []StructuralDiffEntry `json:"structural_diffs"`
+	JobID               string                `json:"job_id"`
+	DocumentID          string                `json:"document_id"`
+	BaseVersionID       string                `json:"base_version_id"`
+	TargetVersionID     string                `json:"target_version_id"`
+	TextDiffs           []TextDiffEntry       `json:"text_diffs"`
+	StructuralDiffs     []StructuralDiffEntry `json:"structural_diffs"`
+	TextDiffCount       int                   `json:"text_diff_count"`
+	StructuralDiffCount int                   `json:"structural_diff_count"`
 }
 
 // --- Events: Document Management → DP (responses) ---

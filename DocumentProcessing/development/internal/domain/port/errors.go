@@ -21,8 +21,9 @@ const (
 	ErrCodeDuplicateJob        = "DUPLICATE_JOB"
 	ErrCodeConcurrencyLimit    = "CONCURRENCY_LIMIT"
 	ErrCodeDMVersionNotFound   = "DM_VERSION_NOT_FOUND"
-	ErrCodeDMDiffPersistFailed = "DM_DIFF_PERSIST_FAILED"
-	ErrCodeSSRFBlocked         = "SSRF_BLOCKED"
+	ErrCodeDMDiffPersistFailed      = "DM_DIFF_PERSIST_FAILED"
+	ErrCodeDMArtifactsPersistFailed = "DM_ARTIFACTS_PERSIST_FAILED"
+	ErrCodeSSRFBlocked              = "SSRF_BLOCKED"
 )
 
 // DomainError represents a typed domain error with machine-readable code
@@ -137,6 +138,17 @@ func NewDMVersionNotFoundError(versionID string, cause error) *DomainError {
 func NewDMDiffPersistFailedError(msg string, retryable bool, cause error) *DomainError {
 	return &DomainError{
 		Code:      ErrCodeDMDiffPersistFailed,
+		Message:   msg,
+		Retryable: retryable,
+		Cause:     cause,
+	}
+}
+
+// NewDMArtifactsPersistFailedError creates an error for DM artifact persist failures.
+// The retryable flag is taken directly from the DM event's is_retryable field.
+func NewDMArtifactsPersistFailedError(msg string, retryable bool, cause error) *DomainError {
+	return &DomainError{
+		Code:      ErrCodeDMArtifactsPersistFailed,
 		Message:   msg,
 		Retryable: retryable,
 		Cause:     cause,

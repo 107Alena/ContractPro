@@ -1089,7 +1089,9 @@
         "Шаг 6: проверить, что таймаут при ожидании DM → TIMED_OUT"
       ],
       "dependencies": ["TASK-035", "TASK-036", "TASK-034"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-28",
+      "implementation_notes": "Implemented DMConfirmationAwaiterPort + Awaiter (application/dmconfirmation/). Processing orchestrator now Register → SendArtifacts → WAITING_DM_CONFIRMATION → Await → retry on retryable DM failures. dmResponseHandler calls Confirm/Reject on awaiter. New error code ErrCodeDMArtifactsPersistFailed. 36 new tests across 3 packages."
     },
     {
       "id": "TASK-047",

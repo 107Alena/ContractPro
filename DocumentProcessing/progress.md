@@ -1928,3 +1928,35 @@ idempotency, malformed input, artifact format.
 - Pending high: TASK-049 (Prometheus metrics endpoint), TASK-050 (DLQ)
 - Pending medium: TASK-051, TASK-052, TASK-053
 - Pending low: TASK-054 (docs)
+
+### TASK-046 — Processing Pipeline: WAITING_DM_CONFIRMATION
+**Статус:** done
+**Дата:** 2026-03-28
+
+**План реализации:**
+1. Новый порт DMConfirmationAwaiterPort + DMConfirmationResult (port/outbound.go)
+2. Новый код ошибки ErrCodeDMArtifactsPersistFailed (port/errors.go)
+3. Реализация Awaiter (application/dmconfirmation/awaiter.go) — channel-based per-job confirmation
+4. Модификация Processing Orchestrator: Register → SendArtifacts → WAITING_DM_CONFIRMATION → Await → retry loop
+5. Модификация dmResponseHandler: HandleArtifactsPersisted → Confirm, HandleArtifactsPersistFailed → Reject
+6. Wiring в app.go: dmconfirmation.NewAwaiter, передача в orchestrator и dmHandler
+7. Обновление существующих тестов (mockDMAwaiter + новый параметр)
+8. Новые тесты: awaiter (26 тестов), orchestrator DM confirmation (5 тестов), dmhandler (5 тестов)
+9. Code review → исправление замечания (retryStep для re-send в retry loop)
+
+**Summary:**
+- Реализован DMConfirmationAwaiterPort — application-layer компонент для ожидания подтверждения сохранения артефактов от DM
+- Awaiter: Register/Await/Confirm/Reject/Cancel — thread-safe, sync.Once для channel close, idempotent Confirm/Reject
+- Processing pipeline теперь: ...SAVING_ARTIFACTS → WAITING_DM_CONFIRMATION → CLEANUP → COMPLETED
+- На ArtifactsPersisted → COMPLETED, на PersistFailed(retryable) → retry с backoff, на PersistFailed(non-retryable) → FAILED
+- Таймаут контекста → TIMED_OUT (context.DeadlineExceeded propagated)
+- dmResponseHandler: HandleArtifactsPersisted вызывает Confirm, HandleArtifactsPersistFailed — Reject с DomainError
+- Code review: 0 critical, замечание по retryStep в retry loop исправлено
+- 31 пакет PASS с -race, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- Pending critical: TASK-047 (DM confirmation routing for comparison pipeline)
+- Pending high: TASK-049 (Prometheus metrics endpoint), TASK-050 (DLQ)
+- Pending medium: TASK-051, TASK-052, TASK-053
+- Pending low: TASK-054 (docs)
+- DMConfirmationAwaiter может быть расширен для comparison pipeline (diff persist confirmation) в TASK-047

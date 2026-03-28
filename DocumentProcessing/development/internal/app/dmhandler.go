@@ -14,30 +14,55 @@ var _ port.DMResponseHandler = (*dmResponseHandler)(nil)
 // dmResponseHandler is a composite that dispatches DM response events to the
 // appropriate application-layer handler. It satisfies port.DMResponseHandler.
 //
-// Artifacts persisted/failed events are logged (actual delegation to the
-// processing orchestrator will be wired once it exposes DM response methods).
+// Artifacts persisted/failed events are dispatched to the DMConfirmationAwaiterPort,
+// which unblocks the processing orchestrator waiting in WAITING_DM_CONFIRMATION.
 //
-// Diff persisted/failed events are handled similarly for the comparison path.
+// Diff persisted/failed events are logged (delegation to the comparison pipeline
+// will be wired once it exposes DM diff confirmation methods).
 //
 // SemanticTreeProvided is dispatched directly by the DM Receiver to the
 // PendingResponseRegistry, so the method here is a no-op safety net.
 type dmResponseHandler struct {
-	logger *observability.Logger
+	dmAwaiter port.DMConfirmationAwaiterPort
+	logger    *observability.Logger
 }
 
-func newDMResponseHandler(logger *observability.Logger) *dmResponseHandler {
-	return &dmResponseHandler{logger: logger}
+func newDMResponseHandler(
+	dmAwaiter port.DMConfirmationAwaiterPort,
+	logger *observability.Logger,
+) *dmResponseHandler {
+	return &dmResponseHandler{
+		dmAwaiter: dmAwaiter,
+		logger:    logger,
+	}
 }
 
 func (h *dmResponseHandler) HandleArtifactsPersisted(ctx context.Context, event model.DocumentProcessingArtifactsPersisted) error {
 	h.logger.Info(ctx, "artifacts persisted by DM",
 		"job_id", event.JobID, "document_id", event.DocumentID)
+
+	if err := h.dmAwaiter.Confirm(event.JobID); err != nil {
+		h.logger.Warn(ctx, "dmAwaiter.Confirm returned error",
+			"job_id", event.JobID, "error", err)
+	}
 	return nil
 }
 
 func (h *dmResponseHandler) HandleArtifactsPersistFailed(ctx context.Context, event model.DocumentProcessingArtifactsPersistFailed) error {
 	h.logger.Warn(ctx, "artifacts persist failed by DM",
-		"job_id", event.JobID, "document_id", event.DocumentID, "error", event.ErrorMessage)
+		"job_id", event.JobID,
+		"document_id", event.DocumentID,
+		"error", event.ErrorMessage,
+		"is_retryable", event.IsRetryable,
+	)
+
+	dmErr := port.NewDMArtifactsPersistFailedError(
+		event.ErrorMessage, event.IsRetryable, nil)
+
+	if err := h.dmAwaiter.Reject(event.JobID, dmErr); err != nil {
+		h.logger.Warn(ctx, "dmAwaiter.Reject returned error",
+			"job_id", event.JobID, "error", err)
+	}
 	return nil
 }
 

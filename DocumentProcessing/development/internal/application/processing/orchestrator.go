@@ -31,10 +31,8 @@ var rejectedCodes = map[string]bool{
 //
 //	VALIDATING_INPUT -> FETCHING_SOURCE_FILE (includes file format/page validation) ->
 //	OCR/OCR_SKIPPED -> TEXT_EXTRACTION -> STRUCTURE_EXTRACTION ->
-//	SEMANTIC_TREE_BUILDING -> SAVING_ARTIFACTS -> CLEANUP_TEMP_ARTIFACTS
-//
-// NOTE: WAITING_DM_CONFIRMATION is currently a no-op placeholder until TASK-046
-// implements DM confirmation flow.
+//	SEMANTIC_TREE_BUILDING -> SAVING_ARTIFACTS -> WAITING_DM_CONFIRMATION ->
+//	CLEANUP_TEMP_ARTIFACTS
 //
 // Warnings are collected per-job in a local slice within runPipeline,
 // ensuring concurrent HandleProcessDocument calls are fully isolated.
@@ -49,6 +47,7 @@ type Orchestrator struct {
 	tempStorage   port.TempStoragePort
 	publisher     port.EventPublisherPort
 	dmSender      port.DMArtifactSenderPort
+	dmAwaiter     port.DMConfirmationAwaiterPort
 	logger        *observability.Logger
 	maxRetries    int
 	backoffBase   time.Duration
@@ -68,6 +67,7 @@ func NewOrchestrator(
 	tempStorage port.TempStoragePort,
 	publisher port.EventPublisherPort,
 	dmSender port.DMArtifactSenderPort,
+	dmAwaiter port.DMConfirmationAwaiterPort,
 	logger *observability.Logger,
 	maxRetries int,
 	backoffBase time.Duration,
@@ -102,6 +102,9 @@ func NewOrchestrator(
 	if dmSender == nil {
 		panic("processing: dm sender must not be nil")
 	}
+	if dmAwaiter == nil {
+		panic("processing: dm awaiter must not be nil")
+	}
 	if logger == nil {
 		panic("processing: logger must not be nil")
 	}
@@ -122,6 +125,7 @@ func NewOrchestrator(
 		tempStorage:   tempStorage,
 		publisher:     publisher,
 		dmSender:      dmSender,
+		dmAwaiter:     dmAwaiter,
 		logger:        logger.With("component", "processing"),
 		maxRetries:    maxRetries,
 		backoffBase:   backoffBase,
@@ -277,9 +281,24 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 		SemanticTree: *semanticTree,
 		Warnings:     allWarnings,
 	}
+
+	// Register confirmation BEFORE sending, so an immediate DM response
+	// is captured even if DM processes it faster than we reach Await.
+	if err := o.dmAwaiter.Register(cmd.JobID); err != nil {
+		return err
+	}
 	if err := o.retryStep(ctx, func() error {
 		return o.dmSender.SendArtifacts(ctx, artifactsEvent)
 	}); err != nil {
+		o.dmAwaiter.Cancel(cmd.JobID)
+		return err
+	}
+
+	// --- Stage 7.5: WAITING_DM_CONFIRMATION ---
+	job.Stage = model.ProcessingStageWaitingDM
+	ctx = observability.WithStage(ctx, string(job.Stage))
+	o.logger.Info(ctx, "pipeline stage started")
+	if err := o.awaitDMConfirmation(ctx, cmd, artifactsEvent); err != nil {
 		return err
 	}
 
@@ -323,6 +342,71 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 	return nil
 }
 
+// awaitDMConfirmation waits for DM to confirm artifact persistence.
+// On retryable DM failures, it re-sends artifacts and re-waits,
+// up to o.maxRetries total attempts. Uses exponential backoff between retries.
+func (o *Orchestrator) awaitDMConfirmation(
+	ctx context.Context,
+	cmd model.ProcessDocumentCommand,
+	artifactsEvent model.DocumentProcessingArtifactsReady,
+) error {
+	for attempt := 0; attempt < o.maxRetries; attempt++ {
+		result, err := o.dmAwaiter.Await(ctx, cmd.JobID)
+		if err != nil {
+			// Context timeout/cancellation — propagate immediately.
+			return err
+		}
+
+		if result.Err == nil {
+			// DM confirmed success.
+			o.logger.Info(ctx, "DM confirmed artifacts persisted")
+			return nil
+		}
+
+		// DM reported failure.
+		o.logger.Warn(ctx, "DM artifacts persist failed",
+			"attempt", attempt+1,
+			"max_retries", o.maxRetries,
+			"error", result.Err,
+			"is_retryable", port.IsRetryable(result.Err),
+		)
+
+		if !port.IsRetryable(result.Err) {
+			return result.Err
+		}
+
+		// Last attempt: return the error, do not retry.
+		if attempt == o.maxRetries-1 {
+			return result.Err
+		}
+
+		// Exponential backoff before re-send.
+		delay := o.backoffBase * (1 << uint(attempt))
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		// Re-register and re-send artifacts for the next attempt.
+		if err := o.dmAwaiter.Register(cmd.JobID); err != nil {
+			return err
+		}
+		artifactsEvent.Timestamp = time.Now().UTC()
+		if err := o.retryStep(ctx, func() error {
+			return o.dmSender.SendArtifacts(ctx, artifactsEvent)
+		}); err != nil {
+			o.dmAwaiter.Cancel(cmd.JobID)
+			return err
+		}
+	}
+
+	return port.NewDMArtifactsPersistFailedError(
+		"DM confirmation retries exhausted", false, nil)
+}
+
 // handlePipelineError handles a pipeline failure: transitions the job to the
 // appropriate terminal status, publishes a ProcessingFailedEvent, and performs
 // best-effort cleanup. All side effects use context.Background() since the
@@ -351,6 +435,9 @@ func (o *Orchestrator) handlePipelineError(
 		"failed_at_stage", string(job.Stage),
 		"is_retryable", isRetryable,
 	)
+
+	// Cancel any pending DM confirmation (best-effort: always safe to call).
+	o.dmAwaiter.Cancel(cmd.JobID)
 
 	// Transition job to terminal status (best-effort: log and continue on failure).
 	if err := o.lifecycle.TransitionJob(bgCtx, job, terminalStatus); err != nil {

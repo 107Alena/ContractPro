@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"contractpro/document-processing/internal/application/comparison"
+	"contractpro/document-processing/internal/application/dmconfirmation"
 	"contractpro/document-processing/internal/application/lifecycle"
 	"contractpro/document-processing/internal/application/pendingresponse"
 	"contractpro/document-processing/internal/application/processing"
@@ -152,11 +153,14 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		eventPublisher, idempotencyStore, cfg.Limits.JobTimeout, cleanupFunc, obs.Logger,
 	)
 
+	dmAwaiter := dmconfirmation.NewAwaiter()
+
 	procOrch := processing.NewOrchestrator(
 		lifecycleMgr,
 		inputValidator, fileFetcher, ocrAdapter,
 		textExtractor, structExtractor, treeBuilder,
 		tempStorage, eventPublisher, dmSender,
+		dmAwaiter,
 		obs.Logger,
 		cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase,
 	)
@@ -170,7 +174,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	)
 
 	// --- Group 6: DM response handler ---
-	dmHandler := newDMResponseHandler(obs.Logger)
+	dmHandler := newDMResponseHandler(dmAwaiter, obs.Logger)
 
 	// --- Group 7: Ingress layer ---
 	brokerSub := &brokerSubscribeAdapter{client: brokerCli}

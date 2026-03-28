@@ -87,6 +87,50 @@ type ConcurrencyLimiterPort interface {
 	Release()
 }
 
+// DMConfirmationResult carries the outcome of a DM persistence confirmation.
+// On success, Err is nil. On failure, Err is a *DomainError with the
+// appropriate error code and retryable flag derived from the DM event.
+type DMConfirmationResult struct {
+	JobID string
+	Err   error // nil on success; *DomainError on failure
+}
+
+// DMConfirmationAwaiterPort tracks pending DM persistence confirmations.
+// The orchestrator calls Register before sending artifacts, then Await
+// to block until confirmation arrives or context expires.
+// The DM response handler calls Confirm or Reject to deliver the result.
+//
+// Implemented by: DM Confirmation Awaiter (application layer).
+// Used by: Processing Orchestrator (Register, Await, Cancel),
+//
+//	DM Response Handler (Confirm, Reject).
+type DMConfirmationAwaiterPort interface {
+	// Register creates a pending confirmation slot for the given job.
+	// Must be called before sending artifacts to DM.
+	// Returns an error if the job is already registered.
+	Register(jobID string) error
+
+	// Await blocks until the confirmation for jobID arrives or ctx expires.
+	// Returns DMConfirmationResult on success/failure, or ctx.Err() on timeout.
+	// Cleans up the entry on return.
+	Await(ctx context.Context, jobID string) (DMConfirmationResult, error)
+
+	// Confirm signals that DM successfully persisted artifacts for the job.
+	// Idempotent: ignores duplicate or post-cancel confirms.
+	// Returns an error if the job is not registered.
+	Confirm(jobID string) error
+
+	// Reject signals that DM failed to persist artifacts for the job.
+	// The error should be a *DomainError with appropriate retryable flag.
+	// Idempotent: ignores duplicate or post-cancel rejects.
+	// Returns an error if the job is not registered.
+	Reject(jobID string, err error) error
+
+	// Cancel removes a pending confirmation, unblocking any Await call.
+	// Safe to call multiple times or on non-existent jobs.
+	Cancel(jobID string)
+}
+
 // PendingResponse holds one correlated response from Document Management.
 // Tree is non-nil on success; Err is non-nil on failure. Exactly one is set.
 type PendingResponse struct {

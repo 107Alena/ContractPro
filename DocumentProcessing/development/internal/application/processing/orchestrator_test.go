@@ -194,6 +194,55 @@ func (m *mockDMSender) SendDiffResult(_ context.Context, _ model.DocumentVersion
 	return nil
 }
 
+// mockDMAwaiter implements port.DMConfirmationAwaiterPort.
+// By default it auto-confirms on Await (no blocking), suitable for tests
+// that don't exercise the DM confirmation path.
+// All methods are guarded by a mutex so the mock is safe for concurrent use
+// (e.g. TestConcurrentJobs_WarningIsolation).
+type mockDMAwaiter struct {
+	mu         sync.Mutex
+	registered []string
+	confirmed  []string
+	rejected   map[string]error
+	awaitFunc  func(ctx context.Context, jobID string) (port.DMConfirmationResult, error)
+}
+
+func (m *mockDMAwaiter) Register(jobID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.registered = append(m.registered, jobID)
+	return nil
+}
+
+func (m *mockDMAwaiter) Await(ctx context.Context, jobID string) (port.DMConfirmationResult, error) {
+	m.mu.Lock()
+	fn := m.awaitFunc
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, jobID)
+	}
+	return port.DMConfirmationResult{JobID: jobID}, nil
+}
+
+func (m *mockDMAwaiter) Confirm(jobID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.confirmed = append(m.confirmed, jobID)
+	return nil
+}
+
+func (m *mockDMAwaiter) Reject(jobID string, err error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.rejected == nil {
+		m.rejected = make(map[string]error)
+	}
+	m.rejected[jobID] = err
+	return nil
+}
+
+func (m *mockDMAwaiter) Cancel(jobID string) {}
+
 // callCountOCRProcessor counts invocations and fails until failUntil is reached.
 type callCountOCRProcessor struct {
 	callCount     int
@@ -305,6 +354,7 @@ type testDeps struct {
 	treeBuilder   *mockTreeBuilder
 	tempStorage   *mockTempStorage
 	dmSender      *mockDMSender
+	dmAwaiter     *mockDMAwaiter
 }
 
 // newTestDeps creates testDeps pre-configured for a successful happy-path
@@ -323,6 +373,7 @@ func newTestDeps() *testDeps {
 		treeBuilder:   &mockTreeBuilder{tree: defaultSemanticTree()},
 		tempStorage:   &mockTempStorage{},
 		dmSender:      &mockDMSender{},
+		dmAwaiter:     &mockDMAwaiter{},
 	}
 }
 
@@ -340,6 +391,7 @@ func (d *testDeps) buildOrchestrator() *Orchestrator {
 		d.tempStorage,
 		d.publisher,
 		d.dmSender,
+		d.dmAwaiter,
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -360,6 +412,7 @@ func (d *testDeps) buildOrchestratorWithRetry(maxRetries int, backoff time.Durat
 		d.tempStorage,
 		d.publisher,
 		d.dmSender,
+		d.dmAwaiter,
 		nopLogger(),
 		maxRetries,
 		backoff,
@@ -379,6 +432,7 @@ func (d *testDeps) buildOrchestratorWithOCR(ocrProc port.OCRProcessorPort, maxRe
 		d.tempStorage,
 		d.publisher,
 		d.dmSender,
+		d.dmAwaiter,
 		nopLogger(),
 		maxRetries,
 		backoff,
@@ -399,6 +453,7 @@ func (d *testDeps) buildOrchestratorWithDMSender(sender port.DMArtifactSenderPor
 		d.tempStorage,
 		d.publisher,
 		sender,
+		d.dmAwaiter,
 		nopLogger(),
 		maxRetries,
 		backoff,
@@ -904,6 +959,7 @@ func TestPublishCompletedError_ReturnsError(t *testing.T) {
 		deps.tempStorage,
 		specialPub,
 		deps.dmSender,
+		&mockDMAwaiter{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -1062,6 +1118,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 		&mockTempStorage{},
 		pub,
 		&mockDMSender{},
+		&mockDMAwaiter{},
 		nopLogger(),
 	}
 
@@ -1069,7 +1126,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 	depNames := []string{
 		"lifecycle", "validator", "fetcher", "ocrProcessor",
 		"textExtract", "structExtract", "treeBuilder",
-		"tempStorage", "publisher", "dmSender", "logger",
+		"tempStorage", "publisher", "dmSender", "dmAwaiter", "logger",
 	}
 
 	for i, name := range depNames {
@@ -1096,7 +1153,8 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 				asTempStorage(args[7]),
 				asPublisher(args[8]),
 				asDMSender(args[9]),
-				asLogger(args[10]),
+				asDMAwaiter(args[10]),
+				asLogger(args[11]),
 				1,
 				time.Millisecond,
 			)
@@ -1175,6 +1233,13 @@ func asDMSender(v interface{}) port.DMArtifactSenderPort {
 	return v.(port.DMArtifactSenderPort)
 }
 
+func asDMAwaiter(v interface{}) port.DMConfirmationAwaiterPort {
+	if v == nil {
+		return nil
+	}
+	return v.(port.DMConfirmationAwaiterPort)
+}
+
 func asLogger(v interface{}) *observability.Logger {
 	if v == nil {
 		return nil
@@ -1244,6 +1309,7 @@ func TestContextCancellation_ReturnsError(t *testing.T) {
 		deps.tempStorage,
 		deps.publisher,
 		deps.dmSender,
+		&mockDMAwaiter{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -2008,6 +2074,7 @@ func TestConcurrentJobs_WarningIsolation(t *testing.T) {
 		tempStorage,
 		pub,
 		dmSender,
+		&mockDMAwaiter{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -2152,4 +2219,244 @@ func (f *jobAwareFetcher) Fetch(_ context.Context, cmd model.ProcessDocumentComm
 		return nil, port.NewFileNotFoundError("unknown job: "+cmd.JobID, nil)
 	}
 	return result, nil
+}
+
+// --- Tests: DM Confirmation ---
+
+func TestDMConfirmation_HappyPath(t *testing.T) {
+	deps := newTestDeps()
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify dmAwaiter.registered contains the jobID (Register is called
+	// before sending artifacts, so it must have been recorded).
+	if len(deps.dmAwaiter.registered) < 1 {
+		t.Fatal("expected at least 1 registration in dmAwaiter")
+	}
+	found := false
+	for _, id := range deps.dmAwaiter.registered {
+		if id == "job-1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected dmAwaiter.registered to contain job-1, got %v", deps.dmAwaiter.registered)
+	}
+
+	// Verify pipeline completed successfully.
+	if len(deps.publisher.processingCompleted) != 1 {
+		t.Fatalf("expected 1 ProcessingCompletedEvent, got %d", len(deps.publisher.processingCompleted))
+	}
+	if deps.publisher.processingCompleted[0].Status != model.StatusCompleted {
+		t.Errorf("expected COMPLETED, got %s", deps.publisher.processingCompleted[0].Status)
+	}
+
+	// No failure events.
+	if len(deps.publisher.processingFailed) != 0 {
+		t.Errorf("expected 0 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+}
+
+func TestDMConfirmation_RetryableFailureThenSuccess(t *testing.T) {
+	deps := newTestDeps()
+
+	callCount := 0
+	deps.dmAwaiter.awaitFunc = func(_ context.Context, jobID string) (port.DMConfirmationResult, error) {
+		callCount++
+		if callCount == 1 {
+			// First call: DM reports a retryable failure.
+			return port.DMConfirmationResult{
+				JobID: jobID,
+				Err:   port.NewDMArtifactsPersistFailedError("transient DM failure", true, nil),
+			}, nil
+		}
+		// Second call: success.
+		return port.DMConfirmationResult{JobID: jobID}, nil
+	}
+
+	orch := deps.buildOrchestratorWithRetry(3, time.Millisecond)
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("expected no error after retry success, got: %v", err)
+	}
+
+	// Verify pipeline completed.
+	if len(deps.publisher.processingCompleted) != 1 {
+		t.Fatalf("expected 1 ProcessingCompletedEvent, got %d", len(deps.publisher.processingCompleted))
+	}
+	if deps.publisher.processingCompleted[0].Status != model.StatusCompleted {
+		t.Errorf("expected COMPLETED, got %s", deps.publisher.processingCompleted[0].Status)
+	}
+
+	// Verify dmSender.sentArtifacts has 2 entries: original send + retry resend.
+	if len(deps.dmSender.sentArtifacts) != 2 {
+		t.Fatalf("expected 2 SendArtifacts calls (original + retry), got %d", len(deps.dmSender.sentArtifacts))
+	}
+
+	// Verify dmAwaiter.registered has 2 entries: original + retry.
+	if len(deps.dmAwaiter.registered) != 2 {
+		t.Fatalf("expected 2 Register calls (original + retry), got %d", len(deps.dmAwaiter.registered))
+	}
+	for _, id := range deps.dmAwaiter.registered {
+		if id != "job-1" {
+			t.Errorf("expected all registrations for job-1, got %s", id)
+		}
+	}
+}
+
+func TestDMConfirmation_NonRetryableFailure(t *testing.T) {
+	deps := newTestDeps()
+
+	deps.dmAwaiter.awaitFunc = func(_ context.Context, jobID string) (port.DMConfirmationResult, error) {
+		return port.DMConfirmationResult{
+			JobID: jobID,
+			Err:   port.NewDMArtifactsPersistFailedError("permanent DM failure", false, nil),
+		}, nil
+	}
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var domErr *port.DomainError
+	if !errors.As(err, &domErr) {
+		t.Fatalf("expected DomainError, got %T: %v", err, err)
+	}
+	if domErr.Code != port.ErrCodeDMArtifactsPersistFailed {
+		t.Errorf("expected error code %s, got %s", port.ErrCodeDMArtifactsPersistFailed, domErr.Code)
+	}
+
+	// Verify pipeline failed with FAILED status.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	failed := deps.publisher.processingFailed[0]
+	if failed.Status != model.StatusFailed {
+		t.Errorf("expected FAILED, got %s", failed.Status)
+	}
+	if failed.ErrorCode != port.ErrCodeDMArtifactsPersistFailed {
+		t.Errorf("expected error code %s, got %s", port.ErrCodeDMArtifactsPersistFailed, failed.ErrorCode)
+	}
+
+	// Verify stage is WAITING_DM_CONFIRMATION.
+	if failed.FailedAtStage != string(model.ProcessingStageWaitingDM) {
+		t.Errorf("expected FailedAtStage %s, got %s", model.ProcessingStageWaitingDM, failed.FailedAtStage)
+	}
+
+	// No completion event.
+	if len(deps.publisher.processingCompleted) != 0 {
+		t.Error("no ProcessingCompletedEvent should be published on DM confirmation failure")
+	}
+}
+
+func TestDMConfirmation_RetryExhausted(t *testing.T) {
+	deps := newTestDeps()
+
+	// awaitFunc always returns a retryable error.
+	deps.dmAwaiter.awaitFunc = func(_ context.Context, jobID string) (port.DMConfirmationResult, error) {
+		return port.DMConfirmationResult{
+			JobID: jobID,
+			Err:   port.NewDMArtifactsPersistFailedError("transient DM failure", true, nil),
+		}, nil
+	}
+
+	orch := deps.buildOrchestratorWithRetry(2, time.Millisecond)
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error after exhausted retries, got nil")
+	}
+
+	// Verify pipeline failed with FAILED status (not TIMED_OUT).
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	failed := deps.publisher.processingFailed[0]
+	if failed.Status != model.StatusFailed {
+		t.Errorf("expected FAILED, got %s", failed.Status)
+	}
+	if failed.Status == model.StatusTimedOut {
+		t.Error("expected FAILED, not TIMED_OUT")
+	}
+
+	// Verify dmSender.sentArtifacts has 2 entries: original send + 1 retry resend.
+	// (maxRetries=2 means 2 total attempts in awaitDMConfirmation; the first
+	// attempt uses the original send, the second re-sends.)
+	if len(deps.dmSender.sentArtifacts) != 2 {
+		t.Fatalf("expected 2 SendArtifacts calls (original + 1 retry), got %d", len(deps.dmSender.sentArtifacts))
+	}
+
+	// No completion event.
+	if len(deps.publisher.processingCompleted) != 0 {
+		t.Error("no ProcessingCompletedEvent should be published when retries exhausted")
+	}
+}
+
+func TestDMConfirmation_ContextTimeout(t *testing.T) {
+	deps := newTestDeps()
+
+	// awaitFunc returns ctx.Err() to simulate a timeout during DM wait.
+	deps.dmAwaiter.awaitFunc = func(ctx context.Context, _ string) (port.DMConfirmationResult, error) {
+		// Ensure the context is done (it should be, given the very short deadline).
+		<-ctx.Done()
+		return port.DMConfirmationResult{}, ctx.Err()
+	}
+
+	// Build orchestrator with a very short job timeout so the context expires.
+	ocrAdapter := ocr.NewAdapter(deps.ocrService, deps.tempStorage, 10, 1, time.Second)
+	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 1*time.Millisecond, nil, nopLogger())
+	orch := NewOrchestrator(
+		lm,
+		deps.validator,
+		deps.fetcher,
+		ocrAdapter,
+		deps.textExtractor,
+		deps.structExtract,
+		deps.treeBuilder,
+		deps.tempStorage,
+		deps.publisher,
+		deps.dmSender,
+		deps.dmAwaiter,
+		nopLogger(),
+		1,
+		time.Millisecond,
+	)
+
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error on context timeout, got nil")
+	}
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected context.DeadlineExceeded, got: %v", err)
+	}
+
+	// Verify pipeline failed with TIMED_OUT status.
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	failed := deps.publisher.processingFailed[0]
+	if failed.Status != model.StatusTimedOut {
+		t.Errorf("expected TIMED_OUT, got %s", failed.Status)
+	}
+
+	// No completion event.
+	if len(deps.publisher.processingCompleted) != 0 {
+		t.Error("no ProcessingCompletedEvent should be published on context timeout")
+	}
 }

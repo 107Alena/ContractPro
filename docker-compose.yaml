@@ -1,0 +1,79 @@
+# =============================================================================
+# ContractPro — Development Environment
+# =============================================================================
+# Usage:
+#   docker compose up --build        — build and start all services
+#   docker compose up -d             — start in background
+#   docker compose logs -f dp-worker — follow worker logs
+#   docker compose down              — stop and remove containers
+#   docker compose down -v           — stop and remove containers + volumes
+#
+# Prerequisites:
+#   cp DocumentProcessing/development/.env.example DocumentProcessing/development/.env
+#   # Fill in Yandex Cloud credentials (Storage + OCR) in .env
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: cp-rabbitmq
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # Management UI: http://localhost:15672 (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: cp-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Application
+  # ---------------------------------------------------------------------------
+
+  dp-worker:
+    build:
+      context: ./DocumentProcessing/development
+    container_name: cp-dp-worker
+    env_file:
+      - ./DocumentProcessing/development/.env
+    environment:
+      # Override addresses to point to compose network services.
+      DP_BROKER_ADDRESS: amqp://guest:guest@rabbitmq:5672/
+      DP_KVSTORE_ADDRESS: redis:6379
+      DP_LOG_LEVEL: debug
+    ports:
+      - "8080:8080"   # Health / readiness probes
+      - "9090:9090"   # Metrics
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  rabbitmq-data:
+  redis-data:

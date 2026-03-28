@@ -70,6 +70,7 @@ func validateSemanticTreeProvided(event model.SemanticTreeProvided) error {
 }
 
 // validateDiffPersisted checks that all required fields are present.
+// correlation_id is required because it is the routing key for the registry.
 func validateDiffPersisted(event model.DocumentVersionDiffPersisted) error {
 	var missing []string
 	if strings.TrimSpace(event.JobID) == "" {
@@ -77,6 +78,9 @@ func validateDiffPersisted(event model.DocumentVersionDiffPersisted) error {
 	}
 	if strings.TrimSpace(event.DocumentID) == "" {
 		missing = append(missing, "document_id")
+	}
+	if strings.TrimSpace(event.CorrelationID) == "" {
+		missing = append(missing, "correlation_id")
 	}
 	if len(missing) > 0 {
 		return port.NewValidationError(
@@ -87,6 +91,7 @@ func validateDiffPersisted(event model.DocumentVersionDiffPersisted) error {
 }
 
 // validateDiffPersistFailed checks that all required fields are present.
+// correlation_id is required because it is the routing key for the registry.
 func validateDiffPersistFailed(event model.DocumentVersionDiffPersistFailed) error {
 	var missing []string
 	if strings.TrimSpace(event.JobID) == "" {
@@ -94,6 +99,9 @@ func validateDiffPersistFailed(event model.DocumentVersionDiffPersistFailed) err
 	}
 	if strings.TrimSpace(event.DocumentID) == "" {
 		missing = append(missing, "document_id")
+	}
+	if strings.TrimSpace(event.CorrelationID) == "" {
+		missing = append(missing, "correlation_id")
 	}
 	if strings.TrimSpace(event.ErrorMessage) == "" {
 		missing = append(missing, "error_message")

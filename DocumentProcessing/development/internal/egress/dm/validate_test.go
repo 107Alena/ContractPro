@@ -140,6 +140,7 @@ func TestValidateSemanticTreeProvided_AllMissing(t *testing.T) {
 
 func TestValidateDiffPersisted_Valid(t *testing.T) {
 	event := model.DocumentVersionDiffPersisted{
+		EventMeta:  model.EventMeta{CorrelationID: "corr-1"},
 		JobID:      "job-1",
 		DocumentID: "doc-1",
 	}
@@ -150,11 +151,23 @@ func TestValidateDiffPersisted_Valid(t *testing.T) {
 
 func TestValidateDiffPersisted_MissingJobID(t *testing.T) {
 	event := model.DocumentVersionDiffPersisted{
+		EventMeta:  model.EventMeta{CorrelationID: "corr-1"},
 		DocumentID: "doc-1",
 	}
 	err := validateDiffPersisted(event)
 	if err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidateDiffPersisted_MissingCorrelationID(t *testing.T) {
+	event := model.DocumentVersionDiffPersisted{
+		JobID:      "job-1",
+		DocumentID: "doc-1",
+	}
+	err := validateDiffPersisted(event)
+	if err == nil {
+		t.Fatal("expected validation error for missing correlation_id")
 	}
 }
 
@@ -169,6 +182,7 @@ func TestValidateDiffPersisted_AllMissing(t *testing.T) {
 
 func TestValidateDiffPersistFailed_Valid(t *testing.T) {
 	event := model.DocumentVersionDiffPersistFailed{
+		EventMeta:    model.EventMeta{CorrelationID: "corr-1"},
 		JobID:        "job-1",
 		DocumentID:   "doc-1",
 		ErrorMessage: "disk full",
@@ -178,8 +192,21 @@ func TestValidateDiffPersistFailed_Valid(t *testing.T) {
 	}
 }
 
+func TestValidateDiffPersistFailed_MissingCorrelationID(t *testing.T) {
+	event := model.DocumentVersionDiffPersistFailed{
+		JobID:        "job-1",
+		DocumentID:   "doc-1",
+		ErrorMessage: "disk full",
+	}
+	err := validateDiffPersistFailed(event)
+	if err == nil {
+		t.Fatal("expected validation error for missing correlation_id")
+	}
+}
+
 func TestValidateDiffPersistFailed_MissingErrorMessage(t *testing.T) {
 	event := model.DocumentVersionDiffPersistFailed{
+		EventMeta:  model.EventMeta{CorrelationID: "corr-1"},
 		JobID:      "job-1",
 		DocumentID: "doc-1",
 	}

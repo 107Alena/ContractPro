@@ -25,11 +25,13 @@ type BrokerSubscriber interface {
 // Receiver subscribes to DM response topics and dispatches deserialized
 // events to the appropriate application-layer handlers.
 //
-// For artifacts persisted/failed and diff persisted/failed events, the Receiver
-// delegates to a DMResponseHandler (implemented by the orchestrators).
+// For artifacts persisted/failed events, the Receiver delegates to a
+// DMResponseHandler (which routes to the DMConfirmationAwaiterPort for
+// the processing pipeline).
 //
-// For SemanticTreeProvided events, the Receiver calls the PendingResponseRegistry
-// directly, using correlation-based async dispatch.
+// For SemanticTreeProvided, DiffPersisted, and DiffPersistFailed events,
+// the Receiver calls the PendingResponseRegistry directly, using
+// correlation-based async dispatch (for the comparison pipeline).
 type Receiver struct {
 	broker   BrokerSubscriber
 	handler  port.DMResponseHandler
@@ -267,8 +269,13 @@ func (r *Receiver) handleSemanticTreeProvided(ctx context.Context, body []byte) 
 	return nil
 }
 
-// handleDiffPersisted deserializes and dispatches a
-// DocumentVersionDiffPersisted event.
+// handleDiffPersisted deserializes a DocumentVersionDiffPersisted event and
+// dispatches it to the PendingResponseRegistry via Receive to unblock the
+// comparison orchestrator's WAITING_DM_CONFIRMATION stage.
+//
+// This handler bypasses DMResponseHandler because diff confirmations use
+// correlation-based async dispatch through the registry, matching the
+// pattern used by handleSemanticTreeProvided.
 //
 // Always returns nil to prevent poison-pill requeue loops.
 func (r *Receiver) handleDiffPersisted(ctx context.Context, body []byte) error {
@@ -299,14 +306,25 @@ func (r *Receiver) handleDiffPersisted(ctx context.Context, body []byte) error {
 
 	r.logger.Info(ctx, "received diff persisted event")
 
-	if err := r.handler.HandleDiffPersisted(ctx, event); err != nil {
-		r.logger.Warn(ctx, "handle diff persisted returned error", "error", err)
+	if err := r.registry.Receive(event.CorrelationID, model.SemanticTree{}); err != nil {
+		r.logger.Warn(ctx, "registry receive returned error",
+			"error", err,
+		)
 	}
 	return nil
 }
 
-// handleDiffPersistFailed deserializes and dispatches a
-// DocumentVersionDiffPersistFailed event.
+// handleDiffPersistFailed deserializes a DocumentVersionDiffPersistFailed
+// event and dispatches it to the PendingResponseRegistry via ReceiveError
+// to propagate the failure to the comparison orchestrator's
+// WAITING_DM_CONFIRMATION stage.
+//
+// The error is constructed as a typed DomainError with the is_retryable flag
+// from the DM event, so the orchestrator's classifyError can determine the
+// correct terminal status and retry behavior.
+//
+// This handler bypasses DMResponseHandler because diff confirmations use
+// correlation-based async dispatch through the registry.
 //
 // Always returns nil to prevent poison-pill requeue loops.
 func (r *Receiver) handleDiffPersistFailed(ctx context.Context, body []byte) error {
@@ -340,8 +358,11 @@ func (r *Receiver) handleDiffPersistFailed(ctx context.Context, body []byte) err
 		"is_retryable", event.IsRetryable,
 	)
 
-	if err := r.handler.HandleDiffPersistFailed(ctx, event); err != nil {
-		r.logger.Warn(ctx, "handle diff persist failed returned error", "error", err)
+	dmErr := port.NewDMDiffPersistFailedError(event.ErrorMessage, event.IsRetryable, nil)
+	if err := r.registry.ReceiveError(event.CorrelationID, dmErr); err != nil {
+		r.logger.Warn(ctx, "registry receive error returned error",
+			"error", err,
+		)
 	}
 	return nil
 }

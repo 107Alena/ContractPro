@@ -310,3 +310,116 @@ func TestComparisonPipeline_DiffFormat_Complete(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Test 7: DM Receiver routing — DiffPersisted → registry → COMPLETED
+// ---------------------------------------------------------------------------
+
+func TestComparisonPipeline_DiffPersisted_ViaReceiver_Completed(t *testing.T) {
+	h := newComparisonHarnessWithReceiver(t, nil) // nil = success (DiffPersisted)
+
+	cmd := defaultCompareCommand()
+	body := mustMarshal(t, cmd)
+
+	err := h.broker.deliverToTopic(testTopicCompareVersions, body)
+	if err != nil {
+		t.Fatalf("deliverToTopic returned error: %v", err)
+	}
+
+	t.Run("status_transitions", func(t *testing.T) {
+		if got := len(h.publisher.statusChanged); got != 2 {
+			t.Fatalf("expected 2 StatusChangedEvents, got %d", got)
+		}
+		assertStatus(t, "first", h.publisher.statusChanged[0], model.StatusQueued, model.StatusInProgress)
+		assertStatus(t, "second", h.publisher.statusChanged[1], model.StatusInProgress, model.StatusCompleted)
+	})
+
+	t.Run("comparison_completed_event", func(t *testing.T) {
+		if got := len(h.publisher.comparisonCompleted); got != 1 {
+			t.Fatalf("expected 1 ComparisonCompletedEvent, got %d", got)
+		}
+		evt := h.publisher.comparisonCompleted[0]
+		assertEqual(t, "Status", string(model.StatusCompleted), string(evt.Status))
+	})
+
+	t.Run("no_failed_events", func(t *testing.T) {
+		assertIntEqual(t, "ComparisonFailedEvents", 0, len(h.publisher.comparisonFailed))
+	})
+
+	t.Run("diff_sent_to_dm", func(t *testing.T) {
+		h.dmSender.mu.Lock()
+		diffCount := len(h.dmSender.sentDiffs)
+		h.dmSender.mu.Unlock()
+		assertIntEqual(t, "sentDiffs", 1, diffCount)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: DM Receiver routing — DiffPersistFailed (non-retryable) → registry → FAILED
+// ---------------------------------------------------------------------------
+
+func TestComparisonPipeline_DiffPersistFailed_ViaReceiver_Failed(t *testing.T) {
+	h := newComparisonHarnessWithReceiver(t, &diffConfirmError{
+		ErrorMessage: "permanent DM storage failure",
+		IsRetryable:  false,
+	})
+
+	cmd := defaultCompareCommand()
+	body := mustMarshal(t, cmd)
+
+	err := h.broker.deliverToTopic(testTopicCompareVersions, body)
+	if err != nil {
+		t.Fatalf("deliverToTopic returned error: %v", err)
+	}
+
+	t.Run("status_transitions", func(t *testing.T) {
+		if got := len(h.publisher.statusChanged); got != 2 {
+			t.Fatalf("expected 2 StatusChangedEvents, got %d", got)
+		}
+		assertStatus(t, "first", h.publisher.statusChanged[0], model.StatusQueued, model.StatusInProgress)
+		assertStatus(t, "second", h.publisher.statusChanged[1], model.StatusInProgress, model.StatusFailed)
+	})
+
+	t.Run("comparison_failed_event", func(t *testing.T) {
+		if got := len(h.publisher.comparisonFailed); got != 1 {
+			t.Fatalf("expected 1 ComparisonFailedEvent, got %d", got)
+		}
+		evt := h.publisher.comparisonFailed[0]
+		assertEqual(t, "Status", string(model.StatusFailed), string(evt.Status))
+		assertEqual(t, "ErrorCode", port.ErrCodeDMDiffPersistFailed, evt.ErrorCode)
+		assertFalse(t, "IsRetryable", evt.IsRetryable)
+	})
+
+	t.Run("no_completed_events", func(t *testing.T) {
+		assertIntEqual(t, "ComparisonCompletedEvents", 0, len(h.publisher.comparisonCompleted))
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: DM Receiver routing — DiffPersistFailed (retryable) → is_retryable passthrough
+// ---------------------------------------------------------------------------
+
+func TestComparisonPipeline_DiffPersistFailed_ViaReceiver_Retryable(t *testing.T) {
+	h := newComparisonHarnessWithReceiver(t, &diffConfirmError{
+		ErrorMessage: "temporary DM storage failure",
+		IsRetryable:  true,
+	})
+
+	cmd := defaultCompareCommand()
+	body := mustMarshal(t, cmd)
+
+	err := h.broker.deliverToTopic(testTopicCompareVersions, body)
+	if err != nil {
+		t.Fatalf("deliverToTopic returned error: %v", err)
+	}
+
+	t.Run("comparison_failed_event_retryable", func(t *testing.T) {
+		if got := len(h.publisher.comparisonFailed); got != 1 {
+			t.Fatalf("expected 1 ComparisonFailedEvent, got %d", got)
+		}
+		evt := h.publisher.comparisonFailed[0]
+		assertEqual(t, "Status", string(model.StatusFailed), string(evt.Status))
+		assertEqual(t, "ErrorCode", port.ErrCodeDMDiffPersistFailed, evt.ErrorCode)
+		assertTrue(t, "IsRetryable", evt.IsRetryable)
+	})
+}

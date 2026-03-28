@@ -12,13 +12,17 @@ import (
 	"testing"
 	"time"
 
+	"encoding/json"
+
 	compapp "contractpro/document-processing/internal/application/comparison"
+	"contractpro/document-processing/internal/application/dmconfirmation"
 	"contractpro/document-processing/internal/application/lifecycle"
 	"contractpro/document-processing/internal/application/pendingresponse"
 	"contractpro/document-processing/internal/application/processing"
 	"contractpro/document-processing/internal/config"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
+	"contractpro/document-processing/internal/egress/dm"
 	compengine "contractpro/document-processing/internal/engine/comparison"
 	"contractpro/document-processing/internal/infra/concurrency"
 	"contractpro/document-processing/internal/infra/observability"
@@ -237,12 +241,22 @@ type recordingDMSender struct {
 	mu            sync.Mutex
 	sentArtifacts []model.DocumentProcessingArtifactsReady
 	sentDiffs     []model.DocumentVersionDiffReady
+	dmAwaiter     port.DMConfirmationAwaiterPort // auto-confirm on SendArtifacts
 }
 
 func (d *recordingDMSender) SendArtifacts(_ context.Context, event model.DocumentProcessingArtifactsReady) error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	d.sentArtifacts = append(d.sentArtifacts, event)
+	awaiter := d.dmAwaiter
+	d.mu.Unlock()
+
+	// Simulate async DM confirmation for the processing pipeline.
+	if awaiter != nil {
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			_ = awaiter.Confirm(event.JobID)
+		}()
+	}
 	return nil
 }
 
@@ -441,7 +455,8 @@ func newTestHarness(t *testing.T, opts ...harnessOption) *testHarness {
 	publisher := &recordingPublisher{}
 	idempotency := newMemoryIdempotencyStore()
 	tempStorage := newRecordingTempStorage()
-	dmSender := &recordingDMSender{}
+	dmAwaiter := dmconfirmation.NewAwaiter()
+	dmSender := &recordingDMSender{dmAwaiter: dmAwaiter}
 
 	validator := &stubValidator{err: nil}
 	fetcher := &stubFetcher{result: defaultFetchResult()}
@@ -476,6 +491,7 @@ func newTestHarness(t *testing.T, opts ...harnessOption) *testHarness {
 		tempStorage,
 		publisher,
 		dmSender,
+		dmAwaiter,
 		logger,
 		cfg.maxRetries,
 		cfg.backoffBase,
@@ -888,4 +904,212 @@ func baseCorrelationID(cmd model.CompareVersionsCommand) string {
 
 func targetCorrelationID(cmd model.CompareVersionsCommand) string {
 	return fmt.Sprintf("%s:target:%s", cmd.JobID, cmd.TargetVersionID)
+}
+
+// ---------------------------------------------------------------------------
+// 22. receiverConfirmingDMSender — implements port.DMArtifactSenderPort
+// ---------------------------------------------------------------------------
+
+// testDiffPersistedTopic is the topic used for DiffPersisted events from DM.
+const testDiffPersistedTopic = "dm.responses.diff-persisted"
+
+// testDiffPersistFailedTopic is the topic used for DiffPersistFailed events from DM.
+const testDiffPersistFailedTopic = "dm.responses.diff-persist-failed"
+
+var _ port.DMArtifactSenderPort = (*receiverConfirmingDMSender)(nil)
+
+// receiverConfirmingDMSender sends diff results and then delivers DiffPersisted
+// or DiffPersistFailed events through the captureBroker → DM Receiver → registry
+// flow, testing the full end-to-end path.
+type receiverConfirmingDMSender struct {
+	mu            sync.Mutex
+	broker        *captureBroker
+	sentArtifacts []model.DocumentProcessingArtifactsReady
+	sentDiffs     []model.DocumentVersionDiffReady
+	confirmErr    *diffConfirmError // if set, sends DiffPersistFailed instead of DiffPersisted
+	sendErr       error             // if set, SendDiffResult returns this error immediately
+}
+
+type diffConfirmError struct {
+	ErrorMessage string
+	IsRetryable  bool
+}
+
+func (d *receiverConfirmingDMSender) SendArtifacts(_ context.Context, event model.DocumentProcessingArtifactsReady) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.sentArtifacts = append(d.sentArtifacts, event)
+	return nil
+}
+
+func (d *receiverConfirmingDMSender) SendDiffResult(_ context.Context, event model.DocumentVersionDiffReady) error {
+	d.mu.Lock()
+	d.sentDiffs = append(d.sentDiffs, event)
+	sendErr := d.sendErr
+	confirmErr := d.confirmErr
+	broker := d.broker
+	d.mu.Unlock()
+
+	if sendErr != nil {
+		return sendErr
+	}
+
+	// Simulate async DM confirmation by delivering an event through the broker
+	// to the DM Receiver, which routes it to the PendingResponseRegistry.
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+
+		if confirmErr != nil {
+			failedEvent := model.DocumentVersionDiffPersistFailed{
+				EventMeta:    model.EventMeta{CorrelationID: event.CorrelationID, Timestamp: time.Now().UTC()},
+				JobID:        event.JobID,
+				DocumentID:   event.DocumentID,
+				ErrorMessage: confirmErr.ErrorMessage,
+				IsRetryable:  confirmErr.IsRetryable,
+			}
+			body, err := json.Marshal(failedEvent)
+			if err != nil {
+				panic(fmt.Sprintf("receiverConfirmingDMSender: marshal DiffPersistFailed: %v", err))
+			}
+			if err := broker.deliverToTopic(testDiffPersistFailedTopic, body); err != nil {
+				panic(fmt.Sprintf("receiverConfirmingDMSender: deliver DiffPersistFailed: %v", err))
+			}
+		} else {
+			persistedEvent := model.DocumentVersionDiffPersisted{
+				EventMeta:  model.EventMeta{CorrelationID: event.CorrelationID, Timestamp: time.Now().UTC()},
+				JobID:      event.JobID,
+				DocumentID: event.DocumentID,
+			}
+			body, err := json.Marshal(persistedEvent)
+			if err != nil {
+				panic(fmt.Sprintf("receiverConfirmingDMSender: marshal DiffPersisted: %v", err))
+			}
+			if err := broker.deliverToTopic(testDiffPersistedTopic, body); err != nil {
+				panic(fmt.Sprintf("receiverConfirmingDMSender: deliver DiffPersisted: %v", err))
+			}
+		}
+	}()
+
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 23. noopDMResponseHandler — implements port.DMResponseHandler
+// ---------------------------------------------------------------------------
+
+var _ port.DMResponseHandler = (*noopDMResponseHandler)(nil)
+
+type noopDMResponseHandler struct{}
+
+func (n *noopDMResponseHandler) HandleArtifactsPersisted(_ context.Context, _ model.DocumentProcessingArtifactsPersisted) error {
+	return nil
+}
+func (n *noopDMResponseHandler) HandleArtifactsPersistFailed(_ context.Context, _ model.DocumentProcessingArtifactsPersistFailed) error {
+	return nil
+}
+func (n *noopDMResponseHandler) HandleSemanticTreeProvided(_ context.Context, _ model.SemanticTreeProvided) error {
+	return nil
+}
+func (n *noopDMResponseHandler) HandleDiffPersisted(_ context.Context, _ model.DocumentVersionDiffPersisted) error {
+	return nil
+}
+func (n *noopDMResponseHandler) HandleDiffPersistFailed(_ context.Context, _ model.DocumentVersionDiffPersistFailed) error {
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 24. comparisonHarnessWithReceiver
+// ---------------------------------------------------------------------------
+
+type comparisonHarnessWithReceiver struct {
+	broker      *captureBroker
+	publisher   *recordingPublisher
+	idempotency *memoryIdempotencyStore
+	treeReq     *treeRequesterMock
+	dmSender    *receiverConfirmingDMSender
+	registry    *pendingresponse.Registry
+}
+
+// newComparisonHarnessWithReceiver creates a harness that wires the DM Receiver
+// into the comparison pipeline. DiffPersisted/DiffPersistFailed events flow
+// through the captureBroker → DM Receiver → PendingResponseRegistry, testing
+// the full end-to-end routing added by TASK-047.
+func newComparisonHarnessWithReceiver(t *testing.T, confirmErr *diffConfirmError) *comparisonHarnessWithReceiver {
+	t.Helper()
+
+	publisher := &recordingPublisher{}
+	idempotency := newMemoryIdempotencyStore()
+	registry := pendingresponse.New()
+	broker := &captureBroker{}
+
+	defaultCmd := defaultCompareCommand()
+	baseCorrID := baseCorrelationID(defaultCmd)
+	targetCorrID := targetCorrelationID(defaultCmd)
+
+	treeReq := &treeRequesterMock{
+		registry: registry,
+		trees: map[string]model.SemanticTree{
+			baseCorrID:   *defaultBaseTree(),
+			targetCorrID: *defaultTargetTree(),
+		},
+		errors: make(map[string]error),
+	}
+
+	dmSender := &receiverConfirmingDMSender{
+		broker:     broker,
+		confirmErr: confirmErr,
+	}
+
+	logger := observability.NewLogger("error")
+	metrics := observability.NewMetrics()
+
+	comparer := compengine.NewComparer()
+	lifecycleMgr := lifecycle.NewLifecycleManager(publisher, idempotency, 30*time.Second, nil, logger)
+
+	compOrch := compapp.NewOrchestrator(
+		lifecycleMgr,
+		treeReq,
+		dmSender,
+		registry,
+		comparer,
+		publisher,
+		logger,
+		1,
+		time.Millisecond,
+	)
+
+	// Wire the DM Receiver with the same broker and registry.
+	dmHandler := &noopDMResponseHandler{}
+	brokerCfg := config.BrokerConfig{
+		TopicProcessDocument:          testTopicProcessDocument,
+		TopicCompareVersions:          testTopicCompareVersions,
+		TopicDMArtifactsPersisted:     "dm.responses.artifacts-persisted",
+		TopicDMArtifactsPersistFailed: "dm.responses.artifacts-persist-failed",
+		TopicDMSemanticTreeProvided:   "dm.responses.semantic-tree-provided",
+		TopicDMDiffPersisted:          testDiffPersistedTopic,
+		TopicDMDiffPersistFailed:      testDiffPersistFailedTopic,
+	}
+
+	dmReceiver := dm.NewReceiver(broker, dmHandler, registry, logger, brokerCfg)
+	if err := dmReceiver.Start(); err != nil {
+		t.Fatalf("dmReceiver.Start failed: %v", err)
+	}
+
+	procHandler := &noopProcessingHandler{}
+	limiter := concurrency.New(5, metrics, logger)
+	disp := dispatcher.NewDispatcher(idempotency, limiter, procHandler, compOrch, logger)
+
+	cons := consumer.NewConsumer(broker, disp, logger, brokerCfg)
+	if err := cons.Start(); err != nil {
+		t.Fatalf("consumer.Start failed: %v", err)
+	}
+
+	return &comparisonHarnessWithReceiver{
+		broker:      broker,
+		publisher:   publisher,
+		idempotency: idempotency,
+		treeReq:     treeReq,
+		dmSender:    dmSender,
+		registry:    registry,
+	}
 }

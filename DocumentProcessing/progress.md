@@ -1955,8 +1955,40 @@ idempotency, malformed input, artifact format.
 - 31 пакет PASS с -race, go vet clean, make build/test/lint OK
 
 **Заметки для следующей итерации:**
-- Pending critical: TASK-047 (DM confirmation routing for comparison pipeline)
+- Pending critical: нет
 - Pending high: TASK-049 (Prometheus metrics endpoint), TASK-050 (DLQ)
 - Pending medium: TASK-051, TASK-052, TASK-053
 - Pending low: TASK-054 (docs)
 - DMConfirmationAwaiter может быть расширен для comparison pipeline (diff persist confirmation) в TASK-047
+
+---
+
+### TASK-047 — Маршрутизация DiffPersisted/DiffPersistFailed из DM Receiver в PendingResponseRegistry
+**Статус:** DONE
+**Дата:** 2026-03-28
+
+**Проблема:** handleDiffPersisted/handleDiffPersistFailed в dm/receiver.go маршрутизировали события в DMResponseHandler, который только логировал. Comparison orchestrator Stage 6 (WAITING_DM_CONFIRMATION) блокировался на registry.AwaitAll, т.к. события никогда не доходили до PendingResponseRegistry → pipeline зависал до таймаута.
+
+**Решение:** По паттерну handleSemanticTreeProvided — маршрутизация DiffPersisted/DiffPersistFailed напрямую в PendingResponseRegistry, минуя DMResponseHandler.
+
+**Изменения:**
+- dm/receiver.go: handleDiffPersisted → registry.Receive(correlationID, SemanticTree{}) (пустое дерево — сигнал успеха)
+- dm/receiver.go: handleDiffPersistFailed → registry.ReceiveError(correlationID, NewDMDiffPersistFailedError(msg, is_retryable, nil))
+- dm/validate.go: correlation_id добавлен как required в validateDiffPersisted/validateDiffPersistFailed
+- app/dmhandler.go: HandleDiffPersisted/HandleDiffPersistFailed → no-op safety nets
+- integration/testinfra.go: receiverConfirmingDMSender + newComparisonHarnessWithReceiver (полный E2E через DM Receiver)
+- integration/testinfra.go: fix processing pipeline dmAwaiter wiring (TASK-046 followup)
+
+**Тесты:**
+- receiver_test.go: 7 обновлённых + 5 новых тестов (registry dispatch, is_retryable, correlation_id validation)
+- validate_test.go: 2 новых теста correlation_id
+- comparison_pipeline_test.go: 3 новых integration теста (DiffPersisted_ViaReceiver → COMPLETED, DiffPersistFailed → FAILED, Retryable passthrough)
+- Code review: 0 critical, 2 warnings fixed (consolidated lock, panic on marshal error)
+- 31 пакет PASS с -race, 16 integration tests PASS, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- Pending high: TASK-049 (Prometheus metrics endpoint), TASK-050 (DLQ)
+- Pending medium: TASK-051, TASK-052, TASK-053
+- Pending low: TASK-054 (docs)
+- PendingResponseRegistryPort используется теперь для 3 типов событий: SemanticTreeProvided, DiffPersisted, DiffPersistFailed
+- В будущем рассмотреть ReceiveAck(correlationID) метод в registry для confirmation events без payload

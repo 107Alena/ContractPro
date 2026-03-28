@@ -1112,7 +1112,9 @@
         "Шаг 4: проверить, что DiffPersistFailed с is_retryable=false → FAILED"
       ],
       "dependencies": ["TASK-037", "TASK-038", "TASK-034"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-28",
+      "summary": "DM Receiver маршрутизирует DiffPersisted/DiffPersistFailed в PendingResponseRegistry вместо DMResponseHandler. handleDiffPersisted: registry.Receive(correlationID, SemanticTree{}) — разблокирует comparison orchestrator Stage 6 WAITING_DM_CONFIRMATION. handleDiffPersistFailed: registry.ReceiveError(correlationID, NewDMDiffPersistFailedError(msg, is_retryable, nil)) — пробрасывает ошибку с is_retryable флагом через DomainError. validate.go: correlation_id добавлен как обязательное поле в validateDiffPersisted/validateDiffPersistFailed. dmhandler.go: HandleDiffPersisted/HandleDiffPersistFailed → no-op safety nets (routing через receiver → registry). Integration test: receiverConfirmingDMSender + newComparisonHarnessWithReceiver — полный E2E flow через captureBroker → DM Receiver → Registry → Orchestrator. Также исправлена integration test инфраструктура для processing pipeline (dmAwaiter wiring для TASK-046). Code review: 0 critical, 2 warnings fixed (consolidated lock, panic on marshal error in test goroutine). 31 пакет PASS с -race, 16 integration tests PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-048",

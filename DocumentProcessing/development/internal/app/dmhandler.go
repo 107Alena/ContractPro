@@ -17,11 +17,9 @@ var _ port.DMResponseHandler = (*dmResponseHandler)(nil)
 // Artifacts persisted/failed events are dispatched to the DMConfirmationAwaiterPort,
 // which unblocks the processing orchestrator waiting in WAITING_DM_CONFIRMATION.
 //
-// Diff persisted/failed events are logged (delegation to the comparison pipeline
-// will be wired once it exposes DM diff confirmation methods).
-//
-// SemanticTreeProvided is dispatched directly by the DM Receiver to the
-// PendingResponseRegistry, so the method here is a no-op safety net.
+// Diff persisted/failed and SemanticTreeProvided events are dispatched directly
+// by the DM Receiver to the PendingResponseRegistry, so the methods here are
+// no-op safety nets.
 type dmResponseHandler struct {
 	dmAwaiter port.DMConfirmationAwaiterPort
 	logger    *observability.Logger
@@ -72,14 +70,20 @@ func (h *dmResponseHandler) HandleSemanticTreeProvided(ctx context.Context, even
 	return nil
 }
 
+// HandleDiffPersisted is a no-op safety net. The DM Receiver routes
+// DiffPersisted events directly to the PendingResponseRegistry for
+// correlation-based dispatch to the comparison pipeline.
 func (h *dmResponseHandler) HandleDiffPersisted(ctx context.Context, event model.DocumentVersionDiffPersisted) error {
-	h.logger.Info(ctx, "diff persisted by DM",
+	h.logger.Info(ctx, "diff persisted (unexpected in composite handler)",
 		"job_id", event.JobID, "document_id", event.DocumentID)
 	return nil
 }
 
+// HandleDiffPersistFailed is a no-op safety net. The DM Receiver routes
+// DiffPersistFailed events directly to the PendingResponseRegistry for
+// correlation-based dispatch to the comparison pipeline.
 func (h *dmResponseHandler) HandleDiffPersistFailed(ctx context.Context, event model.DocumentVersionDiffPersistFailed) error {
-	h.logger.Warn(ctx, "diff persist failed by DM",
+	h.logger.Warn(ctx, "diff persist failed (unexpected in composite handler)",
 		"job_id", event.JobID, "document_id", event.DocumentID, "error", event.ErrorMessage)
 	return nil
 }

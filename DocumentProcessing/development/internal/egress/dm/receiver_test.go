@@ -224,7 +224,7 @@ func validSemanticTreeProvidedEvent() model.SemanticTreeProvided {
 
 func validDiffPersistedEvent() model.DocumentVersionDiffPersisted {
 	return model.DocumentVersionDiffPersisted{
-		EventMeta:  testReceiverMeta(),
+		EventMeta:  model.EventMeta{CorrelationID: "job-dp-1:diff-confirm", Timestamp: testReceiverTimestamp()},
 		JobID:      "job-dp-1",
 		DocumentID: "doc-dp-1",
 	}
@@ -232,7 +232,7 @@ func validDiffPersistedEvent() model.DocumentVersionDiffPersisted {
 
 func validDiffPersistFailedEvent() model.DocumentVersionDiffPersistFailed {
 	return model.DocumentVersionDiffPersistFailed{
-		EventMeta:    testReceiverMeta(),
+		EventMeta:    model.EventMeta{CorrelationID: "job-dpf-1:diff-confirm", Timestamp: testReceiverTimestamp()},
 		JobID:        "job-dpf-1",
 		DocumentID:   "doc-dpf-1",
 		ErrorMessage: "disk full",
@@ -723,8 +723,8 @@ func TestHandleSemanticTreeProvided_RegistryReceiveErrorError_ReturnsNil(t *test
 
 // --- handleDiffPersisted tests ---
 
-func TestHandleDiffPersisted_ValidEvent(t *testing.T) {
-	r, _, handler, _ := newTestReceiver()
+func TestHandleDiffPersisted_ValidEvent_DispatchesToRegistry(t *testing.T) {
+	r, _, handler, registry := newTestReceiver()
 	event := validDiffPersistedEvent()
 	body := mustMarshalReceiver(t, event)
 
@@ -733,34 +733,38 @@ func TestHandleDiffPersisted_ValidEvent(t *testing.T) {
 		t.Fatalf("expected nil, got: %v", err)
 	}
 
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if !registry.receiveCalled {
+		t.Fatal("registry.Receive was not called")
+	}
+	if registry.lastReceiveCorrelationID != event.CorrelationID {
+		t.Errorf("correlation_id = %q, want %q", registry.lastReceiveCorrelationID, event.CorrelationID)
+	}
+
+	// Handler should NOT be called (diff persisted goes to registry, not handler).
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
-
-	if !handler.diffPersistedCalled {
-		t.Fatal("handler was not called")
-	}
-	if handler.lastDiffPersisted.JobID != event.JobID {
-		t.Errorf("job_id = %q, want %q", handler.lastDiffPersisted.JobID, event.JobID)
-	}
-	if handler.lastDiffPersisted.DocumentID != event.DocumentID {
-		t.Errorf("document_id = %q, want %q", handler.lastDiffPersisted.DocumentID, event.DocumentID)
+	if handler.diffPersistedCalled {
+		t.Fatal("DMResponseHandler should not be called for diff persisted (goes to registry)")
 	}
 }
 
 func TestHandleDiffPersisted_InvalidJSON(t *testing.T) {
-	r, _, handler, _ := newTestReceiver()
+	r, _, _, registry := newTestReceiver()
 
 	err := r.handleDiffPersisted(context.Background(), []byte("not-json"))
 	if err != nil {
 		t.Fatalf("expected nil (ack), got: %v", err)
 	}
-	if handler.diffPersistedCalled {
-		t.Fatal("handler should not be called for invalid JSON")
+	if registry.receiveCalled {
+		t.Fatal("registry should not be called for invalid JSON")
 	}
 }
 
 func TestHandleDiffPersisted_MissingRequiredFields(t *testing.T) {
-	r, _, handler, _ := newTestReceiver()
+	r, _, _, registry := newTestReceiver()
 	event := model.DocumentVersionDiffPersisted{} // empty
 	body := mustMarshalReceiver(t, event)
 
@@ -768,29 +772,47 @@ func TestHandleDiffPersisted_MissingRequiredFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil (ack), got: %v", err)
 	}
-	if handler.diffPersistedCalled {
-		t.Fatal("handler should not be called for invalid event")
+	if registry.receiveCalled {
+		t.Fatal("registry should not be called for invalid event")
 	}
 }
 
-func TestHandleDiffPersisted_HandlerError_ReturnsNil(t *testing.T) {
-	r, _, handler, _ := newTestReceiver()
-	handler.diffPersistedErr = errors.New("orchestrator error")
+func TestHandleDiffPersisted_MissingCorrelationID(t *testing.T) {
+	r, _, _, registry := newTestReceiver()
+	event := model.DocumentVersionDiffPersisted{
+		JobID:      "job-1",
+		DocumentID: "doc-1",
+		// CorrelationID missing
+	}
+	body := mustMarshalReceiver(t, event)
+
+	err := r.handleDiffPersisted(context.Background(), body)
+	if err != nil {
+		t.Fatalf("expected nil (ack), got: %v", err)
+	}
+	if registry.receiveCalled {
+		t.Fatal("registry should not be called for missing correlation_id")
+	}
+}
+
+func TestHandleDiffPersisted_RegistryReceiveError_ReturnsNil(t *testing.T) {
+	r, _, _, registry := newTestReceiver()
+	registry.receiveErr = errors.New("unknown correlation ID")
 
 	body := mustMarshalReceiver(t, validDiffPersistedEvent())
 	err := r.handleDiffPersisted(context.Background(), body)
 	if err != nil {
-		t.Fatalf("expected nil (ack despite handler error), got: %v", err)
+		t.Fatalf("expected nil (ack despite registry error), got: %v", err)
 	}
-	if !handler.diffPersistedCalled {
-		t.Fatal("handler should have been called")
+	if !registry.receiveCalled {
+		t.Fatal("registry.Receive should have been called")
 	}
 }
 
 // --- handleDiffPersistFailed tests ---
 
-func TestHandleDiffPersistFailed_ValidEvent(t *testing.T) {
-	r, _, handler, _ := newTestReceiver()
+func TestHandleDiffPersistFailed_ValidEvent_DispatchesToRegistry(t *testing.T) {
+	r, _, handler, registry := newTestReceiver()
 	event := validDiffPersistFailedEvent()
 	body := mustMarshalReceiver(t, event)
 
@@ -799,38 +821,82 @@ func TestHandleDiffPersistFailed_ValidEvent(t *testing.T) {
 		t.Fatalf("expected nil, got: %v", err)
 	}
 
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if !registry.receiveErrorCalled {
+		t.Fatal("registry.ReceiveError was not called")
+	}
+	if registry.lastReceiveErrorCorrelationID != event.CorrelationID {
+		t.Errorf("correlation_id = %q, want %q", registry.lastReceiveErrorCorrelationID, event.CorrelationID)
+	}
+	if registry.lastReceiveErrorErr == nil {
+		t.Fatal("registry.ReceiveError received nil error")
+	}
+
+	// Verify the error is a DomainError with correct code and retryable flag.
+	var domErr *port.DomainError
+	if !errors.As(registry.lastReceiveErrorErr, &domErr) {
+		t.Fatalf("expected *DomainError, got %T", registry.lastReceiveErrorErr)
+	}
+	if domErr.Code != port.ErrCodeDMDiffPersistFailed {
+		t.Errorf("error code = %q, want %q", domErr.Code, port.ErrCodeDMDiffPersistFailed)
+	}
+	if domErr.Retryable != event.IsRetryable {
+		t.Errorf("retryable = %v, want %v", domErr.Retryable, event.IsRetryable)
+	}
+
+	// Handler should NOT be called (diff persist failed goes to registry, not handler).
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
+	if handler.diffPersistFailedCalled {
+		t.Fatal("DMResponseHandler should not be called for diff persist failed (goes to registry)")
+	}
+}
 
-	if !handler.diffPersistFailedCalled {
-		t.Fatal("handler was not called")
+func TestHandleDiffPersistFailed_RetryableEvent_DispatchesToRegistry(t *testing.T) {
+	r, _, _, registry := newTestReceiver()
+	event := validDiffPersistFailedEvent()
+	event.IsRetryable = true
+	body := mustMarshalReceiver(t, event)
+
+	err := r.handleDiffPersistFailed(context.Background(), body)
+	if err != nil {
+		t.Fatalf("expected nil, got: %v", err)
 	}
-	if handler.lastDiffPersistFailed.JobID != event.JobID {
-		t.Errorf("job_id = %q, want %q", handler.lastDiffPersistFailed.JobID, event.JobID)
+
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if !registry.receiveErrorCalled {
+		t.Fatal("registry.ReceiveError was not called")
 	}
-	if handler.lastDiffPersistFailed.ErrorMessage != event.ErrorMessage {
-		t.Errorf("error_message = %q, want %q", handler.lastDiffPersistFailed.ErrorMessage, event.ErrorMessage)
+
+	var domErr *port.DomainError
+	if !errors.As(registry.lastReceiveErrorErr, &domErr) {
+		t.Fatalf("expected *DomainError, got %T", registry.lastReceiveErrorErr)
 	}
-	if handler.lastDiffPersistFailed.IsRetryable != event.IsRetryable {
-		t.Errorf("is_retryable = %v, want %v", handler.lastDiffPersistFailed.IsRetryable, event.IsRetryable)
+	if !domErr.Retryable {
+		t.Error("expected retryable=true for retryable DM event")
 	}
 }
 
 func TestHandleDiffPersistFailed_InvalidJSON(t *testing.T) {
-	r, _, handler, _ := newTestReceiver()
+	r, _, _, registry := newTestReceiver()
 
 	err := r.handleDiffPersistFailed(context.Background(), []byte("not-json"))
 	if err != nil {
 		t.Fatalf("expected nil (ack), got: %v", err)
 	}
-	if handler.diffPersistFailedCalled {
-		t.Fatal("handler should not be called for invalid JSON")
+	if registry.receiveErrorCalled {
+		t.Fatal("registry should not be called for invalid JSON")
 	}
 }
 
 func TestHandleDiffPersistFailed_MissingErrorMessage(t *testing.T) {
-	r, _, handler, _ := newTestReceiver()
+	r, _, _, registry := newTestReceiver()
 	event := model.DocumentVersionDiffPersistFailed{
+		EventMeta:  model.EventMeta{CorrelationID: "corr-1"},
 		JobID:      "job-1",
 		DocumentID: "doc-1",
 		// ErrorMessage missing
@@ -841,22 +907,41 @@ func TestHandleDiffPersistFailed_MissingErrorMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil (ack), got: %v", err)
 	}
-	if handler.diffPersistFailedCalled {
-		t.Fatal("handler should not be called for invalid event")
+	if registry.receiveErrorCalled {
+		t.Fatal("registry should not be called for invalid event")
 	}
 }
 
-func TestHandleDiffPersistFailed_HandlerError_ReturnsNil(t *testing.T) {
-	r, _, handler, _ := newTestReceiver()
-	handler.diffPersistFailedErr = errors.New("orchestrator error")
+func TestHandleDiffPersistFailed_MissingCorrelationID(t *testing.T) {
+	r, _, _, registry := newTestReceiver()
+	event := model.DocumentVersionDiffPersistFailed{
+		JobID:        "job-1",
+		DocumentID:   "doc-1",
+		ErrorMessage: "disk full",
+		// CorrelationID missing
+	}
+	body := mustMarshalReceiver(t, event)
+
+	err := r.handleDiffPersistFailed(context.Background(), body)
+	if err != nil {
+		t.Fatalf("expected nil (ack), got: %v", err)
+	}
+	if registry.receiveErrorCalled {
+		t.Fatal("registry should not be called for missing correlation_id")
+	}
+}
+
+func TestHandleDiffPersistFailed_RegistryReceiveErrorError_ReturnsNil(t *testing.T) {
+	r, _, _, registry := newTestReceiver()
+	registry.receiveErrorErr = errors.New("unknown correlation ID")
 
 	body := mustMarshalReceiver(t, validDiffPersistFailedEvent())
 	err := r.handleDiffPersistFailed(context.Background(), body)
 	if err != nil {
-		t.Fatalf("expected nil (ack despite handler error), got: %v", err)
+		t.Fatalf("expected nil (ack despite registry error), got: %v", err)
 	}
-	if !handler.diffPersistFailedCalled {
-		t.Fatal("handler should have been called")
+	if !registry.receiveErrorCalled {
+		t.Fatal("registry.ReceiveError should have been called")
 	}
 }
 
@@ -905,23 +990,38 @@ func TestIntegration_StartAndDispatchAllEvents(t *testing.T) {
 		t.Error("registry.Receive not called for semantic tree provided")
 	}
 
-	// 4. diff persisted
+	// 4. diff persisted → registry
 	body = mustMarshalReceiver(t, validDiffPersistedEvent())
 	if err := handlers[3](ctx, body); err != nil {
 		t.Fatalf("diff persisted handler returned: %v", err)
 	}
-	if !handler.diffPersistedCalled {
-		t.Error("handler not called for diff persisted")
+	// registry.Receive was already called for semantic tree (step 3),
+	// so we check that the correlationID matches the diff event.
+	registry.mu.Lock()
+	diffPersistedReceived := registry.receiveCalled
+	lastCorrID := registry.lastReceiveCorrelationID
+	registry.mu.Unlock()
+	if lastCorrID != validDiffPersistedEvent().CorrelationID {
+		t.Errorf("registry.Receive correlationID = %q, want %q", lastCorrID, validDiffPersistedEvent().CorrelationID)
+	}
+	if !diffPersistedReceived {
+		t.Error("registry.Receive not called for diff persisted")
 	}
 
-	// 5. diff persist failed
+	// 5. diff persist failed → registry
 	body = mustMarshalReceiver(t, validDiffPersistFailedEvent())
 	if err := handlers[4](ctx, body); err != nil {
 		t.Fatalf("diff persist failed handler returned: %v", err)
 	}
-	if !handler.diffPersistFailedCalled {
-		t.Error("handler not called for diff persist failed")
+	registry.mu.Lock()
+	if !registry.receiveErrorCalled {
+		t.Error("registry.ReceiveError not called for diff persist failed")
 	}
+	if registry.lastReceiveErrorCorrelationID != validDiffPersistFailedEvent().CorrelationID {
+		t.Errorf("registry.ReceiveError correlationID = %q, want %q",
+			registry.lastReceiveErrorCorrelationID, validDiffPersistFailedEvent().CorrelationID)
+	}
+	registry.mu.Unlock()
 }
 
 // --- Context enrichment tests ---
@@ -990,24 +1090,24 @@ func TestHandleArtifactsPersisted_ContextEnrichment(t *testing.T) {
 	}
 }
 
-func TestHandleDiffPersistFailed_ContextEnrichment(t *testing.T) {
-	capturing := &contextCapturingHandler{inner: &mockDMHandler{}}
-	r := NewReceiver(&mockSubscriber{}, capturing, &mockRegistry{}, testReceiverLogger(), testReceiverBrokerCfg())
+func TestHandleDiffPersistFailed_HandlerNotCalled(t *testing.T) {
+	// Verify that the handler is NOT called — diff persist failed goes to registry.
+	r, _, handler, registry := newTestReceiver()
 
 	event := validDiffPersistFailedEvent()
 	body := mustMarshalReceiver(t, event)
 	_ = r.handleDiffPersistFailed(context.Background(), body)
 
-	capturing.mu.Lock()
-	capturedCtx := capturing.lastCtx
-	capturing.mu.Unlock()
-
-	jc := observability.JobContextFrom(capturedCtx)
-	if jc.JobID != event.JobID {
-		t.Errorf("context job_id = %q, want %q", jc.JobID, event.JobID)
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if handler.diffPersistFailedCalled {
+		t.Fatal("handler should not be called (diff persist failed goes to registry)")
 	}
-	if jc.DocumentID != event.DocumentID {
-		t.Errorf("context document_id = %q, want %q", jc.DocumentID, event.DocumentID)
+
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if !registry.receiveErrorCalled {
+		t.Fatal("registry.ReceiveError should have been called")
 	}
 }
 

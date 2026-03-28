@@ -2633,3 +2633,175 @@ func TestDLQ_ErrorIsLogged_NotPropagated(t *testing.T) {
 		t.Error("returned error should be the pipeline error, not the DLQ error")
 	}
 }
+
+// --- Tests: FailedAtStage reclassification (TASK-051) ---
+
+func TestFailedAtStage_FileTooLarge_IsValidatingFile(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewFileTooLargeError("file exceeds 20 MB")
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	f := deps.publisher.processingFailed[0]
+	if f.FailedAtStage != string(model.ProcessingStageValidatingFile) {
+		t.Errorf("FailedAtStage: expected %s, got %s", model.ProcessingStageValidatingFile, f.FailedAtStage)
+	}
+	if f.ErrorCode != port.ErrCodeFileTooLarge {
+		t.Errorf("ErrorCode: expected %s, got %s", port.ErrCodeFileTooLarge, f.ErrorCode)
+	}
+	// File validation errors → REJECTED → no DLQ.
+	if len(deps.dlq.messages) != 0 {
+		t.Errorf("expected 0 DLQ messages for REJECTED error, got %d", len(deps.dlq.messages))
+	}
+}
+
+func TestFailedAtStage_InvalidFormat_IsValidatingFile(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewInvalidFormatError("not a PDF")
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	f := deps.publisher.processingFailed[0]
+	if f.FailedAtStage != string(model.ProcessingStageValidatingFile) {
+		t.Errorf("FailedAtStage: expected %s, got %s", model.ProcessingStageValidatingFile, f.FailedAtStage)
+	}
+	if f.ErrorCode != port.ErrCodeInvalidFormat {
+		t.Errorf("ErrorCode: expected %s, got %s", port.ErrCodeInvalidFormat, f.ErrorCode)
+	}
+}
+
+func TestFailedAtStage_TooManyPages_IsValidatingFile(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewTooManyPagesError("exceeds 100 pages")
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	f := deps.publisher.processingFailed[0]
+	if f.FailedAtStage != string(model.ProcessingStageValidatingFile) {
+		t.Errorf("FailedAtStage: expected %s, got %s", model.ProcessingStageValidatingFile, f.FailedAtStage)
+	}
+	if f.ErrorCode != port.ErrCodeTooManyPages {
+		t.Errorf("ErrorCode: expected %s, got %s", port.ErrCodeTooManyPages, f.ErrorCode)
+	}
+}
+
+func TestFailedAtStage_DownloadFailed_IsFetchingSourceFile(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewFileNotFoundError("file not found", errors.New("404"))
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	f := deps.publisher.processingFailed[0]
+	if f.FailedAtStage != string(model.ProcessingStageFetchingSourceFile) {
+		t.Errorf("FailedAtStage: expected %s, got %s", model.ProcessingStageFetchingSourceFile, f.FailedAtStage)
+	}
+	if f.ErrorCode != port.ErrCodeFileNotFound {
+		t.Errorf("ErrorCode: expected %s, got %s", port.ErrCodeFileNotFound, f.ErrorCode)
+	}
+}
+
+func TestFailedAtStage_ServiceUnavailable_IsFetchingSourceFile(t *testing.T) {
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewServiceUnavailableError("download failed", errors.New("connection refused"))
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	f := deps.publisher.processingFailed[0]
+	if f.FailedAtStage != string(model.ProcessingStageFetchingSourceFile) {
+		t.Errorf("FailedAtStage: expected %s, got %s", model.ProcessingStageFetchingSourceFile, f.FailedAtStage)
+	}
+	if f.ErrorCode != port.ErrCodeServiceUnavailable {
+		t.Errorf("ErrorCode: expected %s, got %s", port.ErrCodeServiceUnavailable, f.ErrorCode)
+	}
+}
+
+func TestFailedAtStage_DLQ_FetchError_StageIsFetchingSourceFile(t *testing.T) {
+	// Non-validation fetch error (SERVICE_UNAVAILABLE) → FAILED → DLQ sent
+	// with FETCHING_SOURCE_FILE stage.
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = port.NewServiceUnavailableError("download failed", errors.New("timeout"))
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	// SERVICE_UNAVAILABLE → FAILED → DLQ sent.
+	if len(deps.dlq.messages) != 1 {
+		t.Fatalf("expected 1 DLQ message, got %d", len(deps.dlq.messages))
+	}
+	if deps.dlq.messages[0].FailedAtStage != string(model.ProcessingStageFetchingSourceFile) {
+		t.Errorf("DLQ FailedAtStage: expected %s, got %s",
+			model.ProcessingStageFetchingSourceFile, deps.dlq.messages[0].FailedAtStage)
+	}
+}
+
+func TestFileValidationCodes_SubsetOfRejectedCodes(t *testing.T) {
+	for code := range fileValidationCodes {
+		if !rejectedCodes[code] {
+			t.Errorf("fileValidationCodes contains %q which is not in rejectedCodes", code)
+		}
+	}
+}
+
+func TestIsFileValidationError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"FileTooLarge", port.NewFileTooLargeError("too big"), true},
+		{"InvalidFormat", port.NewInvalidFormatError("not pdf"), true},
+		{"TooManyPages", port.NewTooManyPagesError("too many"), true},
+		{"FileNotFound", port.NewFileNotFoundError("not found", nil), false},
+		{"ServiceUnavailable", port.NewServiceUnavailableError("down", nil), false},
+		{"ValidationError", port.NewValidationError("bad input"), false},
+		{"ContextCanceled", context.Canceled, false},
+		{"DeadlineExceeded", context.DeadlineExceeded, false},
+		{"NilError", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isFileValidationError(tt.err)
+			if got != tt.expected {
+				t.Errorf("isFileValidationError(%v) = %v, want %v", tt.err, got, tt.expected)
+			}
+		})
+	}
+}

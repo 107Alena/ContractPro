@@ -25,15 +25,36 @@ var rejectedCodes = map[string]bool{
 	port.ErrCodeSSRFBlocked:   true,
 }
 
+// fileValidationCodes are error codes that indicate file content validation
+// failure (post-download), mapping to the VALIDATING_FILE stage.
+// These errors are returned by Fetch() but semantically belong to the
+// file validation phase, not the download phase.
+var fileValidationCodes = map[string]bool{
+	port.ErrCodeFileTooLarge: true,
+	port.ErrCodeInvalidFormat: true,
+	port.ErrCodeTooManyPages: true,
+}
+
+// isFileValidationError returns true if the error code indicates a file
+// content validation failure (format, size, page count) as opposed to a
+// download/network failure.
+func isFileValidationError(err error) bool {
+	return fileValidationCodes[port.ErrorCode(err)]
+}
+
 // Orchestrator implements port.ProcessingCommandHandler — the main orchestrator
 // that runs the full document processing pipeline with error handling and retry.
 //
 // Pipeline stages:
 //
-//	VALIDATING_INPUT -> FETCHING_SOURCE_FILE (includes file format/page validation) ->
+//	VALIDATING_INPUT -> FETCHING_SOURCE_FILE -> VALIDATING_FILE ->
 //	OCR/OCR_SKIPPED -> TEXT_EXTRACTION -> STRUCTURE_EXTRACTION ->
 //	SEMANTIC_TREE_BUILDING -> SAVING_ARTIFACTS -> WAITING_DM_CONFIRMATION ->
 //	CLEANUP_TEMP_ARTIFACTS
+//
+// FETCHING_SOURCE_FILE handles download; VALIDATING_FILE covers
+// format/size/page validation. Both are executed within Fetch() but
+// errors are attributed to the correct stage via error-code classification.
 //
 // Warnings are collected per-job in a local slice within runPipeline,
 // ensuring concurrent HandleProcessDocument calls are fully isolated.
@@ -211,7 +232,7 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 		return err
 	}
 
-	// --- Stage 2: FETCHING_SOURCE_FILE (includes PDF format and page count validation) ---
+	// --- Stage 2: FETCHING_SOURCE_FILE ---
 	job.Stage = model.ProcessingStageFetchingSourceFile
 	ctx = observability.WithStage(ctx, string(job.Stage))
 	o.logger.Info(ctx, "pipeline stage started")
@@ -221,6 +242,12 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 		fetchResult, fetchErr = o.fetcher.Fetch(ctx, cmd)
 		return fetchErr
 	}); err != nil {
+		// Reclassify: file content validation errors (format, size, pages)
+		// are attributed to VALIDATING_FILE stage for accurate failed_at_stage.
+		if isFileValidationError(err) {
+			job.Stage = model.ProcessingStageValidatingFile
+			ctx = observability.WithStage(ctx, string(job.Stage))
+		}
 		return err
 	}
 

@@ -1207,7 +1207,9 @@
         "Шаг 3: проверить, что ошибка 'download failed' → failed_at_stage = FETCHING_SOURCE_FILE"
       ],
       "dependencies": ["TASK-035", "TASK-023", "TASK-024"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-28",
+      "summary": "Error-code based stage reclassification в Processing Orchestrator. fileValidationCodes map (FILE_TOO_LARGE, INVALID_FORMAT, TOO_MANY_PAGES) + isFileValidationError() helper — тот же паттерн, что rejectedCodes. В runPipeline() после ошибки Fetch: если ошибка файловой валидации → job.Stage = ProcessingStageValidatingFile. Без изменений порта/фетчера (SourceFileFetcherPort.Fetch остаётся single-method). Обновлён pipeline comment. Code review: 0 critical, 3 warnings адресованы (W-1: переименован тест DLQ, W-2: добавлена negative DLQ assertion, W-3: тест subset invariant fileValidationCodes ⊂ rejectedCodes). 8 новых тестов: 3 validation errors → VALIDATING_FILE, 2 download errors → FETCHING_SOURCE_FILE, 1 DLQ stage check, 1 subset invariant, 1 table-driven isFileValidationError (9 cases incl nil). 33 пакета PASS с -race, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-052",

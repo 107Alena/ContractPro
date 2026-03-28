@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
 )
@@ -88,12 +87,12 @@ func (t *trackingReadCloser) closeCount() int32 {
 
 // --- Helper: default adapter params ---
 
-func newTestAdapter(ocr *mockOCRService, storage *mockTempStorage, wc *warning.Collector) *Adapter {
-	return NewAdapter(ocr, storage, wc, 100, 3, 1*time.Millisecond)
+func newTestAdapter(ocr *mockOCRService, storage *mockTempStorage) *Adapter {
+	return NewAdapter(ocr, storage, 100, 3, 1*time.Millisecond)
 }
 
-func newTestAdapterNoRetry(ocr *mockOCRService, storage *mockTempStorage, wc *warning.Collector) *Adapter {
-	return NewAdapter(ocr, storage, wc, 100, 1, 1*time.Millisecond)
+func newTestAdapterNoRetry(ocr *mockOCRService, storage *mockTempStorage) *Adapter {
+	return NewAdapter(ocr, storage, 100, 1, 1*time.Millisecond)
 }
 
 func defaultDownloadFn(key string) func(ctx context.Context, k string) (io.ReadCloser, error) {
@@ -107,10 +106,9 @@ func defaultDownloadFn(key string) func(ctx context.Context, k string) (io.ReadC
 func TestProcess_TextPDF(t *testing.T) {
 	ocr := &mockOCRService{}
 	storage := &mockTempStorage{}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	result, err := adapter.Process(context.Background(), "key/doc.pdf", true)
+	result, warnings, err := adapter.Process(context.Background(), "key/doc.pdf", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,8 +122,8 @@ func TestProcess_TextPDF(t *testing.T) {
 	if ocr.called.Load() != 0 {
 		t.Errorf("OCR service should not be called for text PDF, called %d times", ocr.called.Load())
 	}
-	if wc.HasWarnings() {
-		t.Errorf("expected no warnings for text PDF, got %v", wc.Collect())
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for text PDF, got %v", warnings)
 	}
 }
 
@@ -150,10 +148,9 @@ func TestProcess_ScanPDF(t *testing.T) {
 			},
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	result, err := adapter.Process(context.Background(), storageKey, false)
+	result, warnings, err := adapter.Process(context.Background(), storageKey, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,8 +164,8 @@ func TestProcess_ScanPDF(t *testing.T) {
 	if ocr.called.Load() != 1 {
 		t.Errorf("OCR service should be called once, called %d times", ocr.called.Load())
 	}
-	if wc.HasWarnings() {
-		t.Errorf("expected no warnings, got %v", wc.Collect())
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", warnings)
 	}
 }
 
@@ -182,10 +179,9 @@ func TestProcess_ScanPDF_StorageError(t *testing.T) {
 		},
 	}
 	ocr := &mockOCRService{}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	_, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -215,10 +211,9 @@ func TestProcess_ScanPDF_OCRError(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	_, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -249,10 +244,9 @@ func TestProcess_ScanPDF_OCRRetryableError(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc) // maxAttempts=3
+	adapter := newTestAdapter(ocr, storage) // maxAttempts=3
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	_, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -288,10 +282,9 @@ func TestProcess_ContextCancelled(t *testing.T) {
 			},
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	_, err := adapter.Process(ctx, "key/doc.pdf", false)
+	_, _, err := adapter.Process(ctx, "key/doc.pdf", false)
 	if err == nil {
 		t.Fatal("expected error for cancelled context, got nil")
 	}
@@ -319,10 +312,9 @@ func TestProcess_ScanPDF_ReaderClosed(t *testing.T) {
 			},
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	result, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	result, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -340,8 +332,7 @@ func TestProcess_ScanPDF_ReaderClosed(t *testing.T) {
 func TestRateLimiter_AcquireImmediate(t *testing.T) {
 	ocr := &mockOCRService{}
 	storage := &mockTempStorage{}
-	wc := warning.NewCollector()
-	adapter := NewAdapter(ocr, storage, wc, 100, 1, 1*time.Millisecond)
+	adapter := NewAdapter(ocr, storage, 100, 1, 1*time.Millisecond)
 
 	start := time.Now()
 	err := adapter.acquireToken(context.Background())
@@ -358,8 +349,7 @@ func TestRateLimiter_AcquireImmediate(t *testing.T) {
 func TestRateLimiter_RespectsContextCancellation(t *testing.T) {
 	ocr := &mockOCRService{}
 	storage := &mockTempStorage{}
-	wc := warning.NewCollector()
-	adapter := NewAdapter(ocr, storage, wc, 1, 1, 1*time.Millisecond)
+	adapter := NewAdapter(ocr, storage, 1, 1, 1*time.Millisecond)
 
 	// Drain all tokens.
 	if err := adapter.acquireToken(context.Background()); err != nil {
@@ -381,8 +371,7 @@ func TestRateLimiter_RespectsContextCancellation(t *testing.T) {
 func TestRateLimiter_ConcurrentAccess(t *testing.T) {
 	ocr := &mockOCRService{}
 	storage := &mockTempStorage{}
-	wc := warning.NewCollector()
-	adapter := NewAdapter(ocr, storage, wc, 5, 1, 1*time.Millisecond)
+	adapter := NewAdapter(ocr, storage, 5, 1, 1*time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -428,10 +417,9 @@ func TestProcess_RetrySucceedsOnSecondAttempt(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	result, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	result, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -465,10 +453,9 @@ func TestProcess_RetryExhausted_ReturnsError(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc) // maxAttempts=3
+	adapter := newTestAdapter(ocr, storage) // maxAttempts=3
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	_, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -498,10 +485,9 @@ func TestProcess_NonRetryableError_NoRetry(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	_, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -535,10 +521,9 @@ func TestProcess_RetryReDownloadFails(t *testing.T) {
 			},
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	_, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -566,9 +551,8 @@ func TestProcess_ContextCancelledDuringBackoff(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
 	// Use a longer backoff so we can cancel during it.
-	adapter := NewAdapter(ocr, storage, wc, 100, 3, 500*time.Millisecond)
+	adapter := NewAdapter(ocr, storage, 100, 3, 500*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -578,7 +562,7 @@ func TestProcess_ContextCancelledDuringBackoff(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := adapter.Process(ctx, "key/doc.pdf", false)
+	_, _, err := adapter.Process(ctx, "key/doc.pdf", false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -618,10 +602,9 @@ func TestProcess_ReaderClosedOnRetry(t *testing.T) {
 			},
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	result, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	result, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -658,10 +641,9 @@ func TestProcess_WarningPartialRecognition_EmptyText(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	result, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	result, warnings, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -670,7 +652,6 @@ func TestProcess_WarningPartialRecognition_EmptyText(t *testing.T) {
 		t.Errorf("expected status %q, got %q", model.OCRStatusApplicable, result.Status)
 	}
 
-	warnings := wc.Collect()
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 warning, got %d", len(warnings))
 	}
@@ -695,10 +676,9 @@ func TestProcess_WarningPartialRecognition_WhitespaceOnly(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	result, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	result, warnings, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -707,7 +687,6 @@ func TestProcess_WarningPartialRecognition_WhitespaceOnly(t *testing.T) {
 		t.Errorf("expected status %q, got %q", model.OCRStatusApplicable, result.Status)
 	}
 
-	warnings := wc.Collect()
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 warning, got %d", len(warnings))
 	}
@@ -729,10 +708,9 @@ func TestProcess_WarningLowQuality_ShortText(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	result, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	result, warnings, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -741,7 +719,6 @@ func TestProcess_WarningLowQuality_ShortText(t *testing.T) {
 		t.Errorf("expected status %q, got %q", model.OCRStatusApplicable, result.Status)
 	}
 
-	warnings := wc.Collect()
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 warning, got %d", len(warnings))
 	}
@@ -768,32 +745,30 @@ func TestProcess_NoWarning_NormalText(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	_, warnings, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if wc.HasWarnings() {
-		t.Errorf("expected no warnings for normal text, got %v", wc.Collect())
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for normal text, got %v", warnings)
 	}
 }
 
 func TestProcess_NoWarning_TextPDF(t *testing.T) {
 	ocr := &mockOCRService{}
 	storage := &mockTempStorage{}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", true)
+	_, warnings, err := adapter.Process(context.Background(), "key/doc.pdf", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if wc.HasWarnings() {
-		t.Errorf("expected no warnings for text PDF, got %v", wc.Collect())
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for text PDF, got %v", warnings)
 	}
 }
 
@@ -810,15 +785,13 @@ func TestProcess_EmptyText_NotBothWarnings(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	_, warnings, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	warnings := wc.Collect()
 	if len(warnings) != 1 {
 		t.Fatalf("expected exactly 1 warning (partial, not both), got %d: %v", len(warnings), warnings)
 	}
@@ -843,10 +816,9 @@ func TestProcess_MaxAttemptsOne_NoRetry(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapterNoRetry(ocr, storage, wc) // maxAttempts=1
+	adapter := newTestAdapterNoRetry(ocr, storage) // maxAttempts=1
 
-	_, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	_, _, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -878,10 +850,9 @@ func TestProcess_RetryWithWarning(t *testing.T) {
 			defaultDownloadFn(""),
 		},
 	}
-	wc := warning.NewCollector()
-	adapter := newTestAdapter(ocr, storage, wc)
+	adapter := newTestAdapter(ocr, storage)
 
-	result, err := adapter.Process(context.Background(), "key/doc.pdf", false)
+	result, warnings, err := adapter.Process(context.Background(), "key/doc.pdf", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -893,7 +864,6 @@ func TestProcess_RetryWithWarning(t *testing.T) {
 		t.Errorf("OCR should be called 2 times, called %d times", ocr.called.Load())
 	}
 
-	warnings := wc.Collect()
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 warning, got %d", len(warnings))
 	}
@@ -905,9 +875,8 @@ func TestProcess_RetryWithWarning(t *testing.T) {
 func TestNewAdapter_DefaultsForInvalidParams(t *testing.T) {
 	ocr := &mockOCRService{}
 	storage := &mockTempStorage{}
-	wc := warning.NewCollector()
 
-	adapter := NewAdapter(ocr, storage, wc, 0, 0, 1*time.Millisecond)
+	adapter := NewAdapter(ocr, storage, 0, 0, 1*time.Millisecond)
 
 	if adapter.rpsLimit != 10 {
 		t.Errorf("expected default rpsLimit 10, got %d", adapter.rpsLimit)
@@ -923,24 +892,11 @@ func TestNewAdapter_DefaultsForInvalidParams(t *testing.T) {
 	}
 
 	// Also test negative values.
-	adapter2 := NewAdapter(ocr, storage, wc, -5, -3, 1*time.Millisecond)
+	adapter2 := NewAdapter(ocr, storage, -5, -3, 1*time.Millisecond)
 	if adapter2.rpsLimit != 10 {
 		t.Errorf("expected default rpsLimit 10 for negative input, got %d", adapter2.rpsLimit)
 	}
 	if adapter2.maxAttempts != 1 {
 		t.Errorf("expected default maxAttempts 1 for negative input, got %d", adapter2.maxAttempts)
 	}
-}
-
-func TestNewAdapter_NilWarningsPanics(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for nil warnings collector, got none")
-		}
-	}()
-
-	ocr := &mockOCRService{}
-	storage := &mockTempStorage{}
-	NewAdapter(ocr, storage, nil, 10, 3, 1*time.Millisecond)
 }

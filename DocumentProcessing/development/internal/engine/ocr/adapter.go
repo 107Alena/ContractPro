@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
 )
@@ -30,7 +29,6 @@ const (
 type Adapter struct {
 	ocrService  port.OCRServicePort
 	storage     port.TempStoragePort
-	warnings    *warning.Collector
 	rpsLimit    int
 	maxAttempts int
 	backoffBase time.Duration
@@ -43,20 +41,16 @@ type Adapter struct {
 }
 
 // NewAdapter creates an Adapter with the given OCR service, temporary storage,
-// warning collector, rate limit, max retry attempts, and backoff base duration.
+// rate limit, max retry attempts, and backoff base duration.
 //
 // If rpsLimit <= 0, it defaults to 10. If maxAttempts <= 0, it defaults to 1.
 func NewAdapter(
 	ocrService port.OCRServicePort,
 	storage port.TempStoragePort,
-	warnings *warning.Collector,
 	rpsLimit int,
 	maxAttempts int,
 	backoffBase time.Duration,
 ) *Adapter {
-	if warnings == nil {
-		panic("ocr.NewAdapter: warnings collector must not be nil")
-	}
 	if rpsLimit <= 0 {
 		rpsLimit = 10
 	}
@@ -67,7 +61,6 @@ func NewAdapter(
 	return &Adapter{
 		ocrService:  ocrService,
 		storage:     storage,
-		warnings:    warnings,
 		rpsLimit:    rpsLimit,
 		maxAttempts: maxAttempts,
 		backoffBase: backoffBase,
@@ -80,25 +73,25 @@ func NewAdapter(
 // Process determines whether OCR is needed and performs it if necessary.
 //
 // If isTextPDF is true, the PDF already contains extractable text and OCR is
-// skipped — returns an artifact with status not_applicable.
+// skipped — returns an artifact with status not_applicable and no warnings.
 //
 // If isTextPDF is false (scanned PDF), the file is downloaded from temporary
 // storage using storageKey, sent to the OCR service for recognition with
 // rate limiting and retry logic, and the raw text is returned with status
-// applicable. Warnings are emitted for empty or low-quality recognition results.
-func (a *Adapter) Process(ctx context.Context, storageKey string, isTextPDF bool) (*model.OCRRawArtifact, error) {
+// applicable. Warnings are returned for empty or low-quality recognition results.
+func (a *Adapter) Process(ctx context.Context, storageKey string, isTextPDF bool) (*model.OCRRawArtifact, []model.ProcessingWarning, error) {
 	if isTextPDF {
-		return &model.OCRRawArtifact{Status: model.OCRStatusNotApplicable}, nil
+		return &model.OCRRawArtifact{Status: model.OCRStatusNotApplicable}, nil, nil
 	}
 
 	reader, err := a.storage.Download(ctx, storageKey)
 	if err != nil {
-		return nil, port.NewStorageError("download PDF for OCR: "+err.Error(), err)
+		return nil, nil, port.NewStorageError("download PDF for OCR: "+err.Error(), err)
 	}
 
 	if err := ctx.Err(); err != nil {
 		reader.Close()
-		return nil, err
+		return nil, nil, err
 	}
 
 	var lastErr error
@@ -106,30 +99,30 @@ func (a *Adapter) Process(ctx context.Context, storageKey string, isTextPDF bool
 	for attempt := 1; attempt <= a.maxAttempts; attempt++ {
 		if err := a.acquireToken(ctx); err != nil {
 			reader.Close()
-			return nil, err
+			return nil, nil, err
 		}
 
 		rawText, ocrErr := a.ocrService.Recognize(ctx, reader)
 		if ocrErr == nil {
 			reader.Close()
-			a.checkWarnings(rawText)
+			warnings := checkWarnings(rawText)
 
 			return &model.OCRRawArtifact{
 				Status:  model.OCRStatusApplicable,
 				RawText: rawText,
-			}, nil
+			}, warnings, nil
 		}
 
 		lastErr = ocrErr
 
 		if !port.IsRetryable(ocrErr) {
 			reader.Close()
-			return nil, port.NewOCRError(ocrErr.Error(), false, ocrErr)
+			return nil, nil, port.NewOCRError(ocrErr.Error(), false, ocrErr)
 		}
 
 		if attempt == a.maxAttempts {
 			reader.Close()
-			return nil, port.NewOCRError(
+			return nil, nil, port.NewOCRError(
 				fmt.Sprintf("OCR failed after %d attempts: %v", a.maxAttempts, lastErr),
 				true,
 				lastErr,
@@ -140,45 +133,46 @@ func (a *Adapter) Process(ctx context.Context, storageKey string, isTextPDF bool
 		reader.Close()
 
 		if err := a.backoff(ctx, attempt); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		reader, err = a.storage.Download(ctx, storageKey)
 		if err != nil {
-			return nil, port.NewStorageError("re-download PDF for OCR retry: "+err.Error(), err)
+			return nil, nil, port.NewStorageError("re-download PDF for OCR retry: "+err.Error(), err)
 		}
 	}
 
 	// Unreachable: the loop always returns. Guard for safety.
-	return nil, port.NewOCRError(
+	return nil, nil, port.NewOCRError(
 		fmt.Sprintf("OCR failed after %d attempts: %v", a.maxAttempts, lastErr),
 		true,
 		lastErr,
 	)
 }
 
-// checkWarnings adds OCR quality warnings to the collector. Warnings are
-// mutually exclusive: empty/whitespace text triggers partial recognition,
-// non-empty text shorter than lowQualityThreshold triggers low quality.
-func (a *Adapter) checkWarnings(rawText string) {
+// checkWarnings returns OCR quality warnings. Warnings are mutually exclusive:
+// empty/whitespace text triggers partial recognition, non-empty text shorter
+// than lowQualityThreshold triggers low quality.
+func checkWarnings(rawText string) []model.ProcessingWarning {
 	trimmed := strings.TrimSpace(rawText)
 
 	if trimmed == "" {
-		a.warnings.Add(model.ProcessingWarning{
+		return []model.ProcessingWarning{{
 			Code:    WarnPartialRecognition,
 			Message: "OCR produced empty or whitespace-only text",
 			Stage:   model.ProcessingStageOCR,
-		})
-		return
+		}}
 	}
 
 	if len([]rune(trimmed)) < lowQualityThreshold {
-		a.warnings.Add(model.ProcessingWarning{
+		return []model.ProcessingWarning{{
 			Code:    WarnLowQuality,
 			Message: "OCR produced very short text, possible low quality scan",
 			Stage:   model.ProcessingStageOCR,
-		})
+		}}
 	}
+
+	return nil
 }
 
 // refill adds tokens based on elapsed time since last refill. Must be called

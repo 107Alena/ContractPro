@@ -16,7 +16,6 @@ import (
 	"contractpro/document-processing/internal/application/lifecycle"
 	"contractpro/document-processing/internal/application/pendingresponse"
 	"contractpro/document-processing/internal/application/processing"
-	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/config"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
@@ -289,13 +288,13 @@ type stubOCRProcessor struct {
 	err    error
 }
 
-func (o *stubOCRProcessor) Process(_ context.Context, _ string, _ bool) (*model.OCRRawArtifact, error) {
+func (o *stubOCRProcessor) Process(_ context.Context, _ string, _ bool) (*model.OCRRawArtifact, []model.ProcessingWarning, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.err != nil {
-		return nil, o.err
+		return nil, nil, o.err
 	}
-	return o.result, nil
+	return o.result, nil, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +407,6 @@ type testHarness struct {
 	structExtract *stubStructExtractor
 	treeBuilder   *stubTreeBuilder
 	validator     *stubValidator
-	warnings      *warning.Collector
 }
 
 // ---------------------------------------------------------------------------
@@ -462,8 +460,6 @@ func newTestHarness(t *testing.T, opts ...harnessOption) *testHarness {
 		tree: defaultSemanticTree(),
 	}
 
-	warningCollector := warning.NewCollector()
-
 	logger := observability.NewLogger("error")
 	metrics := observability.NewMetrics()
 
@@ -471,7 +467,6 @@ func newTestHarness(t *testing.T, opts ...harnessOption) *testHarness {
 
 	orchestrator := processing.NewOrchestrator(
 		lifecycleMgr,
-		warningCollector,
 		validator,
 		fetcher,
 		ocrProcessor,
@@ -514,7 +509,6 @@ func newTestHarness(t *testing.T, opts ...harnessOption) *testHarness {
 		structExtract: structExtract,
 		treeBuilder:   treeBuilder,
 		validator:     validator,
-		warnings:      warningCollector,
 	}
 }
 
@@ -715,7 +709,6 @@ type comparisonHarness struct {
 	treeReq     *treeRequesterMock
 	dmSender    *confirmingDMSender
 	registry    *pendingresponse.Registry
-	warnings    *warning.Collector
 }
 
 // ---------------------------------------------------------------------------
@@ -760,7 +753,6 @@ func newComparisonHarness(t *testing.T, opts ...harnessOption) *comparisonHarnes
 		registry: registry,
 	}
 
-	warningCollector := warning.NewCollector()
 	logger := observability.NewLogger("error")
 	metrics := observability.NewMetrics()
 
@@ -770,7 +762,6 @@ func newComparisonHarness(t *testing.T, opts ...harnessOption) *comparisonHarnes
 
 	compOrch := compapp.NewOrchestrator(
 		lifecycleMgr,
-		warningCollector,
 		treeReq,
 		dmSender,
 		registry,
@@ -804,7 +795,6 @@ func newComparisonHarness(t *testing.T, opts ...harnessOption) *comparisonHarnes
 		treeReq:     treeReq,
 		dmSender:    dmSender,
 		registry:    registry,
-		warnings:    warningCollector,
 	}
 }
 

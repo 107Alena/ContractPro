@@ -13,7 +13,6 @@ import (
 	"contractpro/document-processing/internal/application/lifecycle"
 	"contractpro/document-processing/internal/application/pendingresponse"
 	"contractpro/document-processing/internal/application/processing"
-	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/config"
 	"contractpro/document-processing/internal/egress/dm"
 	"contractpro/document-processing/internal/egress/publisher"
@@ -133,13 +132,12 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	dmSender := dm.NewSender(brokerCli, cfg.Broker)
 	limiter := concurrency.New(cfg.Concurrency.MaxConcurrentJobs, obs.Metrics, obs.Logger)
 	pendingRegistry := pendingresponse.New()
-	warningCollector := warning.NewCollector()
 
 	// --- Group 4: Engine components ---
 	pdfUtil := pdf.NewUtil()
 	inputValidator := validator.NewValidator(cfg.Limits.MaxFileSize, "application/pdf", nil)
 	fileFetcher := fetcher.NewFetcher(downloader, tempStorage, pdfUtil, cfg.Limits.MaxFileSize, cfg.Limits.MaxPages)
-	ocrAdapter := engineocr.NewAdapter(ocrCli, tempStorage, warningCollector, cfg.OCR.RPSLimit, cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase)
+	ocrAdapter := engineocr.NewAdapter(ocrCli, tempStorage, cfg.OCR.RPSLimit, cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase)
 	textExtractor := textextract.NewExtractor(pdfUtil, tempStorage)
 	structExtractor := structure.NewExtractor()
 	treeBuilder := semantictree.NewBuilder()
@@ -155,7 +153,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	)
 
 	procOrch := processing.NewOrchestrator(
-		lifecycleMgr, warningCollector,
+		lifecycleMgr,
 		inputValidator, fileFetcher, ocrAdapter,
 		textExtractor, structExtractor, treeBuilder,
 		tempStorage, eventPublisher, dmSender,
@@ -164,7 +162,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	)
 
 	compOrch := comparison.NewOrchestrator(
-		lifecycleMgr, warningCollector,
+		lifecycleMgr,
 		dmSender, dmSender, pendingRegistry, versionComparer,
 		eventPublisher,
 		obs.Logger,

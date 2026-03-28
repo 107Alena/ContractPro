@@ -1897,3 +1897,34 @@ idempotency, malformed input, artifact format.
 - Для полного end-to-end тестирования кириллицы: разместить реальные PDF (Word, LibreOffice) в internal/pdf/data/ и расширить real_pdf_test.go
 - textextract.Extractor может быть обновлён для использования ExtractTextWithWarnings и propagation font warnings через pipeline
 - hexToRunes ограничен 16-bit Unicode (BMP); supplementary characters (emoji, CJK ext) потребуют UTF-16 surrogate pair поддержки
+
+### TASK-048 — Per-job Warning Collector — устранение race condition
+**Статус:** done
+**Дата:** 2026-03-28
+
+**План реализации:**
+1. Изменить `OCRProcessorPort.Process` — возвращать `[]model.ProcessingWarning` (как Text/Structure extractors)
+2. Обновить OCR Adapter: убрать shared collector, `checkWarnings` → standalone pure function
+3. Убрать `*warning.Collector` из Processing и Comparison Orchestrators
+4. Использовать `allWarnings := make([]ProcessingWarning, 0)` — локальный per-job слайс в `runPipeline`
+5. Удалить пакет `internal/application/warning/`
+6. Обновить `app.go` DI wiring
+7. Обновить все тесты, добавить тест на конкурентность
+8. Code review → исправить замечания
+
+**Summary:**
+- Устранена race condition: shared `*warning.Collector` заменён на per-job локальные `[]model.ProcessingWarning` слайсы
+- `OCRProcessorPort.Process` теперь возвращает `(*OCRRawArtifact, []ProcessingWarning, error)` — унифицировано с Text/Structure extractors
+- Удалён пакет `internal/application/warning/` (collector.go + collector_test.go)
+- OCR Adapter: `checkWarnings` стала standalone pure function
+- Processing Orchestrator: `allWarnings := make([]ProcessingWarning, 0)` + append OCR/text/struct warnings
+- Comparison Orchestrator: placeholder `allWarnings` для будущей расширяемости
+- Добавлен `TestConcurrentJobs_WarningIsolation`: 2 goroutines × разные warnings на одном Orchestrator
+- Code review: 0 critical, 3 minor warnings исправлены
+- 31 пакет PASS с -race (incl integration), go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- Pending critical: TASK-046 (DM confirmation for processing), TASK-047 (DM confirmation routing for comparison)
+- Pending high: TASK-049 (Prometheus metrics endpoint), TASK-050 (DLQ)
+- Pending medium: TASK-051, TASK-052, TASK-053
+- Pending low: TASK-054 (docs)

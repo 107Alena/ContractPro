@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"contractpro/document-processing/internal/application/lifecycle"
-	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
 	"contractpro/document-processing/internal/infra/observability"
@@ -31,11 +30,11 @@ var rejectedCodes = map[string]bool{
 //	VALIDATING_INPUT -> REQUESTING_SEMANTIC_TREES -> WAITING_DM_RESPONSE ->
 //	EXECUTING_DIFF -> SAVING_COMPARISON_RESULT -> WAITING_DM_CONFIRMATION
 //
-// NOTE: The shared *warning.Collector is not safe for concurrent HandleCompareVersions
-// calls. Concurrent job processing will be addressed separately.
+// The comparison pipeline does not currently produce engine-level warnings,
+// but uses the same per-job local slice pattern as the processing pipeline
+// for future extensibility and consistency.
 type Orchestrator struct {
 	lifecycle   *lifecycle.LifecycleManager
-	warnings    *warning.Collector
 	treeReq     port.DMTreeRequesterPort
 	dmSender    port.DMArtifactSenderPort
 	registry    port.PendingResponseRegistryPort
@@ -51,7 +50,6 @@ type Orchestrator struct {
 // maxRetries defaults to 1 if < 1, backoffBase defaults to time.Second if <= 0.
 func NewOrchestrator(
 	lifecycle *lifecycle.LifecycleManager,
-	warnings *warning.Collector,
 	treeReq port.DMTreeRequesterPort,
 	dmSender port.DMArtifactSenderPort,
 	registry port.PendingResponseRegistryPort,
@@ -63,9 +61,6 @@ func NewOrchestrator(
 ) *Orchestrator {
 	if lifecycle == nil {
 		panic("comparison: lifecycle manager must not be nil")
-	}
-	if warnings == nil {
-		panic("comparison: warnings collector must not be nil")
 	}
 	if treeReq == nil {
 		panic("comparison: tree requester must not be nil")
@@ -93,7 +88,6 @@ func NewOrchestrator(
 	}
 	return &Orchestrator{
 		lifecycle:   lifecycle,
-		warnings:    warnings,
 		treeReq:     treeReq,
 		dmSender:    dmSender,
 		registry:    registry,
@@ -319,7 +313,10 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 	}
 
 	// --- Transition: IN_PROGRESS -> COMPLETED / COMPLETED_WITH_WARNINGS ---
-	allWarnings := o.warnings.Collect()
+	// Per-job warning accumulator — placeholder for future extensibility.
+	// The comparison pipeline does not currently produce engine-level warnings,
+	// but uses the same pattern as the processing pipeline for consistency.
+	allWarnings := make([]model.ProcessingWarning, 0)
 	finalStatus := model.StatusCompleted
 	if len(allWarnings) > 0 {
 		finalStatus = model.StatusCompletedWithWarnings
@@ -425,8 +422,6 @@ func (o *Orchestrator) HandleCompareVersions(ctx context.Context, cmd model.Comp
 	job.UserID = cmd.UserID
 
 	o.logger.Info(ctx, "comparison pipeline started", "base_version_id", cmd.BaseVersionID, "target_version_id", cmd.TargetVersionID)
-
-	o.warnings.Reset()
 
 	// Create a job-scoped context with timeout.
 	jobCtx, cancel := o.lifecycle.NewJobContext(ctx)

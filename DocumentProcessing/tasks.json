@@ -1132,7 +1132,9 @@
         "Шаг 3: go vet ./... — без предупреждений"
       ],
       "dependencies": ["TASK-020", "TASK-035", "TASK-037"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-28",
+      "summary": "Устранена race condition: shared *warning.Collector заменён на per-job локальные []model.ProcessingWarning слайсы. OCRProcessorPort.Process теперь возвращает (*OCRRawArtifact, []ProcessingWarning, error) — унифицировано с Text/Structure extractors. Удалён пакет internal/application/warning/ (collector.go + collector_test.go). Убраны поля warnings и вызовы Reset() из обоих Orchestrators. Processing Orchestrator: allWarnings := make([]ProcessingWarning, 0) в runPipeline, append OCR/text/struct warnings. Comparison Orchestrator: placeholder allWarnings для будущей расширяемости, всегда COMPLETED. OCR Adapter: checkWarnings стала standalone pure function, возвращает []ProcessingWarning. app.go: убран warningCollector из DI. Добавлен TestConcurrentJobs_WarningIsolation: 2 goroutines с разными warnings на одном Orchestrator, проверка изоляции через artifacts и completion events. Code review: 0 critical, 3 warnings (все minor). 31 пакет PASS с -race (incl integration), go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-049",

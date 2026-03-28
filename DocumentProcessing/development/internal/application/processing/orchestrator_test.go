@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
 	"contractpro/document-processing/internal/application/lifecycle"
-	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
 	"contractpro/document-processing/internal/engine/ocr"
@@ -200,14 +200,15 @@ type callCountOCRProcessor struct {
 	failUntil     int
 	err           error
 	successResult *model.OCRRawArtifact
+	warnings      []model.ProcessingWarning
 }
 
-func (m *callCountOCRProcessor) Process(_ context.Context, _ string, _ bool) (*model.OCRRawArtifact, error) {
+func (m *callCountOCRProcessor) Process(_ context.Context, _ string, _ bool) (*model.OCRRawArtifact, []model.ProcessingWarning, error) {
 	m.callCount++
 	if m.callCount <= m.failUntil {
-		return nil, m.err
+		return nil, nil, m.err
 	}
-	return m.successResult, nil
+	return m.successResult, m.warnings, nil
 }
 
 // callCountDMSender counts invocations and always returns err.
@@ -296,7 +297,6 @@ func defaultSemanticTree() *model.SemanticTree {
 type testDeps struct {
 	publisher     *mockPublisher
 	idempotency   *mockIdempotency
-	wc            *warning.Collector
 	validator     *mockValidator
 	fetcher       *mockFetcher
 	ocrService    *mockOCRService
@@ -313,7 +313,6 @@ func newTestDeps() *testDeps {
 	return &testDeps{
 		publisher:   &mockPublisher{},
 		idempotency: &mockIdempotency{},
-		wc:          warning.NewCollector(),
 		validator:   &mockValidator{},
 		fetcher: &mockFetcher{
 			result: defaultFetchResult(),
@@ -328,11 +327,10 @@ func newTestDeps() *testDeps {
 }
 
 func (d *testDeps) buildOrchestrator() *Orchestrator {
-	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, d.wc, 10, 1, time.Second)
+	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, 10, 1, time.Second)
 	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
-		d.wc,
 		d.validator,
 		d.fetcher,
 		ocrAdapter,
@@ -349,11 +347,10 @@ func (d *testDeps) buildOrchestrator() *Orchestrator {
 }
 
 func (d *testDeps) buildOrchestratorWithRetry(maxRetries int, backoff time.Duration) *Orchestrator {
-	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, d.wc, 10, 1, time.Second)
+	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, 10, 1, time.Second)
 	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
-		d.wc,
 		d.validator,
 		d.fetcher,
 		ocrAdapter,
@@ -373,7 +370,6 @@ func (d *testDeps) buildOrchestratorWithOCR(ocrProc port.OCRProcessorPort, maxRe
 	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
-		d.wc,
 		d.validator,
 		d.fetcher,
 		ocrProc,
@@ -390,11 +386,10 @@ func (d *testDeps) buildOrchestratorWithOCR(ocrProc port.OCRProcessorPort, maxRe
 }
 
 func (d *testDeps) buildOrchestratorWithDMSender(sender port.DMArtifactSenderPort, maxRetries int, backoff time.Duration) *Orchestrator {
-	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, d.wc, 10, 1, time.Second)
+	ocrAdapter := ocr.NewAdapter(d.ocrService, d.tempStorage, 10, 1, time.Second)
 	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
-		d.wc,
 		d.validator,
 		d.fetcher,
 		ocrAdapter,
@@ -896,11 +891,10 @@ func TestPublishCompletedError_ReturnsError(t *testing.T) {
 	// We need the publisher to fail only on PublishProcessingCompleted, not on
 	// PublishStatusChanged. To achieve this we use a specialized publisher mock.
 	specialPub := &completionFailPublisher{}
-	ocrAdapter := ocr.NewAdapter(deps.ocrService, deps.tempStorage, deps.wc, 10, 1, time.Second)
+	ocrAdapter := ocr.NewAdapter(deps.ocrService, deps.tempStorage, 10, 1, time.Second)
 	lm := lifecycle.NewLifecycleManager(specialPub, deps.idempotency, 120*time.Second, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
-		deps.wc,
 		deps.validator,
 		deps.fetcher,
 		ocrAdapter,
@@ -998,8 +992,8 @@ func TestArtifactsEventContent(t *testing.T) {
 	}
 
 	// No warnings in artifact for clean run.
-	if a.Warnings != nil {
-		t.Errorf("expected nil Warnings for no-warning path, got %v", a.Warnings)
+	if len(a.Warnings) != 0 {
+		t.Errorf("expected 0 Warnings for no-warning path, got %v", a.Warnings)
 	}
 }
 
@@ -1054,13 +1048,11 @@ func TestCommandFieldsCopiedToJob(t *testing.T) {
 func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 	pub := &mockPublisher{}
 	idem := &mockIdempotency{}
-	wc := warning.NewCollector()
 	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
-	ocrAdapter := ocr.NewAdapter(&mockOCRService{}, &mockTempStorage{}, wc, 10, 1, time.Second)
+	ocrAdapter := ocr.NewAdapter(&mockOCRService{}, &mockTempStorage{}, 10, 1, time.Second)
 
 	validArgs := []interface{}{
 		lm,
-		wc,
 		&mockValidator{},
 		&mockFetcher{result: defaultFetchResult()},
 		ocrAdapter,
@@ -1075,7 +1067,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 
 	// Test that passing nil for each dependency panics.
 	depNames := []string{
-		"lifecycle", "warnings", "validator", "fetcher", "ocrProcessor",
+		"lifecycle", "validator", "fetcher", "ocrProcessor",
 		"textExtract", "structExtract", "treeBuilder",
 		"tempStorage", "publisher", "dmSender", "logger",
 	}
@@ -1095,17 +1087,16 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 
 			NewOrchestrator(
 				asLifecycle(args[0]),
-				asWarnings(args[1]),
-				asValidator(args[2]),
-				asFetcher(args[3]),
-				asOCRProcessor(args[4]),
-				asTextExtractor(args[5]),
-				asStructExtractor(args[6]),
-				asTreeBuilder(args[7]),
-				asTempStorage(args[8]),
-				asPublisher(args[9]),
-				asDMSender(args[10]),
-				asLogger(args[11]),
+				asValidator(args[1]),
+				asFetcher(args[2]),
+				asOCRProcessor(args[3]),
+				asTextExtractor(args[4]),
+				asStructExtractor(args[5]),
+				asTreeBuilder(args[6]),
+				asTempStorage(args[7]),
+				asPublisher(args[8]),
+				asDMSender(args[9]),
+				asLogger(args[10]),
 				1,
 				time.Millisecond,
 			)
@@ -1119,13 +1110,6 @@ func asLifecycle(v interface{}) *lifecycle.LifecycleManager {
 		return nil
 	}
 	return v.(*lifecycle.LifecycleManager)
-}
-
-func asWarnings(v interface{}) *warning.Collector {
-	if v == nil {
-		return nil
-	}
-	return v.(*warning.Collector)
 }
 
 func asValidator(v interface{}) port.InputValidatorPort {
@@ -1244,15 +1228,13 @@ func TestContextCancellation_ReturnsError(t *testing.T) {
 	// Build orchestrator with a very short job timeout so the context expires
 	// during the pipeline. We simulate this by providing a validator that
 	// respects context cancellation.
-	wc := warning.NewCollector()
-	ocrAdapter := ocr.NewAdapter(deps.ocrService, deps.tempStorage, wc, 10, 1, time.Second)
+	ocrAdapter := ocr.NewAdapter(deps.ocrService, deps.tempStorage, 10, 1, time.Second)
 	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 120*time.Second, nil, nopLogger())
 
 	// Use a fetcher that checks context and returns cancel error.
 	cancelFetcher := &contextAwareFetcher{result: defaultFetchResult()}
 	orch := NewOrchestrator(
 		lm,
-		wc,
 		deps.validator,
 		cancelFetcher,
 		ocrAdapter,
@@ -1850,4 +1832,324 @@ func TestRetryStep_RespectsContextCancellation(t *testing.T) {
 	if callCount != 1 {
 		t.Errorf("expected 1 call before cancellation, got %d", callCount)
 	}
+}
+
+// --- Tests: Concurrent warning isolation ---
+
+// jobAwareTextExtractor returns different warnings based on the storage key
+// (which contains the job ID). This enables testing that concurrent jobs
+// receive only their own warnings.
+type jobAwareTextExtractor struct {
+	mu       sync.Mutex
+	textByID map[string]*model.ExtractedText
+	warnByID map[string][]model.ProcessingWarning
+}
+
+func (e *jobAwareTextExtractor) Extract(_ context.Context, storageKey string, _ *model.OCRRawArtifact) (*model.ExtractedText, []model.ProcessingWarning, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	text, ok := e.textByID[storageKey]
+	if !ok {
+		return nil, nil, port.NewExtractionError("unknown storage key: "+storageKey, nil)
+	}
+	return text, e.warnByID[storageKey], nil
+}
+
+// threadSafePublisher is a concurrent-safe mock publisher for multi-goroutine tests.
+type threadSafePublisher struct {
+	mu                  sync.Mutex
+	statusChanged       []model.StatusChangedEvent
+	processingCompleted []model.ProcessingCompletedEvent
+	processingFailed    []model.ProcessingFailedEvent
+}
+
+func (p *threadSafePublisher) PublishStatusChanged(_ context.Context, event model.StatusChangedEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.statusChanged = append(p.statusChanged, event)
+	return nil
+}
+
+func (p *threadSafePublisher) PublishProcessingCompleted(_ context.Context, event model.ProcessingCompletedEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.processingCompleted = append(p.processingCompleted, event)
+	return nil
+}
+
+func (p *threadSafePublisher) PublishProcessingFailed(_ context.Context, event model.ProcessingFailedEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.processingFailed = append(p.processingFailed, event)
+	return nil
+}
+
+func (p *threadSafePublisher) PublishComparisonCompleted(_ context.Context, _ model.ComparisonCompletedEvent) error {
+	return nil
+}
+
+func (p *threadSafePublisher) PublishComparisonFailed(_ context.Context, _ model.ComparisonFailedEvent) error {
+	return nil
+}
+
+// threadSafeIdempotency is a concurrent-safe idempotency store.
+type threadSafeIdempotency struct {
+	mu    sync.Mutex
+	store map[string]bool
+}
+
+func newThreadSafeIdempotency() *threadSafeIdempotency {
+	return &threadSafeIdempotency{store: make(map[string]bool)}
+}
+
+func (m *threadSafeIdempotency) Check(_ context.Context, _ string) (port.IdempotencyStatus, error) {
+	return port.IdempotencyStatusNew, nil
+}
+
+func (m *threadSafeIdempotency) Register(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *threadSafeIdempotency) MarkCompleted(_ context.Context, jobID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.store[jobID] = true
+	return nil
+}
+
+// threadSafeDMSender is a concurrent-safe DM sender mock.
+type threadSafeDMSender struct {
+	mu        sync.Mutex
+	artifacts []model.DocumentProcessingArtifactsReady
+}
+
+func (m *threadSafeDMSender) SendArtifacts(_ context.Context, event model.DocumentProcessingArtifactsReady) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.artifacts = append(m.artifacts, event)
+	return nil
+}
+
+func (m *threadSafeDMSender) SendDiffResult(_ context.Context, _ model.DocumentVersionDiffReady) error {
+	return nil
+}
+
+// threadSafeTempStorage is a concurrent-safe temp storage mock.
+type threadSafeTempStorage struct {
+	mu sync.Mutex
+}
+
+func (m *threadSafeTempStorage) Upload(_ context.Context, _ string, _ io.Reader) error {
+	return nil
+}
+
+func (m *threadSafeTempStorage) Download(_ context.Context, _ string) (io.ReadCloser, error) {
+	return io.NopCloser(io.LimitReader(nil, 0)), nil
+}
+
+func (m *threadSafeTempStorage) Delete(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *threadSafeTempStorage) DeleteByPrefix(_ context.Context, _ string) error {
+	return nil
+}
+
+func TestConcurrentJobs_WarningIsolation(t *testing.T) {
+	// Two concurrent jobs processed by a single Orchestrator should have
+	// completely isolated warnings: job A's warnings must not leak into job B's
+	// artifacts or completion event, and vice versa.
+
+	pub := &threadSafePublisher{}
+	idem := newThreadSafeIdempotency()
+	dmSender := &threadSafeDMSender{}
+	tempStorage := &threadSafeTempStorage{}
+
+	// Job-aware text extractor returns different warnings per job.
+	textExtract := &jobAwareTextExtractor{
+		textByID: map[string]*model.ExtractedText{
+			"job-A/source.pdf": {DocumentID: "doc-A", Pages: []model.PageText{{PageNumber: 1, Text: "Текст А"}}},
+			"job-B/source.pdf": {DocumentID: "doc-B", Pages: []model.PageText{{PageNumber: 1, Text: "Текст Б"}}},
+		},
+		warnByID: map[string][]model.ProcessingWarning{
+			"job-A/source.pdf": {
+				{Code: "WARN_A_1", Message: "warning for job A page 1", Stage: model.ProcessingStageTextExtraction},
+				{Code: "WARN_A_2", Message: "warning for job A page 2", Stage: model.ProcessingStageTextExtraction},
+			},
+			"job-B/source.pdf": {
+				{Code: "WARN_B_1", Message: "warning for job B", Stage: model.ProcessingStageTextExtraction},
+			},
+		},
+	}
+
+	// Job-aware fetcher: returns different storage keys per job.
+	fetcherA := &mockFetcher{result: &port.FetchResult{StorageKey: "job-A/source.pdf", PageCount: 1, IsTextPDF: true, FileSize: 100}}
+	fetcherB := &mockFetcher{result: &port.FetchResult{StorageKey: "job-B/source.pdf", PageCount: 1, IsTextPDF: true, FileSize: 100}}
+
+	// We need a job-aware fetcher that routes based on the command.
+	jobFetcher := &jobAwareFetcher{
+		byJobID: map[string]*port.FetchResult{
+			"job-A": fetcherA.result,
+			"job-B": fetcherB.result,
+		},
+	}
+
+	ocrAdapter := ocr.NewAdapter(&mockOCRService{}, tempStorage, 10, 1, time.Second)
+	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
+
+	orch := NewOrchestrator(
+		lm,
+		&mockValidator{},
+		jobFetcher,
+		ocrAdapter,
+		textExtract,
+		&mockStructureExtractor{structure: defaultStructure()},
+		&mockTreeBuilder{tree: defaultSemanticTree()},
+		tempStorage,
+		pub,
+		dmSender,
+		nopLogger(),
+		1,
+		time.Millisecond,
+	)
+
+	cmdA := model.ProcessDocumentCommand{
+		JobID: "job-A", DocumentID: "doc-A",
+		FileURL: "https://example.com/a.pdf", FileName: "a.pdf",
+		FileSize: 100, MimeType: "application/pdf",
+		OrgID: "org-1", UserID: "user-1",
+	}
+	cmdB := model.ProcessDocumentCommand{
+		JobID: "job-B", DocumentID: "doc-B",
+		FileURL: "https://example.com/b.pdf", FileName: "b.pdf",
+		FileSize: 100, MimeType: "application/pdf",
+		OrgID: "org-1", UserID: "user-1",
+	}
+
+	var wg sync.WaitGroup
+	errA := make(chan error, 1)
+	errB := make(chan error, 1)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errA <- orch.HandleProcessDocument(context.Background(), cmdA)
+	}()
+	go func() {
+		defer wg.Done()
+		errB <- orch.HandleProcessDocument(context.Background(), cmdB)
+	}()
+	wg.Wait()
+
+	if err := <-errA; err != nil {
+		t.Fatalf("job-A failed: %v", err)
+	}
+	if err := <-errB; err != nil {
+		t.Fatalf("job-B failed: %v", err)
+	}
+
+	// Verify both jobs completed.
+	pub.mu.Lock()
+	completedEvents := make([]model.ProcessingCompletedEvent, len(pub.processingCompleted))
+	copy(completedEvents, pub.processingCompleted)
+	pub.mu.Unlock()
+
+	if len(completedEvents) != 2 {
+		t.Fatalf("expected 2 ProcessingCompletedEvent, got %d", len(completedEvents))
+	}
+
+	// Find events by job ID.
+	var completedA, completedB *model.ProcessingCompletedEvent
+	for i := range completedEvents {
+		switch completedEvents[i].JobID {
+		case "job-A":
+			completedA = &completedEvents[i]
+		case "job-B":
+			completedB = &completedEvents[i]
+		}
+	}
+
+	if completedA == nil {
+		t.Fatal("missing ProcessingCompletedEvent for job-A")
+	}
+	if completedB == nil {
+		t.Fatal("missing ProcessingCompletedEvent for job-B")
+	}
+
+	// Job A should have exactly 2 warnings.
+	if completedA.WarningCount != 2 {
+		t.Errorf("job-A: expected WarningCount=2, got %d", completedA.WarningCount)
+	}
+	if completedA.Status != model.StatusCompletedWithWarnings {
+		t.Errorf("job-A: expected COMPLETED_WITH_WARNINGS, got %s", completedA.Status)
+	}
+
+	// Job B should have exactly 1 warning.
+	if completedB.WarningCount != 1 {
+		t.Errorf("job-B: expected WarningCount=1, got %d", completedB.WarningCount)
+	}
+	if completedB.Status != model.StatusCompletedWithWarnings {
+		t.Errorf("job-B: expected COMPLETED_WITH_WARNINGS, got %s", completedB.Status)
+	}
+
+	// Verify artifacts contain ONLY the correct warnings.
+	dmSender.mu.Lock()
+	artifacts := make([]model.DocumentProcessingArtifactsReady, len(dmSender.artifacts))
+	copy(artifacts, dmSender.artifacts)
+	dmSender.mu.Unlock()
+
+	if len(artifacts) != 2 {
+		t.Fatalf("expected 2 artifact events, got %d", len(artifacts))
+	}
+
+	var artifactsA, artifactsB *model.DocumentProcessingArtifactsReady
+	for i := range artifacts {
+		switch artifacts[i].JobID {
+		case "job-A":
+			artifactsA = &artifacts[i]
+		case "job-B":
+			artifactsB = &artifacts[i]
+		}
+	}
+
+	if artifactsA == nil {
+		t.Fatal("missing artifacts for job-A")
+	}
+	if artifactsB == nil {
+		t.Fatal("missing artifacts for job-B")
+	}
+
+	// Job A artifacts: exactly 2 warnings, both with "WARN_A_" prefix.
+	if len(artifactsA.Warnings) != 2 {
+		t.Fatalf("job-A artifacts: expected 2 warnings, got %d", len(artifactsA.Warnings))
+	}
+	for _, w := range artifactsA.Warnings {
+		if w.Code != "WARN_A_1" && w.Code != "WARN_A_2" {
+			t.Errorf("job-A artifacts: unexpected warning code %q (expected WARN_A_1 or WARN_A_2)", w.Code)
+		}
+	}
+
+	// Job B artifacts: exactly 1 warning with code "WARN_B_1".
+	if len(artifactsB.Warnings) != 1 {
+		t.Fatalf("job-B artifacts: expected 1 warning, got %d", len(artifactsB.Warnings))
+	}
+	if artifactsB.Warnings[0].Code != "WARN_B_1" {
+		t.Errorf("job-B artifacts: expected warning code WARN_B_1, got %q", artifactsB.Warnings[0].Code)
+	}
+}
+
+// jobAwareFetcher routes fetch results based on the command's JobID.
+type jobAwareFetcher struct {
+	mu      sync.Mutex
+	byJobID map[string]*port.FetchResult
+}
+
+func (f *jobAwareFetcher) Fetch(_ context.Context, cmd model.ProcessDocumentCommand) (*port.FetchResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result, ok := f.byJobID[cmd.JobID]
+	if !ok {
+		return nil, port.NewFileNotFoundError("unknown job: "+cmd.JobID, nil)
+	}
+	return result, nil
 }

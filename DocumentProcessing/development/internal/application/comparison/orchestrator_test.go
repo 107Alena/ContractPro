@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"contractpro/document-processing/internal/application/lifecycle"
-	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
 	"contractpro/document-processing/internal/infra/observability"
@@ -278,7 +277,6 @@ func defaultDiffResult() *model.VersionDiffResult {
 type testDeps struct {
 	publisher   *mockPublisher
 	idempotency *mockIdempotency
-	wc          *warning.Collector
 	treeReq     *mockTreeRequester
 	dmSender    *mockDMSender
 	registry    *mockRegistry
@@ -308,7 +306,6 @@ func newTestDeps() *testDeps {
 	return &testDeps{
 		publisher:   &mockPublisher{},
 		idempotency: &mockIdempotency{},
-		wc:          warning.NewCollector(),
 		treeReq:     &mockTreeRequester{},
 		dmSender:    &mockDMSender{},
 		registry:    reg,
@@ -322,7 +319,6 @@ func (d *testDeps) build() *Orchestrator {
 	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
-		d.wc,
 		d.treeReq,
 		d.dmSender,
 		d.registry,
@@ -338,7 +334,6 @@ func (d *testDeps) buildWithRetry(maxRetries int, backoff time.Duration) *Orches
 	lm := lifecycle.NewLifecycleManager(d.publisher, d.idempotency, 120*time.Second, nil, nopLogger())
 	return NewOrchestrator(
 		lm,
-		d.wc,
 		d.treeReq,
 		d.dmSender,
 		d.registry,
@@ -355,12 +350,10 @@ func (d *testDeps) buildWithRetry(maxRetries int, backoff time.Duration) *Orches
 func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 	pub := &mockPublisher{}
 	idem := &mockIdempotency{}
-	wc := warning.NewCollector()
 	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 
 	validArgs := []interface{}{
 		lm,
-		wc,
 		&mockTreeRequester{},
 		&mockDMSender{},
 		newMockRegistry(),
@@ -370,7 +363,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 	}
 
 	depNames := []string{
-		"lifecycle", "warnings", "treeRequester", "dmSender",
+		"lifecycle", "treeRequester", "dmSender",
 		"registry", "comparer", "publisher", "logger",
 	}
 
@@ -388,13 +381,12 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 
 			NewOrchestrator(
 				asLifecycle(args[0]),
-				asWarnings(args[1]),
-				asTreeRequester(args[2]),
-				asDMSender(args[3]),
-				asRegistry(args[4]),
-				asComparer(args[5]),
-				asPublisher(args[6]),
-				asLogger(args[7]),
+				asTreeRequester(args[1]),
+				asDMSender(args[2]),
+				asRegistry(args[3]),
+				asComparer(args[4]),
+				asPublisher(args[5]),
+				asLogger(args[6]),
 				1,
 				time.Millisecond,
 			)
@@ -411,7 +403,6 @@ func TestNewOrchestrator_Defaults(t *testing.T) {
 	// maxRetries < 1 defaults to 1, backoffBase <= 0 defaults to time.Second.
 	orch := NewOrchestrator(
 		lm,
-		deps.wc,
 		deps.treeReq,
 		deps.dmSender,
 		deps.registry,
@@ -436,13 +427,6 @@ func asLifecycle(v interface{}) *lifecycle.LifecycleManager {
 		return nil
 	}
 	return v.(*lifecycle.LifecycleManager)
-}
-
-func asWarnings(v interface{}) *warning.Collector {
-	if v == nil {
-		return nil
-	}
-	return v.(*warning.Collector)
 }
 
 func asTreeRequester(v interface{}) port.DMTreeRequesterPort {
@@ -645,34 +629,11 @@ func TestHappyPath_Completed(t *testing.T) {
 	}
 }
 
-func TestHappyPath_WithWarnings(t *testing.T) {
+func TestHappyPath_NoWarnings(t *testing.T) {
+	// The comparison pipeline does not currently produce warnings.
+	// Verify that the pipeline always completes with COMPLETED status.
 	deps := newTestDeps()
-
-	// Use a comparer that adds a warning to the collector during execution.
-	warningComparer := &warningAddingComparer{
-		result: defaultDiffResult(),
-		wc:     deps.wc,
-		warn: model.ProcessingWarning{
-			Code:    "COMPARISON_LOW_CONFIDENCE",
-			Message: "structural diff confidence is low",
-			Stage:   "EXECUTING_DIFF",
-		},
-	}
-	pub := deps.publisher
-	idem := deps.idempotency
-	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
-	orch := NewOrchestrator(
-		lm,
-		deps.wc,
-		deps.treeReq,
-		deps.dmSender,
-		deps.registry,
-		warningComparer,
-		pub,
-		nopLogger(),
-		1,
-		time.Millisecond,
-	)
+	orch := deps.build()
 	cmd := defaultCompareCmd()
 
 	err := orch.HandleCompareVersions(context.Background(), cmd)
@@ -680,21 +641,21 @@ func TestHappyPath_WithWarnings(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	// Verify terminal status is COMPLETED_WITH_WARNINGS.
+	// Verify terminal status is COMPLETED.
 	if len(deps.publisher.statusChanged) != 2 {
 		t.Fatalf("expected 2 StatusChangedEvents, got %d", len(deps.publisher.statusChanged))
 	}
 	second := deps.publisher.statusChanged[1]
-	if second.NewStatus != model.StatusCompletedWithWarnings {
-		t.Errorf("expected COMPLETED_WITH_WARNINGS, got %s", second.NewStatus)
+	if second.NewStatus != model.StatusCompleted {
+		t.Errorf("expected COMPLETED, got %s", second.NewStatus)
 	}
 
-	// Verify ComparisonCompletedEvent reflects COMPLETED_WITH_WARNINGS.
+	// Verify ComparisonCompletedEvent reflects COMPLETED.
 	if len(deps.publisher.comparisonCompleted) != 1 {
 		t.Fatalf("expected 1 ComparisonCompletedEvent, got %d", len(deps.publisher.comparisonCompleted))
 	}
-	if deps.publisher.comparisonCompleted[0].Status != model.StatusCompletedWithWarnings {
-		t.Errorf("expected status COMPLETED_WITH_WARNINGS, got %s", deps.publisher.comparisonCompleted[0].Status)
+	if deps.publisher.comparisonCompleted[0].Status != model.StatusCompleted {
+		t.Errorf("expected status COMPLETED, got %s", deps.publisher.comparisonCompleted[0].Status)
 	}
 }
 
@@ -742,7 +703,6 @@ func TestHappyPath_RegisterBeforeRequestSemanticTree(t *testing.T) {
 	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
-		deps.wc,
 		checkingReq,
 		deps.dmSender,
 		deps.registry,
@@ -792,7 +752,6 @@ func TestHappyPath_TreesRoutedToComparer(t *testing.T) {
 	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
-		deps.wc,
 		deps.treeReq,
 		deps.dmSender,
 		deps.registry,
@@ -822,18 +781,6 @@ func TestHappyPath_TreesRoutedToComparer(t *testing.T) {
 	if cc.targetTree.Root.Children[0].Content != "Предмет договора (v2)" {
 		t.Errorf("target tree content mismatch: %s", cc.targetTree.Root.Children[0].Content)
 	}
-}
-
-// warningAddingComparer adds a warning to the collector during Compare.
-type warningAddingComparer struct {
-	result *model.VersionDiffResult
-	wc     *warning.Collector
-	warn   model.ProcessingWarning
-}
-
-func (m *warningAddingComparer) Compare(_ context.Context, _, _ *model.SemanticTree) (*model.VersionDiffResult, error) {
-	m.wc.Add(m.warn)
-	return m.result, nil
 }
 
 type capturingComparer struct {
@@ -1033,7 +980,6 @@ func TestError_TargetTreeRequestError(t *testing.T) {
 	lm := lifecycle.NewLifecycleManager(pub, idem, 120*time.Second, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
-		deps.wc,
 		failOnSecond,
 		deps.dmSender,
 		deps.registry,
@@ -1733,30 +1679,6 @@ func TestHandlePipelineError_SkipsTransitionWhenAlreadyTerminal(t *testing.T) {
 	}
 }
 
-func TestWarningsResetBetweenCalls(t *testing.T) {
-	deps := newTestDeps()
-	// Pre-add a warning.
-	deps.wc.Add(model.ProcessingWarning{Code: "OLD_WARNING", Message: "from previous run"})
-
-	orch := deps.build()
-	cmd := defaultCompareCmd()
-
-	// HandleCompareVersions should call warnings.Reset() first.
-	err := orch.HandleCompareVersions(context.Background(), cmd)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	// Since Reset is called and no new warnings are added, status should be COMPLETED (not COMPLETED_WITH_WARNINGS).
-	if len(deps.publisher.statusChanged) != 2 {
-		t.Fatalf("expected 2 StatusChangedEvents, got %d", len(deps.publisher.statusChanged))
-	}
-	second := deps.publisher.statusChanged[1]
-	if second.NewStatus != model.StatusCompleted {
-		t.Errorf("expected COMPLETED (warnings should be reset), got %s", second.NewStatus)
-	}
-}
-
 // --- Helper types: TASK-038 ---
 
 // blockingRegistry embeds mockRegistry but overrides AwaitAll to block until
@@ -1926,7 +1848,6 @@ func TestError_JobContextTimeout(t *testing.T) {
 	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 5*time.Millisecond, nil, nopLogger())
 	orch := NewOrchestrator(
 		lm,
-		deps.wc,
 		deps.treeReq,
 		deps.dmSender,
 		blocking,
@@ -1965,7 +1886,6 @@ func TestError_CleanupCalledOnFailure(t *testing.T) {
 	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 120*time.Second, recorder.cleanup, nopLogger())
 	orch := NewOrchestrator(
 		lm,
-		deps.wc,
 		deps.treeReq,
 		deps.dmSender,
 		deps.registry,
@@ -2002,7 +1922,6 @@ func TestError_CleanupCalledOnTimeout(t *testing.T) {
 	lm := lifecycle.NewLifecycleManager(deps.publisher, deps.idempotency, 5*time.Millisecond, recorder.cleanup, nopLogger())
 	orch := NewOrchestrator(
 		lm,
-		deps.wc,
 		deps.treeReq,
 		deps.dmSender,
 		blocking,

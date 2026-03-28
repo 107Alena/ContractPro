@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"contractpro/document-processing/internal/application/lifecycle"
-	"contractpro/document-processing/internal/application/warning"
 	"contractpro/document-processing/internal/domain/model"
 	"contractpro/document-processing/internal/domain/port"
 	"contractpro/document-processing/internal/infra/observability"
@@ -34,14 +33,13 @@ var rejectedCodes = map[string]bool{
 //	OCR/OCR_SKIPPED -> TEXT_EXTRACTION -> STRUCTURE_EXTRACTION ->
 //	SEMANTIC_TREE_BUILDING -> SAVING_ARTIFACTS -> CLEANUP_TEMP_ARTIFACTS
 //
-// NOTE: WAITING_DM_CONFIRMATION is currently a no-op placeholder until TASK-034
-// implements the DM Inbound Adapter.
+// NOTE: WAITING_DM_CONFIRMATION is currently a no-op placeholder until TASK-046
+// implements DM confirmation flow.
 //
-// NOTE: The shared *warning.Collector is not safe for concurrent HandleProcessDocument
-// calls. Concurrent job processing will be addressed separately.
+// Warnings are collected per-job in a local slice within runPipeline,
+// ensuring concurrent HandleProcessDocument calls are fully isolated.
 type Orchestrator struct {
 	lifecycle     *lifecycle.LifecycleManager
-	warnings      *warning.Collector
 	validator     port.InputValidatorPort
 	fetcher       port.SourceFileFetcherPort
 	ocrProcessor  port.OCRProcessorPort
@@ -61,7 +59,6 @@ type Orchestrator struct {
 // maxRetries defaults to 1 if < 1, backoffBase defaults to time.Second if <= 0.
 func NewOrchestrator(
 	lifecycle *lifecycle.LifecycleManager,
-	warnings *warning.Collector,
 	validator port.InputValidatorPort,
 	fetcher port.SourceFileFetcherPort,
 	ocrProcessor port.OCRProcessorPort,
@@ -77,9 +74,6 @@ func NewOrchestrator(
 ) *Orchestrator {
 	if lifecycle == nil {
 		panic("processing: lifecycle manager must not be nil")
-	}
-	if warnings == nil {
-		panic("processing: warnings collector must not be nil")
 	}
 	if validator == nil {
 		panic("processing: validator must not be nil")
@@ -119,7 +113,6 @@ func NewOrchestrator(
 	}
 	return &Orchestrator{
 		lifecycle:     lifecycle,
-		warnings:      warnings,
 		validator:     validator,
 		fetcher:       fetcher,
 		ocrProcessor:  ocrProcessor,
@@ -187,7 +180,13 @@ func (o *Orchestrator) retryStep(ctx context.Context, fn func() error) error {
 // runPipeline executes the happy-path processing pipeline stages.
 // Retry is applied only to stages that can produce retryable errors:
 // fetcher.Fetch, ocrProcessor.Process, and dmSender.SendArtifacts.
+//
+// Warnings are collected in a local slice, ensuring per-job isolation
+// when multiple jobs are processed concurrently.
 func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob, cmd model.ProcessDocumentCommand) error {
+	// Per-job warning accumulator — no shared state between concurrent jobs.
+	allWarnings := make([]model.ProcessingWarning, 0)
+
 	// --- Transition: QUEUED -> IN_PROGRESS ---
 	job.Stage = model.ProcessingStageValidatingInput
 	ctx = observability.WithStage(ctx, string(job.Stage))
@@ -219,13 +218,15 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 	ctx = observability.WithStage(ctx, string(job.Stage))
 	o.logger.Info(ctx, "pipeline stage started")
 	var ocrResult *model.OCRRawArtifact
+	var ocrWarnings []model.ProcessingWarning
 	if err := o.retryStep(ctx, func() error {
 		var ocrErr error
-		ocrResult, ocrErr = o.ocrProcessor.Process(ctx, fetchResult.StorageKey, fetchResult.IsTextPDF)
+		ocrResult, ocrWarnings, ocrErr = o.ocrProcessor.Process(ctx, fetchResult.StorageKey, fetchResult.IsTextPDF)
 		return ocrErr
 	}); err != nil {
 		return err
 	}
+	allWarnings = append(allWarnings, ocrWarnings...)
 	if ocrResult.Status == model.OCRStatusNotApplicable {
 		job.Stage = model.ProcessingStageOCRSkipped
 	}
@@ -238,9 +239,7 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 	if err != nil {
 		return err
 	}
-	for _, w := range textWarnings {
-		o.warnings.Add(w)
-	}
+	allWarnings = append(allWarnings, textWarnings...)
 
 	// --- Stage 5: STRUCTURE_EXTRACTION ---
 	job.Stage = model.ProcessingStageStructureExtract
@@ -250,9 +249,7 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 	if err != nil {
 		return err
 	}
-	for _, w := range structWarnings {
-		o.warnings.Add(w)
-	}
+	allWarnings = append(allWarnings, structWarnings...)
 
 	// --- Stage 6: SEMANTIC_TREE_BUILDING ---
 	job.Stage = model.ProcessingStageSemanticTree
@@ -262,9 +259,6 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 	if err != nil {
 		return err
 	}
-
-	// Collect all warnings once — used for both artifacts and completion event.
-	allWarnings := o.warnings.Collect()
 
 	// --- Stage 7: SAVING_ARTIFACTS (send to DM) ---
 	job.Stage = model.ProcessingStageSavingArtifacts
@@ -409,8 +403,6 @@ func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.Proc
 	job.UserID = cmd.UserID
 
 	o.logger.Info(ctx, "processing pipeline started", "file_name", cmd.FileName, "file_size", cmd.FileSize, "mime_type", cmd.MimeType)
-
-	o.warnings.Reset()
 
 	// Create a job-scoped context with timeout.
 	jobCtx, cancel := o.lifecycle.NewJobContext(ctx)

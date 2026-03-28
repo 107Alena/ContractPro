@@ -1992,3 +1992,27 @@ idempotency, malformed input, artifact format.
 - Pending low: TASK-054 (docs)
 - PendingResponseRegistryPort используется теперь для 3 типов событий: SemanticTreeProvided, DiffPersisted, DiffPersistFailed
 - В будущем рассмотреть ReceiveAck(correlationID) метод в registry для confirmation events без payload
+
+---
+
+### TASK-049 — Prometheus /metrics HTTP endpoint
+**Статус:** done
+**Дата:** 2026-03-28
+**Summary:** Создан MetricsHandler в observability пакете (promhttp.HandlerFor с dedicated Registry), подключён второй HTTP-сервер на DP_METRICS_PORT (9090) в App. Nil-registry guard. Port collision validation в Config.Validate(). Dockerfile уже имел EXPOSE 9090.
+
+**Что сделано:**
+- internal/infra/observability/handler.go: MetricsHandler с promhttp.HandlerFor(registry)
+- internal/infra/observability/handler_test.go: 6 тестов (200, metrics content, content-type, empty, nil registry, 404)
+- internal/app/app.go: metricsServer field, Group 9 wiring, Run() goroutine, Shutdown() Phase 2
+- internal/app/app_test.go: 2 новых теста (metrics shutdown, nil safety)
+- internal/config/config.go: port collision check (HTTP.Port != MetricsPort)
+- internal/config/config_test.go: 2 новых теста + 2 обновлённых (port collision)
+
+**Code review:** 0 critical, 3 warnings fixed (nil registry guard, port collision validation, test updates)
+**Тесты:** 31 пакет PASS с -race, go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- Pending high: TASK-050 (DLQ)
+- Pending medium: TASK-051, TASK-052, TASK-053
+- Pending low: TASK-054 (docs)
+- W3 (fire-and-forget metrics server bind error) — существующий design pattern, не блокирует

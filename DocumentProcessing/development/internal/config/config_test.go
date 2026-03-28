@@ -352,8 +352,10 @@ func TestValidate_EmptyConfig(t *testing.T) {
 
 func TestValidate_PartialConfig(t *testing.T) {
 	cfg := &Config{
-		Broker: BrokerConfig{Address: "localhost:9092"},
-		OCR:    OCRConfig{Endpoint: "https://ocr", APIKey: "key", FolderID: "folder"},
+		Broker:        BrokerConfig{Address: "localhost:9092"},
+		OCR:           OCRConfig{Endpoint: "https://ocr", APIKey: "key", FolderID: "folder"},
+		HTTP:          HTTPConfig{Port: 8080},
+		Observability: ObservabilityConfig{MetricsPort: 9090},
 	}
 	err := cfg.Validate()
 	if err == nil {
@@ -379,13 +381,49 @@ func TestValidate_PartialConfig(t *testing.T) {
 
 func TestValidate_FullConfig(t *testing.T) {
 	cfg := &Config{
+		Broker:        BrokerConfig{Address: "localhost:9092"},
+		Storage:       StorageConfig{Endpoint: "e", Bucket: "b", AccessKey: "ak", SecretKey: "sk"},
+		OCR:           OCRConfig{Endpoint: "e", APIKey: "k", FolderID: "f"},
+		KVStore:       KVStoreConfig{Address: "localhost:6379"},
+		HTTP:          HTTPConfig{Port: 8080},
+		Observability: ObservabilityConfig{MetricsPort: 9090},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+// --- Port collision test ---
+
+func TestValidate_PortCollision(t *testing.T) {
+	cfg := &Config{
 		Broker:  BrokerConfig{Address: "localhost:9092"},
 		Storage: StorageConfig{Endpoint: "e", Bucket: "b", AccessKey: "ak", SecretKey: "sk"},
 		OCR:     OCRConfig{Endpoint: "e", APIKey: "k", FolderID: "f"},
 		KVStore: KVStoreConfig{Address: "localhost:6379"},
+		HTTP:    HTTPConfig{Port: 8080},
+		Observability: ObservabilityConfig{MetricsPort: 8080}, // same as HTTP
 	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error, got: %v", err)
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for port collision, got nil")
+	}
+	if !strings.Contains(err.Error(), "DP_HTTP_PORT and DP_METRICS_PORT must differ") {
+		t.Errorf("error should mention port collision, got: %s", err.Error())
+	}
+}
+
+func TestLoad_PortCollision_SamePort(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DP_HTTP_PORT", "9090")
+	// DP_METRICS_PORT defaults to 9090
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for port collision, got nil")
+	}
+	if !strings.Contains(err.Error(), "DP_HTTP_PORT and DP_METRICS_PORT must differ") {
+		t.Errorf("error should mention port collision, got: %s", err.Error())
 	}
 }
 

@@ -86,6 +86,10 @@ func (c *Config) Validate() error {
 		missing = append(missing, "DP_KVSTORE_ADDRESS")
 	}
 
+	if c.HTTP.Port == c.Observability.MetricsPort {
+		missing = append(missing, "DP_HTTP_PORT and DP_METRICS_PORT must differ")
+	}
+
 	if len(missing) > 0 {
 		return fmt.Errorf("config: missing required environment variables: %s", strings.Join(missing, ", "))
 	}

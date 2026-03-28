@@ -1160,7 +1160,9 @@
         "Шаг 4: make build — компилируется без ошибок"
       ],
       "dependencies": ["TASK-012", "TASK-039"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-28",
+      "summary": "MetricsHandler в internal/infra/observability/handler.go. Использует promhttp.HandlerFor(registry, HandlerOpts{}) с dedicated Prometheus Registry. Nil-registry guard (заменяет nil на пустой registry). Паттерн: зеркалит health.Handler (struct + Mux()). App: metricsServer *http.Server на DP_METRICS_PORT (default 9090, Group 9 wiring), запуск в Run() (goroutine), shutdown в doShutdown() Phase 2 (рядом с health server). Config: port collision validation (HTTP.Port != MetricsPort) в Validate(). Dockerfile уже имел EXPOSE 9090. 6 тестов handler (200, all 6 metrics presence, content-type, empty registry, nil registry, unknown 404). 2 теста app (metrics server shutdown, nil safety). 2 теста config (port collision Validate, port collision Load). Code review: 0 critical, 3 warnings fixed (nil guard, port collision validation, existing test updates). 31 пакет PASS с -race, go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-050",

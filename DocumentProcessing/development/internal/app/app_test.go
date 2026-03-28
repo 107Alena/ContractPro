@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -89,6 +90,20 @@ func newTestApp(
 	if httpSrv != nil {
 		a.httpServer = httpSrv
 	}
+	return a
+}
+
+// newTestAppWithMetrics extends newTestApp with an optional metrics server.
+func newTestAppWithMetrics(
+	broker *mockBrokerCloser,
+	kv *mockKVCloser,
+	obs *mockObsShutdowner,
+	h *health.Handler,
+	httpSrv *http.Server,
+	metricsSrv *http.Server,
+) *App {
+	a := newTestApp(broker, kv, obs, h, httpSrv)
+	a.metricsServer = metricsSrv
 	return a
 }
 
@@ -226,6 +241,47 @@ func TestShutdown_IdempotentDoubleCall(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("expected 2 shutdown calls (broker, obs), got %d: %v", len(calls), calls)
 	}
+}
+
+func TestShutdown_WithMetricsServer(t *testing.T) {
+	h := health.NewHandler()
+
+	// Start a metrics server on an ephemeral port.
+	metricsMux := http.NewServeMux()
+	metricsMux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	metricsSrv := &http.Server{
+		Addr:    "127.0.0.1:0",
+		Handler: metricsMux,
+	}
+
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	metricsSrv.Addr = ln.Addr().String()
+	go func() { _ = metricsSrv.Serve(ln) }()
+
+	a := newTestAppWithMetrics(nil, nil, nil, h, nil, metricsSrv)
+	a.Shutdown(context.Background())
+
+	// After shutdown, Serve should have returned — a second Shutdown is safe.
+	err = metricsSrv.Shutdown(context.Background())
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("second metrics Shutdown returned unexpected error: %v", err)
+	}
+}
+
+func TestShutdown_NilMetricsServer(t *testing.T) {
+	// metricsServer is nil — must not panic.
+	a := newTestAppWithMetrics(nil, nil, nil, nil, nil, nil)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Shutdown panicked with nil metricsServer: %v", r)
+		}
+	}()
+	a.Shutdown(context.Background())
 }
 
 func TestShutdown_AllErrors(t *testing.T) {

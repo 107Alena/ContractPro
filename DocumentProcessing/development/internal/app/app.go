@@ -95,6 +95,9 @@ type App struct {
 	// HTTP health server.
 	httpServer *http.Server
 	health     *health.Handler
+
+	// HTTP metrics server (Prometheus /metrics).
+	metricsServer *http.Server
 }
 
 // New creates an App by loading the given config and wiring all components.
@@ -190,15 +193,24 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	// --- Group 9: HTTP metrics server ---
+	metricsHandler := observability.NewMetricsHandler(obs.Metrics.Registry())
+	metricsServer := &http.Server{
+		Addr:              fmt.Sprintf(":%d", cfg.Observability.MetricsPort),
+		Handler:           metricsHandler.Mux(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
 	return &App{
-		logger:     logger,
-		obs:        obs,
-		brokerCli:  brokerCli,
-		kvCli:      kvCli,
-		consumer:   cmdConsumer,
-		dmReceiver: dmReceiver,
-		httpServer: httpServer,
-		health:     healthHandler,
+		logger:        logger,
+		obs:           obs,
+		brokerCli:     brokerCli,
+		kvCli:         kvCli,
+		consumer:      cmdConsumer,
+		dmReceiver:    dmReceiver,
+		httpServer:    httpServer,
+		health:        healthHandler,
+		metricsServer: metricsServer,
 	}, nil
 }
 
@@ -209,6 +221,13 @@ func (a *App) Run(ctx context.Context) int {
 	go func() {
 		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			a.logger.Error(ctx, "health server failed", "error", err)
+		}
+	}()
+
+	// Start HTTP metrics server.
+	go func() {
+		if err := a.metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			a.logger.Error(ctx, "metrics server failed", "error", err)
 		}
 	}()
 
@@ -264,11 +283,17 @@ func (a *App) doShutdown(ctx context.Context) {
 		}
 	}
 
-	// Phase 2: Stop HTTP server.
+	// Phase 2: Stop HTTP servers.
 	if a.httpServer != nil {
 		a.logger.Info(shutdownCtx, "shutting down health server")
 		if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
 			a.logger.Error(shutdownCtx, "health server shutdown error", "error", err)
+		}
+	}
+	if a.metricsServer != nil {
+		a.logger.Info(shutdownCtx, "shutting down metrics server")
+		if err := a.metricsServer.Shutdown(shutdownCtx); err != nil {
+			a.logger.Error(shutdownCtx, "metrics server shutdown error", "error", err)
 		}
 	}
 

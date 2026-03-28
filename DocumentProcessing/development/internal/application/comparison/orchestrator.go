@@ -2,6 +2,7 @@ package comparison
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -40,6 +41,7 @@ type Orchestrator struct {
 	registry    port.PendingResponseRegistryPort
 	comparer    port.VersionComparisonPort
 	publisher   port.EventPublisherPort
+	dlq         port.DLQPort
 	logger      *observability.Logger
 	maxRetries  int
 	backoffBase time.Duration
@@ -55,6 +57,7 @@ func NewOrchestrator(
 	registry port.PendingResponseRegistryPort,
 	comparer port.VersionComparisonPort,
 	publisher port.EventPublisherPort,
+	dlq port.DLQPort,
 	logger *observability.Logger,
 	maxRetries int,
 	backoffBase time.Duration,
@@ -77,6 +80,9 @@ func NewOrchestrator(
 	if publisher == nil {
 		panic("comparison: publisher must not be nil")
 	}
+	if dlq == nil {
+		panic("comparison: dlq must not be nil")
+	}
 	if logger == nil {
 		panic("comparison: logger must not be nil")
 	}
@@ -93,6 +99,7 @@ func NewOrchestrator(
 		registry:    registry,
 		comparer:    comparer,
 		publisher:   publisher,
+		dlq:         dlq,
 		logger:      logger.With("component", "comparison"),
 		maxRetries:  maxRetries,
 		backoffBase: backoffBase,
@@ -407,7 +414,50 @@ func (o *Orchestrator) handlePipelineError(
 		o.logger.Error(bgCtx, "failed to publish ComparisonFailedEvent", "error", err)
 	}
 
+	// Send to DLQ (best-effort: log and continue on failure).
+	// Only for FAILED status — REJECTED jobs have deterministic input errors,
+	// and TIMED_OUT jobs are already marked retryable in the failed event.
+	if terminalStatus == model.StatusFailed {
+		o.sendToDLQ(bgCtx, cmd.JobID, cmd.DocumentID, pipelineErr, job, "comparison", cmd)
+	}
+
 	return pipelineErr
+}
+
+// sendToDLQ marshals the original command and sends a DLQ message.
+// Best-effort: errors are logged, not propagated.
+//
+// This method mirrors processing.Orchestrator.sendToDLQ by design:
+// each pipeline owns its DLQ integration independently.
+func (o *Orchestrator) sendToDLQ(
+	ctx context.Context,
+	jobID, documentID string,
+	pipelineErr error,
+	job *model.ComparisonJob,
+	pipelineType string,
+	originalCmd any,
+) {
+	cmdJSON, marshalErr := json.Marshal(originalCmd)
+	if marshalErr != nil {
+		o.logger.Error(ctx, "failed to marshal command for DLQ", "error", marshalErr)
+		return
+	}
+	dlqMsg := model.DLQMessage{
+		EventMeta: model.EventMeta{
+			CorrelationID: jobID,
+			Timestamp:     time.Now().UTC(),
+		},
+		JobID:           jobID,
+		DocumentID:      documentID,
+		ErrorCode:       port.ErrorCode(pipelineErr),
+		ErrorMessage:    pipelineErr.Error(),
+		FailedAtStage:   string(job.Stage),
+		PipelineType:    pipelineType,
+		OriginalCommand: cmdJSON,
+	}
+	if err := o.dlq.SendToDLQ(ctx, dlqMsg); err != nil {
+		o.logger.Error(ctx, "failed to send to DLQ", "error", err)
+	}
 }
 
 // HandleCompareVersions executes the full version comparison pipeline.

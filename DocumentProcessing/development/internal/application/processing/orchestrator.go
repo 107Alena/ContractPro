@@ -2,6 +2,7 @@ package processing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -48,6 +49,7 @@ type Orchestrator struct {
 	publisher     port.EventPublisherPort
 	dmSender      port.DMArtifactSenderPort
 	dmAwaiter     port.DMConfirmationAwaiterPort
+	dlq           port.DLQPort
 	logger        *observability.Logger
 	maxRetries    int
 	backoffBase   time.Duration
@@ -68,6 +70,7 @@ func NewOrchestrator(
 	publisher port.EventPublisherPort,
 	dmSender port.DMArtifactSenderPort,
 	dmAwaiter port.DMConfirmationAwaiterPort,
+	dlq port.DLQPort,
 	logger *observability.Logger,
 	maxRetries int,
 	backoffBase time.Duration,
@@ -105,6 +108,9 @@ func NewOrchestrator(
 	if dmAwaiter == nil {
 		panic("processing: dm awaiter must not be nil")
 	}
+	if dlq == nil {
+		panic("processing: dlq must not be nil")
+	}
 	if logger == nil {
 		panic("processing: logger must not be nil")
 	}
@@ -126,6 +132,7 @@ func NewOrchestrator(
 		publisher:     publisher,
 		dmSender:      dmSender,
 		dmAwaiter:     dmAwaiter,
+		dlq:           dlq,
 		logger:        logger.With("component", "processing"),
 		maxRetries:    maxRetries,
 		backoffBase:   backoffBase,
@@ -462,6 +469,14 @@ func (o *Orchestrator) handlePipelineError(
 		o.logger.Error(bgCtx, "failed to publish ProcessingFailedEvent", "error", err)
 	}
 
+	// Send to DLQ (best-effort: log and continue on failure).
+	// Only for FAILED status — REJECTED jobs have deterministic input errors
+	// (not worth reprocessing), and TIMED_OUT jobs are already marked retryable
+	// in the failed event for the upstream consumer.
+	if terminalStatus == model.StatusFailed {
+		o.sendToDLQ(bgCtx, cmd.JobID, cmd.DocumentID, pipelineErr, job, "processing", cmd)
+	}
+
 	// Cleanup temp storage (best-effort: log and continue on failure).
 	// NOTE: LifecycleManager.TransitionJob may also run cleanup on terminal status
 	// if a cleanup function was provided. DeleteByPrefix is idempotent so double
@@ -472,6 +487,45 @@ func (o *Orchestrator) handlePipelineError(
 	}
 
 	return pipelineErr
+}
+
+// sendToDLQ marshals the original command and sends a DLQ message.
+// Best-effort: errors are logged, not propagated.
+//
+// NOTE: OriginalCommand includes FileURL, which may contain pre-signed URLs.
+// DLQ topic access must be restricted to the same security boundary.
+//
+// This method mirrors comparison.Orchestrator.sendToDLQ by design:
+// each pipeline owns its DLQ integration independently.
+func (o *Orchestrator) sendToDLQ(
+	ctx context.Context,
+	jobID, documentID string,
+	pipelineErr error,
+	job *model.ProcessingJob,
+	pipelineType string,
+	originalCmd any,
+) {
+	cmdJSON, marshalErr := json.Marshal(originalCmd)
+	if marshalErr != nil {
+		o.logger.Error(ctx, "failed to marshal command for DLQ", "error", marshalErr)
+		return
+	}
+	dlqMsg := model.DLQMessage{
+		EventMeta: model.EventMeta{
+			CorrelationID: jobID,
+			Timestamp:     time.Now().UTC(),
+		},
+		JobID:           jobID,
+		DocumentID:      documentID,
+		ErrorCode:       port.ErrorCode(pipelineErr),
+		ErrorMessage:    pipelineErr.Error(),
+		FailedAtStage:   string(job.Stage),
+		PipelineType:    pipelineType,
+		OriginalCommand: cmdJSON,
+	}
+	if err := o.dlq.SendToDLQ(ctx, dlqMsg); err != nil {
+		o.logger.Error(ctx, "failed to send to DLQ", "error", err)
+	}
 }
 
 // HandleProcessDocument executes the full document processing pipeline.

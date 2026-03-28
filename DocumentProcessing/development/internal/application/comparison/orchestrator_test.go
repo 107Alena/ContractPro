@@ -2,6 +2,7 @@ package comparison
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -219,6 +220,23 @@ func (m *mockComparer) Compare(_ context.Context, _, _ *model.SemanticTree) (*mo
 	return m.result, m.err
 }
 
+// mockDLQ implements port.DLQPort.
+type mockDLQ struct {
+	mu       sync.Mutex
+	messages []model.DLQMessage
+	err      error
+}
+
+func (m *mockDLQ) SendToDLQ(_ context.Context, msg model.DLQMessage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	m.messages = append(m.messages, msg)
+	return nil
+}
+
 // --- Helpers ---
 
 func defaultCompareCmd() model.CompareVersionsCommand {
@@ -281,6 +299,7 @@ type testDeps struct {
 	dmSender    *mockDMSender
 	registry    *mockRegistry
 	comparer    *mockComparer
+	dlq         *mockDLQ
 }
 
 // newTestDeps creates testDeps pre-configured for a successful happy-path comparison pipeline.
@@ -310,6 +329,7 @@ func newTestDeps() *testDeps {
 		dmSender:    &mockDMSender{},
 		registry:    reg,
 		comparer:    &mockComparer{result: defaultDiffResult()},
+		dlq:         &mockDLQ{},
 	}
 }
 
@@ -324,6 +344,7 @@ func (d *testDeps) build() *Orchestrator {
 		d.registry,
 		d.comparer,
 		d.publisher,
+		d.dlq,
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -339,6 +360,7 @@ func (d *testDeps) buildWithRetry(maxRetries int, backoff time.Duration) *Orches
 		d.registry,
 		d.comparer,
 		d.publisher,
+		d.dlq,
 		nopLogger(),
 		maxRetries,
 		backoff,
@@ -359,12 +381,13 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 		newMockRegistry(),
 		&mockComparer{result: defaultDiffResult()},
 		pub,
+		&mockDLQ{},
 		nopLogger(),
 	}
 
 	depNames := []string{
 		"lifecycle", "treeRequester", "dmSender",
-		"registry", "comparer", "publisher", "logger",
+		"registry", "comparer", "publisher", "dlq", "logger",
 	}
 
 	for i, name := range depNames {
@@ -386,7 +409,8 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 				asRegistry(args[3]),
 				asComparer(args[4]),
 				asPublisher(args[5]),
-				asLogger(args[6]),
+				asDLQ(args[6]),
+				asLogger(args[7]),
 				1,
 				time.Millisecond,
 			)
@@ -408,6 +432,7 @@ func TestNewOrchestrator_Defaults(t *testing.T) {
 		deps.registry,
 		deps.comparer,
 		pub,
+		&mockDLQ{},
 		nopLogger(),
 		0,
 		0,
@@ -462,6 +487,13 @@ func asPublisher(v interface{}) port.EventPublisherPort {
 		return nil
 	}
 	return v.(port.EventPublisherPort)
+}
+
+func asDLQ(v interface{}) port.DLQPort {
+	if v == nil {
+		return nil
+	}
+	return v.(port.DLQPort)
 }
 
 func asLogger(v interface{}) *observability.Logger {
@@ -708,6 +740,7 @@ func TestHappyPath_RegisterBeforeRequestSemanticTree(t *testing.T) {
 		deps.registry,
 		deps.comparer,
 		pub,
+		&mockDLQ{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -757,6 +790,7 @@ func TestHappyPath_TreesRoutedToComparer(t *testing.T) {
 		deps.registry,
 		cc,
 		pub,
+		&mockDLQ{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -985,6 +1019,7 @@ func TestError_TargetTreeRequestError(t *testing.T) {
 		deps.registry,
 		deps.comparer,
 		pub,
+		&mockDLQ{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -1853,6 +1888,7 @@ func TestError_JobContextTimeout(t *testing.T) {
 		blocking,
 		deps.comparer,
 		deps.publisher,
+		&mockDLQ{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -1891,6 +1927,7 @@ func TestError_CleanupCalledOnFailure(t *testing.T) {
 		deps.registry,
 		deps.comparer,
 		deps.publisher,
+		&mockDLQ{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -1927,6 +1964,7 @@ func TestError_CleanupCalledOnTimeout(t *testing.T) {
 		blocking,
 		deps.comparer,
 		deps.publisher,
+		&mockDLQ{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -2018,5 +2056,141 @@ func TestError_FailedEventFieldsForDiffPersistFailed(t *testing.T) {
 	// 9. IsRetryable
 	if !f.IsRetryable {
 		t.Error("expected IsRetryable=true for retryable DiffPersistFailed")
+	}
+}
+
+// --- Tests: DLQ ---
+
+func TestDLQ_SentOnFailed(t *testing.T) {
+	// Trigger FAILED by using a retryable broker error from tree requester
+	// that exhausts retries (maxRetries=1).
+	deps := newTestDeps()
+	deps.treeReq.err = port.NewBrokerError("broker down", errors.New("connection refused"))
+
+	orch := deps.buildWithRetry(1, time.Millisecond)
+	cmd := defaultCompareCmd()
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Verify DLQ message was sent.
+	deps.dlq.mu.Lock()
+	dlqMessages := make([]model.DLQMessage, len(deps.dlq.messages))
+	copy(dlqMessages, deps.dlq.messages)
+	deps.dlq.mu.Unlock()
+
+	if len(dlqMessages) != 1 {
+		t.Fatalf("expected 1 DLQ message, got %d", len(dlqMessages))
+	}
+
+	dlqMsg := dlqMessages[0]
+
+	// Verify DLQ message fields.
+	if dlqMsg.JobID != "job-cmp-1" {
+		t.Errorf("DLQ JobID: expected job-cmp-1, got %s", dlqMsg.JobID)
+	}
+	if dlqMsg.DocumentID != "doc-1" {
+		t.Errorf("DLQ DocumentID: expected doc-1, got %s", dlqMsg.DocumentID)
+	}
+	if dlqMsg.ErrorCode != port.ErrCodeBrokerFailed {
+		t.Errorf("DLQ ErrorCode: expected %s, got %s", port.ErrCodeBrokerFailed, dlqMsg.ErrorCode)
+	}
+	if dlqMsg.FailedAtStage == "" {
+		t.Error("DLQ FailedAtStage should not be empty")
+	}
+	if dlqMsg.PipelineType != "comparison" {
+		t.Errorf("DLQ PipelineType: expected comparison, got %s", dlqMsg.PipelineType)
+	}
+
+	// Verify OriginalCommand contains the command JSON.
+	if len(dlqMsg.OriginalCommand) == 0 {
+		t.Error("DLQ OriginalCommand should not be empty")
+	}
+	var cmdFromDLQ map[string]interface{}
+	if err := json.Unmarshal(dlqMsg.OriginalCommand, &cmdFromDLQ); err != nil {
+		t.Fatalf("failed to unmarshal DLQ OriginalCommand: %v", err)
+	}
+	if cmdFromDLQ["job_id"] != "job-cmp-1" {
+		t.Errorf("DLQ OriginalCommand job_id: expected job-cmp-1, got %v", cmdFromDLQ["job_id"])
+	}
+}
+
+func TestDLQ_NotSentOnRejected(t *testing.T) {
+	// Trigger REJECTED using same base_version_id and target_version_id
+	// (validation error, non-retryable).
+	deps := newTestDeps()
+	orch := deps.build()
+
+	cmd := model.CompareVersionsCommand{
+		JobID:           "job-rej-1",
+		DocumentID:      "doc-1",
+		BaseVersionID:   "v1",
+		TargetVersionID: "v1", // same as base -> REJECTED
+		OrgID:           "org-1",
+		UserID:          "user-1",
+	}
+
+	_ = orch.HandleCompareVersions(context.Background(), cmd)
+
+	// Verify no DLQ message was sent.
+	deps.dlq.mu.Lock()
+	dlqCount := len(deps.dlq.messages)
+	deps.dlq.mu.Unlock()
+
+	if dlqCount != 0 {
+		t.Errorf("expected 0 DLQ messages for REJECTED, got %d", dlqCount)
+	}
+}
+
+func TestDLQ_NotSentOnTimedOut(t *testing.T) {
+	// Trigger TIMED_OUT using context.DeadlineExceeded from registry.
+	deps := newTestDeps()
+	deps.registry.awaitErr = context.DeadlineExceeded
+
+	orch := deps.build()
+	cmd := defaultCompareCmd()
+
+	_ = orch.HandleCompareVersions(context.Background(), cmd)
+
+	// Verify no DLQ message was sent.
+	deps.dlq.mu.Lock()
+	dlqCount := len(deps.dlq.messages)
+	deps.dlq.mu.Unlock()
+
+	if dlqCount != 0 {
+		t.Errorf("expected 0 DLQ messages for TIMED_OUT, got %d", dlqCount)
+	}
+}
+
+func TestDLQ_ErrorIsLogged_NotPropagated(t *testing.T) {
+	// Set mockDLQ to return an error, then trigger a FAILED pipeline error.
+	// Verify that HandleCompareVersions returns the original pipeline error,
+	// not the DLQ error.
+	deps := newTestDeps()
+	deps.dlq.err = errors.New("DLQ broker down")
+	deps.treeReq.err = port.NewBrokerError("broker down", errors.New("connection refused"))
+
+	orch := deps.buildWithRetry(1, time.Millisecond)
+	cmd := defaultCompareCmd()
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// The returned error should be the original pipeline error, not the DLQ error.
+	var domErr *port.DomainError
+	if !errors.As(err, &domErr) {
+		t.Fatalf("expected DomainError, got %T: %v", err, err)
+	}
+	if domErr.Code != port.ErrCodeBrokerFailed {
+		t.Errorf("expected original error code %s, got %s", port.ErrCodeBrokerFailed, domErr.Code)
+	}
+
+	// Verify the error is NOT the DLQ error.
+	if err.Error() == "DLQ broker down" {
+		t.Error("returned error should be the pipeline error, not the DLQ error")
 	}
 }

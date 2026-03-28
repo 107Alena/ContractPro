@@ -2,6 +2,7 @@ package processing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"sync"
@@ -243,6 +244,23 @@ func (m *mockDMAwaiter) Reject(jobID string, err error) error {
 
 func (m *mockDMAwaiter) Cancel(jobID string) {}
 
+// mockDLQ implements port.DLQPort.
+type mockDLQ struct {
+	mu       sync.Mutex
+	messages []model.DLQMessage
+	err      error
+}
+
+func (m *mockDLQ) SendToDLQ(_ context.Context, msg model.DLQMessage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	m.messages = append(m.messages, msg)
+	return nil
+}
+
 // callCountOCRProcessor counts invocations and fails until failUntil is reached.
 type callCountOCRProcessor struct {
 	callCount     int
@@ -355,6 +373,7 @@ type testDeps struct {
 	tempStorage   *mockTempStorage
 	dmSender      *mockDMSender
 	dmAwaiter     *mockDMAwaiter
+	dlq           *mockDLQ
 }
 
 // newTestDeps creates testDeps pre-configured for a successful happy-path
@@ -374,6 +393,7 @@ func newTestDeps() *testDeps {
 		tempStorage:   &mockTempStorage{},
 		dmSender:      &mockDMSender{},
 		dmAwaiter:     &mockDMAwaiter{},
+		dlq:           &mockDLQ{},
 	}
 }
 
@@ -392,6 +412,7 @@ func (d *testDeps) buildOrchestrator() *Orchestrator {
 		d.publisher,
 		d.dmSender,
 		d.dmAwaiter,
+		d.dlq,
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -413,6 +434,7 @@ func (d *testDeps) buildOrchestratorWithRetry(maxRetries int, backoff time.Durat
 		d.publisher,
 		d.dmSender,
 		d.dmAwaiter,
+		d.dlq,
 		nopLogger(),
 		maxRetries,
 		backoff,
@@ -433,6 +455,7 @@ func (d *testDeps) buildOrchestratorWithOCR(ocrProc port.OCRProcessorPort, maxRe
 		d.publisher,
 		d.dmSender,
 		d.dmAwaiter,
+		d.dlq,
 		nopLogger(),
 		maxRetries,
 		backoff,
@@ -454,6 +477,7 @@ func (d *testDeps) buildOrchestratorWithDMSender(sender port.DMArtifactSenderPor
 		d.publisher,
 		sender,
 		d.dmAwaiter,
+		d.dlq,
 		nopLogger(),
 		maxRetries,
 		backoff,
@@ -960,6 +984,7 @@ func TestPublishCompletedError_ReturnsError(t *testing.T) {
 		specialPub,
 		deps.dmSender,
 		&mockDMAwaiter{},
+		&mockDLQ{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -1119,6 +1144,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 		pub,
 		&mockDMSender{},
 		&mockDMAwaiter{},
+		&mockDLQ{},
 		nopLogger(),
 	}
 
@@ -1126,7 +1152,7 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 	depNames := []string{
 		"lifecycle", "validator", "fetcher", "ocrProcessor",
 		"textExtract", "structExtract", "treeBuilder",
-		"tempStorage", "publisher", "dmSender", "dmAwaiter", "logger",
+		"tempStorage", "publisher", "dmSender", "dmAwaiter", "dlq", "logger",
 	}
 
 	for i, name := range depNames {
@@ -1154,7 +1180,8 @@ func TestNewOrchestrator_PanicsOnNilDeps(t *testing.T) {
 				asPublisher(args[8]),
 				asDMSender(args[9]),
 				asDMAwaiter(args[10]),
-				asLogger(args[11]),
+				asDLQ(args[11]),
+				asLogger(args[12]),
 				1,
 				time.Millisecond,
 			)
@@ -1240,6 +1267,13 @@ func asDMAwaiter(v interface{}) port.DMConfirmationAwaiterPort {
 	return v.(port.DMConfirmationAwaiterPort)
 }
 
+func asDLQ(v interface{}) port.DLQPort {
+	if v == nil {
+		return nil
+	}
+	return v.(port.DLQPort)
+}
+
 func asLogger(v interface{}) *observability.Logger {
 	if v == nil {
 		return nil
@@ -1310,6 +1344,7 @@ func TestContextCancellation_ReturnsError(t *testing.T) {
 		deps.publisher,
 		deps.dmSender,
 		&mockDMAwaiter{},
+		&mockDLQ{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -2075,6 +2110,7 @@ func TestConcurrentJobs_WarningIsolation(t *testing.T) {
 		pub,
 		dmSender,
 		&mockDMAwaiter{},
+		&mockDLQ{},
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -2430,6 +2466,7 @@ func TestDMConfirmation_ContextTimeout(t *testing.T) {
 		deps.publisher,
 		deps.dmSender,
 		deps.dmAwaiter,
+		deps.dlq,
 		nopLogger(),
 		1,
 		time.Millisecond,
@@ -2458,5 +2495,141 @@ func TestDMConfirmation_ContextTimeout(t *testing.T) {
 	// No completion event.
 	if len(deps.publisher.processingCompleted) != 0 {
 		t.Error("no ProcessingCompletedEvent should be published on context timeout")
+	}
+}
+
+// --- Tests: DLQ ---
+
+func TestDLQ_SentOnFailed(t *testing.T) {
+	// Trigger FAILED by using a retryable broker error from DM sender that
+	// exhausts retries (maxRetries=1 means 1 attempt, no success).
+	deps := newTestDeps()
+
+	dmSender := &callCountDMSender{
+		err: port.NewBrokerError("broker unavailable", errors.New("connection refused")),
+	}
+
+	orch := deps.buildOrchestratorWithDMSender(dmSender, 1, time.Millisecond)
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Verify DLQ message was sent.
+	deps.dlq.mu.Lock()
+	dlqMessages := make([]model.DLQMessage, len(deps.dlq.messages))
+	copy(dlqMessages, deps.dlq.messages)
+	deps.dlq.mu.Unlock()
+
+	if len(dlqMessages) != 1 {
+		t.Fatalf("expected 1 DLQ message, got %d", len(dlqMessages))
+	}
+
+	dlqMsg := dlqMessages[0]
+
+	// Verify DLQ message fields.
+	if dlqMsg.JobID != "job-1" {
+		t.Errorf("DLQ JobID: expected job-1, got %s", dlqMsg.JobID)
+	}
+	if dlqMsg.DocumentID != "doc-1" {
+		t.Errorf("DLQ DocumentID: expected doc-1, got %s", dlqMsg.DocumentID)
+	}
+	if dlqMsg.ErrorCode != port.ErrCodeBrokerFailed {
+		t.Errorf("DLQ ErrorCode: expected %s, got %s", port.ErrCodeBrokerFailed, dlqMsg.ErrorCode)
+	}
+	if dlqMsg.FailedAtStage == "" {
+		t.Error("DLQ FailedAtStage should not be empty")
+	}
+	if dlqMsg.PipelineType != "processing" {
+		t.Errorf("DLQ PipelineType: expected processing, got %s", dlqMsg.PipelineType)
+	}
+
+	// Verify OriginalCommand contains the command JSON.
+	if len(dlqMsg.OriginalCommand) == 0 {
+		t.Error("DLQ OriginalCommand should not be empty")
+	}
+	var cmdFromDLQ map[string]interface{}
+	if err := json.Unmarshal(dlqMsg.OriginalCommand, &cmdFromDLQ); err != nil {
+		t.Fatalf("failed to unmarshal DLQ OriginalCommand: %v", err)
+	}
+	if cmdFromDLQ["job_id"] != "job-1" {
+		t.Errorf("DLQ OriginalCommand job_id: expected job-1, got %v", cmdFromDLQ["job_id"])
+	}
+}
+
+func TestDLQ_NotSentOnRejected(t *testing.T) {
+	// Trigger REJECTED using a validation error (non-retryable).
+	deps := newTestDeps()
+	deps.validator.err = port.NewValidationError("document_id is required")
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	// Verify no DLQ message was sent.
+	deps.dlq.mu.Lock()
+	dlqCount := len(deps.dlq.messages)
+	deps.dlq.mu.Unlock()
+
+	if dlqCount != 0 {
+		t.Errorf("expected 0 DLQ messages for REJECTED, got %d", dlqCount)
+	}
+}
+
+func TestDLQ_NotSentOnTimedOut(t *testing.T) {
+	// Trigger TIMED_OUT using context.DeadlineExceeded from fetcher.
+	deps := newTestDeps()
+	deps.fetcher.result = nil
+	deps.fetcher.err = context.DeadlineExceeded
+
+	orch := deps.buildOrchestrator()
+	cmd := defaultCmd()
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	// Verify no DLQ message was sent.
+	deps.dlq.mu.Lock()
+	dlqCount := len(deps.dlq.messages)
+	deps.dlq.mu.Unlock()
+
+	if dlqCount != 0 {
+		t.Errorf("expected 0 DLQ messages for TIMED_OUT, got %d", dlqCount)
+	}
+}
+
+func TestDLQ_ErrorIsLogged_NotPropagated(t *testing.T) {
+	// Set mockDLQ to return an error, then trigger a FAILED pipeline error.
+	// Verify that HandleProcessDocument returns the original pipeline error,
+	// not the DLQ error.
+	deps := newTestDeps()
+	deps.dlq.err = errors.New("DLQ broker down")
+
+	dmSender := &callCountDMSender{
+		err: port.NewBrokerError("broker unavailable", errors.New("connection refused")),
+	}
+
+	orch := deps.buildOrchestratorWithDMSender(dmSender, 1, time.Millisecond)
+	cmd := defaultCmd()
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// The returned error should be the original pipeline error, not the DLQ error.
+	var domErr *port.DomainError
+	if !errors.As(err, &domErr) {
+		t.Fatalf("expected DomainError, got %T: %v", err, err)
+	}
+	if domErr.Code != port.ErrCodeBrokerFailed {
+		t.Errorf("expected original error code %s, got %s", port.ErrCodeBrokerFailed, domErr.Code)
+	}
+
+	// Verify the error is NOT the DLQ error.
+	if err.Error() == "DLQ broker down" {
+		t.Error("returned error should be the pipeline error, not the DLQ error")
 	}
 }

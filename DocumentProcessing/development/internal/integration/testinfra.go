@@ -406,6 +406,18 @@ func (n *noopComparisonHandler) HandleCompareVersions(_ context.Context, _ model
 }
 
 // ---------------------------------------------------------------------------
+// 12b. noopDLQ — implements port.DLQPort (no-op for integration tests)
+// ---------------------------------------------------------------------------
+
+var _ port.DLQPort = (*noopDLQ)(nil)
+
+type noopDLQ struct{}
+
+func (n *noopDLQ) SendToDLQ(_ context.Context, _ model.DLQMessage) error {
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // 13. testHarness
 // ---------------------------------------------------------------------------
 
@@ -492,6 +504,7 @@ func newTestHarness(t *testing.T, opts ...harnessOption) *testHarness {
 		publisher,
 		dmSender,
 		dmAwaiter,
+		&noopDLQ{},
 		logger,
 		cfg.maxRetries,
 		cfg.backoffBase,
@@ -783,6 +796,7 @@ func newComparisonHarness(t *testing.T, opts ...harnessOption) *comparisonHarnes
 		registry,
 		comparer,
 		publisher,
+		&noopDLQ{},
 		logger,
 		cfg.maxRetries,
 		cfg.backoffBase,
@@ -1073,6 +1087,7 @@ func newComparisonHarnessWithReceiver(t *testing.T, confirmErr *diffConfirmError
 		registry,
 		comparer,
 		publisher,
+		&noopDLQ{},
 		logger,
 		1,
 		time.Millisecond,

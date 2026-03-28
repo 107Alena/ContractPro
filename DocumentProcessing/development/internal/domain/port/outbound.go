@@ -139,6 +139,14 @@ type PendingResponse struct {
 	Err           error
 }
 
+// DLQPort publishes failed messages to a Dead Letter Queue for post-mortem
+// analysis and potential reprocessing.
+// Implemented by: DLQ Sender (egress layer).
+// Used by: Processing Orchestrator, Comparison Orchestrator (in handlePipelineError).
+type DLQPort interface {
+	SendToDLQ(ctx context.Context, msg model.DLQMessage) error
+}
+
 // PendingResponseRegistryPort tracks and correlates asynchronous responses
 // from Document Management during the comparison pipeline.
 // Implemented by: Pending Response Registry (application layer).

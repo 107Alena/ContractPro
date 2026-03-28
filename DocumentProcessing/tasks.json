@@ -1185,7 +1185,9 @@
         "Шаг 4: make build — компилируется без ошибок"
       ],
       "dependencies": ["TASK-035", "TASK-037", "TASK-008"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-28",
+      "summary": "DLQPort в port/outbound.go: SendToDLQ(ctx, msg DLQMessage) error. DLQMessage struct в model/dlq.go: EventMeta, job_id, document_id, error_code, error_message, failed_at_stage, pipeline_type ('processing'/'comparison'), original_command (json.RawMessage). Sender в egress/dlq/sender.go: BrokerPublisher consumer-side interface, NewSender(broker, cfg), compile-time check var _ DLQPort = (*Sender)(nil). Конфигурация: TopicDLQ в BrokerConfig, DP_BROKER_TOPIC_DLQ (default: dp.dlq). Processing Orchestrator: sendToDLQ best-effort в handlePipelineError (только для StatusFailed — не REJECTED/TIMED_OUT), после PublishProcessingFailed, перед cleanup. json.Marshal(cmd) → DLQMessage.OriginalCommand. Comparison Orchestrator: аналогичный sendToDLQ с PipelineType='comparison'. DI wiring: dlqSender в app.go, передаётся в оба оркестратора. Integration tests: noopDLQ в testinfra.go. Code review: 0 critical, 4 warnings (W-1: дублирование sendToDLQ — by design, W-2: FileURL в DLQ — documented, W-3: ErrorMessage chain — consistent, W-4: mockDLQ duplicate — Go limitation). 10 тестов DLQ sender (interface, panics, topic, JSON, round-trip, errors, context). 4+4 новых теста в оркестраторах (SentOnFailed, NotSentOnRejected, NotSentOnTimedOut, ErrorLogged). 33 пакета PASS с -race (incl integration), go vet clean, make build/test/lint OK."
     },
     {
       "id": "TASK-051",

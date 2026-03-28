@@ -15,6 +15,7 @@ import (
 	"contractpro/document-processing/internal/application/pendingresponse"
 	"contractpro/document-processing/internal/application/processing"
 	"contractpro/document-processing/internal/config"
+	"contractpro/document-processing/internal/egress/dlq"
 	"contractpro/document-processing/internal/egress/dm"
 	"contractpro/document-processing/internal/egress/publisher"
 	"contractpro/document-processing/internal/egress/storage"
@@ -136,6 +137,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	dmSender := dm.NewSender(brokerCli, cfg.Broker)
 	limiter := concurrency.New(cfg.Concurrency.MaxConcurrentJobs, obs.Metrics, obs.Logger)
 	pendingRegistry := pendingresponse.New()
+	dlqSender := dlq.NewSender(brokerCli, cfg.Broker)
 
 	// --- Group 4: Engine components ---
 	pdfUtil := pdf.NewUtil()
@@ -164,6 +166,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		textExtractor, structExtractor, treeBuilder,
 		tempStorage, eventPublisher, dmSender,
 		dmAwaiter,
+		dlqSender,
 		obs.Logger,
 		cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase,
 	)
@@ -172,6 +175,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		lifecycleMgr,
 		dmSender, dmSender, pendingRegistry, versionComparer,
 		eventPublisher,
+		dlqSender,
 		obs.Logger,
 		cfg.Retry.MaxAttempts, cfg.Retry.BackoffBase,
 	)

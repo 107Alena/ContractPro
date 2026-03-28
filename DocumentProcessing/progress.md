@@ -2016,3 +2016,37 @@ idempotency, malformed input, artifact format.
 - Pending medium: TASK-051, TASK-052, TASK-053
 - Pending low: TASK-054 (docs)
 - W3 (fire-and-forget metrics server bind error) — существующий design pattern, не блокирует
+
+---
+
+### TASK-050 — DLQ (Dead Letter Queue) — порт, адаптер, конфигурация для failed-сообщений
+**Статус:** done
+**Дата:** 2026-03-28
+**Summary:** Определён DLQPort + DLQMessage. Реализован DLQ-адаптер через broker в egress/dlq/. Интегрирован best-effort DLQ send в оба оркестратора (только StatusFailed). DP_BROKER_TOPIC_DLQ (default: dp.dlq). DI wiring в app.go.
+
+**Что сделано:**
+- internal/domain/model/dlq.go: DLQMessage struct (EventMeta, job_id, document_id, error_code, error_message, failed_at_stage, pipeline_type, original_command json.RawMessage)
+- internal/domain/port/outbound.go: DLQPort interface — SendToDLQ(ctx, msg DLQMessage)
+- internal/config/sub_configs.go: TopicDLQ в BrokerConfig, DP_BROKER_TOPIC_DLQ (default: dp.dlq)
+- internal/egress/dlq/sender.go: Sender — BrokerPublisher consumer-side interface, NewSender, SendToDLQ с JSON marshal
+- internal/egress/dlq/sender_test.go: 10 тестов (interface, panics, topic, JSON fields, round-trip, broker/context errors)
+- internal/application/processing/orchestrator.go: dlq field, sendToDLQ helper (best-effort, только StatusFailed, после PublishProcessingFailed)
+- internal/application/comparison/orchestrator.go: аналогичные изменения
+- internal/app/app.go: dlqSender wiring, передаётся в оба оркестратора
+- internal/integration/testinfra.go: noopDLQ, обновлены 3 NewOrchestrator вызова
+- 4+4 новых теста в оркестраторах: SentOnFailed, NotSentOnRejected, NotSentOnTimedOut, ErrorLogged
+
+**Архитектурные решения:**
+- DLQ только для StatusFailed: REJECTED — детерминистическая ошибка, TIMED_OUT — уже retryable в failed event
+- json.RawMessage для OriginalCommand: адаптер не знает о типе команды, маршалинг в оркестраторе
+- Best-effort: ошибки DLQ логируются, не пропагируются (не блокируют error flow)
+- Порядок: transition → FailedEvent publish → DLQ send → cleanup
+- Отдельный пакет egress/dlq/ (SRP, аналогично egress/dm/ и egress/publisher/)
+
+**Code review:** 0 critical, 4 warnings (дублирование sendToDLQ — by design, FileURL в DLQ — documented, ErrorMessage chain — consistent, mockDLQ dup — Go)
+**Тесты:** 33 пакета PASS с -race (incl integration), go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- Pending medium: TASK-051 (VALIDATING_FILE stage), TASK-052 (diff counts), TASK-053 (error_code в PersistFailed)
+- Pending low: TASK-054 (docs)
+- Все acceptance_criteria TASK-050 выполнены

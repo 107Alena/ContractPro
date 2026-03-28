@@ -22,6 +22,9 @@ type BrokerConfig struct {
 	TopicDMDiffPersisted         string // DP_BROKER_TOPIC_DM_DIFF_PERSISTED
 	TopicDMDiffPersistFailed     string // DP_BROKER_TOPIC_DM_DIFF_PERSIST_FAILED
 
+	// DP dead letter queue topic
+	TopicDLQ string // DP_BROKER_TOPIC_DLQ
+
 	// DP -> external event topics (published by Event Publisher)
 	TopicStatusChanged        string // DP_BROKER_TOPIC_STATUS_CHANGED
 	TopicProcessingCompleted  string // DP_BROKER_TOPIC_PROCESSING_COMPLETED
@@ -46,6 +49,8 @@ func loadBrokerConfig() BrokerConfig {
 		TopicDMSemanticTreeProvided:  envString("DP_BROKER_TOPIC_DM_SEMANTIC_TREE_PROVIDED", "dm.responses.semantic-tree-provided"),
 		TopicDMDiffPersisted:         envString("DP_BROKER_TOPIC_DM_DIFF_PERSISTED", "dm.responses.diff-persisted"),
 		TopicDMDiffPersistFailed:     envString("DP_BROKER_TOPIC_DM_DIFF_PERSIST_FAILED", "dm.responses.diff-persist-failed"),
+
+		TopicDLQ: envString("DP_BROKER_TOPIC_DLQ", "dp.dlq"),
 
 		TopicStatusChanged:       envString("DP_BROKER_TOPIC_STATUS_CHANGED", "dp.events.status-changed"),
 		TopicProcessingCompleted: envString("DP_BROKER_TOPIC_PROCESSING_COMPLETED", "dp.events.processing-completed"),

@@ -16,6 +16,7 @@ type ManagedJob interface {
 	GetJobMeta() *model.JobMeta
 	GetDocumentID() string
 	GetStage() string
+	GetOrgID() string
 }
 
 // CleanupFunc is called on terminal status transitions.
@@ -81,6 +82,7 @@ func (m *LifecycleManager) TransitionJob(ctx context.Context, job ManagedJob, ne
 		},
 		JobID:      meta.JobID,
 		DocumentID: job.GetDocumentID(),
+		OrgID:      job.GetOrgID(),
 		OldStatus:  oldStatus,
 		NewStatus:  newStatus,
 		Stage:      job.GetStage(),

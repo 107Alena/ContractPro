@@ -466,3 +466,64 @@ func TestComparisonJob(t *testing.T) {
 		t.Errorf("expected idempotency marked for job-2, got %v", idem.completed)
 	}
 }
+
+func TestOrgID_PropagatedInStatusChangedEvent(t *testing.T) {
+	t.Run("ProcessingJob", func(t *testing.T) {
+		pub := &mockPublisher{}
+		idem := &mockIdempotency{}
+		mgr := newManager(pub, idem, nil)
+
+		job := newProcessingJob()
+		job.OrgID = "org-alpha-1"
+		job.Stage = model.ProcessingStageValidatingInput
+
+		err := mgr.TransitionJob(context.Background(), job, model.StatusInProgress)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		evt := pub.events.statusChanged[0]
+		if evt.OrgID != "org-alpha-1" {
+			t.Errorf("OrgID = %q, want %q", evt.OrgID, "org-alpha-1")
+		}
+	})
+
+	t.Run("ComparisonJob", func(t *testing.T) {
+		pub := &mockPublisher{}
+		idem := &mockIdempotency{}
+		mgr := newManager(pub, idem, nil)
+
+		job := newComparisonJob()
+		job.OrgID = "org-beta-2"
+		job.Stage = model.ComparisonStageRequestingTrees
+
+		err := mgr.TransitionJob(context.Background(), job, model.StatusInProgress)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		evt := pub.events.statusChanged[0]
+		if evt.OrgID != "org-beta-2" {
+			t.Errorf("OrgID = %q, want %q", evt.OrgID, "org-beta-2")
+		}
+	})
+
+	t.Run("EmptyOrgID", func(t *testing.T) {
+		pub := &mockPublisher{}
+		idem := &mockIdempotency{}
+		mgr := newManager(pub, idem, nil)
+
+		job := newProcessingJob()
+		// OrgID intentionally not set — backward compatibility.
+
+		err := mgr.TransitionJob(context.Background(), job, model.StatusInProgress)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		evt := pub.events.statusChanged[0]
+		if evt.OrgID != "" {
+			t.Errorf("OrgID = %q, want empty (backward compat)", evt.OrgID)
+		}
+	})
+}

@@ -56,6 +56,9 @@ func (j *ProcessingJob) GetDocumentID() string { return j.DocumentID }
 // GetStage returns the current processing stage as a string.
 func (j *ProcessingJob) GetStage() string { return string(j.Stage) }
 
+// GetOrgID returns the organization ID associated with this job.
+func (j *ProcessingJob) GetOrgID() string { return j.OrgID }
+
 // GetJobMeta returns a pointer to the embedded JobMeta.
 func (j *ComparisonJob) GetJobMeta() *JobMeta { return &j.JobMeta }
 
@@ -64,6 +67,9 @@ func (j *ComparisonJob) GetDocumentID() string { return j.DocumentID }
 
 // GetStage returns the current comparison stage as a string.
 func (j *ComparisonJob) GetStage() string { return string(j.Stage) }
+
+// GetOrgID returns the organization ID associated with this job.
+func (j *ComparisonJob) GetOrgID() string { return j.OrgID }
 
 // NewProcessingJob creates a new ProcessingJob in QUEUED status.
 func NewProcessingJob(jobID, documentID, fileURL string) *ProcessingJob {

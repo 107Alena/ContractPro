@@ -2120,3 +2120,36 @@ idempotency, malformed input, artifact format.
 **Заметки для следующей итерации:**
 - Остались 2 задачи: TASK-055 (medium, error fields в SemanticTreeProvided) и TASK-057 (high, organization_id во все события)
 - TASK-057 — следующая по приоритету (high)
+
+---
+
+### TASK-057 — Добавить organization_id во все исходящие события DP
+**Статус:** done
+**Дата:** 2026-03-31
+**Summary:**
+Добавлено поле `OrgID string json:"organization_id,omitempty"` во все 8 исходящих событий DP для поддержки tenant validation и маршрутизации в DM и других потребителях. OrgID пробрасывается из команды через Job во все события: StatusChangedEvent (через lifecycle manager), ArtifactsReady/CompletedEvent/FailedEvent (через processing orchestrator), TreeRequest/DiffReady/CompletedEvent/FailedEvent (через comparison orchestrator).
+
+**План реализации:**
+1. Добавить OrgID в 8 struct-ов событий в model/event.go (omitempty для backward compat)
+2. Добавить GetOrgID() в ManagedJob interface (lifecycle/manager.go) и реализации (ProcessingJob, ComparisonJob)
+3. Обновить lifecycle manager: проброс OrgID из Job в StatusChangedEvent
+4. Обновить processing orchestrator: проброс OrgID из cmd в ArtifactsReady, CompletedEvent, FailedEvent
+5. Обновить comparison orchestrator: проброс OrgID из cmd в GetSemanticTreeRequest (x2), DocumentVersionDiffReady, CompletedEvent, FailedEvent
+6. Добавить тесты: JSON round-trip с OrgID, backward compat, omitempty, lifecycle propagation, orchestrator propagation
+
+**Изменённые файлы (8):**
+- `internal/domain/model/event.go` — OrgID во всех 8 исходящих событиях
+- `internal/domain/model/job.go` — GetOrgID() для ProcessingJob и ComparisonJob
+- `internal/domain/model/event_test.go` — 24 новых теста (8 round-trip, 8 backward compat, 8 omitempty)
+- `internal/domain/model/job_test.go` — 2 теста GetOrgID()
+- `internal/application/lifecycle/manager.go` — GetOrgID() в ManagedJob, OrgID в StatusChangedEvent
+- `internal/application/lifecycle/manager_test.go` — 3 теста OrgID propagation
+- `internal/application/processing/orchestrator.go` — OrgID в ArtifactsReady, Completed, Failed
+- `internal/application/processing/orchestrator_test.go` — 4 теста OrgID propagation
+- `internal/application/comparison/orchestrator.go` — OrgID в TreeRequest, DiffReady, Completed, Failed
+- `internal/application/comparison/orchestrator_test.go` — 6 тестов OrgID propagation
+
+**Тесты:** 32 пакета PASS (-race -count=1), go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- Осталась 1 задача: TASK-055 (medium, error fields в SemanticTreeProvided, зависит от TASK-053 done)

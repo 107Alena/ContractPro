@@ -220,6 +220,7 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 			JobID:      cmd.JobID,
 			DocumentID: cmd.DocumentID,
 			VersionID:  cmd.BaseVersionID,
+			OrgID:      cmd.OrgID,
 		})
 	}); err != nil {
 		o.registry.Cancel(cmd.JobID)
@@ -233,6 +234,7 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 			JobID:      cmd.JobID,
 			DocumentID: cmd.DocumentID,
 			VersionID:  cmd.TargetVersionID,
+			OrgID:      cmd.OrgID,
 		})
 	}); err != nil {
 		o.registry.Cancel(cmd.JobID)
@@ -288,6 +290,7 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 		DocumentID:          cmd.DocumentID,
 		BaseVersionID:       cmd.BaseVersionID,
 		TargetVersionID:     cmd.TargetVersionID,
+		OrgID:               cmd.OrgID,
 		TextDiffs:           diffResult.TextDiffs,
 		StructuralDiffs:     diffResult.StructuralDiffs,
 		TextDiffCount:       len(diffResult.TextDiffs),
@@ -342,6 +345,7 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ComparisonJob
 		},
 		JobID:               cmd.JobID,
 		DocumentID:          cmd.DocumentID,
+		OrgID:               cmd.OrgID,
 		BaseVersionID:       cmd.BaseVersionID,
 		TargetVersionID:     cmd.TargetVersionID,
 		Status:              finalStatus,
@@ -406,6 +410,7 @@ func (o *Orchestrator) handlePipelineError(
 		},
 		JobID:         cmd.JobID,
 		DocumentID:    cmd.DocumentID,
+		OrgID:         cmd.OrgID,
 		Status:        terminalStatus,
 		ErrorCode:     port.ErrorCode(pipelineErr),
 		ErrorMessage:  pipelineErr.Error(),

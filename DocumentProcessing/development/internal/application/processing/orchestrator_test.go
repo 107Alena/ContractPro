@@ -2807,3 +2807,85 @@ func TestIsFileValidationError(t *testing.T) {
 		})
 	}
 }
+
+// --- OrgID propagation tests ---
+
+func TestOrgID_PropagatedToProcessingCompletedEvent(t *testing.T) {
+	deps := newTestDeps()
+	orch := deps.buildOrchestrator()
+
+	cmd := defaultCmd()
+	cmd.OrgID = "org-prop-test"
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(deps.publisher.processingCompleted) != 1 {
+		t.Fatalf("expected 1 ProcessingCompletedEvent, got %d", len(deps.publisher.processingCompleted))
+	}
+	completed := deps.publisher.processingCompleted[0]
+	if completed.OrgID != "org-prop-test" {
+		t.Errorf("ProcessingCompletedEvent.OrgID = %q, want %q", completed.OrgID, "org-prop-test")
+	}
+}
+
+func TestOrgID_PropagatedToProcessingFailedEvent(t *testing.T) {
+	deps := newTestDeps()
+	deps.validator = &mockValidator{err: port.NewValidationError("bad input")}
+	orch := deps.buildOrchestrator()
+
+	cmd := defaultCmd()
+	cmd.OrgID = "org-fail-test"
+
+	_ = orch.HandleProcessDocument(context.Background(), cmd)
+
+	if len(deps.publisher.processingFailed) != 1 {
+		t.Fatalf("expected 1 ProcessingFailedEvent, got %d", len(deps.publisher.processingFailed))
+	}
+	failed := deps.publisher.processingFailed[0]
+	if failed.OrgID != "org-fail-test" {
+		t.Errorf("ProcessingFailedEvent.OrgID = %q, want %q", failed.OrgID, "org-fail-test")
+	}
+}
+
+func TestOrgID_PropagatedToArtifactsReady(t *testing.T) {
+	deps := newTestDeps()
+	orch := deps.buildOrchestrator()
+
+	cmd := defaultCmd()
+	cmd.OrgID = "org-artifacts-test"
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(deps.dmSender.sentArtifacts) < 1 {
+		t.Fatal("expected at least 1 SendArtifacts call")
+	}
+	artifacts := deps.dmSender.sentArtifacts[0]
+	if artifacts.OrgID != "org-artifacts-test" {
+		t.Errorf("DocumentProcessingArtifactsReady.OrgID = %q, want %q", artifacts.OrgID, "org-artifacts-test")
+	}
+}
+
+func TestOrgID_PropagatedToStatusChangedEvents(t *testing.T) {
+	deps := newTestDeps()
+	orch := deps.buildOrchestrator()
+
+	cmd := defaultCmd()
+	cmd.OrgID = "org-status-test"
+
+	err := orch.HandleProcessDocument(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for i, evt := range deps.publisher.statusChanged {
+		if evt.OrgID != "org-status-test" {
+			t.Errorf("StatusChangedEvent[%d].OrgID = %q, want %q", i, evt.OrgID, "org-status-test")
+		}
+	}
+}

@@ -18,6 +18,7 @@ type DocumentProcessingArtifactsReady struct {
 	JobID        string              `json:"job_id"`
 	DocumentID   string              `json:"document_id"`
 	VersionID    string              `json:"version_id"`
+	OrgID        string              `json:"organization_id,omitempty"`
 	OCRRaw       OCRRawArtifact      `json:"ocr_raw"`
 	Text         ExtractedText       `json:"text"`
 	Structure    DocumentStructure   `json:"structure"`
@@ -32,6 +33,7 @@ type GetSemanticTreeRequest struct {
 	JobID      string `json:"job_id"`
 	DocumentID string `json:"document_id"`
 	VersionID  string `json:"version_id"`
+	OrgID      string `json:"organization_id,omitempty"`
 }
 
 // DocumentVersionDiffReady is published when DP finishes comparing
@@ -42,6 +44,7 @@ type DocumentVersionDiffReady struct {
 	DocumentID          string                `json:"document_id"`
 	BaseVersionID       string                `json:"base_version_id"`
 	TargetVersionID     string                `json:"target_version_id"`
+	OrgID               string                `json:"organization_id,omitempty"`
 	TextDiffs           []TextDiffEntry       `json:"text_diffs"`
 	StructuralDiffs     []StructuralDiffEntry `json:"structural_diffs"`
 	TextDiffCount       int                   `json:"text_diff_count"`
@@ -106,6 +109,7 @@ type StatusChangedEvent struct {
 	EventMeta
 	JobID      string    `json:"job_id"`
 	DocumentID string    `json:"document_id"`
+	OrgID      string    `json:"organization_id,omitempty"`
 	OldStatus  JobStatus `json:"old_status"`
 	NewStatus  JobStatus `json:"new_status"`
 	Stage      string    `json:"stage,omitempty"`
@@ -117,6 +121,7 @@ type ProcessingCompletedEvent struct {
 	EventMeta
 	JobID        string    `json:"job_id"`
 	DocumentID   string    `json:"document_id"`
+	OrgID        string    `json:"organization_id,omitempty"`
 	Status       JobStatus `json:"status"`
 	HasWarnings  bool      `json:"has_warnings"`
 	WarningCount int       `json:"warning_count"`
@@ -128,6 +133,7 @@ type ComparisonCompletedEvent struct {
 	EventMeta
 	JobID               string    `json:"job_id"`
 	DocumentID          string    `json:"document_id"`
+	OrgID               string    `json:"organization_id,omitempty"`
 	BaseVersionID       string    `json:"base_version_id"`
 	TargetVersionID     string    `json:"target_version_id"`
 	Status              JobStatus `json:"status"`
@@ -141,6 +147,7 @@ type ProcessingFailedEvent struct {
 	EventMeta
 	JobID         string    `json:"job_id"`
 	DocumentID    string    `json:"document_id"`
+	OrgID         string    `json:"organization_id,omitempty"`
 	Status        JobStatus `json:"status"`
 	ErrorCode     string    `json:"error_code"`
 	ErrorMessage  string    `json:"error_message"`
@@ -154,6 +161,7 @@ type ComparisonFailedEvent struct {
 	EventMeta
 	JobID         string    `json:"job_id"`
 	DocumentID    string    `json:"document_id"`
+	OrgID         string    `json:"organization_id,omitempty"`
 	Status        JobStatus `json:"status"`
 	ErrorCode     string    `json:"error_code"`
 	ErrorMessage  string    `json:"error_message"`

@@ -2200,3 +2200,114 @@ func TestDLQ_ErrorIsLogged_NotPropagated(t *testing.T) {
 		t.Error("returned error should be the pipeline error, not the DLQ error")
 	}
 }
+
+// --- OrgID propagation tests ---
+
+func TestOrgID_PropagatedToComparisonCompletedEvent(t *testing.T) {
+	deps := newTestDeps()
+	orch := deps.build()
+
+	cmd := defaultCompareCmd()
+	cmd.OrgID = "org-cmp-complete"
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(deps.publisher.comparisonCompleted) != 1 {
+		t.Fatalf("expected 1 ComparisonCompletedEvent, got %d", len(deps.publisher.comparisonCompleted))
+	}
+	completed := deps.publisher.comparisonCompleted[0]
+	if completed.OrgID != "org-cmp-complete" {
+		t.Errorf("ComparisonCompletedEvent.OrgID = %q, want %q", completed.OrgID, "org-cmp-complete")
+	}
+}
+
+func TestOrgID_PropagatedToComparisonFailedEvent(t *testing.T) {
+	deps := newTestDeps()
+	deps.treeReq = &mockTreeRequester{err: port.NewBrokerError("tree request failed", nil)}
+	orch := deps.build()
+
+	cmd := defaultCompareCmd()
+	cmd.OrgID = "org-cmp-fail"
+
+	_ = orch.HandleCompareVersions(context.Background(), cmd)
+
+	if len(deps.publisher.comparisonFailed) != 1 {
+		t.Fatalf("expected 1 ComparisonFailedEvent, got %d", len(deps.publisher.comparisonFailed))
+	}
+	failed := deps.publisher.comparisonFailed[0]
+	if failed.OrgID != "org-cmp-fail" {
+		t.Errorf("ComparisonFailedEvent.OrgID = %q, want %q", failed.OrgID, "org-cmp-fail")
+	}
+}
+
+func TestOrgID_PropagatedToTreeRequests(t *testing.T) {
+	deps := newTestDeps()
+	orch := deps.build()
+
+	cmd := defaultCompareCmd()
+	cmd.OrgID = "org-tree-req"
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	deps.treeReq.mu.Lock()
+	requests := deps.treeReq.requests
+	deps.treeReq.mu.Unlock()
+
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 tree requests, got %d", len(requests))
+	}
+	for i, req := range requests {
+		if req.OrgID != "org-tree-req" {
+			t.Errorf("GetSemanticTreeRequest[%d].OrgID = %q, want %q", i, req.OrgID, "org-tree-req")
+		}
+	}
+}
+
+func TestOrgID_PropagatedToDiffReady(t *testing.T) {
+	deps := newTestDeps()
+	orch := deps.build()
+
+	cmd := defaultCompareCmd()
+	cmd.OrgID = "org-diff-ready"
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	deps.dmSender.mu.Lock()
+	diffs := deps.dmSender.sentDiffResult
+	deps.dmSender.mu.Unlock()
+
+	if len(diffs) != 1 {
+		t.Fatalf("expected 1 diff result, got %d", len(diffs))
+	}
+	if diffs[0].OrgID != "org-diff-ready" {
+		t.Errorf("DocumentVersionDiffReady.OrgID = %q, want %q", diffs[0].OrgID, "org-diff-ready")
+	}
+}
+
+func TestOrgID_PropagatedToComparisonStatusChangedEvents(t *testing.T) {
+	deps := newTestDeps()
+	orch := deps.build()
+
+	cmd := defaultCompareCmd()
+	cmd.OrgID = "org-cmp-status"
+
+	err := orch.HandleCompareVersions(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for i, evt := range deps.publisher.statusChanged {
+		if evt.OrgID != "org-cmp-status" {
+			t.Errorf("StatusChangedEvent[%d].OrgID = %q, want %q", i, evt.OrgID, "org-cmp-status")
+		}
+	}
+}

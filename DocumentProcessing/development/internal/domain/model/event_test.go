@@ -661,3 +661,329 @@ func TestEventMeta_EmbeddedInJSON(t *testing.T) {
 		t.Error("timestamp should be present at top level of JSON (embedded EventMeta)")
 	}
 }
+
+// --- OrgID JSON round-trip tests for all 8 outbound events ---
+
+func TestOrgID_JSONRoundTrip_AllOutboundEvents(t *testing.T) {
+	const orgID = "org-acme-123"
+
+	t.Run("DocumentProcessingArtifactsReady", func(t *testing.T) {
+		original := DocumentProcessingArtifactsReady{
+			EventMeta:  testEventMeta,
+			JobID:      "job-1",
+			DocumentID: "doc-1",
+			VersionID:  "ver-1",
+			OrgID:      orgID,
+		}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var restored DocumentProcessingArtifactsReady
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if restored.OrgID != orgID {
+			t.Errorf("OrgID = %q, want %q", restored.OrgID, orgID)
+		}
+		// Verify JSON key name
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("Unmarshal to map: %v", err)
+		}
+		if raw["organization_id"] != orgID {
+			t.Errorf("JSON key organization_id = %v, want %q", raw["organization_id"], orgID)
+		}
+	})
+
+	t.Run("GetSemanticTreeRequest", func(t *testing.T) {
+		original := GetSemanticTreeRequest{
+			EventMeta:  testEventMeta,
+			JobID:      "job-1",
+			DocumentID: "doc-1",
+			VersionID:  "ver-1",
+			OrgID:      orgID,
+		}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var restored GetSemanticTreeRequest
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if restored.OrgID != orgID {
+			t.Errorf("OrgID = %q, want %q", restored.OrgID, orgID)
+		}
+	})
+
+	t.Run("DocumentVersionDiffReady", func(t *testing.T) {
+		original := DocumentVersionDiffReady{
+			EventMeta:       testEventMeta,
+			JobID:           "job-1",
+			DocumentID:      "doc-1",
+			BaseVersionID:   "ver-1",
+			TargetVersionID: "ver-2",
+			OrgID:           orgID,
+			TextDiffs:       []TextDiffEntry{},
+			StructuralDiffs: []StructuralDiffEntry{},
+		}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var restored DocumentVersionDiffReady
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if restored.OrgID != orgID {
+			t.Errorf("OrgID = %q, want %q", restored.OrgID, orgID)
+		}
+	})
+
+	t.Run("StatusChangedEvent", func(t *testing.T) {
+		original := StatusChangedEvent{
+			EventMeta:  testEventMeta,
+			JobID:      "job-1",
+			DocumentID: "doc-1",
+			OrgID:      orgID,
+			OldStatus:  StatusQueued,
+			NewStatus:  StatusInProgress,
+		}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var restored StatusChangedEvent
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if restored.OrgID != orgID {
+			t.Errorf("OrgID = %q, want %q", restored.OrgID, orgID)
+		}
+	})
+
+	t.Run("ProcessingCompletedEvent", func(t *testing.T) {
+		original := ProcessingCompletedEvent{
+			EventMeta:    testEventMeta,
+			JobID:        "job-1",
+			DocumentID:   "doc-1",
+			OrgID:        orgID,
+			Status:       StatusCompleted,
+			HasWarnings:  false,
+			WarningCount: 0,
+		}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var restored ProcessingCompletedEvent
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if restored.OrgID != orgID {
+			t.Errorf("OrgID = %q, want %q", restored.OrgID, orgID)
+		}
+	})
+
+	t.Run("ProcessingFailedEvent", func(t *testing.T) {
+		original := ProcessingFailedEvent{
+			EventMeta:     testEventMeta,
+			JobID:         "job-1",
+			DocumentID:    "doc-1",
+			OrgID:         orgID,
+			Status:        StatusFailed,
+			ErrorCode:     "ERR",
+			ErrorMessage:  "fail",
+			FailedAtStage: "OCR",
+			IsRetryable:   true,
+		}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var restored ProcessingFailedEvent
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if restored.OrgID != orgID {
+			t.Errorf("OrgID = %q, want %q", restored.OrgID, orgID)
+		}
+	})
+
+	t.Run("ComparisonCompletedEvent", func(t *testing.T) {
+		original := ComparisonCompletedEvent{
+			EventMeta:           testEventMeta,
+			JobID:               "job-1",
+			DocumentID:          "doc-1",
+			OrgID:               orgID,
+			BaseVersionID:       "ver-1",
+			TargetVersionID:     "ver-2",
+			Status:              StatusCompleted,
+			TextDiffCount:       1,
+			StructuralDiffCount: 2,
+		}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var restored ComparisonCompletedEvent
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if restored.OrgID != orgID {
+			t.Errorf("OrgID = %q, want %q", restored.OrgID, orgID)
+		}
+	})
+
+	t.Run("ComparisonFailedEvent", func(t *testing.T) {
+		original := ComparisonFailedEvent{
+			EventMeta:     testEventMeta,
+			JobID:         "job-1",
+			DocumentID:    "doc-1",
+			OrgID:         orgID,
+			Status:        StatusFailed,
+			ErrorCode:     "ERR",
+			ErrorMessage:  "fail",
+			FailedAtStage: "DIFF",
+			IsRetryable:   false,
+		}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var restored ComparisonFailedEvent
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if restored.OrgID != orgID {
+			t.Errorf("OrgID = %q, want %q", restored.OrgID, orgID)
+		}
+	})
+}
+
+// --- OrgID backward compatibility: JSON without organization_id deserializes with empty OrgID ---
+
+func TestOrgID_BackwardCompatibility_AllOutboundEvents(t *testing.T) {
+	t.Run("DocumentProcessingArtifactsReady", func(t *testing.T) {
+		payload := `{"correlation_id":"c1","timestamp":"2026-03-15T14:30:00Z","job_id":"j1","document_id":"d1","version_id":"v1","ocr_raw":{"status":"not_applicable"},"text":{"document_id":"d1","pages":[]},"structure":{"document_id":"d1"},"semantic_tree":{"document_id":"d1"}}`
+		var event DocumentProcessingArtifactsReady
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if event.OrgID != "" {
+			t.Errorf("OrgID = %q, want empty (backward compat)", event.OrgID)
+		}
+	})
+
+	t.Run("GetSemanticTreeRequest", func(t *testing.T) {
+		payload := `{"correlation_id":"c1","timestamp":"2026-03-15T14:30:00Z","job_id":"j1","document_id":"d1","version_id":"v1"}`
+		var event GetSemanticTreeRequest
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if event.OrgID != "" {
+			t.Errorf("OrgID = %q, want empty (backward compat)", event.OrgID)
+		}
+	})
+
+	t.Run("DocumentVersionDiffReady", func(t *testing.T) {
+		payload := `{"correlation_id":"c1","timestamp":"2026-03-15T14:30:00Z","job_id":"j1","document_id":"d1","base_version_id":"v1","target_version_id":"v2","text_diffs":[],"structural_diffs":[],"text_diff_count":0,"structural_diff_count":0}`
+		var event DocumentVersionDiffReady
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if event.OrgID != "" {
+			t.Errorf("OrgID = %q, want empty (backward compat)", event.OrgID)
+		}
+	})
+
+	t.Run("StatusChangedEvent", func(t *testing.T) {
+		payload := `{"correlation_id":"c1","timestamp":"2026-03-15T14:30:00Z","job_id":"j1","document_id":"d1","old_status":"QUEUED","new_status":"IN_PROGRESS"}`
+		var event StatusChangedEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if event.OrgID != "" {
+			t.Errorf("OrgID = %q, want empty (backward compat)", event.OrgID)
+		}
+	})
+
+	t.Run("ProcessingCompletedEvent", func(t *testing.T) {
+		payload := `{"correlation_id":"c1","timestamp":"2026-03-15T14:30:00Z","job_id":"j1","document_id":"d1","status":"COMPLETED","has_warnings":false,"warning_count":0}`
+		var event ProcessingCompletedEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if event.OrgID != "" {
+			t.Errorf("OrgID = %q, want empty (backward compat)", event.OrgID)
+		}
+	})
+
+	t.Run("ProcessingFailedEvent", func(t *testing.T) {
+		payload := `{"correlation_id":"c1","timestamp":"2026-03-15T14:30:00Z","job_id":"j1","document_id":"d1","status":"FAILED","error_code":"ERR","error_message":"fail","failed_at_stage":"OCR","is_retryable":true}`
+		var event ProcessingFailedEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if event.OrgID != "" {
+			t.Errorf("OrgID = %q, want empty (backward compat)", event.OrgID)
+		}
+	})
+
+	t.Run("ComparisonCompletedEvent", func(t *testing.T) {
+		payload := `{"correlation_id":"c1","timestamp":"2026-03-15T14:30:00Z","job_id":"j1","document_id":"d1","base_version_id":"v1","target_version_id":"v2","status":"COMPLETED","text_diff_count":0,"structural_diff_count":0}`
+		var event ComparisonCompletedEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if event.OrgID != "" {
+			t.Errorf("OrgID = %q, want empty (backward compat)", event.OrgID)
+		}
+	})
+
+	t.Run("ComparisonFailedEvent", func(t *testing.T) {
+		payload := `{"correlation_id":"c1","timestamp":"2026-03-15T14:30:00Z","job_id":"j1","document_id":"d1","status":"FAILED","error_code":"ERR","error_message":"fail","failed_at_stage":"DIFF","is_retryable":false}`
+		var event ComparisonFailedEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if event.OrgID != "" {
+			t.Errorf("OrgID = %q, want empty (backward compat)", event.OrgID)
+		}
+	})
+}
+
+// --- OrgID omitempty: empty OrgID should not appear in JSON output ---
+
+func TestOrgID_OmittedWhenEmpty(t *testing.T) {
+	events := []struct {
+		name  string
+		event any
+	}{
+		{"DocumentProcessingArtifactsReady", DocumentProcessingArtifactsReady{EventMeta: testEventMeta, JobID: "j1", DocumentID: "d1"}},
+		{"GetSemanticTreeRequest", GetSemanticTreeRequest{EventMeta: testEventMeta, JobID: "j1", DocumentID: "d1", VersionID: "v1"}},
+		{"DocumentVersionDiffReady", DocumentVersionDiffReady{EventMeta: testEventMeta, JobID: "j1", DocumentID: "d1", TextDiffs: []TextDiffEntry{}, StructuralDiffs: []StructuralDiffEntry{}}},
+		{"StatusChangedEvent", StatusChangedEvent{EventMeta: testEventMeta, JobID: "j1", DocumentID: "d1", OldStatus: StatusQueued, NewStatus: StatusInProgress}},
+		{"ProcessingCompletedEvent", ProcessingCompletedEvent{EventMeta: testEventMeta, JobID: "j1", DocumentID: "d1", Status: StatusCompleted}},
+		{"ProcessingFailedEvent", ProcessingFailedEvent{EventMeta: testEventMeta, JobID: "j1", DocumentID: "d1", Status: StatusFailed, ErrorCode: "E", ErrorMessage: "m", FailedAtStage: "S"}},
+		{"ComparisonCompletedEvent", ComparisonCompletedEvent{EventMeta: testEventMeta, JobID: "j1", DocumentID: "d1", Status: StatusCompleted}},
+		{"ComparisonFailedEvent", ComparisonFailedEvent{EventMeta: testEventMeta, JobID: "j1", DocumentID: "d1", Status: StatusFailed, ErrorCode: "E", ErrorMessage: "m", FailedAtStage: "S"}},
+	}
+
+	for _, tc := range events {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.event)
+			if err != nil {
+				t.Fatalf("Marshal error: %v", err)
+			}
+			var raw map[string]any
+			if err := json.Unmarshal(data, &raw); err != nil {
+				t.Fatalf("Unmarshal to map: %v", err)
+			}
+			if _, exists := raw["organization_id"]; exists {
+				t.Error("organization_id should be omitted when empty (omitempty)")
+			}
+		})
+	}
+}

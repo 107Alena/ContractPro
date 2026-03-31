@@ -260,3 +260,25 @@ func TestProcessingJob_JSONOmitsEmptyOptionalFields(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessingJob_GetOrgID(t *testing.T) {
+	job := NewProcessingJob("job-1", "doc-1", "https://example.com/file.pdf")
+	if job.GetOrgID() != "" {
+		t.Errorf("GetOrgID() = %q, want empty for new job", job.GetOrgID())
+	}
+	job.OrgID = "org-test-42"
+	if job.GetOrgID() != "org-test-42" {
+		t.Errorf("GetOrgID() = %q, want %q", job.GetOrgID(), "org-test-42")
+	}
+}
+
+func TestComparisonJob_GetOrgID(t *testing.T) {
+	job := NewComparisonJob("job-2", "doc-1", "v1", "v2")
+	if job.GetOrgID() != "" {
+		t.Errorf("GetOrgID() = %q, want empty for new job", job.GetOrgID())
+	}
+	job.OrgID = "org-test-99"
+	if job.GetOrgID() != "org-test-99" {
+		t.Errorf("GetOrgID() = %q, want %q", job.GetOrgID(), "org-test-99")
+	}
+}

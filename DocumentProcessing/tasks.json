@@ -1390,7 +1390,9 @@
         "Шаг 6: make build"
       ],
       "dependencies": ["TASK-054"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-31",
+      "summary": "Добавлено поле OrgID string `json:\"organization_id,omitempty\"` в 8 исходящих событий: DocumentProcessingArtifactsReady, GetSemanticTreeRequest, DocumentVersionDiffReady, StatusChangedEvent, ProcessingCompletedEvent, ProcessingFailedEvent, ComparisonCompletedEvent, ComparisonFailedEvent. Добавлен GetOrgID() в ManagedJob interface и обе реализации (ProcessingJob, ComparisonJob). Lifecycle manager пробрасывает OrgID из Job в StatusChangedEvent. Processing orchestrator пробрасывает OrgID из cmd в ArtifactsReady, CompletedEvent, FailedEvent. Comparison orchestrator пробрасывает OrgID из cmd в GetSemanticTreeRequest (оба), DocumentVersionDiffReady, CompletedEvent, FailedEvent. JSON backward-compatible (omitempty). 29 новых тестов: 8 JSON round-trip с OrgID, 8 backward compat, 8 omitempty, 3 lifecycle OrgID propagation, 4 processing OrgID propagation, 6 comparison OrgID propagation, 2 GetOrgID(). Все тесты PASS, go vet чистый, make OK."
     }
   ]
 }

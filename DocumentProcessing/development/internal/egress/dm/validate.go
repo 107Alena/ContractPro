@@ -47,6 +47,8 @@ func validateArtifactsPersistFailed(event model.DocumentProcessingArtifactsPersi
 
 // validateSemanticTreeProvided checks that all required fields are present.
 // correlation_id is required because it is the routing key for the registry.
+// When ErrorMessage is non-empty the event represents a DM error response;
+// in that case version_id is not required (DM may not know it).
 func validateSemanticTreeProvided(event model.SemanticTreeProvided) error {
 	var missing []string
 	if strings.TrimSpace(event.JobID) == "" {
@@ -55,11 +57,13 @@ func validateSemanticTreeProvided(event model.SemanticTreeProvided) error {
 	if strings.TrimSpace(event.DocumentID) == "" {
 		missing = append(missing, "document_id")
 	}
-	if strings.TrimSpace(event.VersionID) == "" {
-		missing = append(missing, "version_id")
-	}
 	if strings.TrimSpace(event.CorrelationID) == "" {
 		missing = append(missing, "correlation_id")
+	}
+	// version_id is required only for success responses.
+	isErrorResponse := strings.TrimSpace(event.ErrorMessage) != ""
+	if !isErrorResponse && strings.TrimSpace(event.VersionID) == "" {
+		missing = append(missing, "version_id")
 	}
 	if len(missing) > 0 {
 		return port.NewValidationError(

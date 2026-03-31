@@ -74,12 +74,17 @@ type DocumentProcessingArtifactsPersistFailed struct {
 
 // SemanticTreeProvided is the DM response containing the requested
 // semantic tree for a document version (correlated by correlation_id).
+// When DM encounters an error, ErrorMessage is non-empty and SemanticTree
+// may be zero-valued; the receiver checks ErrorMessage before Root == nil.
 type SemanticTreeProvided struct {
 	EventMeta
 	JobID        string       `json:"job_id"`
 	DocumentID   string       `json:"document_id"`
 	VersionID    string       `json:"version_id"`
 	SemanticTree SemanticTree `json:"semantic_tree"`
+	ErrorCode    string       `json:"error_code,omitempty"`
+	ErrorMessage string       `json:"error_message,omitempty"`
+	IsRetryable  bool         `json:"is_retryable,omitempty"`
 }
 
 // DocumentVersionDiffPersisted confirms that DM successfully

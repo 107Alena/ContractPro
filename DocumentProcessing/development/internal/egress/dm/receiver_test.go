@@ -950,6 +950,195 @@ func TestHandleDiffPersistFailed_RegistryReceiveErrorError_ReturnsNil(t *testing
 	}
 }
 
+// --- handleSemanticTreeProvided error field tests ---
+
+func TestHandleSemanticTreeProvided_ErrorMessage_DispatchesTypedError(t *testing.T) {
+	r, _, handler, registry := newTestReceiver()
+	event := model.SemanticTreeProvided{
+		EventMeta:    testReceiverMeta(),
+		JobID:        "job-stp-err-1",
+		DocumentID:   "doc-stp-err-1",
+		VersionID:    "v1",
+		ErrorCode:    "VERSION_NOT_FOUND",
+		ErrorMessage: "version v1 not found in DM",
+		IsRetryable:  false,
+	}
+	body := mustMarshalReceiver(t, event)
+
+	err := r.handleSemanticTreeProvided(context.Background(), body)
+	if err != nil {
+		t.Fatalf("expected nil, got: %v", err)
+	}
+
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if registry.receiveCalled {
+		t.Fatal("registry.Receive should not be called for error response")
+	}
+	if !registry.receiveErrorCalled {
+		t.Fatal("registry.ReceiveError was not called")
+	}
+	if registry.lastReceiveErrorCorrelationID != event.CorrelationID {
+		t.Errorf("correlation_id = %q, want %q", registry.lastReceiveErrorCorrelationID, event.CorrelationID)
+	}
+
+	// Verify typed DomainError.
+	var domErr *port.DomainError
+	if !errors.As(registry.lastReceiveErrorErr, &domErr) {
+		t.Fatalf("expected *DomainError, got %T", registry.lastReceiveErrorErr)
+	}
+	if domErr.Code != port.ErrCodeDMSemanticTreeFailed {
+		t.Errorf("error code = %q, want %q", domErr.Code, port.ErrCodeDMSemanticTreeFailed)
+	}
+	if domErr.Message != event.ErrorMessage {
+		t.Errorf("error message = %q, want %q", domErr.Message, event.ErrorMessage)
+	}
+	if domErr.Retryable != event.IsRetryable {
+		t.Errorf("retryable = %v, want %v", domErr.Retryable, event.IsRetryable)
+	}
+
+	// Handler should NOT be called.
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if handler.semanticTreeProvidedCalled {
+		t.Fatal("DMResponseHandler should not be called (goes to registry)")
+	}
+}
+
+func TestHandleSemanticTreeProvided_ErrorMessage_RetryableTrue(t *testing.T) {
+	r, _, _, registry := newTestReceiver()
+	event := model.SemanticTreeProvided{
+		EventMeta:    testReceiverMeta(),
+		JobID:        "job-stp-err-2",
+		DocumentID:   "doc-stp-err-2",
+		VersionID:    "v2",
+		ErrorCode:    "STORAGE_TEMPORARILY_UNAVAILABLE",
+		ErrorMessage: "storage temporarily unavailable",
+		IsRetryable:  true,
+	}
+	body := mustMarshalReceiver(t, event)
+
+	err := r.handleSemanticTreeProvided(context.Background(), body)
+	if err != nil {
+		t.Fatalf("expected nil, got: %v", err)
+	}
+
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if !registry.receiveErrorCalled {
+		t.Fatal("registry.ReceiveError was not called")
+	}
+
+	var domErr *port.DomainError
+	if !errors.As(registry.lastReceiveErrorErr, &domErr) {
+		t.Fatalf("expected *DomainError, got %T", registry.lastReceiveErrorErr)
+	}
+	if !domErr.Retryable {
+		t.Error("expected retryable=true for retryable DM event")
+	}
+}
+
+func TestHandleSemanticTreeProvided_EmptyErrorMessage_NilRoot_FallbackBehavior(t *testing.T) {
+	// When ErrorMessage is empty and Root is nil, the existing fallback
+	// (fmt.Errorf) should be used — NOT a typed DomainError.
+	r, _, _, registry := newTestReceiver()
+	event := validSemanticTreeProvidedEvent()
+	event.SemanticTree = model.SemanticTree{DocumentID: "doc-stp-1"} // Root is nil, no ErrorMessage
+	body := mustMarshalReceiver(t, event)
+
+	err := r.handleSemanticTreeProvided(context.Background(), body)
+	if err != nil {
+		t.Fatalf("expected nil, got: %v", err)
+	}
+
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if !registry.receiveErrorCalled {
+		t.Fatal("registry.ReceiveError was not called")
+	}
+
+	// Should NOT be a DomainError (existing behavior preserved).
+	var domErr *port.DomainError
+	if errors.As(registry.lastReceiveErrorErr, &domErr) {
+		t.Fatal("expected plain error (not DomainError) for empty tree without error fields")
+	}
+}
+
+func TestHandleSemanticTreeProvided_ErrorMessage_PriorityOverNilRoot(t *testing.T) {
+	// ErrorMessage is checked BEFORE Root == nil. When both are present,
+	// the typed DomainError from ErrorMessage should be dispatched.
+	r, _, _, registry := newTestReceiver()
+	event := model.SemanticTreeProvided{
+		EventMeta:    testReceiverMeta(),
+		JobID:        "job-stp-err-3",
+		DocumentID:   "doc-stp-err-3",
+		VersionID:    "v3",
+		ErrorCode:    "INTERNAL_ERROR",
+		ErrorMessage: "internal DM error",
+		IsRetryable:  true,
+		// SemanticTree.Root is nil
+	}
+	body := mustMarshalReceiver(t, event)
+
+	err := r.handleSemanticTreeProvided(context.Background(), body)
+	if err != nil {
+		t.Fatalf("expected nil, got: %v", err)
+	}
+
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if !registry.receiveErrorCalled {
+		t.Fatal("registry.ReceiveError was not called")
+	}
+
+	var domErr *port.DomainError
+	if !errors.As(registry.lastReceiveErrorErr, &domErr) {
+		t.Fatalf("expected *DomainError (ErrorMessage takes priority), got %T", registry.lastReceiveErrorErr)
+	}
+	if domErr.Code != port.ErrCodeDMSemanticTreeFailed {
+		t.Errorf("error code = %q, want %q", domErr.Code, port.ErrCodeDMSemanticTreeFailed)
+	}
+}
+
+func TestHandleSemanticTreeProvided_ErrorResponse_WithoutVersionID_PassesValidation(t *testing.T) {
+	// DM error response may omit version_id; validation should still pass.
+	r, _, _, registry := newTestReceiver()
+	event := model.SemanticTreeProvided{
+		EventMeta:    testReceiverMeta(),
+		JobID:        "job-stp-err-4",
+		DocumentID:   "doc-stp-err-4",
+		ErrorCode:    "VERSION_NOT_FOUND",
+		ErrorMessage: "version not found",
+		IsRetryable:  false,
+		// VersionID intentionally empty
+	}
+	body := mustMarshalReceiver(t, event)
+
+	err := r.handleSemanticTreeProvided(context.Background(), body)
+	if err != nil {
+		t.Fatalf("expected nil, got: %v", err)
+	}
+
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if !registry.receiveErrorCalled {
+		t.Fatal("registry.ReceiveError was not called (error response without version_id should pass validation)")
+	}
+
+	var domErr *port.DomainError
+	if !errors.As(registry.lastReceiveErrorErr, &domErr) {
+		t.Fatalf("expected *DomainError, got %T", registry.lastReceiveErrorErr)
+	}
+	if domErr.Code != port.ErrCodeDMSemanticTreeFailed {
+		t.Errorf("error code = %q, want %q", domErr.Code, port.ErrCodeDMSemanticTreeFailed)
+	}
+}
+
 // --- Integration: Start -> dispatch via broker handlers ---
 
 func TestIntegration_StartAndDispatchAllEvents(t *testing.T) {

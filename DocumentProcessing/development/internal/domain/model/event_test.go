@@ -279,6 +279,102 @@ func TestSemanticTreeProvided_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSemanticTreeProvided_JSONRoundTrip_WithErrorFields(t *testing.T) {
+	original := SemanticTreeProvided{
+		EventMeta:    testEventMeta,
+		JobID:        "job-1",
+		DocumentID:   "doc-1",
+		VersionID:    "ver-1",
+		ErrorCode:    "VERSION_NOT_FOUND",
+		ErrorMessage: "version ver-1 not found",
+		IsRetryable:  false,
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+
+	var restored SemanticTreeProvided
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	if restored.ErrorCode != original.ErrorCode {
+		t.Errorf("ErrorCode = %q, want %q", restored.ErrorCode, original.ErrorCode)
+	}
+	if restored.ErrorMessage != original.ErrorMessage {
+		t.Errorf("ErrorMessage = %q, want %q", restored.ErrorMessage, original.ErrorMessage)
+	}
+	if restored.IsRetryable != original.IsRetryable {
+		t.Errorf("IsRetryable = %v, want %v", restored.IsRetryable, original.IsRetryable)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, ok := m["error_code"]; !ok {
+		t.Error("JSON missing key error_code")
+	}
+	if _, ok := m["error_message"]; !ok {
+		t.Error("JSON missing key error_message")
+	}
+}
+
+func TestSemanticTreeProvided_JSONBackwardsCompatibility(t *testing.T) {
+	// Simulate old DM payload without error fields.
+	payload := `{"correlation_id":"corr-1","timestamp":"2026-03-15T14:30:00Z","job_id":"job-1","document_id":"doc-1","version_id":"ver-1","semantic_tree":{"document_id":"doc-1"}}`
+
+	var event SemanticTreeProvided
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	if event.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty (backwards compat)", event.ErrorCode)
+	}
+	if event.ErrorMessage != "" {
+		t.Errorf("ErrorMessage = %q, want empty (backwards compat)", event.ErrorMessage)
+	}
+	if event.IsRetryable {
+		t.Error("IsRetryable should be false by default (backwards compat)")
+	}
+	if event.VersionID != "ver-1" {
+		t.Errorf("VersionID = %q, want %q", event.VersionID, "ver-1")
+	}
+}
+
+func TestSemanticTreeProvided_JSONOmitsEmptyErrorFields(t *testing.T) {
+	event := SemanticTreeProvided{
+		EventMeta:  testEventMeta,
+		JobID:      "job-1",
+		DocumentID: "doc-1",
+		VersionID:  "ver-1",
+		// Error fields intentionally empty
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+
+	if _, exists := raw["error_code"]; exists {
+		t.Error("error_code should be omitted when empty")
+	}
+	if _, exists := raw["error_message"]; exists {
+		t.Error("error_message should be omitted when empty")
+	}
+	if _, exists := raw["is_retryable"]; exists {
+		t.Error("is_retryable should be omitted when false")
+	}
+}
+
 func TestDocumentVersionDiffReady_JSONRoundTrip(t *testing.T) {
 	original := DocumentVersionDiffReady{
 		EventMeta:       testEventMeta,

@@ -149,6 +149,46 @@ func TestValidateSemanticTreeProvided_AllMissing(t *testing.T) {
 	}
 }
 
+func TestValidateSemanticTreeProvided_ErrorResponse_WithoutVersionID(t *testing.T) {
+	// Error responses from DM may omit version_id; validation should pass.
+	event := model.SemanticTreeProvided{
+		EventMeta:    model.EventMeta{CorrelationID: "corr-1"},
+		JobID:        "job-1",
+		DocumentID:   "doc-1",
+		ErrorMessage: "version not found",
+		// VersionID intentionally empty
+	}
+	if err := validateSemanticTreeProvided(event); err != nil {
+		t.Errorf("expected nil for error response without version_id, got: %v", err)
+	}
+}
+
+func TestValidateSemanticTreeProvided_ErrorResponse_WithVersionID(t *testing.T) {
+	event := model.SemanticTreeProvided{
+		EventMeta:    model.EventMeta{CorrelationID: "corr-1"},
+		JobID:        "job-1",
+		DocumentID:   "doc-1",
+		VersionID:    "v1",
+		ErrorMessage: "storage unavailable",
+	}
+	if err := validateSemanticTreeProvided(event); err != nil {
+		t.Errorf("expected nil, got: %v", err)
+	}
+}
+
+func TestValidateSemanticTreeProvided_ErrorResponse_MissingJobID(t *testing.T) {
+	// Even error responses require job_id.
+	event := model.SemanticTreeProvided{
+		EventMeta:    model.EventMeta{CorrelationID: "corr-1"},
+		DocumentID:   "doc-1",
+		ErrorMessage: "version not found",
+	}
+	err := validateSemanticTreeProvided(event)
+	if err == nil {
+		t.Fatal("expected validation error for missing job_id")
+	}
+}
+
 // --- validateDiffPersisted ---
 
 func TestValidateDiffPersisted_Valid(t *testing.T) {

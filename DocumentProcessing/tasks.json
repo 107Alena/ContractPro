@@ -1314,7 +1314,18 @@
         "Шаг 5: make build"
       ],
       "dependencies": ["TASK-053"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-31",
+      "summary": "Добавлены поля ErrorCode string `json:\"error_code,omitempty\"`, ErrorMessage string `json:\"error_message,omitempty\"`, IsRetryable bool `json:\"is_retryable,omitempty\"` в SemanticTreeProvided. Добавлен ErrCodeDMSemanticTreeFailed и конструктор NewDMSemanticTreeFailedError в errors.go. В receiver.go проверка ErrorMessage выполняется ДО Root == nil — при наличии создаётся typed DomainError. Валидация обновлена: version_id не обязателен для error responses. Backward compatibility сохранена. 11 новых тестов: 3 JSON (round-trip, backward compat, omitempty), 5 receiver (typed error, retryable, fallback, priority, no version_id), 3 validation (error without version_id, with version_id, missing job_id). Все 32 пакета PASS, go vet чистый, make OK.",
+      "files_changed": [
+        "internal/domain/model/event.go",
+        "internal/domain/model/event_test.go",
+        "internal/domain/port/errors.go",
+        "internal/egress/dm/validate.go",
+        "internal/egress/dm/validate_test.go",
+        "internal/egress/dm/receiver.go",
+        "internal/egress/dm/receiver_test.go"
+      ]
     },
     {
       "id": "TASK-056",

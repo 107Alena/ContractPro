@@ -250,6 +250,23 @@ func (r *Receiver) handleSemanticTreeProvided(ctx context.Context, body []byte) 
 		"version_id", event.VersionID,
 	)
 
+	// Error response from DM takes priority over empty-tree check.
+	if event.ErrorMessage != "" {
+		r.logger.Warn(ctx, "semantic tree provided event contains error from DM",
+			"error_code", event.ErrorCode,
+			"error_message", event.ErrorMessage,
+			"is_retryable", event.IsRetryable,
+		)
+		dmErr := port.NewDMSemanticTreeFailedError(event.ErrorMessage, event.IsRetryable, nil)
+		if err := r.registry.ReceiveError(event.CorrelationID, dmErr); err != nil {
+			r.logger.Warn(ctx, "registry receive error returned error",
+				"error", err,
+				"version_id", event.VersionID,
+			)
+		}
+		return nil
+	}
+
 	if event.SemanticTree.Root == nil {
 		dmErr := fmt.Errorf("dm: empty semantic tree for version %s", event.VersionID)
 		if err := r.registry.ReceiveError(event.CorrelationID, dmErr); err != nil {

@@ -2153,3 +2153,37 @@ idempotency, malformed input, artifact format.
 
 **Заметки для следующей итерации:**
 - Осталась 1 задача: TASK-055 (medium, error fields в SemanticTreeProvided, зависит от TASK-053 done)
+
+### TASK-055 — Добавить поля ошибки в SemanticTreeProvided и обновить receiver
+**Статус:** done
+**Дата:** 2026-03-31
+
+**План реализации:**
+1. Добавить ErrorCode, ErrorMessage, IsRetryable в model.SemanticTreeProvided (omitempty для backward compat)
+2. Добавить ErrCodeDMSemanticTreeFailed и NewDMSemanticTreeFailedError в port/errors.go
+3. Обновить validateSemanticTreeProvided: version_id не обязателен для error responses (isErrorResponse = ErrorMessage != "")
+4. Обновить handleSemanticTreeProvided: проверка ErrorMessage ДО Root == nil, typed DomainError через port.NewDMSemanticTreeFailedError
+5. Добавить тесты: JSON round-trip с error fields, backward compat, omitempty, receiver error dispatch (typed, retryable, fallback, priority), validation (error without version_id)
+
+**Summary:**
+- Добавлены 3 поля в SemanticTreeProvided: ErrorCode (omitempty), ErrorMessage (omitempty), IsRetryable (omitempty)
+- Добавлен ErrCodeDMSemanticTreeFailed = "DM_SEMANTIC_TREE_FAILED" и конструктор NewDMSemanticTreeFailedError
+- В receiver.go: ErrorMessage проверяется ДО Root == nil, создаётся typed DomainError (code + retryable из события)
+- Существующее поведение при Root == nil без error fields сохранено (backward compatibility)
+- Валидация обновлена: version_id не обязателен когда ErrorMessage непусто
+- 11 новых тестов: 3 JSON model (round-trip, backward compat, omitempty), 5 receiver (typed error, retryable, fallback, priority, no version_id), 3 validation
+
+**Изменённые файлы (7):**
+- `internal/domain/model/event.go` — ErrorCode, ErrorMessage, IsRetryable в SemanticTreeProvided
+- `internal/domain/model/event_test.go` — 3 новых теста
+- `internal/domain/port/errors.go` — ErrCodeDMSemanticTreeFailed + NewDMSemanticTreeFailedError
+- `internal/egress/dm/validate.go` — version_id optional для error responses
+- `internal/egress/dm/validate_test.go` — 3 новых теста
+- `internal/egress/dm/receiver.go` — ErrorMessage check before Root == nil
+- `internal/egress/dm/receiver_test.go` — 5 новых тестов
+
+**Тесты:** 32 пакета PASS (-race -count=1), go vet clean, make build/test/lint OK
+
+**Заметки для следующей итерации:**
+- Все 57 задач TASK-001..TASK-057 завершены (status: done)
+- Document Processing domain полностью реализован

@@ -22,7 +22,8 @@ const (
 	ErrCodeConcurrencyLimit    = "CONCURRENCY_LIMIT"
 	ErrCodeDMVersionNotFound   = "DM_VERSION_NOT_FOUND"
 	ErrCodeDMDiffPersistFailed      = "DM_DIFF_PERSIST_FAILED"
-	ErrCodeDMArtifactsPersistFailed = "DM_ARTIFACTS_PERSIST_FAILED"
+	ErrCodeDMArtifactsPersistFailed  = "DM_ARTIFACTS_PERSIST_FAILED"
+	ErrCodeDMSemanticTreeFailed     = "DM_SEMANTIC_TREE_FAILED"
 	ErrCodeSSRFBlocked              = "SSRF_BLOCKED"
 )
 
@@ -149,6 +150,17 @@ func NewDMDiffPersistFailedError(msg string, retryable bool, cause error) *Domai
 func NewDMArtifactsPersistFailedError(msg string, retryable bool, cause error) *DomainError {
 	return &DomainError{
 		Code:      ErrCodeDMArtifactsPersistFailed,
+		Message:   msg,
+		Retryable: retryable,
+		Cause:     cause,
+	}
+}
+
+// NewDMSemanticTreeFailedError creates an error for DM semantic tree retrieval failures.
+// The retryable flag is taken directly from the DM event's is_retryable field.
+func NewDMSemanticTreeFailedError(msg string, retryable bool, cause error) *DomainError {
+	return &DomainError{
+		Code:      ErrCodeDMSemanticTreeFailed,
 		Message:   msg,
 		Retryable: retryable,
 		Cause:     cause,

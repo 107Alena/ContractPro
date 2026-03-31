@@ -353,3 +353,53 @@
 - DM-TASK-019 (Document Lifecycle) — зависит от DM-TASK-004 ✅ + DM-TASK-012 ✅
 
 ---
+
+## DM-TASK-007: RabbitMQ клиент (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Удалён placeholder `broker.go` (только `package broker`)
+- Создано 3 файла реализации + 1 тест-файл в `internal/infra/broker/`:
+  - `client.go` — `Client` struct, `AMQPAPI`/`AMQPChannelAPI` интерфейсы, `amqpConnWrapper`/`amqpChanWrapper`, `NewClient` с TLS и publisher confirms, `Publish` (synchronous confirm + stale confirm drain), `Subscribe` (QoS prefetch), `DeclareTopology` (7 incoming + 3 DLQ quorum), `IsConnected`, `Close`
+  - `errors.go` — `mapError` (AMQP→DomainError, nonRetryableAMQPCodes 404/403/406, context passthrough)
+  - `reconnect.go` — `reconnectLoop` + `reconnectWithBackoff` (exponential backoff 1s-30s, 25% jitter, confirms re-enable, topology re-declare, re-subscribe)
+  - `client_test.go` — 32 unit-теста с mock
+- Добавлена зависимость `github.com/rabbitmq/amqp091-go v1.10.0` в `go.mod`
+
+**Ключевые паттерны:**
+- Publisher confirms: dedicated publish channel в confirm mode, `publishMu` serializes publish+confirm, stale confirm drain
+- TLS: `amqp.DialTLS` с `MinVersion: tls.VersionTLS12` при `DM_BROKER_TLS=true`
+- QoS: `channel.Qos(prefetch, 0, false)` на consumer channels
+- Queue policies (BRE-026): `x-max-length=10000`, `x-overflow=reject-publish`, `x-message-ttl=24h`
+- DLQ (REV-025): `x-queue-type=quorum`, `x-max-length=50000`, `x-message-ttl=7d`
+- AMQP Table values: explicit `int32` для cross-client compatibility
+- Dependency inversion: `AMQPAPI`/`AMQPChannelAPI` interfaces + wrapper types для тестирования
+- Injectable `dialFn` + `newClientWithAMQP` test constructor
+- Separate publish/consume channels (AMQP best practice)
+- Compile-time check: `var _ port.BrokerPublisherPort = (*Client)(nil)`
+- Default exchange (routing key = queue name), consistent с DP
+
+**Проверки:**
+- `go test ./internal/infra/broker/... -race -count=1` — 32 PASS
+- `go test -count=1 -race ./...` — 201 PASS (config 20 + model 76 + broker 32 + postgres 73)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Ревью (code-reviewer + golang-pro):**
+- Исправлено: stale confirm drain перед каждым publish (предотвращает чтение confirm от предыдущего timed-out publish)
+- Исправлено: `int32` для AMQP Table значений (предотвращает 406 при cross-client декларациях)
+- Исправлено: DLQ quorum queue version requirement comment (RabbitMQ >= 3.10 для x-message-ttl)
+- Исправлено: `mockAcknowledger` в `TestSubscribe_Success` (предотвращает nil pointer deref)
+- Добавлено: reconnect re-subscribe failures documentation comment
+
+**Следующие задачи:**
+- DM-TASK-008 (Object Storage) — зависит от DM-TASK-005 ✅
+- DM-TASK-009 (Redis клиент) — зависит от DM-TASK-005 ✅
+- DM-TASK-013 (Idempotency Guard) — зависит от DM-TASK-004 ✅ + DM-TASK-009
+- DM-TASK-015 (Confirmation Publisher) — зависит от DM-TASK-003 ✅ + DM-TASK-007 ✅
+- DM-TASK-019 (Document Lifecycle) — зависит от DM-TASK-004 ✅ + DM-TASK-012 ✅
+
+---

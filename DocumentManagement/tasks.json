@@ -173,7 +173,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-005"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Создан internal/infra/broker/ с RabbitMQ клиентом на amqp091-go v1.10.0. ФАЙЛЫ: client.go (Client struct, AMQPAPI/AMQPChannelAPI interfaces, amqpConnWrapper/amqpChanWrapper, NewClient с TLS и publisher confirms, Publish с synchronous confirm и stale confirm drain, Subscribe с QoS prefetch, DeclareTopology — 7 incoming + 3 DLQ quorum queues, IsConnected для healthcheck, Close с graceful shutdown), errors.go (mapError: AMQP→DomainError, nonRetryableAMQPCodes 404/403/406, context passthrough), reconnect.go (reconnectLoop + reconnectWithBackoff с exponential backoff 1s-30s + 25% jitter, confirms re-enable, topology re-declare, re-subscribe). PUBLISHER CONFIRMS: dedicated publish channel в confirm mode, publishMu serializes publish+confirm, stale confirm drain. TLS: amqp.DialTLS с MinVersion TLS 1.2 при DM_BROKER_TLS=true. QOS: channel.Qos(prefetch) на consumer channels. QUEUE POLICIES: BRE-026 x-max-length=10000, x-overflow=reject-publish, x-message-ttl=24h. DLQ: REV-025 x-queue-type=quorum, x-max-length=50000, x-message-ttl=7d. COMPILE-TIME: var _ port.BrokerPublisherPort = (*Client)(nil). 32 unit-теста с mock (6 publish + 4 subscribe + 3 topology + 2 close + 2 health + 6 error mapping + 5 reconnect/backoff + 1 interface + 1 context + 2 queue args). Ревью: code-reviewer + golang-pro → исправлено: stale confirm drain, int32 для AMQP Table, DLQ version comment, mockAcknowledger в тестах."
     },
     {
       "id": "DM-TASK-008",

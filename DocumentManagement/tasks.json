@@ -79,7 +79,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-002"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Созданы все входящие и исходящие event structs + EventMeta + BlobReference + topic constants + DLQRecord в internal/domain/model/. Файлы: event.go (EventMeta, BlobReference), event_incoming.go (6 входящих: DocumentProcessingArtifactsReady, GetSemanticTreeRequest, DocumentVersionDiffReady, GetArtifactsRequest, LegalAnalysisArtifactsReady, ReportsArtifactsReady), event_outgoing.go (10 confirmations: Persisted/PersistFailed для DP/LIC/RE + SemanticTreeProvided + ArtifactsProvided + DiffPersisted/DiffPersistFailed; 4 notifications: VersionProcessingArtifactsReady, VersionAnalysisArtifactsReady, VersionReportsReady, VersionCreated), topic.go (7 incoming + 10 confirmation + 5 notification + 3 DLQ = 25 topic constants), dlq.go (DLQRecord). Artifact content хранится как json.RawMessage (DM — storage domain, не интерпретирует содержимое). BlobReference для claim-check pattern (RE exports). EventMeta совместим с DP. 44 unit-теста: JSON round-trip для каждого типа события, backward compatibility (unknown fields), optional fields omitempty, raw message preservation, topic naming convention."
     },
     {
       "id": "DM-TASK-004",

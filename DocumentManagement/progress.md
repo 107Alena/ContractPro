@@ -298,3 +298,58 @@
 - DM-TASK-012 (PostgreSQL repositories) — зависит от DM-TASK-004 ✅ + DM-TASK-006 ✅
 
 ---
+
+## DM-TASK-012: PostgreSQL repositories (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Создано 7 файлов реализации + 8 тест-файлов в `internal/infra/postgres/`:
+  - `pg_error.go` — shared helpers: `isPgUniqueViolation`, `isPgFKViolation`, `nullableString`, `fromNullableString`
+  - `document_repository.go` — `DocumentRepository` (5 методов: Insert, FindByID, List, Update, ExistsByID)
+  - `version_repository.go` — `VersionRepository` (5 методов: Insert, FindByID, List, Update, NextVersionNumber)
+  - `artifact_repository.go` — `ArtifactRepository` (5 методов: Insert, FindByVersionAndType, ListByVersion, ListByVersionAndTypes, DeleteByVersion)
+  - `diff_repository.go` — `DiffRepository` (4 метода: Insert, FindByVersionPair, ListByDocument, DeleteByDocument)
+  - `audit_repository.go` — `AuditRepository` (2 метода: Insert, List с dynamic WHERE builder)
+  - `outbox_repository.go` — `OutboxRepository` (4 метода: Insert multi-row, FetchUnpublished FOR UPDATE SKIP LOCKED, MarkPublished, DeletePublished)
+- 73 unit-теста с mock pgx.Tx (`mockTx`, `mockRow`, `mockRows`)
+
+**Ключевые паттерны:**
+- Stateless repo structs — `ConnFromCtx(ctx)` для каждого вызова
+- Compile-time interface checks: `var _ port.XxxRepository = (*XxxRepository)(nil)` для всех 6 repos
+- Tenant isolation: ВСЕ SQL-запросы содержат `WHERE organization_id` (кроме outbox — cross-tenant by design)
+- Error mapping: `23505` → `AlreadyExists`, `23503` → `NotFound`/`DatabaseError`, `pgx.ErrNoRows` → `NotFound`, generic → `DatabaseError(retryable)`
+- Pagination: `COUNT(*) OVER()` window function (single query)
+- Nullable strings: `""` → SQL NULL через `nullableString()`, обратно через `fromNullableString()`
+- Empty slices guarantee: all List operations return `[]*T{}` not nil
+- `rows.Close()` via defer + `rows.Err()` check after every iteration
+- Audit List: dynamic WHERE builder с `fmt.Sprintf("$%d", argIdx)` — safe from SQL injection
+- Outbox Insert: multi-row INSERT via `strings.Builder` + positional params
+- Outbox FetchUnpublished: `FOR UPDATE SKIP LOCKED` для concurrent pollers
+- Outbox MarkPublished: `now()` DB-side timestamp
+- NextVersionNumber: non-locking, relies on UNIQUE constraint as arbiter
+
+**Проверки:**
+- `go test ./internal/infra/postgres/... -race -count=1` — 73 PASS
+- `go test -count=1 -race ./...` — 169 PASS (config 20 + model 76 + postgres 73)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Ревью (code-reviewer + golang-pro):**
+- Исправлено: удалён dead code (`scanDocumentWithTotal`, `constraintName`)
+- Исправлено: добавлен FK violation handling в `Document.Insert` и `Document.Update` (для `current_version_id`)
+- Исправлено: добавлен `document_id` в Version `Update` WHERE (defense-in-depth)
+- Исправлено: `MarkPublished` использует `now()` вместо `time.Now().UTC()` (DB-side timestamp)
+- Исправлено: consistent `DeletedAt` scan через intermediate `*time.Time` variable
+- Добавлено: SKIP LOCKED FIFO caveat comment, NextVersionNumber race documentation, outbox cross-tenant comment
+
+**Следующие задачи:**
+- DM-TASK-007 (RabbitMQ клиент) — зависит от DM-TASK-005 ✅
+- DM-TASK-008 (Object Storage) — зависит от DM-TASK-005 ✅
+- DM-TASK-009 (Redis клиент) — зависит от DM-TASK-005 ✅
+- DM-TASK-013 (Idempotency Guard) — зависит от DM-TASK-004 ✅ + DM-TASK-009
+- DM-TASK-019 (Document Lifecycle) — зависит от DM-TASK-004 ✅ + DM-TASK-012 ✅
+
+---

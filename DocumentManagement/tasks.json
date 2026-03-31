@@ -272,7 +272,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-004", "DM-TASK-006"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Реализованы 6 PostgreSQL repositories + shared helpers в internal/infra/postgres/. ФАЙЛЫ: pg_error.go (isPgUniqueViolation, isPgFKViolation, nullableString, fromNullableString), document_repository.go (DocumentRepository: Insert, FindByID, List, Update, ExistsByID), version_repository.go (VersionRepository: Insert, FindByID, List, Update, NextVersionNumber), artifact_repository.go (ArtifactRepository: Insert, FindByVersionAndType, ListByVersion, ListByVersionAndTypes, DeleteByVersion), diff_repository.go (DiffRepository: Insert, FindByVersionPair, ListByDocument, DeleteByDocument), audit_repository.go (AuditRepository: Insert, List с dynamic WHERE), outbox_repository.go (OutboxRepository: Insert multi-row, FetchUnpublished FOR UPDATE SKIP LOCKED, MarkPublished, DeletePublished). TENANT ISOLATION: все SQL-запросы содержат WHERE organization_id (кроме outbox — cross-tenant by design). ERROR MAPPING: 23505→AlreadyExists, 23503→NotFound/DatabaseError, ErrNoRows→NotFound, generic→DatabaseError(retryable). PAGINATION: COUNT(*) OVER() window function. COMPILE-TIME: var _ port.XxxRepository = (*XxxRepository)(nil) для всех 6. ТЕСТЫ: 73 unit-теста с mock pgx.Tx (mockTx, mockRow, mockRows). Ревью: code-reviewer + golang-pro → исправлено: dead code (scanDocumentWithTotal, constraintName), FK violation в Document Insert/Update, document_id в Version Update WHERE, MarkPublished→now(), SKIP LOCKED FIFO comment, NextVersionNumber race doc, consistent DeletedAt scan."
     },
     {
       "id": "DM-TASK-013",

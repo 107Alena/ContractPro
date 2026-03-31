@@ -250,7 +250,7 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 |---|-----------|-----------|
 | 14 | **DM Outbound Adapter** | Публикация событий в Document Management: `DocumentProcessingArtifactsReady` (артефакты обработки), `GetSemanticTreeRequest` (запрос semantic tree для сравнения), `DocumentVersionDiffReady` (результат сравнения). |
 | 15 | **DM Inbound Adapter** | Подписка на ответы от Document Management: `DocumentProcessingArtifactsPersisted`, `DocumentProcessingArtifactsPersistFailed`, `SemanticTreeProvided`, `DocumentVersionDiffPersisted`, `DocumentVersionDiffPersistFailed`. Корреляция ответов по `correlation_id` / `job_id`, уведомление соответствующего оркестратора. |
-| 16 | **Event Publisher** | Публикация статусных событий (`StatusChangedEvent`), событий завершения (`ProcessingCompletedEvent`, `ComparisonCompletedEvent`) и событий ошибок (`ProcessingFailedEvent`, `ComparisonFailedEvent`) для внешних потребителей (API/backend-оркестратор, другие домены). События ошибок содержат `error_code`, `error_message`, `failed_at_stage`, `is_retryable`. |
+| 16 | **Event Publisher** | Публикация статусных событий (`StatusChangedEvent`), событий завершения (`ProcessingCompletedEvent`, `ComparisonCompletedEvent`) и событий ошибок (`ProcessingFailedEvent`, `ComparisonFailedEvent`) для внешних потребителей (API/backend-оркестратор, другие домены). Все исходящие события содержат `organization_id` (из входной команды, `omitempty`). События ошибок дополнительно содержат `error_code`, `error_message`, `failed_at_stage`, `is_retryable`. |
 | 17 | **Temporary Artifact Storage Adapter** | Работа с временными артефактами в Yandex Object Storage: сохранение, чтение, удаление при cleanup. |
 
 ### Слой инфраструктуры (Cross-cutting)
@@ -406,7 +406,7 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 |-------|----------|
 | `dm.responses.artifacts-persisted` | Артефакты успешно сохранены (DocumentProcessingArtifactsPersisted) |
 | `dm.responses.artifacts-persist-failed` | Ошибка сохранения артефактов (DocumentProcessingArtifactsPersistFailed) |
-| `dm.responses.semantic-tree-provided` | Semantic tree предоставлен (SemanticTreeProvided) |
+| `dm.responses.semantic-tree-provided` | Semantic tree предоставлен (SemanticTreeProvided). Payload содержит `error_code`, `error_message`, `is_retryable` (все `omitempty`) — если DM не смог предоставить дерево, эти поля заполняются вместо `semantic_tree`. |
 | `dm.responses.diff-persisted` | Результат сравнения сохранён (DocumentVersionDiffPersisted) |
 | `dm.responses.diff-persist-failed` | Ошибка сохранения результата сравнения (DocumentVersionDiffPersistFailed) |
 
@@ -500,7 +500,7 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 
 4. **Processing Pipeline Orchestrator** принимает задачу.
 
-5. **Job Lifecycle Manager** публикует статус `IN_PROGRESS` через Event Publisher.
+5. **Job Lifecycle Manager** публикует `StatusChangedEvent` (`job_id`, `document_id`, `organization_id`, `old_status`, `new_status`, `stage`, `correlation_id`, `timestamp`) со статусом `IN_PROGRESS` через Event Publisher.
 
 6. **Input Validator** проверяет бизнес-ограничения по метаданным:
    * заявленный размер > 20 МБ → `REJECTED`;
@@ -531,7 +531,7 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 12. **Warning Collector** формирует итоговый список warnings.
 
 13. **DM Outbound Adapter** отправляет событие `DocumentProcessingArtifactsReady` с артефактами:
-    * `ocr_raw`, `text`, `structure`, `semantic_tree`, `warnings`.
+    * `job_id`, `document_id`, `version_id`, `organization_id` (omitempty), `ocr_raw`, `text`, `structure`, `semantic_tree`, `warnings`.
 
 14. **DM Inbound Adapter** ожидает подтверждение:
     * `DocumentProcessingArtifactsPersisted` → успех;
@@ -540,17 +540,17 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 15. При успехе:
     * Orchestrator запускает cleanup временных артефактов через Temporary Artifact Storage Adapter;
     * Job Lifecycle Manager публикует статус: `COMPLETED` (если warnings пуст) или `COMPLETED_WITH_WARNINGS`;
-    * Event Publisher публикует `ProcessingCompletedEvent` (`job_id`, `document_id`, `status`, `has_warnings`, `warning_count`, `correlation_id`, `timestamp`);
+    * Event Publisher публикует `ProcessingCompletedEvent` (`job_id`, `document_id`, `organization_id`, `status`, `has_warnings`, `warning_count`, `correlation_id`, `timestamp`);
     * Idempotency Guard обновляет статус `job_id` → завершен.
 
 16. При ошибке:
     * retryable → retry-политика;
     * non-retryable или retry исчерпаны → `FAILED`, запись в DLQ, cleanup;
-    * Event Publisher публикует `ProcessingFailedEvent` (`job_id`, `document_id`, `status`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=false`, `correlation_id`, `timestamp`).
+    * Event Publisher публикует `ProcessingFailedEvent` (`job_id`, `document_id`, `organization_id`, `status`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=false`, `correlation_id`, `timestamp`).
 
 17. При таймауте (> 120 сек):
     * Job Lifecycle Manager прерывает обработку → `TIMED_OUT`, cleanup;
-    * Event Publisher публикует `ProcessingFailedEvent` (`job_id`, `document_id`, `status=TIMED_OUT`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=true`, `correlation_id`, `timestamp`).
+    * Event Publisher публикует `ProcessingFailedEvent` (`job_id`, `document_id`, `organization_id`, `status=TIMED_OUT`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=true`, `correlation_id`, `timestamp`).
 
 #### Диаграмма сценария
 
@@ -630,20 +630,23 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 5. **Job Lifecycle Manager** публикует статус `IN_PROGRESS`.
 
 6. **DM Outbound Adapter** отправляет два запроса semantic tree:
-   * `GetSemanticTreeRequest` для `base_version_id` (с `correlation_id_A`);
-   * `GetSemanticTreeRequest` для `target_version_id` (с `correlation_id_B`).
+   * `GetSemanticTreeRequest` (`job_id`, `document_id`, `version_id`, `organization_id`, `correlation_id`) для `base_version_id` (с `correlation_id_A`);
+   * `GetSemanticTreeRequest` (аналогично) для `target_version_id` (с `correlation_id_B`).
 
 7. **Pending Response Registry** регистрирует два ожидаемых ответа.
 
-8. **DM Inbound Adapter** получает ответы `SemanticTreeProvided`, коррелирует по `correlation_id`, передает в Pending Response Registry.
+8. **DM Inbound Adapter** получает ответы `SemanticTreeProvided`, коррелирует по `correlation_id`. Приоритет обработки:
+   * Если `error_message` не пуст — DM вернул ошибку (версия не найдена, внутренняя ошибка и т.д.). Создаётся типизированный `DMSemanticTreeFailedError` с `is_retryable` из ответа, передаётся в Pending Response Registry как ошибка.
+   * Иначе, если `semantic_tree.root == nil` — пустое дерево, создаётся ошибка, передаётся в Pending Response Registry.
+   * Иначе — успешный ответ, дерево передаётся в Pending Response Registry.
 
 9. **Pending Response Registry** уведомляет оркестратор, когда оба ответа получены.
    * Если один из ответов не получен в течение настраиваемого таймаута → `ComparisonFailedEvent` с `is_retryable=true`.
-   * Если DM вернул ошибку (версия не найдена) → `FAILED`, `ComparisonFailedEvent` с `is_retryable=false`.
+   * Если DM вернул ошибку (через `error_message` в `SemanticTreeProvided`) → `FAILED`, `ComparisonFailedEvent` с `is_retryable` из ответа DM.
 
 10. **Version Comparison Engine** выполняет текстовый diff и структурный diff по semantic tree.
 
-11. **DM Outbound Adapter** отправляет `DocumentVersionDiffReady` с результатом сравнения.
+11. **DM Outbound Adapter** отправляет `DocumentVersionDiffReady` (`job_id`, `document_id`, `base_version_id`, `target_version_id`, `organization_id`, `text_diffs`, `structural_diffs`, `text_diff_count`, `structural_diff_count`) с результатом сравнения.
 
 12. **DM Inbound Adapter** ожидает подтверждение сохранения:
     * `DocumentVersionDiffPersisted` → успех;
@@ -651,16 +654,16 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 
 13. При успехе:
     * `COMPLETED`;
-    * Event Publisher публикует `ComparisonCompletedEvent` (`job_id`, `document_id`, `base_version_id`, `target_version_id`, `status`, `text_diff_count`, `structural_diff_count`, `correlation_id`, `timestamp`).
+    * Event Publisher публикует `ComparisonCompletedEvent` (`job_id`, `document_id`, `organization_id`, `base_version_id`, `target_version_id`, `status`, `text_diff_count`, `structural_diff_count`, `correlation_id`, `timestamp`).
 
 14. При ошибке:
     * retryable (`is_retryable=true` из `DocumentVersionDiffPersistFailed`) → retry-политика;
     * non-retryable или retry исчерпаны → `FAILED`;
-    * Event Publisher публикует `ComparisonFailedEvent` (`job_id`, `document_id`, `status`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=false`, `correlation_id`, `timestamp`).
+    * Event Publisher публикует `ComparisonFailedEvent` (`job_id`, `document_id`, `organization_id`, `status`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=false`, `correlation_id`, `timestamp`).
 
 15. При таймауте (> 120 сек):
     * `TIMED_OUT`, cleanup;
-    * Event Publisher публикует `ComparisonFailedEvent` (`job_id`, `document_id`, `status=TIMED_OUT`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=true`, `correlation_id`, `timestamp`).
+    * Event Publisher публикует `ComparisonFailedEvent` (`job_id`, `document_id`, `organization_id`, `status=TIMED_OUT`, `error_code`, `error_message`, `failed_at_stage`, `is_retryable=true`, `correlation_id`, `timestamp`).
 
 #### Диаграмма сценария
 

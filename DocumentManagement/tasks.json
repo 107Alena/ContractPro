@@ -36,7 +36,9 @@
         "Шаг 4: make lint (go vet ./...) — без ошибок"
       ],
       "dependencies": [],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-31",
+      "summary": "Создан Go-модуль contractpro/document-management (Go 1.26.1), полная структура каталогов (21 пакет), Makefile с целями build/test/lint/docker-build, .gitignore, cmd/dm-service/main.go. Все проверки (go mod tidy, make build, make test, make lint) прошли успешно."
     },
     {
       "id": "DM-TASK-002",

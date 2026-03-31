@@ -1341,7 +1341,24 @@
         "Шаг 7: make build"
       ],
       "dependencies": ["TASK-054"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-03-31",
+      "implementation_notes": "Добавлен VersionID string `json:\"version_id\"` в ProcessDocumentCommand (обязательное), DocumentProcessingArtifactsReady, ProcessingJob. Валидация в validate.go проверяет непустой version_id. Санитизация в sanitizeProcessDocumentCommand. Оркестратор пробрасывает version_id из command в event и job. Документация high-architecture.md обновлена. Все 32 пакета тестов PASS, go vet чистый, make build/lint/test OK.",
+      "files_changed": [
+        "internal/domain/model/command.go",
+        "internal/domain/model/event.go",
+        "internal/domain/model/job.go",
+        "internal/domain/model/command_test.go",
+        "internal/domain/model/event_test.go",
+        "internal/ingress/consumer/validate.go",
+        "internal/ingress/consumer/validate_test.go",
+        "internal/ingress/consumer/consumer_test.go",
+        "internal/application/processing/orchestrator.go",
+        "internal/application/processing/orchestrator_test.go",
+        "internal/integration/testinfra.go",
+        "internal/integration/processing_pipeline_test.go",
+        "architecture/high-architecture.md"
+      ]
     },
     {
       "id": "TASK-057",

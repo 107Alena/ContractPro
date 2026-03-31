@@ -5,6 +5,7 @@ package model
 type ProcessDocumentCommand struct {
 	JobID      string `json:"job_id"`
 	DocumentID string `json:"document_id"`
+	VersionID  string `json:"version_id"`
 	FileURL    string `json:"file_url"`
 	OrgID      string `json:"organization_id,omitempty"`
 	UserID     string `json:"requested_by_user_id,omitempty"`

@@ -309,6 +309,7 @@ func (o *Orchestrator) runPipeline(ctx context.Context, job *model.ProcessingJob
 		},
 		JobID:        cmd.JobID,
 		DocumentID:   cmd.DocumentID,
+		VersionID:    cmd.VersionID,
 		OCRRaw:       *ocrResult,
 		Text:         *extractedText,
 		Structure:    *structure,
@@ -563,6 +564,7 @@ func (o *Orchestrator) sendToDLQ(
 // ProcessingFailedEvent, and performs best-effort cleanup.
 func (o *Orchestrator) HandleProcessDocument(ctx context.Context, cmd model.ProcessDocumentCommand) error {
 	job := model.NewProcessingJob(cmd.JobID, cmd.DocumentID, cmd.FileURL)
+	job.VersionID = cmd.VersionID
 	job.FileName = cmd.FileName
 	job.FileSize = cmd.FileSize
 	job.MimeType = cmd.MimeType

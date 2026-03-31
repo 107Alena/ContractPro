@@ -17,6 +17,7 @@ type DocumentProcessingArtifactsReady struct {
 	EventMeta
 	JobID        string              `json:"job_id"`
 	DocumentID   string              `json:"document_id"`
+	VersionID    string              `json:"version_id"`
 	OCRRaw       OCRRawArtifact      `json:"ocr_raw"`
 	Text         ExtractedText       `json:"text"`
 	Structure    DocumentStructure   `json:"structure"`

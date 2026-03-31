@@ -549,6 +549,7 @@ func defaultCommand() model.ProcessDocumentCommand {
 	return model.ProcessDocumentCommand{
 		JobID:      "job-integ-1",
 		DocumentID: "doc-integ-1",
+		VersionID:  "ver-integ-1",
 		FileURL:    "https://example.com/contract.pdf",
 		OrgID:      "org-1",
 		UserID:     "user-1",

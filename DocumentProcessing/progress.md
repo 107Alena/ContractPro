@@ -2079,3 +2079,44 @@ idempotency, malformed input, artifact format.
 **Заметки для следующей итерации:**
 - Все 54 задачи в tasks.json завершены (status: done)
 - Документация configuration.md теперь полностью соответствует коду config/
+
+---
+
+### TASK-056 — Добавить version_id в ProcessDocumentCommand и DocumentProcessingArtifactsReady
+**Статус:** done
+**Дата:** 2026-03-31
+**Агент:** Claude Opus 4.6
+
+**План реализации:**
+1. Добавить VersionID string `json:"version_id"` в ProcessDocumentCommand (обязательное поле)
+2. Добавить VersionID string `json:"version_id"` в DocumentProcessingArtifactsReady
+3. Добавить VersionID string `json:"version_id,omitempty"` в ProcessingJob
+4. Обновить sanitizeProcessDocumentCommand — санитизация version_id
+5. Обновить validateProcessDocumentCommand — валидация version_id (required)
+6. Обновить orchestrator — проброс version_id из cmd в job и event
+7. Обновить high-architecture.md раздел 3.4.2
+8. Обновить все тесты: model, ingress, orchestrator, integration
+
+**Summary:**
+Добавлено обязательное поле `version_id` в ProcessDocumentCommand для явной привязки обработанных артефактов к версии документа в Document Management. Поле пробрасывается через весь пайплайн: command → job → artifacts event → DM. Валидация на входе проверяет непустое значение (аналогично job_id, document_id, file_url). Документация обновлена.
+
+**Изменённые файлы (13):**
+- `internal/domain/model/command.go` — добавлен VersionID
+- `internal/domain/model/event.go` — добавлен VersionID в DocumentProcessingArtifactsReady
+- `internal/domain/model/job.go` — добавлен VersionID в ProcessingJob
+- `internal/domain/model/command_test.go` — round-trip test + required field check
+- `internal/domain/model/event_test.go` — round-trip test для VersionID
+- `internal/ingress/consumer/validate.go` — санитизация + валидация
+- `internal/ingress/consumer/validate_test.go` — тест MissingVersionID + обновлены существующие
+- `internal/ingress/consumer/consumer_test.go` — обновлены fixtures
+- `internal/application/processing/orchestrator.go` — проброс VersionID
+- `internal/application/processing/orchestrator_test.go` — обновлены fixtures
+- `internal/integration/testinfra.go` — defaultCommand() + VersionID
+- `internal/integration/processing_pipeline_test.go` — assertion для VersionID
+- `architecture/high-architecture.md` — version_id в обязательных полях
+
+**Тесты:** 32 пакета PASS, go vet clean, make build/lint/test OK
+
+**Заметки для следующей итерации:**
+- Остались 2 задачи: TASK-055 (medium, error fields в SemanticTreeProvided) и TASK-057 (high, organization_id во все события)
+- TASK-057 — следующая по приоритету (high)

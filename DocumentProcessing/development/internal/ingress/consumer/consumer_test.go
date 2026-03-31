@@ -79,6 +79,7 @@ func validProcessCmd() model.ProcessDocumentCommand {
 	return model.ProcessDocumentCommand{
 		JobID:      "job-123",
 		DocumentID: "doc-456",
+		VersionID:  "ver-789",
 		FileURL:    "https://storage.example.com/files/contract.pdf",
 		FileName:   "contract.pdf",
 		FileSize:   1024,
@@ -219,7 +220,7 @@ func TestHandleProcessDocument_MissingRequiredFields(t *testing.T) {
 	c := NewConsumer(&mockBroker{}, disp, testLogger(), testBrokerCfg())
 
 	// Command without required job_id
-	cmd := model.ProcessDocumentCommand{DocumentID: "doc-1", FileURL: "https://example.com/f.pdf"}
+	cmd := model.ProcessDocumentCommand{DocumentID: "doc-1", VersionID: "ver-1", FileURL: "https://example.com/f.pdf"}
 	body := mustMarshal(t, cmd)
 
 	err := c.handleProcessDocument(context.Background(), body)
@@ -253,6 +254,7 @@ func TestHandleProcessDocument_AllFieldsCopied(t *testing.T) {
 	cmd := model.ProcessDocumentCommand{
 		JobID:      "j1",
 		DocumentID: "d1",
+		VersionID:  "v1",
 		FileURL:    "https://example.com/f.pdf",
 		OrgID:      "org-1",
 		UserID:     "user-1",
@@ -266,6 +268,9 @@ func TestHandleProcessDocument_AllFieldsCopied(t *testing.T) {
 	_ = c.handleProcessDocument(context.Background(), body)
 
 	got := disp.lastProcessCmd
+	if got.VersionID != cmd.VersionID {
+		t.Errorf("VersionID not preserved: got %q, want %q", got.VersionID, cmd.VersionID)
+	}
 	if got.OrgID != cmd.OrgID || got.UserID != cmd.UserID || got.FileName != cmd.FileName ||
 		got.FileSize != cmd.FileSize || got.MimeType != cmd.MimeType || got.Checksum != cmd.Checksum {
 		t.Errorf("optional fields not preserved: got %+v", got)

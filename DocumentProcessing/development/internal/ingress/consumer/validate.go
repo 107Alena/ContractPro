@@ -59,6 +59,7 @@ func sanitizeString(s string) string {
 func sanitizeProcessDocumentCommand(cmd *model.ProcessDocumentCommand) {
 	cmd.JobID = sanitizeString(cmd.JobID)
 	cmd.DocumentID = sanitizeString(cmd.DocumentID)
+	cmd.VersionID = sanitizeString(cmd.VersionID)
 	cmd.FileURL = sanitizeString(cmd.FileURL)
 	cmd.OrgID = sanitizeString(cmd.OrgID)
 	cmd.UserID = sanitizeString(cmd.UserID)
@@ -89,6 +90,9 @@ func validateProcessDocumentCommand(cmd model.ProcessDocumentCommand) error {
 	}
 	if strings.TrimSpace(cmd.DocumentID) == "" {
 		missing = append(missing, "document_id")
+	}
+	if strings.TrimSpace(cmd.VersionID) == "" {
+		missing = append(missing, "version_id")
 	}
 	if strings.TrimSpace(cmd.FileURL) == "" {
 		missing = append(missing, "file_url")

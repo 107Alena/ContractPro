@@ -37,6 +37,7 @@ func TestDocumentProcessingArtifactsReady_JSONRoundTrip(t *testing.T) {
 		EventMeta:  testEventMeta,
 		JobID:      "job-1",
 		DocumentID: "doc-1",
+		VersionID:  "ver-1",
 		OCRRaw:     OCRRawArtifact{Status: OCRStatusNotApplicable},
 		Text: ExtractedText{
 			DocumentID: "doc-1",
@@ -67,6 +68,12 @@ func TestDocumentProcessingArtifactsReady_JSONRoundTrip(t *testing.T) {
 
 	if restored.JobID != original.JobID {
 		t.Errorf("JobID = %q, want %q", restored.JobID, original.JobID)
+	}
+	if restored.DocumentID != original.DocumentID {
+		t.Errorf("DocumentID = %q, want %q", restored.DocumentID, original.DocumentID)
+	}
+	if restored.VersionID != original.VersionID {
+		t.Errorf("VersionID = %q, want %q", restored.VersionID, original.VersionID)
 	}
 	if restored.CorrelationID != original.CorrelationID {
 		t.Errorf("CorrelationID = %q, want %q", restored.CorrelationID, original.CorrelationID)

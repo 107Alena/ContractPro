@@ -9,6 +9,7 @@ func TestProcessDocumentCommand_JSONRoundTrip(t *testing.T) {
 	original := ProcessDocumentCommand{
 		JobID:      "job-100",
 		DocumentID: "doc-200",
+		VersionID:  "ver-300",
 		FileURL:    "https://storage.example.com/contracts/file.pdf",
 		OrgID:      "org-1",
 		UserID:     "user-1",
@@ -33,6 +34,9 @@ func TestProcessDocumentCommand_JSONRoundTrip(t *testing.T) {
 	}
 	if restored.DocumentID != original.DocumentID {
 		t.Errorf("DocumentID = %q, want %q", restored.DocumentID, original.DocumentID)
+	}
+	if restored.VersionID != original.VersionID {
+		t.Errorf("VersionID = %q, want %q", restored.VersionID, original.VersionID)
 	}
 	if restored.FileURL != original.FileURL {
 		t.Errorf("FileURL = %q, want %q", restored.FileURL, original.FileURL)
@@ -81,7 +85,7 @@ func TestProcessDocumentCommand_JSONOmitsEmptyOptionalFields(t *testing.T) {
 		}
 	}
 
-	requiredFields := []string{"job_id", "document_id", "file_url"}
+	requiredFields := []string{"job_id", "document_id", "version_id", "file_url"}
 	for _, field := range requiredFields {
 		if _, exists := raw[field]; !exists {
 			t.Errorf("required field %q should be present in JSON, but was missing", field)

@@ -14,6 +14,7 @@ type JobMeta struct {
 type ProcessingJob struct {
 	JobMeta
 	DocumentID string          `json:"document_id"`
+	VersionID  string          `json:"version_id,omitempty"`
 	FileURL    string          `json:"file_url"`
 	Stage      ProcessingStage `json:"stage"`
 	FileName   string          `json:"file_name,omitempty"`

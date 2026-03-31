@@ -301,6 +301,7 @@ func defaultCmd() model.ProcessDocumentCommand {
 	return model.ProcessDocumentCommand{
 		JobID:      "job-1",
 		DocumentID: "doc-1",
+		VersionID:  "ver-1",
 		FileURL:    "https://example.com/contract.pdf",
 		FileName:   "contract.pdf",
 		FileSize:   1024,
@@ -1087,6 +1088,7 @@ func TestCommandFieldsCopiedToJob(t *testing.T) {
 	cmd := model.ProcessDocumentCommand{
 		JobID:      "job-42",
 		DocumentID: "doc-99",
+		VersionID:  "ver-42",
 		FileURL:    "https://example.com/test.pdf",
 		FileName:   "test.pdf",
 		FileSize:   512,
@@ -2117,13 +2119,13 @@ func TestConcurrentJobs_WarningIsolation(t *testing.T) {
 	)
 
 	cmdA := model.ProcessDocumentCommand{
-		JobID: "job-A", DocumentID: "doc-A",
+		JobID: "job-A", DocumentID: "doc-A", VersionID: "ver-A",
 		FileURL: "https://example.com/a.pdf", FileName: "a.pdf",
 		FileSize: 100, MimeType: "application/pdf",
 		OrgID: "org-1", UserID: "user-1",
 	}
 	cmdB := model.ProcessDocumentCommand{
-		JobID: "job-B", DocumentID: "doc-B",
+		JobID: "job-B", DocumentID: "doc-B", VersionID: "ver-B",
 		FileURL: "https://example.com/b.pdf", FileName: "b.pdf",
 		FileSize: 100, MimeType: "application/pdf",
 		OrgID: "org-1", UserID: "user-1",

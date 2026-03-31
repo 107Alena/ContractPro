@@ -480,6 +480,7 @@ Document Processing (DP) — stateless-домен, отвечающий за:
 Обязательные поля:
 * `job_id`
 * `document_id`
+* `version_id` (идентификатор версии документа в DM)
 * `file_url` (ссылка на PDF)
 
 Рекомендуемые поля:

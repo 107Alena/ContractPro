@@ -15,6 +15,7 @@ func TestValidateProcessDocumentCommand_Valid(t *testing.T) {
 	cmd := model.ProcessDocumentCommand{
 		JobID:      "job-1",
 		DocumentID: "doc-1",
+		VersionID:  "ver-1",
 		FileURL:    "https://example.com/file.pdf",
 	}
 	if err := validateProcessDocumentCommand(cmd); err != nil {
@@ -25,6 +26,7 @@ func TestValidateProcessDocumentCommand_Valid(t *testing.T) {
 func TestValidateProcessDocumentCommand_MissingJobID(t *testing.T) {
 	cmd := model.ProcessDocumentCommand{
 		DocumentID: "doc-1",
+		VersionID:  "ver-1",
 		FileURL:    "https://example.com/file.pdf",
 	}
 	err := validateProcessDocumentCommand(cmd)
@@ -39,8 +41,9 @@ func TestValidateProcessDocumentCommand_MissingJobID(t *testing.T) {
 
 func TestValidateProcessDocumentCommand_MissingDocumentID(t *testing.T) {
 	cmd := model.ProcessDocumentCommand{
-		JobID:   "job-1",
-		FileURL: "https://example.com/file.pdf",
+		JobID:     "job-1",
+		VersionID: "ver-1",
+		FileURL:   "https://example.com/file.pdf",
 	}
 	err := validateProcessDocumentCommand(cmd)
 	if err == nil {
@@ -56,6 +59,7 @@ func TestValidateProcessDocumentCommand_MissingFileURL(t *testing.T) {
 	cmd := model.ProcessDocumentCommand{
 		JobID:      "job-1",
 		DocumentID: "doc-1",
+		VersionID:  "ver-1",
 	}
 	err := validateProcessDocumentCommand(cmd)
 	if err == nil {
@@ -67,6 +71,22 @@ func TestValidateProcessDocumentCommand_MissingFileURL(t *testing.T) {
 	}
 }
 
+func TestValidateProcessDocumentCommand_MissingVersionID(t *testing.T) {
+	cmd := model.ProcessDocumentCommand{
+		JobID:      "job-1",
+		DocumentID: "doc-1",
+		FileURL:    "https://example.com/file.pdf",
+	}
+	err := validateProcessDocumentCommand(cmd)
+	if err == nil {
+		t.Fatal("expected error for missing version_id")
+	}
+	assertValidationError(t, err)
+	if !strings.Contains(err.Error(), "version_id") {
+		t.Errorf("error should mention version_id: %v", err)
+	}
+}
+
 func TestValidateProcessDocumentCommand_MultipleFieldsMissing(t *testing.T) {
 	cmd := model.ProcessDocumentCommand{} // all empty
 	err := validateProcessDocumentCommand(cmd)
@@ -75,7 +95,7 @@ func TestValidateProcessDocumentCommand_MultipleFieldsMissing(t *testing.T) {
 	}
 	assertValidationError(t, err)
 	msg := err.Error()
-	for _, field := range []string{"job_id", "document_id", "file_url"} {
+	for _, field := range []string{"job_id", "document_id", "version_id", "file_url"} {
 		if !strings.Contains(msg, field) {
 			t.Errorf("error should mention %s: %v", field, err)
 		}
@@ -86,6 +106,7 @@ func TestValidateProcessDocumentCommand_WhitespaceOnly(t *testing.T) {
 	cmd := model.ProcessDocumentCommand{
 		JobID:      "  \t ",
 		DocumentID: "  ",
+		VersionID:  "   ",
 		FileURL:    " \n ",
 	}
 	err := validateProcessDocumentCommand(cmd)
@@ -94,7 +115,7 @@ func TestValidateProcessDocumentCommand_WhitespaceOnly(t *testing.T) {
 	}
 	assertValidationError(t, err)
 	msg := err.Error()
-	for _, field := range []string{"job_id", "document_id", "file_url"} {
+	for _, field := range []string{"job_id", "document_id", "version_id", "file_url"} {
 		if !strings.Contains(msg, field) {
 			t.Errorf("error should mention %s: %v", field, err)
 		}
@@ -239,6 +260,7 @@ func TestSanitizeProcessDocumentCommand(t *testing.T) {
 	cmd := model.ProcessDocumentCommand{
 		JobID:      "job\x00-1",
 		DocumentID: "../doc-1",
+		VersionID:  "ver\x00-1",
 		FileURL:    "https://example.com/file.pdf",
 		OrgID:      "org\x01-1",
 		UserID:     "user%00-1",
@@ -254,6 +276,9 @@ func TestSanitizeProcessDocumentCommand(t *testing.T) {
 	}
 	if cmd.DocumentID != "doc-1" {
 		t.Errorf("DocumentID = %q, want %q", cmd.DocumentID, "doc-1")
+	}
+	if cmd.VersionID != "ver-1" {
+		t.Errorf("VersionID = %q, want %q", cmd.VersionID, "ver-1")
 	}
 	if cmd.FileURL != "https://example.com/file.pdf" {
 		t.Errorf("FileURL = %q, want unchanged", cmd.FileURL)

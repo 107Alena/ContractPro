@@ -60,6 +60,7 @@ func TestProcessingPipeline_HappyPath_TextPDF(t *testing.T) {
 		art := h.dmSender.sentArtifacts[0]
 		assertEqual(t, "JobID", cmd.JobID, art.JobID)
 		assertEqual(t, "DocumentID", cmd.DocumentID, art.DocumentID)
+		assertEqual(t, "VersionID", cmd.VersionID, art.VersionID)
 		assertEqual(t, "OCRRaw.Status", string(model.OCRStatusNotApplicable), string(art.OCRRaw.Status))
 
 		if len(art.Text.Pages) == 0 {

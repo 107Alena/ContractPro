@@ -146,7 +146,9 @@
         "Шаг 3: миграции вверх/вниз без ошибок (при наличии DB)"
       ],
       "dependencies": ["DM-TASK-005"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Создан internal/infra/postgres/ с 4 файлами Go + 2 SQL миграции. client.go: Client struct обёртка над pgxpool.Pool с NewPostgresClient(ctx, DatabaseConfig), Ping(), Close() (idempotентный через sync.Mutex+chan), Pool(), String(). MaxConns/MinConns из config, sslmode через DSN. transactor.go: Transactor реализует port.Transactor, compile-time check. WithTransaction с join semantics для вложенных вызовов, deferred rollback для panic safety, rollback с context.Background(), возврат fnErr без маскировки error code. context.go: DBTX interface (Exec/Query/QueryRow), compile-time checks для pgxpool.Pool и pgx.Tx. InjectPool/ConnFromCtx (panic при nil — programming error), HasTx для join semantics. migrate.go: Migrator с embed.FS, iofs source driver, pgx5 database driver. Up/Down/MigrateToVersion/Version/Close (с errors.Join). migrations/000001_initial_schema.up.sql: 7 таблиц (documents, document_versions, artifact_descriptors, version_diff_references, audit_records, outbox_events, orphan_candidates), 12 индексов, все FK включая circular FK documents.current_version_id через ALTER TABLE. migrations/000001_initial_schema.down.sql: drop FK + drop 7 таблиц в обратном порядке. Зависимости: pgx/v5 v5.7.4, golang-migrate/v4 v4.19.1."
     },
     {
       "id": "DM-TASK-007",

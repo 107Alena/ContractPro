@@ -239,3 +239,62 @@
 - DM-TASK-010 (Observability) — зависит от DM-TASK-005 ✅
 
 ---
+
+## DM-TASK-006: PostgreSQL клиент (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Удалён placeholder `postgres.go` (только `package postgres`)
+- Создано 4 файла Go + 2 SQL миграции в `internal/infra/postgres/`:
+  - `client.go` — `Client` struct обёртка над `*pgxpool.Pool`, `NewPostgresClient(ctx, DatabaseConfig)`, `Ping()`, `Close()` (idempотентный через `sync.Mutex` + `chan struct{}`), `Pool()`, `String()`
+  - `transactor.go` — `Transactor` реализует `port.Transactor` (compile-time check). `WithTransaction` с join semantics для вложенных вызовов, deferred rollback для panic safety
+  - `context.go` — `DBTX` interface (Exec/Query/QueryRow), compile-time checks для `*pgxpool.Pool` и `pgx.Tx`. `InjectPool`/`ConnFromCtx` (panic при nil), `HasTx` для join semantics
+  - `migrate.go` — `Migrator` с `embed.FS`, `iofs` source driver, `pgx5` database driver. `Up`/`Down`/`MigrateToVersion`/`Version`/`Close` (с `errors.Join`)
+  - `migrations/000001_initial_schema.up.sql` — 7 таблиц, 12 индексов, все FK включая circular FK
+  - `migrations/000001_initial_schema.down.sql` — drop FK + drop 7 таблиц в обратном порядке
+- Добавлены зависимости: `pgx/v5 v5.7.4`, `golang-migrate/v4 v4.19.1`
+
+**Таблицы в миграции (7):**
+- `documents` — корневой агрегат с soft delete (status: ACTIVE/ARCHIVED/DELETED)
+- `document_versions` — иммутабельные версии с artifact_status state machine, UNIQUE(document_id, version_number)
+- `artifact_descriptors` — метаданные артефактов, UNIQUE(version_id, artifact_type)
+- `version_diff_references` — метаданные diff, UNIQUE(base_version_id, target_version_id)
+- `audit_records` — append-only аудит с JSONB details
+- `outbox_events` — transactional outbox (PENDING/CONFIRMED)
+- `orphan_candidates` — отслеживание orphan blobs (BRE-008)
+
+**Индексы (12):**
+- `idx_documents_org`, `idx_documents_deleted` (partial)
+- `idx_versions_doc`, `idx_versions_org`
+- `idx_artifacts_version`, `idx_artifacts_org`, `idx_artifacts_storage_key`
+- `idx_audit_org_time`, `idx_audit_doc`, `idx_audit_version` (partial)
+- `idx_outbox_pending` (partial), `idx_outbox_aggregate` (partial)
+
+**Проверки:**
+- `go build ./internal/infra/postgres/...` — OK
+- `go build ./...` — OK
+- `go test -count=1 ./...` — 96 PASS (config 20 + model 76), postgres без тестов (infra, требует DB)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Ключевые решения:**
+- `DBTX` interface вместо concrete type — repositories работают и с pool, и с tx прозрачно
+- Join semantics для вложенных WithTransaction (без savepoints)
+- Deferred `tx.Rollback(context.Background())` для panic safety
+- `ConnFromCtx` panic при nil (programming error, не runtime)
+- Circular FK (documents ↔ document_versions) через ALTER TABLE после создания обеих таблиц
+- Outbox без партиционирования (упрощение, партиционирование можно добавить в отдельной миграции)
+
+**Ревью (code-reviewer + golang-pro):**
+- Исправлено: rollback с `context.Background()` (не parent ctx который может быть cancelled), deferred rollback для panic safety, fnErr возвращается без маскировки error code (не double %w), ConnFromCtx panic вместо nil, Migrator.Close с `errors.Join`
+
+**Следующие задачи:**
+- DM-TASK-007 (RabbitMQ клиент) — зависит от DM-TASK-005 ✅
+- DM-TASK-008 (Object Storage) — зависит от DM-TASK-005 ✅
+- DM-TASK-009 (Redis клиент) — зависит от DM-TASK-005 ✅
+- DM-TASK-012 (PostgreSQL repositories) — зависит от DM-TASK-004 ✅ + DM-TASK-006 ✅
+
+---

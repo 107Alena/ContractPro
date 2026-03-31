@@ -131,3 +131,55 @@
 - DM-TASK-004 разблокирует: DM-TASK-012, 013, 017-021
 
 ---
+
+## DM-TASK-004: Hexagonal порты (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Удалён placeholder `port.go`
+- Создано 3 файла в `internal/domain/port/`:
+  - `errors.go` — `DomainError` struct (Code, Message, Retryable, Cause) + 16 error code constants + 17 конструкторов + 6 helpers (IsDomainError, IsRetryable, ErrorCode, IsNotFound, IsConflict, IsDuplicateEvent)
+  - `inbound.go` — 5 inbound handler interfaces:
+    - `DocumentLifecycleHandler` (5 методов: CreateDocument, GetDocument, ListDocuments, ArchiveDocument, DeleteDocument)
+    - `VersionManagementHandler` (3 метода: CreateVersion, GetVersion, ListVersions)
+    - `ArtifactIngestionHandler` (3 метода: HandleDPArtifacts, HandleLICArtifacts, HandleREArtifacts)
+    - `ArtifactQueryHandler` (4 метода: HandleGetSemanticTree, HandleGetArtifacts, GetArtifact, ListArtifacts)
+    - `DiffStorageHandler` (2 метода: HandleDiffReady, GetDiff)
+  - `outbound.go` — 12 outbound port interfaces:
+    - `Transactor` — unit-of-work для DB-транзакций
+    - 6 repositories: `DocumentRepository`, `VersionRepository`, `ArtifactRepository`, `DiffRepository`, `AuditRepository`, `OutboxRepository`
+    - `ObjectStoragePort` (6 методов: PutObject, GetObject, DeleteObject, HeadObject, GeneratePresignedURL, DeleteByPrefix)
+    - `BrokerPublisherPort` (Publish)
+    - `IdempotencyStorePort` (Get, Set, Delete)
+    - `AuditPort` (Record, List)
+    - `DLQPort` (SendToDLQ)
+- Вспомогательные типы: `PageResult[T]`, `CreateDocumentParams`, `ListDocumentsParams`, `CreateVersionParams`, `ListVersionsParams`, `GetArtifactParams`, `ArtifactContent`, `GetDiffParams`, `AuditListParams`, `OutboxEntry`
+
+**Проверки:**
+- `go build ./internal/domain/...` — OK
+- `go vet ./...` — OK
+- `go test -count=1 ./...` — 76 PASS (model тесты), port без тестов (interface-only)
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Ключевые решения:**
+- Handler suffix для inbound (как DP: ProcessingCommandHandler, DMResponseHandler), Port/Repository suffix для outbound
+- MetadataStorePort из acceptance criteria декомпозирован на 6 per-aggregate repositories (Interface Segregation Principle)
+- OutboxEntry содержит AggregateID для FIFO ordering (REV-010)
+- HeadObject возвращает `(sizeBytes, exists bool, err)` вместо error на not-found
+- IsDuplicateEvent выделен из IsConflict (разная семантика: idempotency vs conflict)
+- PageResult без JSON tags (domain layer serialization-agnostic)
+- Compile-time interface checks (`var _ Port = (*Impl)(nil)`) будут в файлах адаптеров
+
+**Ревью (code-reviewer + golang-pro):**
+- Исправлено: удалён дублирующий FindByDocumentAndVersion, добавлен AggregateID/Status/PublishedAt в OutboxEntry, DeletePublished в OutboxRepository, consistent params в ArtifactRepository, улучшены doc comments
+
+**Следующие задачи:**
+- DM-TASK-005 (конфигурация) — зависит от DM-TASK-001 ✅ (параллельная ветка)
+- DM-TASK-012 (PostgreSQL repositories) — зависит от DM-TASK-004 ✅ + DM-TASK-006
+- DM-TASK-013 (Idempotency Guard) — зависит от DM-TASK-004 ✅ + DM-TASK-009
+- DM-TASK-017-021 (application services) — зависят от DM-TASK-004 ✅ + infra tasks
+
+---

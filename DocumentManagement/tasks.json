@@ -100,7 +100,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-003"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Определены hexagonal порты в internal/domain/port/: 3 файла (errors.go, inbound.go, outbound.go). INBOUND (5 интерфейсов): DocumentLifecycleHandler (CreateDocument, GetDocument, ListDocuments, ArchiveDocument, DeleteDocument), VersionManagementHandler (CreateVersion, GetVersion, ListVersions), ArtifactIngestionHandler (HandleDPArtifacts, HandleLICArtifacts, HandleREArtifacts), ArtifactQueryHandler (HandleGetSemanticTree, HandleGetArtifacts, GetArtifact, ListArtifacts), DiffStorageHandler (HandleDiffReady, GetDiff). OUTBOUND (12 интерфейсов): Transactor, DocumentRepository (Insert, FindByID, List, Update, ExistsByID), VersionRepository (Insert, FindByID, List, Update, NextVersionNumber), ArtifactRepository (Insert, FindByVersionAndType, ListByVersion, ListByVersionAndTypes, DeleteByVersion), DiffRepository (Insert, FindByVersionPair, ListByDocument, DeleteByDocument), AuditRepository (Insert, List), OutboxRepository (Insert, FetchUnpublished, MarkPublished, DeletePublished), ObjectStoragePort (PutObject, GetObject, DeleteObject, HeadObject, GeneratePresignedURL, DeleteByPrefix), BrokerPublisherPort (Publish), IdempotencyStorePort (Get, Set, Delete), AuditPort (Record, List), DLQPort (SendToDLQ). DomainError: 16 error codes, 17 constructors, 6 helpers (IsDomainError, IsRetryable, ErrorCode, IsNotFound, IsConflict, IsDuplicateEvent). Вспомогательные типы: PageResult[T], CreateDocumentParams, ListDocumentsParams, CreateVersionParams, ListVersionsParams, GetArtifactParams, ArtifactContent, GetDiffParams, AuditListParams, OutboxEntry (с AggregateID для FIFO, REV-010). Naming: Handler suffix для inbound (как DP), Port/Repository suffix для outbound. MetadataStorePort декомпозирован на 6 per-aggregate repositories (ISP). Compile-time checks будут в файлах реализации адаптеров."
     },
     {
       "id": "DM-TASK-005",

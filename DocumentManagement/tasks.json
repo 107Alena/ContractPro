@@ -123,7 +123,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-001"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Создан internal/config/ с Load() функцией, Validate(), 4 env-хелперами (envString, envInt, envDuration, envBool). 12 sub-config типов: DatabaseConfig (DM_DB_DSN required, MaxConns/MinConns/QueryTimeout defaults), BrokerConfig (DM_BROKER_ADDRESS required, TLS, 25 configurable topic names с defaults из model.Topic* constants), StorageConfig (4 required: Endpoint/Bucket/AccessKey/SecretKey, Region/PresignedURLTTL defaults), KVStoreConfig (DM_KVSTORE_ADDRESS required, Password/DB/PoolSize/Timeout defaults), HTTPConfig (Port default 8080), ConsumerConfig (Prefetch 10, Concurrency 5), IdempotencyConfig (TTL 24h, ProcessingTTL 120s, StuckThreshold 240s), OutboxConfig (PollInterval 200ms, BatchSize 50, LockTimeout 5s, CleanupHours 48), RetentionConfig (ArchiveDays 90, DeletedBlobDays 30, DeletedMetaDays 365, AuditDays 1095), RetryConfig (MaxAttempts 3, BackoffBase 1s), ObservabilityConfig (LogLevel info, MetricsPort 9090, TracingEnabled false), TimeoutConfig (StoragePut 30s, StorageGet 15s, EventProcessing 60s, BrokerPublish 10s, StaleVersion 30m, Shutdown 30s). Validate() разделяет missing required и invalid constraint errors. Port collision check (HTTP vs Metrics). godotenv для .env файлов. 20 test functions (96+ subtests): all required validated individually and collectively, all defaults verified, all 25 topic defaults cross-verified against model.Topic* constants, overrides, invalid fallbacks, port collision, envBool edge cases."
     },
     {
       "id": "DM-TASK-006",

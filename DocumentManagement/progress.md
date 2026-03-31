@@ -183,3 +183,59 @@
 - DM-TASK-017-021 (application services) — зависят от DM-TASK-004 ✅ + infra tasks
 
 ---
+
+## DM-TASK-005: Конфигурация сервиса (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Удалён placeholder `config.go` (только `package config`)
+- Создано 3 файла в `internal/config/`:
+  - `config.go` — `Config` struct (12 nested sub-configs), `Load()`, `Validate()`, 4 env-хелпера (envString, envInt, envDuration, envBool)
+  - `sub_configs.go` — 12 sub-config типов с `load*Config()` функциями
+  - `config_test.go` — 20 test functions (96+ subtests)
+- Добавлена зависимость `github.com/joho/godotenv v1.5.1` в `go.mod`
+
+**Sub-config типы (12):**
+- `DatabaseConfig` — DM_DB_DSN (required), MaxConns(25), MinConns(5), QueryTimeout(10s)
+- `BrokerConfig` — DM_BROKER_ADDRESS (required), TLS(false), 25 configurable topic names
+- `StorageConfig` — 4 required (Endpoint, Bucket, AccessKey, SecretKey), Region("ru-central1"), PresignedURLTTL(5m)
+- `KVStoreConfig` — DM_KVSTORE_ADDRESS (required), Password(""), DB(0), PoolSize(10), Timeout(2s)
+- `HTTPConfig` — Port(8080)
+- `ConsumerConfig` — Prefetch(10), Concurrency(5)
+- `IdempotencyConfig` — TTL(24h), ProcessingTTL(120s), StuckThreshold(240s)
+- `OutboxConfig` — PollInterval(200ms), BatchSize(50), LockTimeout(5s), CleanupHours(48)
+- `RetentionConfig` — ArchiveDays(90), DeletedBlobDays(30), DeletedMetaDays(365), AuditDays(1095)
+- `RetryConfig` — MaxAttempts(3), BackoffBase(1s)
+- `ObservabilityConfig` — LogLevel("info"), MetricsPort(9090), TracingEnabled(false), TracingEndpoint("")
+- `TimeoutConfig` — StoragePut(30s), StorageGet(15s), EventProcessing(60s), BrokerPublish(10s), StaleVersion(30m), Shutdown(30s)
+
+**Required env vars (7):** DM_DB_DSN, DM_BROKER_ADDRESS, DM_STORAGE_ENDPOINT, DM_STORAGE_BUCKET, DM_STORAGE_ACCESS_KEY, DM_STORAGE_SECRET_KEY, DM_KVSTORE_ADDRESS
+
+**Проверки:**
+- `go test ./internal/config/... -race -count=1` — 20 PASS (96+ subtests)
+- `go test -count=1 ./...` — OK (config 20 + model 76 = 96 tests)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Ключевые решения:**
+- Validate() разделяет `missing` (required fields) и `invalid` (constraint violations) в отдельные слайсы
+- Port collision: DM_HTTP_PORT != DM_METRICS_PORT
+- DM_HTTP_PORT optional с default 8080 (не required)
+- Topic defaults в тестах cross-verified против model.Topic* constants (import model)
+- envInt64 удалён как dead code (по результатам ревью)
+- TestLoad_MissingMultipleRequiredFields явно очищает env vars через t.Setenv("", "")
+
+**Ревью (code-reviewer + golang-pro):**
+- Исправлено: удалён envInt64 (dead code), разделены missing/invalid в Validate(), topic тесты используют model constants, TestLoad_MissingMultipleRequiredFields защищён от ambient env
+
+**Следующие задачи:**
+- DM-TASK-006 (PostgreSQL клиент) — зависит от DM-TASK-005 ✅
+- DM-TASK-007 (RabbitMQ клиент) — зависит от DM-TASK-005 ✅
+- DM-TASK-008 (Object Storage) — зависит от DM-TASK-005 ✅
+- DM-TASK-009 (Redis клиент) — зависит от DM-TASK-005 ✅
+- DM-TASK-010 (Observability) — зависит от DM-TASK-005 ✅
+
+---

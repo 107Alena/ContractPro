@@ -1,0 +1,781 @@
+openapi: 3.0.3
+info:
+  title: Document Management API
+  description: |
+    Sync REST API домена Document Management (DM) сервиса ContractPro.
+    Используется API/Backend-оркестратором и UI для CRUD-операций, чтения метаданных и артефактов.
+    Междоменное взаимодействие (DP, LIC, RE) — исключительно async через RabbitMQ.
+  version: 1.0.0
+
+servers:
+  - url: /api/v1
+    description: DM API v1
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Documents
+    description: CRUD-операции над документами
+  - name: Versions
+    description: Управление версиями документа
+  - name: Artifacts
+    description: Чтение артефактов версии
+  - name: Diffs
+    description: Результаты сравнения версий
+  - name: Audit
+    description: Журнал аудита
+
+paths:
+  /documents:
+    post:
+      tags: [Documents]
+      summary: Создать документ
+      operationId: createDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDocumentRequest'
+      responses:
+        '201':
+          description: Документ создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    get:
+      tags: [Documents]
+      summary: Список документов организации
+      operationId: listDocuments
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/DocumentStatus'
+          description: Фильтр по статусу
+      responses:
+        '200':
+          description: Список документов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /documents/{document_id}:
+    get:
+      tags: [Documents]
+      summary: Метаданные документа
+      operationId: getDocument
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdParam'
+      responses:
+        '200':
+          description: Метаданные документа с текущей версией
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentWithCurrentVersion'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Documents]
+      summary: Soft delete документа
+      operationId: deleteDocument
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdParam'
+      responses:
+        '200':
+          description: Документ удалён (soft delete)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /documents/{document_id}/archive:
+    post:
+      tags: [Documents]
+      summary: Архивация документа
+      description: Переводит документ из ACTIVE в ARCHIVED.
+      operationId: archiveDocument
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdParam'
+      responses:
+        '200':
+          description: Документ архивирован
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /documents/{document_id}/versions:
+    post:
+      tags: [Versions]
+      summary: Создать новую версию
+      operationId: createVersion
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVersionRequest'
+      responses:
+        '201':
+          description: Версия создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentVersion'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+    get:
+      tags: [Versions]
+      summary: Список версий документа
+      operationId: listVersions
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: Список версий
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /documents/{document_id}/versions/{version_id}:
+    get:
+      tags: [Versions]
+      summary: Метаданные версии
+      operationId: getVersion
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      responses:
+        '200':
+          description: Метаданные версии со списком артефактов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentVersionWithArtifacts'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /documents/{document_id}/versions/{version_id}/artifacts:
+    get:
+      tags: [Artifacts]
+      summary: Список артефактов версии
+      operationId: listArtifacts
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+        - name: artifact_type
+          in: query
+          schema:
+            $ref: '#/components/schemas/ArtifactType'
+          description: Фильтр по типу артефакта
+        - name: producer_domain
+          in: query
+          schema:
+            $ref: '#/components/schemas/ProducerDomain'
+          description: Фильтр по домену-производителю
+      responses:
+        '200':
+          description: Список дескрипторов артефактов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactDescriptorList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /documents/{document_id}/versions/{version_id}/artifacts/{artifact_type}:
+    get:
+      tags: [Artifacts]
+      summary: Получить артефакт
+      description: |
+        Для JSON-артефактов (SEMANTIC_TREE, RISK_ANALYSIS, etc.) — возвращает содержимое в теле ответа.
+        Для blob-артефактов (SOURCE_FILE, EXPORT_PDF, EXPORT_DOCX) — возвращает 302 Redirect на presigned URL.
+      operationId: getArtifact
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+        - name: artifact_type
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ArtifactType'
+      responses:
+        '200':
+          description: Содержимое JSON-артефакта
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Содержимое артефакта (schema зависит от artifact_type)
+        '302':
+          description: Redirect на presigned URL (для blob-артефактов)
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+              description: Presigned S3 URL (TTL 15 минут)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /documents/{document_id}/diffs/{base_version_id}/{target_version_id}:
+    get:
+      tags: [Diffs]
+      summary: Получить результат сравнения версий
+      operationId: getDiff
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdParam'
+        - name: base_version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: target_version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Результат сравнения
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionDiff'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /audit:
+    get:
+      tags: [Audit]
+      summary: Журнал аудита
+      description: Доступен только администратору организации (R-3) и системным операторам.
+      operationId: listAuditRecords
+      parameters:
+        - name: document_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: version_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: action
+          in: query
+          schema:
+            type: string
+          description: "Фильтр по типу действия (DOCUMENT_CREATED, ARTIFACT_SAVED, etc.)"
+        - name: actor_id
+          in: query
+          schema:
+            type: string
+          description: "Фильтр по исполнителю (user_id или имя домена)"
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: Список записей аудита
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditRecordList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: JWT-токен от API Gateway. Содержит organization_id, user_id, role.
+
+  parameters:
+    DocumentIdParam:
+      name: document_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    VersionIdParam:
+      name: version_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    SizeParam:
+      name: size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  responses:
+    BadRequest:
+      description: Невалидный запрос
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Unauthorized:
+      description: Не авторизован
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Forbidden:
+      description: Недостаточно прав
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: Ресурс не найден или не принадлежит организации
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Conflict:
+      description: Конфликт состояния (документ archived/deleted, race condition)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    TooManyRequests:
+      description: Превышен лимит запросов (per-organization rate limiting)
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Секунды до следующей попытки
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    DocumentStatus:
+      type: string
+      enum: [ACTIVE, ARCHIVED, DELETED]
+
+    OriginType:
+      type: string
+      enum: [UPLOAD, RE_UPLOAD, RECOMMENDATION_APPLIED, MANUAL_EDIT, RE_CHECK]
+
+    ArtifactStatus:
+      type: string
+      enum: [PENDING, PROCESSING_ARTIFACTS_RECEIVED, ANALYSIS_ARTIFACTS_RECEIVED, REPORTS_READY, FULLY_READY, PARTIALLY_AVAILABLE]
+
+    ArtifactType:
+      type: string
+      enum:
+        - OCR_RAW
+        - EXTRACTED_TEXT
+        - DOCUMENT_STRUCTURE
+        - SEMANTIC_TREE
+        - PROCESSING_WARNINGS
+        - CLASSIFICATION_RESULT
+        - KEY_PARAMETERS
+        - RISK_ANALYSIS
+        - RISK_PROFILE
+        - RECOMMENDATIONS
+        - SUMMARY
+        - DETAILED_REPORT
+        - AGGREGATE_SCORE
+        - EXPORT_PDF
+        - EXPORT_DOCX
+
+    ProducerDomain:
+      type: string
+      enum: [DP, LIC, RE]
+
+    CreateDocumentRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+
+    CreateVersionRequest:
+      type: object
+      required: [source_file_key, source_file_name, source_file_size, source_file_checksum, origin_type]
+      properties:
+        source_file_key:
+          type: string
+          description: Ключ исходного файла в Object Storage (загружен оркестратором заранее)
+        source_file_name:
+          type: string
+        source_file_size:
+          type: integer
+          format: int64
+        source_file_checksum:
+          type: string
+          description: SHA-256 checksum
+        origin_type:
+          $ref: '#/components/schemas/OriginType'
+        origin_description:
+          type: string
+          description: Дополнительный контекст (например, «рекомендация по п. 5.3»)
+
+    Document:
+      type: object
+      properties:
+        document_id:
+          type: string
+          format: uuid
+        organization_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        current_version_id:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          $ref: '#/components/schemas/DocumentStatus'
+        created_by_user_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DocumentWithCurrentVersion:
+      allOf:
+        - $ref: '#/components/schemas/Document'
+        - type: object
+          properties:
+            current_version:
+              $ref: '#/components/schemas/DocumentVersion'
+              nullable: true
+
+    DocumentList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Document'
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+
+    DocumentVersion:
+      type: object
+      properties:
+        version_id:
+          type: string
+          format: uuid
+        document_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        parent_version_id:
+          type: string
+          format: uuid
+          nullable: true
+        origin_type:
+          $ref: '#/components/schemas/OriginType'
+        origin_description:
+          type: string
+          nullable: true
+        source_file_key:
+          type: string
+        source_file_name:
+          type: string
+        source_file_size:
+          type: integer
+          format: int64
+        source_file_checksum:
+          type: string
+        artifact_status:
+          $ref: '#/components/schemas/ArtifactStatus'
+        created_by_user_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    DocumentVersionWithArtifacts:
+      allOf:
+        - $ref: '#/components/schemas/DocumentVersion'
+        - type: object
+          properties:
+            artifacts:
+              type: array
+              items:
+                $ref: '#/components/schemas/ArtifactDescriptor'
+
+    VersionList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentVersion'
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+
+    ArtifactDescriptor:
+      type: object
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+        version_id:
+          type: string
+          format: uuid
+        artifact_type:
+          $ref: '#/components/schemas/ArtifactType'
+        producer_domain:
+          $ref: '#/components/schemas/ProducerDomain'
+        size_bytes:
+          type: integer
+          format: int64
+        content_hash:
+          type: string
+        schema_version:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ArtifactDescriptorList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArtifactDescriptor'
+
+    VersionDiff:
+      type: object
+      properties:
+        diff_id:
+          type: string
+          format: uuid
+        document_id:
+          type: string
+          format: uuid
+        base_version_id:
+          type: string
+          format: uuid
+        target_version_id:
+          type: string
+          format: uuid
+        text_diff_count:
+          type: integer
+        structural_diff_count:
+          type: integer
+        text_diffs:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [added, removed, modified]
+              path:
+                type: string
+              old_text:
+                type: string
+                nullable: true
+              new_text:
+                type: string
+                nullable: true
+        structural_diffs:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [added, removed, modified, moved]
+              node_id:
+                type: string
+              old_value:
+                type: object
+                nullable: true
+              new_value:
+                type: object
+                nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    AuditRecord:
+      type: object
+      properties:
+        audit_id:
+          type: string
+          format: uuid
+        document_id:
+          type: string
+          format: uuid
+          nullable: true
+        version_id:
+          type: string
+          format: uuid
+          nullable: true
+        action:
+          type: string
+          enum:
+            - DOCUMENT_CREATED
+            - VERSION_CREATED
+            - ARTIFACT_SAVED
+            - ARTIFACT_READ
+            - DIFF_SAVED
+            - DOCUMENT_ARCHIVED
+            - DOCUMENT_DELETED
+            - ARTIFACT_STATUS_CHANGED
+            - VERSION_FINALIZED
+        actor_type:
+          type: string
+          enum: [USER, SYSTEM, DOMAIN]
+        actor_id:
+          type: string
+        job_id:
+          type: string
+          nullable: true
+        correlation_id:
+          type: string
+          nullable: true
+        details:
+          type: object
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    AuditRecordList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditRecord'
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+          description: Машиночитаемый код ошибки
+        message:
+          type: string
+          description: Человекочитаемое описание
+        details:
+          type: object
+          nullable: true
+          description: Дополнительные данные об ошибке

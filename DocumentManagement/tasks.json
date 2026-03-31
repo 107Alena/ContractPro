@@ -1,0 +1,1057 @@
+{
+  "agent_instructions": {
+    "before_start": [
+      "Прочитай этот файл и git log --oneline -20",
+      "Выбери ОДНУ задачу со статусом pending и наивысшим приоритетом",
+      "Проверь, что все dependencies этой задачи имеют статус done"
+    ],
+    "during_work": [
+      "Работай только над выбранной задачей",
+      "Делай коммиты после каждого логического изменения",
+      "Не трогай код, не связанный с текущей задачей"
+    ],
+    "before_finish": [
+      "Выполни ВСЕ test_steps из задачи",
+      "Меняй status на done ТОЛЬКО после успешного прохождения всех тестов",
+      "Напиши summary в progress.md",
+      "ЗАПРЕЩЕНО удалять или редактировать задачи — только менять status"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "DM-TASK-001",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Инициализация Go-модуля и структуры проекта Document Management",
+      "acceptance_criteria": [
+        "Создан go.mod с именем модуля contractpro/document-management",
+        "Создана полная структура каталогов: cmd/dm-service/, internal/config/, internal/domain/model/, internal/domain/port/, internal/application/ingestion/, internal/application/query/, internal/application/lifecycle/, internal/application/version/, internal/application/diff/, internal/ingress/consumer/, internal/ingress/api/, internal/ingress/idempotency/, internal/egress/confirmation/, internal/egress/notification/, internal/egress/outbox/, internal/infra/postgres/, internal/infra/objectstorage/, internal/infra/broker/, internal/infra/kvstore/, internal/infra/observability/, internal/infra/health/",
+        "Создан Makefile с целями build, test, lint",
+        "go mod tidy выполняется без ошибок"
+      ],
+      "test_steps": [
+        "Шаг 1: go mod tidy — без ошибок",
+        "Шаг 2: make build — без ошибок",
+        "Шаг 3: make test — 0 тестов, но без ошибок",
+        "Шаг 4: make lint (go vet ./...) — без ошибок"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-002",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Доменные модели: Document, DocumentVersion, ArtifactDescriptor, VersionDiffReference, AuditRecord",
+      "acceptance_criteria": [
+        "Созданы Go-структуры для всех 6 сущностей (Document, DocumentVersion, ArtifactDescriptor, VersionDiffReference, AuditRecord, IdempotencyRecord) в internal/domain/model/",
+        "Определены все enums: DocumentStatus, OriginType, ArtifactStatus, ArtifactType, ProducerDomain, AuditAction, ActorType",
+        "Enum ArtifactStatus реализует state machine (allowed_transitions map) с валидацией переходов",
+        "JSON-теги соответствуют event-catalog.md и api-specification.yaml",
+        "Unit-тесты: JSON round-trip для каждой сущности, валидация state machine transitions"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-001"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-003",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Доменные события: все входящие и исходящие event structs + EventMeta",
+      "acceptance_criteria": [
+        "Создана структура EventMeta (CorrelationID, Timestamp) — совместимость с DP",
+        "Созданы все входящие event structs: DocumentProcessingArtifactsReady, GetSemanticTreeRequest, DocumentVersionDiffReady, GetArtifactsRequest, LegalAnalysisArtifactsReady, ReportsArtifactsReady",
+        "Созданы все исходящие event structs: DocumentProcessingArtifactsPersisted, DocumentProcessingArtifactsPersistFailed, SemanticTreeProvided, ArtifactsProvided, DocumentVersionDiffPersisted, DocumentVersionDiffPersistFailed, LegalAnalysisArtifactsPersisted, LegalAnalysisArtifactsPersistFailed, ReportsArtifactsPersisted, ReportsArtifactsPersistFailed",
+        "Созданы notification events: VersionProcessingArtifactsReady, VersionAnalysisArtifactsReady, VersionReportsReady, VersionCreated",
+        "JSON-теги соответствуют event-catalog.md",
+        "Unit-тесты: JSON round-trip, backward compatibility (optional fields)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-004",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Hexagonal порты: inbound, outbound, engine interfaces + DomainError",
+      "acceptance_criteria": [
+        "Определены inbound ports: DocumentLifecyclePort, VersionManagementPort, ArtifactIngestionPort, ArtifactQueryPort, DiffStoragePort",
+        "Определены outbound ports: MetadataStorePort, ObjectStoragePort, BrokerPublisherPort, IdempotencyStorePort, AuditPort",
+        "Определён typed DomainError с error_code, is_retryable, errors.Is/As unwrapping",
+        "Compile-time interface checks: var _ Port = (*Impl)(nil) паттерн",
+        "Все порты в internal/domain/port/"
+      ],
+      "test_steps": [
+        "Шаг 1: go build ./internal/domain/...",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-003"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-005",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Конфигурация сервиса: env-based config с DM_ prefix + валидация",
+      "acceptance_criteria": [
+        "Создан internal/config/ с Load() функцией",
+        "Все переменные с DM_ prefix: DM_BROKER_ADDRESS, DM_DB_DSN, DM_KVSTORE_ADDRESS, DM_STORAGE_ENDPOINT, DM_STORAGE_BUCKET, DM_STORAGE_ACCESS_KEY, DM_STORAGE_SECRET_KEY, DM_HTTP_PORT",
+        "Конфигурируемые топики RabbitMQ (все из integration-contracts.md)",
+        "Конфигурируемые retention параметры: DM_RETENTION_ARCHIVE_DAYS, DM_RETENTION_DELETED_BLOB_DAYS, DM_RETENTION_DELETED_META_DAYS, DM_RETENTION_AUDIT_DAYS, DM_IDEMPOTENCY_TTL, DM_OUTBOX_CLEANUP_HOURS",
+        "Валидация обязательных переменных при старте (паника при отсутствии)",
+        "godotenv для .env файлов",
+        "Unit-тесты: валидация required, defaults для optional"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/config/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-001"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-006",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "PostgreSQL клиент: connection pool (pgx), миграции (golang-migrate), repository base",
+      "acceptance_criteria": [
+        "Создан internal/infra/postgres/ с клиентом на pgx",
+        "Connection pool с конфигурируемым размером, sslmode=require для TLS (NFR-3.2)",
+        "SQL-миграции для всех таблиц: documents, document_versions, artifact_descriptors, version_diff_references, audit_records, outbox_events",
+        "Все индексы из storage.md созданы в миграциях",
+        "Healthcheck: Ping()",
+        "Graceful shutdown: Close()"
+      ],
+      "test_steps": [
+        "Шаг 1: go build ./internal/infra/postgres/...",
+        "Шаг 2: go vet ./...",
+        "Шаг 3: миграции вверх/вниз без ошибок (при наличии DB)"
+      ],
+      "dependencies": ["DM-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-007",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "RabbitMQ клиент: publish с confirms, subscribe с manual ack, auto-reconnect",
+      "acceptance_criteria": [
+        "Создан internal/infra/broker/ с клиентом RabbitMQ",
+        "Publish с publisher confirms",
+        "Subscribe с manual ack и configurable prefetch",
+        "TLS-соединение с RabbitMQ (amqps://) — конфигурируемо через DM_BROKER_TLS (NFR-3.2)",
+        "Auto-reconnect при обрыве соединения",
+        "Конфигурируемые exchange/queue names",
+        "Queue declaration с policies: durable=true, x-max-length, x-overflow=reject-publish, x-message-ttl (BRE-026)",
+        "Quorum queues для DLQ (x-delivery-count для retry tracking) (REV-025)",
+        "Healthcheck",
+        "Graceful shutdown",
+        "Unit-тесты с mock"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/broker/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-008",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Object Storage адаптер (S3-compatible): PutObject, GetObject, DeleteObject, GeneratePresignedURL",
+      "acceptance_criteria": [
+        "Создан internal/infra/objectstorage/ с S3-compatible клиентом",
+        "Операции: PutObject, GetObject, DeleteObject, HeadObject, GeneratePresignedURL(TTL)",
+        "Naming convention: {organization_id}/{document_id}/{version_id}/{artifact_type}",
+        "Retry: exponential backoff (3 попытки)",
+        "Content-Type awareness: application/json vs application/pdf",
+        "Unit-тесты с mock"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/objectstorage/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-009",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Redis клиент: idempotency store с TTL + fallback логика",
+      "acceptance_criteria": [
+        "Создан internal/infra/kvstore/ с Redis клиентом",
+        "Операции: Get, Set (с TTL), Delete",
+        "Хранение idempotency records: key → {status, result_snapshot}",
+        "Конфигурируемый TTL (default 24h)",
+        "Healthcheck",
+        "Graceful shutdown",
+        "Unit-тесты с mock"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/kvstore/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-010",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Observability SDK: structured logging, Prometheus metrics, OpenTelemetry tracing",
+      "acceptance_criteria": [
+        "Создан internal/infra/observability/ с Logger, Metrics, Tracer",
+        "Structured JSON logging с обязательными полями: timestamp, level, service=document-management, correlation_id, job_id, document_id, version_id, organization_id, component, stage",
+        "Prometheus metrics: dm_events_received_total, dm_events_processed_total, dm_event_processing_duration_seconds, dm_artifacts_stored_total, dm_api_requests_total, dm_api_request_duration_seconds, dm_outbox_pending_count, dm_outbox_oldest_pending_age_seconds (gauge — возраст старейшего PENDING события в outbox, REV-022), dm_dlq_messages_total, dm_missing_version_id_total, dm_idempotency_fallback_total, dm_stuck_versions_count, dm_integrity_check_failures_total, dm_circuit_breaker_state",
+        "OpenTelemetry spans: dm.event.process, dm.api.request с child spans",
+        "Единый стиль с DP observability"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/observability/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-011",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Health Check Handler: /healthz и /readyz endpoints",
+      "acceptance_criteria": [
+        "Создан internal/infra/health/ с HTTP-хэндлерами",
+        "/healthz — liveness: процесс жив (HTTP 200)",
+        "/readyz — readiness: core (PostgreSQL + Redis + RabbitMQ) проверяется обязательно. Object Storage — отдельный check, не блокирующий readiness (REV-024). Ответ JSON с breakdown по компонентам",
+        "При недоступности core-компонента /readyz → HTTP 503",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/health/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-006", "DM-TASK-007", "DM-TASK-008", "DM-TASK-009"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-012",
+      "category": "functional",
+      "priority": "critical",
+      "description": "PostgreSQL repositories: Document, DocumentVersion, ArtifactDescriptor, VersionDiffReference, AuditRecord",
+      "acceptance_criteria": [
+        "Реализованы repositories для каждой сущности, удовлетворяющие outbound ports",
+        "Все запросы фильтруются по organization_id (tenant isolation)",
+        "Пагинация для List-операций",
+        "Транзакционная обёртка для атомарных операций (создание версии + update current_version_id + audit)",
+        "Optimistic locking для version creation (unique constraint + retry)",
+        "Unit-тесты с sqlmock или testcontainers"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/postgres/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-004", "DM-TASK-006"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-013",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Idempotency Guard: дедупликация входящих событий через Redis + DB fallback",
+      "acceptance_criteria": [
+        "Создан internal/ingress/idempotency/ с IdempotencyGuard",
+        "Проверка ключа в Redis: COMPLETED → ACK (без re-publish), PROCESSING (age < 240s) → skip, PROCESSING (age ≥ 240s) → delete + re-process, not found → SET PROCESSING с TTL 120s",
+        "После успешной обработки: перезаписать на COMPLETED с TTL 24h",
+        "Fallback на DB при недоступности Redis: SELECT artifact_descriptor WHERE job_id AND artifact_type + метрика dm_idempotency_fallback_total",
+        "Ключи идемпотентности для всех 7 типов входящих событий (из high-architecture.md раздел 6.3)",
+        "Unit-тесты: happy path, duplicate, Redis down fallback"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/idempotency/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-004", "DM-TASK-009"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-014",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Event Consumer: подписка на 7 топиков, десериализация, валидация контракта, маршрутизация",
+      "acceptance_criteria": [
+        "Создан internal/ingress/consumer/ с EventConsumer",
+        "Подписка на все 7 входящих топиков из integration-contracts.md",
+        "Десериализация JSON → Go-структуры для каждого типа события",
+        "Первичная валидация: обязательные поля (correlation_id, timestamp, job_id, document_id). Неизвестные JSON-поля игнорируются (forward compatibility). При неизвестном schema_version — WARN лог, обработка продолжается (REV-031)",
+        "Передача в Idempotency Guard → Event Router",
+        "Event Router маршрутизирует к правильному Application Service",
+        "Always returns nil (prevent poison-pill requeue)",
+        "Unit-тесты: каждый тип события, невалидный JSON, missing fields"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/consumer/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-003", "DM-TASK-007", "DM-TASK-013"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-015",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Confirmation Publisher + Notification Publisher: публикация подтверждений и уведомлений",
+      "acceptance_criteria": [
+        "Создан internal/egress/confirmation/ — публикация 10 типов confirmation events (persisted/persist-failed для DP, LIC, RE + SemanticTreeProvided + ArtifactsProvided)",
+        "Создан internal/egress/notification/ — публикация 4 типов notification events (version-artifacts-ready, version-analysis-ready, version-reports-ready, version-created)",
+        "EventMeta (correlation_id, timestamp) ОБЯЗАТЕЛЬНО копируется из входящего события в каждый исходящий event. DP Receiver использует correlation_id для tracing context — если DM не заполнит, tracing будет потерян (REV-021)",
+        "Notification events включают dm.events.version-partially-available для оркестратора (BRE-010)",
+        "JSON-сериализация, publish через Broker Client",
+        "Unit-тесты: каждый тип события, проверка корректности топика и payload, проверка что correlation_id скопирован из входящего события"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-003", "DM-TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-016",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Transactional Outbox: запись событий в outbox_events + Outbox Poller для publish в RabbitMQ",
+      "acceptance_criteria": [
+        "Создан internal/egress/outbox/ с OutboxWriter и OutboxPoller",
+        "OutboxWriter: INSERT в outbox_events в той же DB-транзакции, что и основные данные",
+        "OutboxWriter: поле aggregate_id (= version_id) для FIFO ordering в рамках версии (REV-010)",
+        "OutboxPoller: SELECT ... FOR UPDATE SKIP LOCKED LIMIT N → publish → publisher confirm → UPDATE status=CONFIRMED (BRE-006, BRE-013)",
+        "Cleanup: удаление CONFIRMED записей старше DM_OUTBOX_CLEANUP_HOURS, партициями или DELETE LIMIT 1000 (BRE-018)",
+        "Метрики: dm_outbox_pending_count (gauge), dm_outbox_oldest_pending_age_seconds (gauge) (REV-022)",
+        "Graceful shutdown poller",
+        "Unit-тесты: write + poll + cleanup cycle"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/outbox/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-006", "DM-TASK-007", "DM-TASK-015"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-017",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Artifact Ingestion Service: приём и сохранение артефактов от DP, LIC, RE",
+      "acceptance_criteria": [
+        "Создан internal/application/ingestion/ с ArtifactIngestionService",
+        "Обработка DocumentProcessingArtifactsReady: валидация → save blobs → DB tx (descriptors + artifact_status + audit + outbox) → idempotency COMPLETED",
+        "Обработка LegalAnalysisArtifactsReady: аналогично, artifact_status → ANALYSIS_ARTIFACTS_RECEIVED",
+        "Обработка ReportsArtifactsReady: аналогично, artifact_status → REPORTS_READY/FULLY_READY",
+        "State machine validation: проверка допустимости перехода artifact_status",
+        "Compensation при ошибке Object Storage: удаление уже сохранённых blobs",
+        "Публикация confirmation через outbox",
+        "Публикация notification при смене artifact_status через outbox",
+        "Unit-тесты: happy path для каждого домена, document not found, partial save failure, duplicate event"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/ingestion/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-004", "DM-TASK-008", "DM-TASK-012", "DM-TASK-016"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-018",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Artifact Query Service: выдача semantic tree, артефактов по запросу, sync API чтение",
+      "acceptance_criteria": [
+        "Создан internal/application/query/ с ArtifactQueryService",
+        "Обработка GetSemanticTreeRequest: поиск descriptor → GetObject → publish SemanticTreeProvided (с error fields при отсутствии)",
+        "Обработка GetArtifactsRequest: поиск descriptors по artifact_types[] → GetObject для каждого → publish ArtifactsProvided (с missing_types)",
+        "Sync API: получение артефакта по type → JSON content или presigned URL (302)",
+        "Audit record для каждого чтения",
+        "Unit-тесты: happy path, version not found, artifact not found, presigned URL generation"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/query/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-004", "DM-TASK-008", "DM-TASK-012", "DM-TASK-015"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-019",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Document Lifecycle Service: CRUD документов с tenant isolation",
+      "acceptance_criteria": [
+        "Создан internal/application/lifecycle/ с DocumentLifecycleService",
+        "CreateDocument: INSERT document + audit",
+        "GetDocument: SELECT с current_version join, фильтр organization_id",
+        "ListDocuments: пагинация, фильтр по status и organization_id",
+        "DeleteDocument: soft delete (ACTIVE/ARCHIVED → DELETED) + audit",
+        "ArchiveDocument: ACTIVE → ARCHIVED + audit",
+        "HTTP 404 при чужой организации, 409 при невалидном status transition",
+        "Unit-тесты: happy path для каждой операции, tenant isolation, status transitions"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/lifecycle/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-004", "DM-TASK-012"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-020",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Version Management Service: создание версий с lineage и optimistic locking",
+      "acceptance_criteria": [
+        "Создан internal/application/version/ с VersionManagementService",
+        "CreateVersion: validate document exists + ACTIVE → HEAD source_file_key → DB tx (INSERT version + UPDATE current_version_id + audit + outbox VersionCreated)",
+        "version_number = max + 1, optimistic locking при concurrent creation (retry до 3 раз)",
+        "origin_type: все 5 значений поддержаны",
+        "RE_CHECK: source_file_key копируется из parent version",
+        "ListVersions: пагинация по document_id",
+        "GetVersion: с join на artifacts list",
+        "Unit-тесты: happy path, concurrent version creation, document not found, document archived"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/version/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-004", "DM-TASK-008", "DM-TASK-012", "DM-TASK-016"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-021",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Diff Storage Service: приём и сохранение результатов сравнения версий",
+      "acceptance_criteria": [
+        "Создан internal/application/diff/ с DiffStorageService",
+        "Обработка DocumentVersionDiffReady: validate both versions exist + same document → save blob → DB tx (INSERT diff_reference + audit + outbox)",
+        "Publish DocumentVersionDiffPersisted через outbox",
+        "При ошибке: publish DocumentVersionDiffPersistFailed",
+        "Idempotency: unique constraint (base_version_id, target_version_id). При constraint violation с новым job_id — upsert поведение: вернуть DiffPersisted без перезаписи (REV-028)",
+        "Unit-тесты: happy path, version not found, duplicate diff (same job_id), duplicate diff (different job_id → upsert)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/diff/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-004", "DM-TASK-008", "DM-TASK-012", "DM-TASK-016"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-022",
+      "category": "functional",
+      "priority": "high",
+      "description": "API Handler: HTTP REST endpoints с auth context extraction и маршрутизацией",
+      "acceptance_criteria": [
+        "Создан internal/ingress/api/ с HTTP Router (net/http или chi)",
+        "Auth Context Extractor: извлечение organization_id, user_id из request headers / JWT claims",
+        "Все endpoints из api-specification.yaml реализованы (включая POST /archive, расширенные фильтры audit). Целевой p95 latency для sync read-операций < 100 мс (NFR-1.3)",
+        "Стратегия версионирования API: additive changes only для v1 (новые поля, endpoints). Breaking changes — новая major version /api/v2/ (REV-023)",
+        "Поведение для soft-deleted документов: GET → 200 для R-3 (admin) с пометкой status=DELETED, 404 для R-1/R-2. List → exclude DELETED по умолчанию, include при status=DELETED в query (BRE-024)",
+        "JSON-сериализация ответов, ErrorResponse при ошибках",
+        "Пагинация: page/size query params",
+        "Middleware: request logging, metrics (dm_api_requests_total, dm_api_request_duration_seconds), tracing",
+        "Unit-тесты: каждый endpoint happy path, 404, 409, 400"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/api/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-017", "DM-TASK-018", "DM-TASK-019", "DM-TASK-020", "DM-TASK-021"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-023",
+      "category": "functional",
+      "priority": "high",
+      "description": "DLQ: отправка необработанных сообщений + replay механизм + backoff при NACK",
+      "acceptance_criteria": [
+        "Реализована отправка в 3 DLQ-топика: dm.dlq.ingestion-failed, dm.dlq.query-failed, dm.dlq.invalid-message",
+        "DLQ record содержит: original_message, error_code, error_message, original_topic, retry_count, correlation_id, job_id, failed_at",
+        "retry_count: использовать RabbitMQ quorum queues с x-delivery-count или инкремент через Redis (REV-025)",
+        "Интеграция с Event Consumer: невалидная схема → dm.dlq.invalid-message",
+        "Интеграция с Artifact Ingestion Service: retry exhausted → dm.dlq.ingestion-failed",
+        "Метрика dm_dlq_messages_total (counter, label: reason)",
+        "DLQ Replay: admin API endpoint POST /api/v1/admin/dlq/replay с фильтром по topic, correlation_id. При replay: проверка idempotency через DB (не Redis — TTL может истечь). Max replay count = 3, защита от бесконечного цикла (REV-018, BRE-011)",
+        "Backoff при NACK: client-side delay перед NACK (1s, 2s, 4s) или delayed message exchange. Предотвращает tight loop при persistent failure (BRE-025)",
+        "Unit-тесты: каждый DLQ-путь, replay happy path, replay max count exceeded, backoff delay"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/... -race -count=1 (проверить DLQ тесты)",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-014", "DM-TASK-017"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-024",
+      "category": "functional",
+      "priority": "high",
+      "description": "Audit Trail: запись и чтение audit records с расширенной фильтрацией",
+      "acceptance_criteria": [
+        "AuditRecord записывается при каждом значимом действии: DOCUMENT_CREATED, VERSION_CREATED, ARTIFACT_SAVED, ARTIFACT_READ, DIFF_SAVED, DOCUMENT_ARCHIVED, DOCUMENT_DELETED, ARTIFACT_STATUS_CHANGED",
+        "ARTIFACT_READ записывается и для async GetArtifactsRequest/GetSemanticTreeRequest с actor_type=DOMAIN, actor_id=имя домена (REV-012)",
+        "Append-only: INSERT only, no UPDATE/DELETE",
+        "API endpoint GET /api/v1/audit: фильтрация по document_id, version_id, action, actor_id, from/to, пагинация (REV-009)",
+        "Доступ ограничен (role check через middleware — подготовка, фактическая проверка через UOM в будущем)",
+        "Unit-тесты: audit record creation для каждого action type, async read audit, API endpoint с фильтрами"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/... -race -count=1 (audit-related tests)",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-012", "DM-TASK-022"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-025",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Application wiring: main.go с graceful startup/shutdown, dependency injection",
+      "acceptance_criteria": [
+        "Создан cmd/dm-service/main.go",
+        "Загрузка конфигурации",
+        "Инициализация всех инфра-компонентов: PostgreSQL, Redis, RabbitMQ, Object Storage, Observability",
+        "Wiring application services с инфра-адаптерами",
+        "Запуск Event Consumer (подписка на 7 топиков)",
+        "Запуск HTTP-сервера (API Handler + Health Check)",
+        "Запуск Outbox Poller",
+        "Graceful shutdown: ordered teardown — readiness=false → stop consumer (drain in-flight) → stop outbox poller (finish current batch) → stop HTTP server → close RabbitMQ → close Redis → close PostgreSQL → stop observability. Timeout: DM_SHUTDOWN_TIMEOUT (default 30s) (BRE-019)",
+        "PostgreSQL connection pool: раздельные пулы для sync API и async consumer. Конфигурация: DM_DB_MAX_CONNS (default 25), DM_DB_MIN_CONNS (default 5) (BRE-012)",
+        "make build успешен"
+      ],
+      "test_steps": [
+        "Шаг 1: make build — бинарник собирается без ошибок",
+        "Шаг 2: go vet ./...",
+        "Шаг 3: бинарник запускается и падает с ожидаемой ошибкой (нет DB/Redis/RabbitMQ)"
+      ],
+      "dependencies": ["DM-TASK-010", "DM-TASK-011", "DM-TASK-014", "DM-TASK-022", "DM-TASK-016"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-026",
+      "category": "integration",
+      "priority": "high",
+      "description": "Integration test: сохранение артефактов DP → DM (end-to-end с in-memory fakes)",
+      "acceptance_criteria": [
+        "Создан internal/integration/ с end-to-end тестами",
+        "In-memory fakes для PostgreSQL, Redis, RabbitMQ, Object Storage",
+        "Тест: publish DocumentProcessingArtifactsReady → DM сохраняет артефакты → publish ArtifactsPersisted + VersionArtifactsReady",
+        "Проверка: ArtifactDescriptor в DB, blob в Object Storage, artifact_status=PROCESSING_ARTIFACTS_RECEIVED, audit record, idempotency key",
+        "Тест: повторная доставка того же события → idempotency hit, no duplicate"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/integration/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-025"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-027",
+      "category": "integration",
+      "priority": "high",
+      "description": "Integration test: полный pipeline (DP → LIC → RE) с version lifecycle",
+      "acceptance_criteria": [
+        "Тест: создание документа и версии (sync API) → DP artifacts → LIC artifacts → RE artifacts → artifact_status=FULLY_READY",
+        "Проверка: все notifications опубликованы в правильном порядке",
+        "Проверка: все audit records созданы",
+        "Проверка: sync API возвращает корректные данные на каждом этапе",
+        "Тест: GetSemanticTreeRequest → SemanticTreeProvided",
+        "Тест: GetArtifactsRequest → ArtifactsProvided"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/integration/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-026"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-028",
+      "category": "integration",
+      "priority": "high",
+      "description": "Integration test: error scenarios (partial save, version conflict, storage unavailable)",
+      "acceptance_criteria": [
+        "Тест: Object Storage fail на 4-м артефакте → compensation → NACK → retry → success",
+        "Тест: concurrent version creation → один succeeds, другой retries → оба succeed с разными version_number",
+        "Тест: document not found → PersistFailed event",
+        "Тест: Redis unavailable → fallback на DB → success",
+        "Тест: retry exhausted → DLQ + PersistFailed"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/integration/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-026"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-029",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Dockerfile (multi-stage) + Docker Compose для локальной разработки",
+      "acceptance_criteria": [
+        "Создан Dockerfile: multi-stage build (builder + runtime)",
+        "Создан docker-compose.yaml с сервисами: dm-service, PostgreSQL, Redis, RabbitMQ, MinIO (S3-compatible)",
+        "DM-сервис стартует и проходит healthcheck",
+        "Миграции выполняются при старте (или через отдельный init-контейнер)",
+        "make docker-build успешен"
+      ],
+      "test_steps": [
+        "Шаг 1: make docker-build — образ собирается",
+        "Шаг 2: docker compose up — все сервисы стартуют",
+        "Шаг 3: curl localhost:{port}/healthz → 200",
+        "Шаг 4: curl localhost:{port}/readyz → 200"
+      ],
+      "dependencies": ["DM-TASK-025"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-030",
+      "category": "security",
+      "priority": "high",
+      "description": "Tenant isolation enforcement: organization_id фильтрация на всех уровнях",
+      "acceptance_criteria": [
+        "Все SQL-запросы в repositories содержат WHERE organization_id = $org_id",
+        "API Handler: organization_id извлекается из auth context и передаётся во все service calls",
+        "Event Consumer: organization_id из события валидируется (document принадлежит organization). Если organization_id присутствует в событии и не совпадает с document.organization_id → PersistFailed + WARN + alert (BRE-015)",
+        "organization_id в async-событиях: обязательное поле при наличии. Если пустое — fallback lookup из DB (совместимость до DP TASK-057) (BRE-015)",
+        "Тест: попытка доступа к документу чужой организации → 404 (sync), PersistFailed (async)",
+        "Row-level security в PostgreSQL (миграция с CREATE POLICY)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./... -race -count=1 -run TestTenantIsolation",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-012", "DM-TASK-014", "DM-TASK-022"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-031",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Orphan Cleanup Job: фоновый процесс удаления blob без ArtifactDescriptor",
+      "acceptance_criteria": [
+        "Создан background job (goroutine с ticker, period конфигурируемо — default 1 час)",
+        "Логика: list keys в Object Storage → check exists в artifact_descriptors → delete orphans (older than 1 hour)",
+        "Метрика orphan count",
+        "Логирование: количество найденных и удалённых orphans",
+        "Graceful shutdown",
+        "Unit-тесты с mock"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./... -race -count=1 -run TestOrphanCleanup",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-008", "DM-TASK-012"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-032",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Retention Jobs: soft delete cleanup + archive blob + audit partition drop",
+      "acceptance_criteria": [
+        "Background job: удаление blobs для DELETED документов старше DM_RETENTION_DELETED_BLOB_DAYS",
+        "Background job: удаление метаданных DELETED документов старше DM_RETENTION_DELETED_META_DAYS",
+        "S3 lifecycle rule конфигурация документирована для archived documents (DM_RETENTION_ARCHIVE_DAYS)",
+        "Audit records: PARTITION BY RANGE (created_at), monthly partitions, управление через pg_partman. Drop partitions старше DM_RETENTION_AUDIT_DAYS (REV-027)",
+        "Unit-тесты для каждого retention job"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./... -race -count=1 -run TestRetention",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-012", "DM-TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-033",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Presigned URL generation: для blob-артефактов (SOURCE_FILE, EXPORT_PDF, EXPORT_DOCX)",
+      "acceptance_criteria": [
+        "GET /artifacts/{type} для blob-типов → HTTP 302 Redirect с presigned URL (TTL 15 min)",
+        "GET /artifacts/{type} для JSON-типов → HTTP 200 с содержимым",
+        "Presigned URL генерируется после проверки organization_id",
+        "Unit-тесты: presigned URL для PDF, JSON content для SEMANTIC_TREE"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/query/... -race -count=1",
+        "Шаг 2: go test ./internal/ingress/api/... -race -count=1"
+      ],
+      "dependencies": ["DM-TASK-018", "DM-TASK-022"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-034",
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "Документация: configuration.md с полным списком DM_* переменных окружения",
+      "acceptance_criteria": [
+        "Создан DocumentManagement/architecture/configuration.md",
+        "Все переменные из config/sub_configs.go документированы: описание, тип, default, required/optional",
+        "Таблица обязательных переменных",
+        "Пример .env файла",
+        "Структура аналогична DocumentProcessing/architecture/configuration.md"
+      ],
+      "test_steps": [
+        "Шаг 1: все переменные из кода отражены в документации",
+        "Шаг 2: пример .env содержит все required переменные"
+      ],
+      "dependencies": ["DM-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-035",
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "Документация: deployment.md с Docker Compose и production guide",
+      "acceptance_criteria": [
+        "Создан DocumentManagement/architecture/deployment.md",
+        "Описание локального запуска через docker compose",
+        "Описание production deployment",
+        "Описание миграций",
+        "Описание secrets management",
+        "Описание encryption at rest: PostgreSQL (managed DB / dm-crypt), Object Storage (SSE-S3/SSE-KMS на уровне bucket) (NFR-3.2)",
+        "Описание failover конфигурации: PostgreSQL HA (managed), Redis sentinel/cluster, RabbitMQ HA (NFR-2.4/NFR-2.5)",
+        "Структура аналогична DocumentProcessing/architecture/deployment.md"
+      ],
+      "test_steps": [
+        "Шаг 1: инструкции из deployment.md воспроизводимы"
+      ],
+      "dependencies": ["DM-TASK-029"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-036",
+      "category": "functional",
+      "priority": "critical",
+      "description": "REV-001/REV-002: Defensive fallback для version_id и organization_id в событиях от DP",
+      "acceptance_criteria": [
+        "При пустом version_id в DocumentProcessingArtifactsReady: fallback на lookup current_version_id по document_id + WARN лог + метрика dm_missing_version_id_total",
+        "При пустом organization_id в любом входящем событии: fallback на lookup organization_id по document_id из DB + WARN лог",
+        "Оба fallback работают корректно до выполнения DP TASK-056 и TASK-057",
+        "Unit-тесты: событие без version_id → fallback → success, событие без organization_id → fallback → success"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/ingestion/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-017"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-037",
+      "category": "functional",
+      "priority": "critical",
+      "description": "BRE-001: SELECT FOR UPDATE на artifact_status для защиты от race condition",
+      "acceptance_criteria": [
+        "В Artifact Ingestion Service: SELECT document_versions FOR UPDATE по version_id перед обновлением artifact_status",
+        "Проверка допустимости перехода state machine выполняется внутри транзакции (после блокировки)",
+        "При недопустимом переходе: NACK с requeue (дать предыдущему этапу завершиться)",
+        "Unit-тесты: параллельное обновление artifact_status → один успешен, второй ждёт блокировку"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/ingestion/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-017"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-038",
+      "category": "functional",
+      "priority": "critical",
+      "description": "BRE-003: Idempotency Guard — short TTL для PROCESSING, age check для stuck keys",
+      "acceptance_criteria": [
+        "SET PROCESSING с TTL 120s (не 24h)",
+        "После успешной обработки: перезаписать на COMPLETED с TTL 24h",
+        "При повторной доставке и PROCESSING с возрастом ≥ 240s (2× timeout): удалить ключ, обработать заново",
+        "При повторной доставке и COMPLETED: ACK без повторной публикации confirmation (BRE-002)",
+        "Unit-тесты: stuck PROCESSING → re-process, fresh PROCESSING → skip, COMPLETED → skip"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/idempotency/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-013"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-039",
+      "category": "functional",
+      "priority": "high",
+      "description": "BRE-005: SELECT FOR UPDATE на documents при создании версии для сериализации",
+      "acceptance_criteria": [
+        "В Version Management Service: SELECT documents FOR UPDATE по document_id перед вычислением version_number",
+        "version_number = max + 1 вычисляется внутри транзакции",
+        "current_version_id обновляется в той же транзакции",
+        "Unit-тесты: concurrent version creation → сериализуется через FOR UPDATE"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/version/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-020"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-040",
+      "category": "functional",
+      "priority": "high",
+      "description": "REV-005: Endpoint архивации документа POST /documents/{id}/archive",
+      "acceptance_criteria": [
+        "Endpoint POST /api/v1/documents/{document_id}/archive реализован",
+        "Переход ACTIVE → ARCHIVED + audit record",
+        "При status != ACTIVE → HTTP 409 Conflict",
+        "Unit-тесты: happy path, already archived, deleted"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/api/... -race -count=1",
+        "Шаг 2: go test ./internal/application/lifecycle/... -race -count=1"
+      ],
+      "dependencies": ["DM-TASK-022"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-041",
+      "category": "functional",
+      "priority": "high",
+      "description": "REV-008/BRE-010: Stale Version Watchdog + notification для PARTIALLY_AVAILABLE",
+      "acceptance_criteria": [
+        "Background job (goroutine с ticker, period 5 мин)",
+        "Логика: SELECT versions в промежуточных состояниях старше DM_STALE_VERSION_TIMEOUT (default 30 мин) → UPDATE → PARTIALLY_AVAILABLE + audit",
+        "Публикация dm.events.version-partially-available через outbox",
+        "Метрика dm_stuck_versions_total (counter) + dm_stuck_versions_count (gauge)",
+        "Graceful shutdown",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./... -race -count=1 -run TestStaleVersionWatchdog",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-017", "DM-TASK-016"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-042",
+      "category": "functional",
+      "priority": "high",
+      "description": "BRE-006: Outbox Poller — SELECT FOR UPDATE SKIP LOCKED + ordering по aggregate_id",
+      "acceptance_criteria": [
+        "Outbox Poller: SELECT ... FOR UPDATE SKIP LOCKED LIMIT N",
+        "FIFO ordering по aggregate_id (version_id) + created_at",
+        "Статус CONFIRMED после publisher confirm (вместо PUBLISHED)",
+        "Cleanup: DELETE WHERE status = CONFIRMED AND published_at < threshold",
+        "Конфигурация: DM_OUTBOX_POLL_INTERVAL, DM_OUTBOX_BATCH_SIZE",
+        "Unit-тесты: concurrent pollers, ordering"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/outbox/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-016"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-043",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "BRE-007: Consumer backpressure — prefetch count + concurrency limiter",
+      "acceptance_criteria": [
+        "RabbitMQ consumer: prefetch count конфигурируемый (DM_CONSUMER_PREFETCH, default 10)",
+        "Semaphore-based concurrency limiter (DM_CONSUMER_CONCURRENCY, default 5)",
+        "При исчерпании слотов — сообщения остаются в очереди",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/broker/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-044",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "BRE-014: Circuit breaker для Object Storage",
+      "acceptance_criteria": [
+        "Интеграция gobreaker в Object Storage Adapter",
+        "Per-event retry budget: 30-40s (не 5 × 3 × 30s)",
+        "При открытом circuit breaker → fast fail без ожидания timeout",
+        "Метрика dm_circuit_breaker_state (gauge, labels: component)",
+        "Unit-тесты: circuit opens after N failures, half-open recovery"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/objectstorage/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-045",
+      "category": "security",
+      "priority": "high",
+      "description": "BRE-009: Rate limiting для sync API (per-organization token bucket)",
+      "acceptance_criteria": [
+        "Per-organization rate limiting middleware",
+        "Лимиты: 100 read/s, 20 write/s (конфигурируемо)",
+        "HTTP 429 Too Many Requests + Retry-After header",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/api/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-022"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-046",
+      "category": "security",
+      "priority": "medium",
+      "description": "BRE-016: Audit append-only trigger + REV-020: RLS для всех таблиц",
+      "acceptance_criteria": [
+        "DB миграция: CREATE TRIGGER no_update_audit на audit_records (reject UPDATE/DELETE)",
+        "DB миграция: RLS policies для document_versions, artifact_descriptors, version_diff_references, audit_records",
+        "Отдельная DB-роль dm_audit_writer с INSERT only на audit_records",
+        "Тест: попытка UPDATE audit_records → ошибка"
+      ],
+      "test_steps": [
+        "Шаг 1: миграции up/down без ошибок",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-006"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-047",
+      "category": "functional",
+      "priority": "medium",
+      "description": "BRE-008: Orphan candidates table вместо full S3 scan",
+      "acceptance_criteria": [
+        "При ошибке DB-транзакции после успешного PutObject: INSERT в orphan_candidates(storage_key, version_id)",
+        "Orphan Cleanup Job читает из orphan_candidates (не full S3 scan)",
+        "Не блокировать обработку при неудачной compensation (DeleteObject)",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./... -race -count=1 -run TestOrphanCandidate",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-031"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-048",
+      "category": "functional",
+      "priority": "medium",
+      "description": "BRE-027: Content hash verification при чтении артефактов",
+      "acceptance_criteria": [
+        "Artifact Query Service: после GetObject вычислить SHA-256 и сравнить с content_hash из ArtifactDescriptor",
+        "При несовпадении: ERROR лог + метрика dm_integrity_check_failures_total + вернуть ошибку",
+        "Unit-тесты: matching hash → OK, mismatched hash → error"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/query/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-018"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-049",
+      "category": "functional",
+      "priority": "medium",
+      "description": "BRE-029: Валидация содержимого входящих артефактов",
+      "acceptance_criteria": [
+        "Size limit per artifact_type (конфигурируемо): JSON артефакты ≤ 10 МБ, diff ≤ 20 МБ",
+        "JSON артефакты: проверка корректности JSON-парсинга перед сохранением в Object Storage",
+        "PDF артефакты (если RE передаёт storage_key): HEAD request для проверки существования объекта",
+        "При невалидном содержимом: PersistFailed с error_code=INVALID_CONTENT",
+        "Unit-тесты: oversized artifact, invalid JSON, missing storage_key"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/ingestion/... -race -count=1",
+        "Шаг 2: go vet ./..."
+      ],
+      "dependencies": ["DM-TASK-017"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-050",
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "REV-030/BRE-022: Стратегия миграций PostgreSQL",
+      "acceptance_criteria": [
+        "Миграции выполняются через init-container перед стартом приложения",
+        "Все DDL-операции совместимы с online migration (no full table locks): CREATE INDEX CONCURRENTLY, ADD COLUMN с DEFAULT",
+        "RLS policies применяются до старта приложения",
+        "Rollback: каждая миграция имеет down-скрипт",
+        "Документировано в deployment.md: порядок миграций, rollback процедура",
+        "Unit-тест: все миграции up + down без ошибок"
+      ],
+      "test_steps": [
+        "Шаг 1: migrate up — все миграции применены",
+        "Шаг 2: migrate down — все миграции откачены",
+        "Шаг 3: migrate up повторно — идемпотентно"
+      ],
+      "dependencies": ["DM-TASK-006"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-051",
+      "category": "infrastructure",
+      "priority": "low",
+      "description": "BRE-021/REV-033: RPO/RTO стратегия для PostgreSQL и Object Storage",
+      "acceptance_criteria": [
+        "PostgreSQL: WAL archiving с периодом ≤ 15 мин (RPO). Managed PG с point-in-time recovery. RTO ≤ 2 часов — документирован runbook восстановления",
+        "Object Storage: S3 versioning включён на bucket contractpro-dm-artifacts. Описан сценарий восстановления при случайном удалении",
+        "Redis: AOF persistence (если используется для idempotency). При потере Redis — fallback на DB, без потери данных",
+        "Документировано в deployment.md: backup schedule, restore procedure, RTO/RPO validation"
+      ],
+      "test_steps": [
+        "Шаг 1: документация описывает backup и restore для каждого компонента"
+      ],
+      "dependencies": ["DM-TASK-035"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-052",
+      "category": "infrastructure",
+      "priority": "low",
+      "description": "CLAUDE.md файлы для каждого пакета DM (аналогично DocumentProcessing)",
+      "acceptance_criteria": [
+        "Каждый пакет под DocumentManagement/development/internal/ имеет собственный CLAUDE.md",
+        "CLAUDE.md описывает: назначение пакета, ключевые типы/интерфейсы, зависимости, инварианты",
+        "Корневой DocumentManagement/development/CLAUDE.md с overview и ссылками на architecture/",
+        "Структура аналогична DocumentProcessing (каждый пакет имеет CLAUDE.md)"
+      ],
+      "test_steps": [
+        "Шаг 1: каждый пакет с .go файлами имеет CLAUDE.md"
+      ],
+      "dependencies": ["DM-TASK-025"],
+      "status": "pending"
+    }
+  ]
+}

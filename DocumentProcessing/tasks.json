@@ -1290,6 +1290,90 @@
       "changes": [
         "DocumentProcessing/architecture/configuration.md — 5 additions: required table, KV Store section, Observability vars, DLQ topic, .env example"
       ]
+    },
+    {
+      "id": "TASK-055",
+      "category": "domain-model",
+      "priority": "medium",
+      "description": "Добавить поля ошибки в SemanticTreeProvided и обновить receiver для полноценной обработки ошибки от DM",
+      "acceptance_criteria": [
+        "В model.SemanticTreeProvided добавлены поля: ErrorCode string `json:\"error_code,omitempty\"`, ErrorMessage string `json:\"error_message,omitempty\"`, IsRetryable bool `json:\"is_retryable,omitempty\"`",
+        "В receiver.go handleSemanticTreeProvided: проверка event.ErrorMessage != \"\" выполняется ДО проверки Root == nil",
+        "При наличии ErrorMessage создаётся typed DomainError с error_code и is_retryable из события (аналогично handleDiffPersistFailed)",
+        "Ошибка передаётся в registry.ReceiveError с сохранением error_code и is_retryable",
+        "Существующее поведение при Root == nil без error fields сохранено (backward compatibility)",
+        "JSON десериализация backward-compatible: событие без новых полей десериализуется корректно (omitempty)",
+        "Добавлены unit-тесты: (1) round-trip JSON с error fields, (2) backward compat без error fields, (3) receiver: ErrorMessage → ReceiveError с typed DomainError, (4) receiver: пустой ErrorMessage + nil Root → существующее поведение, (5) receiver: ErrorMessage + is_retryable=true → retryable DomainError",
+        "Все существующие тесты проходят без изменений"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... -race -count=1",
+        "Шаг 2: go test ./internal/egress/dm/... -race -count=1",
+        "Шаг 3: go test ./... -race -count=1 (все 936+ тестов PASS)",
+        "Шаг 4: go vet ./...",
+        "Шаг 5: make build"
+      ],
+      "dependencies": ["TASK-053"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-056",
+      "category": "domain-model",
+      "priority": "high",
+      "description": "Добавить version_id в ProcessDocumentCommand и DocumentProcessingArtifactsReady для явной привязки артефактов к версии в DM",
+      "acceptance_criteria": [
+        "В model.ProcessDocumentCommand добавлено поле VersionID string `json:\"version_id\"` (обязательное, как document_id)",
+        "В model.DocumentProcessingArtifactsReady добавлено поле VersionID string `json:\"version_id\"`",
+        "В orchestrator.go при формировании DocumentProcessingArtifactsReady поле VersionID заполняется из cmd.VersionID",
+        "В consumer/dispatcher: валидация ProcessDocumentCommand проверяет наличие version_id (непустая строка), при отсутствии — REJECTED",
+        "В high-architecture.md (раздел 3.4.2): в описании обязательных полей ProcessDocumentRequested добавлен version_id",
+        "Все существующие тесты обновлены: в test helpers и fixtures добавлено поле VersionID",
+        "Добавлены unit-тесты: (1) command с пустым version_id → ошибка валидации, (2) command с заполненным version_id → OK, (3) event round-trip JSON с version_id, (4) orchestrator: version_id пробрасывается из command в event",
+        "Все тесты проходят (936+ PASS)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... -race -count=1",
+        "Шаг 2: go test ./internal/ingress/... -race -count=1",
+        "Шаг 3: go test ./internal/application/processing/... -race -count=1",
+        "Шаг 4: go test ./internal/egress/dm/... -race -count=1",
+        "Шаг 5: go test ./... -race -count=1 (все тесты PASS)",
+        "Шаг 6: go vet ./...",
+        "Шаг 7: make build"
+      ],
+      "dependencies": ["TASK-054"],
+      "status": "pending"
+    },
+    {
+      "id": "TASK-057",
+      "category": "domain-model",
+      "priority": "high",
+      "description": "Добавить organization_id во все исходящие события DP для tenant validation в DM и корректной маршрутизации",
+      "acceptance_criteria": [
+        "В model.DocumentProcessingArtifactsReady добавлено поле OrgID string `json:\"organization_id,omitempty\"`",
+        "В model.GetSemanticTreeRequest добавлено поле OrgID string `json:\"organization_id,omitempty\"`",
+        "В model.DocumentVersionDiffReady добавлено поле OrgID string `json:\"organization_id,omitempty\"`",
+        "В model.StatusChangedEvent добавлено поле OrgID string `json:\"organization_id,omitempty\"`",
+        "В model.ProcessingCompletedEvent добавлено поле OrgID string `json:\"organization_id,omitempty\"`",
+        "В model.ProcessingFailedEvent добавлено поле OrgID string `json:\"organization_id,omitempty\"`",
+        "В model.ComparisonCompletedEvent добавлено поле OrgID string `json:\"organization_id,omitempty\"`",
+        "В model.ComparisonFailedEvent добавлено поле OrgID string `json:\"organization_id,omitempty\"`",
+        "В processing orchestrator: OrgID пробрасывается из cmd.OrgID в DocumentProcessingArtifactsReady",
+        "В comparison orchestrator: OrgID пробрасывается из cmd.OrgID в GetSemanticTreeRequest и DocumentVersionDiffReady",
+        "В lifecycle manager / event publisher: OrgID пробрасывается из Job.OrgID во все статусные и completion/failed события",
+        "JSON backward-compatible: поля с omitempty, старые потребители без organization_id не ломаются",
+        "Добавлены unit-тесты: (1) round-trip JSON для каждого из 8 событий с OrgID, (2) backward compat без OrgID, (3) orchestrators: OrgID пробрасывается из command в events",
+        "Все тесты проходят (936+ PASS)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... -race -count=1",
+        "Шаг 2: go test ./internal/application/... -race -count=1",
+        "Шаг 3: go test ./internal/egress/... -race -count=1",
+        "Шаг 4: go test ./... -race -count=1 (все тесты PASS)",
+        "Шаг 5: go vet ./...",
+        "Шаг 6: make build"
+      ],
+      "dependencies": ["TASK-054"],
+      "status": "pending"
     }
   ]
 }

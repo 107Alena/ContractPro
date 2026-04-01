@@ -731,3 +731,50 @@
 - DM-TASK-021 (Diff Storage Service) — all deps done
 
 ---
+
+## DM-TASK-017: Artifact Ingestion Service (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/application/ingestion/ingestion.go` — ArtifactIngestionService:
+  - `HandleDPArtifacts` — 5 артефактов (OCR_RAW, EXTRACTED_TEXT, DOCUMENT_STRUCTURE, SEMANTIC_TREE, PROCESSING_WARNINGS), status PENDING → PROCESSING_ARTIFACTS_RECEIVED
+  - `HandleLICArtifacts` — 8 артефактов (CLASSIFICATION_RESULT, KEY_PARAMETERS, RISK_ANALYSIS, RISK_PROFILE, RECOMMENDATIONS, SUMMARY, DETAILED_REPORT, AGGREGATE_SCORE), status → ANALYSIS_ARTIFACTS_RECEIVED
+  - `HandleREArtifacts` — claim-check pattern (EXPORT_PDF, EXPORT_DOCX via BlobReference), status → FULLY_READY
+  - `processIngestion` — shared flow: saveBlobs → WithTransaction(FindByID + TransitionArtifactStatus + Insert descriptors + Update version + Insert 2 audit records + WriteMultiple outbox)
+  - `saveBlobs` — PutObject для DP/LIC, HeadObject verify для RE
+  - `compensate` — best-effort DeleteObject с 30s timeout, context.Background()
+  - `extractDPArtifacts/extractLICArtifacts/extractREArtifacts` — event → artifactItem helpers
+  - `validateRequired` — orgID + jobID + documentID + versionID validation
+  - `sha256Hex` — SHA-256 content hash
+  - `generateUUID` — UUID v4 via crypto/rand
+- Compile-time check: `var _ port.ArtifactIngestionHandler = (*ArtifactIngestionService)(nil)`
+- Outbox: WriteMultiple(versionID, [confirmation, notification]) — aggregate_id = versionID для FIFO (REV-010)
+- Audit: 2 records per ingestion — ARTIFACT_SAVED + ARTIFACT_STATUS_CHANGED с Details JSON
+
+**Ревью:** code-reviewer + golang-pro → 2 blocking + 14 warnings исправлено:
+- B1: Missing compensation after DB tx failure → added s.compensate(blobs) в error path
+- B2: orgID validation missing → добавлен в validateRequired
+- W1: json.Marshal audit error ignored → added error check + warn log
+- W2: compensate unbounded context → added 30s timeout
+- W3: State transition error not wrapped → wraps original as Cause
+- W4: Missing tests → added outbox/audit/version update failure tests
+
+**Проверки:**
+- `go test ./internal/application/ingestion/... -race -count=1` — 30 PASS
+- `go test -count=1 ./...` — OK (all packages)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Следующие задачи (ready, critical):**
+- DM-TASK-014 (Event Consumer) — blocks DM-TASK-025 (wiring)
+- DM-TASK-018 (Artifact Query) — blocks DM-TASK-022 (API)
+- DM-TASK-019 (Document Lifecycle) — blocks DM-TASK-022
+- DM-TASK-020 (Version Management) — blocks DM-TASK-022
+- DM-TASK-021 (Diff Storage) — blocks DM-TASK-022
+- DM-TASK-036 (REV-001/REV-002 fallback) — now unblocked by DM-TASK-017
+- DM-TASK-037 (BRE-001 FOR UPDATE) — now unblocked by DM-TASK-017
+
+---

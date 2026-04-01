@@ -393,7 +393,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-004", "DM-TASK-008", "DM-TASK-012", "DM-TASK-016"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Создан internal/application/ingestion/ с ArtifactIngestionService, реализующим port.ArtifactIngestionHandler (3 метода). ФАЙЛЫ: ingestion.go (ArtifactIngestionService struct, NewArtifactIngestionService с panic на nil deps, HandleDPArtifacts — 5 артефактов → PROCESSING_ARTIFACTS_RECEIVED, HandleLICArtifacts — 8 артефактов → ANALYSIS_ARTIFACTS_RECEIVED, HandleREArtifacts — claim-check pattern → FULLY_READY; processIngestion — shared flow: saveBlobs → WithTransaction(FindByID + TransitionArtifactStatus + Insert descriptors + Update version + Insert 2 audit records + WriteMultiple outbox); saveBlobs — PutObject для DP/LIC + HeadObject verify для RE; compensate — best-effort DeleteObject с 30s timeout + context.Background; extractDPArtifacts/extractLICArtifacts/extractREArtifacts helpers; validateRequired с orgID/jobID/docID/versionID; sha256Hex для content_hash; generateUUID v4 crypto/rand). COMPILE-TIME: var _ port.ArtifactIngestionHandler = (*ArtifactIngestionService)(nil). OUTBOX: WriteMultiple(versionID, [confirmation, notification]) — aggregate_id = versionID для FIFO (REV-010). AUDIT: 2 records per ingestion — ARTIFACT_SAVED (с details: producer, types, count) + ARTIFACT_STATUS_CHANGED (с details: from/to). COMPENSATION: при ошибке saveBlobs И при ошибке DB transaction — удаление uploaded blobs. РЕВЬЮ: code-reviewer + golang-pro → 2 blocking + 14 warnings исправлено (compensation after tx failure, orgID validation, json.Marshal error handling, compensate 30s timeout, state transition error wrapping, 3 missing test paths). 30 unit-тестов (7 constructor + 12 DP paths + 3 LIC + 7 RE + 1 outbox aggregate_id + 1 audit details + 4 extract helpers + 1 sha256). Все тесты PASS с -race."
     },
     {
       "id": "DM-TASK-018",

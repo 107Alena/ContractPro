@@ -396,10 +396,75 @@
 - Добавлено: reconnect re-subscribe failures documentation comment
 
 **Следующие задачи:**
-- DM-TASK-008 (Object Storage) — зависит от DM-TASK-005 ✅
+- DM-TASK-008 (Object Storage) — зависит от DM-TASK-005 ✅ ← NEXT
 - DM-TASK-009 (Redis клиент) — зависит от DM-TASK-005 ✅
 - DM-TASK-013 (Idempotency Guard) — зависит от DM-TASK-004 ✅ + DM-TASK-009
 - DM-TASK-015 (Confirmation Publisher) — зависит от DM-TASK-003 ✅ + DM-TASK-007 ✅
 - DM-TASK-019 (Document Lifecycle) — зависит от DM-TASK-004 ✅ + DM-TASK-012 ✅
+
+---
+
+## DM-TASK-008: Object Storage адаптер (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Удалён placeholder `objectstorage.go` (только `package objectstorage`)
+- Создано 3 файла реализации + 2 тест-файла в `internal/infra/objectstorage/`:
+  - `client.go` — `Client` struct, `S3API`/`PresignAPI` interfaces, `NewClient` (EndpointResolverFunc, path-style, static credentials, RetryMaxAttempts=3), `newClientWithS3` (test constructor), 6 port method implementations
+  - `errors.go` — `nonRetryableCodes` map (5 codes), `mapError` (S3→DomainError, context passthrough)
+  - `keys.go` — `ArtifactKey`, `DiffKey`, `VersionPrefix`, `DocumentPrefix`, `ContentTypeForArtifact` (JSON/PDF/DOCX)
+  - `client_test.go` — 33 unit-теста (mockS3, mockPresigner, apiError helper)
+  - `keys_test.go` — 8 unit-тестов
+- Добавлены зависимости: `aws-sdk-go-v2 v1.16.16`, `aws-sdk-go-v2/credentials v1.12.20`, `aws-sdk-go-v2/service/s3 v1.27.11`, `smithy-go v1.13.3`
+
+**Ключевые паттерны:**
+- Dependency inversion: `S3API` и `PresignAPI` interfaces (ISP — разные типы SDK)
+- EndpointResolverFunc для custom endpoint (Yandex Object Storage, HostnameImmutable=true)
+- UsePathStyle=true (required для S3-compatible)
+- RetryMaxAttempts=3 (встроенный exponential backoff SDK)
+- Context errors pass through raw (не обёрнуты в DomainError)
+- HeadObject: `isNotFoundError()` проверяет `types.NotFound` + `smithy.APIError` codes (NotFound, NoSuchKey)
+- DeleteByPrefix: pagination с `MaxKeys=1000`, empty prefix guard, partial delete error count
+- GeneratePresignedURL: negative expiry guard, zero→defaultTTL fallback
+- Content-type: `ContentTypeForArtifact()` — PDF для EXPORT_PDF, DOCX для EXPORT_DOCX, JSON для всех остальных
+- Key naming: `{org}/{doc}/{ver}/{type}` для артефактов, `{org}/{doc}/diffs/{base}_{target}` для diff
+- Compile-time check: `var _ port.ObjectStoragePort = (*Client)(nil)`
+- Consistent error mapping: `nonRetryableCodes` map (NoSuchKey, NoSuchBucket, AccessDenied, InvalidBucketName, NotFound)
+
+**Проверки:**
+- `go test ./internal/infra/objectstorage/... -race -count=1` — 41 PASS
+- `go test -count=1 -race ./...` — 242 PASS (config 20 + model 76 + broker 32 + objectstorage 41 + postgres 73)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Тесты (41):**
+- PutObject: success, S3 error, context cancelled, access denied (4)
+- GetObject: success, NoSuchKey, nil body, context cancelled (4)
+- DeleteObject: success, idempotent, S3 error (3)
+- HeadObject: exists, NotFound (types), NoSuchKey (API error), S3 error, context cancelled (5)
+- GeneratePresignedURL: success, zero expiry → default, custom expiry, negative expiry, context cancelled, error (6)
+- DeleteByPrefix: zero objects, single page, multiple pages, empty prefix, list error, delete error, partial delete, context cancelled between pages (8)
+- Error mapping: nil, context canceled, deadline exceeded, retryable API, access denied, no such bucket, unknown (7)
+- isNotFoundError: types.NotFound, API NotFound, API NoSuchKey, other error (4)
+- Interface compliance (1)
+- Keys: artifact key, diff key, version prefix, document prefix (4)
+- ContentType: JSON (13 types), PDF, DOCX, all types (4)
+
+**Ревью (code-reviewer + golang-pro):**
+- Исправлено: negative expiry guard в GeneratePresignedURL
+- Исправлено: error count в DeleteByPrefix partial failure message (N of M)
+- Исправлено: explicit MaxKeys=1000 в ListObjectsV2
+- Добавлены: TestGeneratePresignedURL_NegativeExpiry, TestGeneratePresignedURL_ContextCancelled
+- Не исправлено (deferred): key segment validation (application layer responsibility), empty key validation (same), structured logging (DM-TASK-010)
+
+**Следующие задачи:**
+- DM-TASK-009 (Redis клиент) — зависит от DM-TASK-005 ✅
+- DM-TASK-015 (Confirmation Publisher) — зависит от DM-TASK-003 ✅ + DM-TASK-007 ✅
+- DM-TASK-019 (Document Lifecycle) — зависит от DM-TASK-004 ✅ + DM-TASK-012 ✅
+- DM-TASK-011 (Health Check) — зависит от DM-TASK-006 ✅ + DM-TASK-007 ✅ + DM-TASK-008 ✅ + DM-TASK-009
+- DM-TASK-044 (Circuit Breaker для Object Storage) — зависит от DM-TASK-008 ✅
 
 ---

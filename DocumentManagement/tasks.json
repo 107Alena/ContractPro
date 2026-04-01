@@ -195,7 +195,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-005"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Создан internal/infra/objectstorage/ с S3-compatible клиентом на AWS SDK v2. ФАЙЛЫ: client.go (S3API/PresignAPI interfaces, Client struct, NewClient с EndpointResolver + path-style + RetryMaxAttempts=3, PutObject, GetObject, DeleteObject, HeadObject с isNotFoundError, GeneratePresignedURL с negative expiry guard + default TTL fallback, DeleteByPrefix с pagination + MaxKeys=1000 + empty prefix guard + partial delete error count), errors.go (nonRetryableCodes map: NoSuchKey/NoSuchBucket/AccessDenied/InvalidBucketName/NotFound, mapError с context passthrough), keys.go (ArtifactKey, DiffKey, VersionPrefix, DocumentPrefix, ContentTypeForArtifact: JSON/PDF/DOCX). COMPILE-TIME: var _ port.ObjectStoragePort = (*Client)(nil). Зависимости: aws-sdk-go-v2 v1.16.16, aws-sdk-go-v2/service/s3 v1.27.11, smithy-go v1.13.3. 41 unit-тест с mock (4 PutObject + 4 GetObject + 3 DeleteObject + 5 HeadObject + 5 GeneratePresignedURL + 8 DeleteByPrefix + 7 error mapping + 4 isNotFoundError + 1 interface compliance + 8 keys/content-type). Ревью: code-reviewer + golang-pro → исправлено: negative expiry guard, error count в partial delete, explicit MaxKeys=1000, добавлены тесты NegativeExpiry и ContextCancelled."
     },
     {
       "id": "DM-TASK-009",

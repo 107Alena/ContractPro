@@ -19,6 +19,7 @@ import (
 
 type mockRedis struct {
 	setFn   func(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	setNXFn func(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd
 	getFn   func(ctx context.Context, key string) *redis.StringCmd
 	delFn   func(ctx context.Context, keys ...string) *redis.IntCmd
 	pingFn  func(ctx context.Context) *redis.StatusCmd
@@ -30,6 +31,13 @@ func (m *mockRedis) Set(ctx context.Context, key string, value interface{}, expi
 		return m.setFn(ctx, key, value, expiration)
 	}
 	return redis.NewStatusResult("OK", nil)
+}
+
+func (m *mockRedis) SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd {
+	if m.setNXFn != nil {
+		return m.setNXFn(ctx, key, value, expiration)
+	}
+	return redis.NewBoolResult(true, nil)
 }
 
 func (m *mockRedis) Get(ctx context.Context, key string) *redis.StringCmd {
@@ -81,6 +89,21 @@ func newInMemoryRedis() *mockRedis {
 			}
 			mu.Unlock()
 			return redis.NewStatusResult("OK", nil)
+		},
+		setNXFn: func(_ context.Context, key string, value interface{}, _ time.Duration) *redis.BoolCmd {
+			mu.Lock()
+			if _, exists := store[key]; exists {
+				mu.Unlock()
+				return redis.NewBoolResult(false, nil)
+			}
+			switch v := value.(type) {
+			case []byte:
+				store[key] = string(v)
+			default:
+				store[key] = fmt.Sprint(v)
+			}
+			mu.Unlock()
+			return redis.NewBoolResult(true, nil)
 		},
 		getFn: func(_ context.Context, key string) *redis.StringCmd {
 			mu.Lock()

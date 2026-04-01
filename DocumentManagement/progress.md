@@ -655,3 +655,79 @@
 - DM-TASK-042 (Outbox Poller ordering) — зависит от DM-TASK-016 ✅
 
 ---
+
+## DM-TASK-013: Idempotency Guard (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Удалён placeholder `idempotency.go`
+- Создано 3 файла в `internal/ingress/idempotency/`:
+  - `idempotency.go` — `IdempotencyGuard` struct, `Check()` с atomic SETNX, `MarkCompleted()`, `Cleanup()`
+    - `CheckResult` enum: `ResultProcess` / `ResultSkip` / `ResultReprocess`
+    - `FallbackChecker` function type для DB fallback при недоступности Redis
+    - `MetricsCollector` interface: `IncFallbackTotal(topic)`, `IncCheckTotal(result)` — consumer-side
+    - `Logger` interface: `Warn(msg, ...any)`, `Info(msg, ...any)` — consumer-side
+    - `NewIdempotencyGuard` с panic на nil deps (store, metrics, logger)
+    - Check logic: `ctx.Err()` → SETNX → acquired=true → ResultProcess; acquired=false → Get → evaluate
+    - COMPLETED → ResultSkip, PROCESSING fresh → ResultSkip, PROCESSING stuck (≥240s) → Set overwrite → ResultReprocess
+    - Redis error → FallbackChecker → ResultProcess/ResultSkip (safe default: process)
+  - `keys.go` — 7 key generators для всех входящих event types
+    - Формат: `dm:idem:{topic-short}:{job_id}[:{version_id}]`
+    - Ingestion events (dp-art, dp-diff, lic-art, re-art): keyed by job_id
+    - Query events (dp-tree, lic-req, re-req): keyed by job_id + version_id
+    - `mustNotEmpty` validation — panic на пустые IDs
+    - `topicShortNames` map для 7 incoming topics
+  - `fallback.go` — DB fallback builders
+    - `ArtifactFallback` — проверяет artifact_descriptors по producer domain + job_id. Panic на unknown producer
+    - `DiffFallback` — проверяет diff по version pair (existence check, unique constraint гарантирует один diff)
+- Изменено `port/outbound.go` — добавлен `SetNX(ctx, record, ttl) (bool, error)` в `IdempotencyStorePort`
+- Изменено `infra/kvstore/client.go` — добавлен `Client.SetNX()` с Redis SETNX, `SetNX` в `RedisAPI` interface
+- Изменено `infra/kvstore/client_test.go` — `setNXFn` в mock, atomic `SetNX` в in-memory store
+- Создано 3 файла тестов (53 теста):
+  - `idempotency_test.go` — 28 тестов: constructor panics, all Check decision branches, SETNX atomicity, concurrent claim, Redis down + all fallback variants, stuck overwrite, context cancellation, MarkCompleted/Cleanup success+error, CheckResult.String, full lifecycle (process→skip, fail→cleanup→reprocess)
+  - `keys_test.go` — 17 тестов: all 7 key generators, uniqueness cross-topic, uniqueness cross-version, all TopicShortName, coverage check, 8 panic-on-empty tests
+  - `fallback_test.go` — 8 тестов: artifact fallback (matching/different/no artifacts/repo error, LIC/RE producers, unknown producer panic), diff fallback (exists/not-found/repo error)
+
+**Проверки:**
+- `go test ./internal/ingress/idempotency/... -race -count=1` — 53 PASS
+- `go test -count=1 ./...` — OK (все пакеты)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Ревью (code-reviewer + golang-pro):**
+- 2 BLOCKING исправлено:
+  - B1: GET+SET race → atomic SETNX (добавлен SetNX в port + kvstore + guard)
+  - B2: Context cancellation не проверялась → early ctx.Err() check, returns error
+- 5 WARNING исправлено:
+  - W1: Stuck cleanup delete+set → single Set overwrite (no gap window)
+  - W2: Key functions без валидации → mustNotEmpty panic on empty IDs
+  - W3: Logger `interface{}` → `any` (Go 1.26.1 modern style)
+  - W4: Custom contains в тестах → `strings.Contains`
+  - W5: ArtifactFallback silently returns false for unknown producer → panic
+
+**Ключевые решения:**
+- Atomic SETNX вместо GET+SET: eliminates race window при concurrent consumers
+- FallbackChecker as function type (не repository injection): decoupled, testable, nil = "always process"
+- Consumer-side interfaces (MetricsCollector, Logger): hexagonal pattern, no Prometheus/slog coupling
+- Key format dm:idem:{topic-short}:{ids}: topic prefix prevents cross-topic collisions
+- Ingestion events keyed by job_id alone (job produces exactly one artifact set)
+- Query events keyed by job_id+version_id (comparison pipeline requests two trees)
+- Safe defaults: Redis failure → process (handlers are idempotent), DB fallback failure → process
+- Stuck threshold 240s = 2× ProcessingTTL (120s): gives ample time for legitimate processing
+
+**Следующие задачи (unblocked by DM-TASK-013):**
+- DM-TASK-014 (Event Consumer) — зависит от DM-TASK-003 ✅ + DM-TASK-007 ✅ + DM-TASK-013 ✅
+- DM-TASK-038 (Idempotency Guard enhancements) — зависит от DM-TASK-013 ✅
+
+**Ready critical tasks:**
+- DM-TASK-014 (Event Consumer) — all deps done
+- DM-TASK-017 (Artifact Ingestion Service) — all deps done
+- DM-TASK-018 (Artifact Query Service) — all deps done
+- DM-TASK-019 (Document Lifecycle Service) — all deps done
+- DM-TASK-020 (Version Management Service) — all deps done
+- DM-TASK-021 (Diff Storage Service) — all deps done
+
+---

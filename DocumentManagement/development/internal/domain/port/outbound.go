@@ -281,6 +281,11 @@ type IdempotencyStorePort interface {
 	// Set creates or updates an idempotency record with a TTL.
 	Set(ctx context.Context, record *model.IdempotencyRecord, ttl time.Duration) error
 
+	// SetNX atomically sets the idempotency record only if the key does not exist.
+	// Returns true if the key was set (caller claimed it), false if the key already exists.
+	// Used by the idempotency guard to atomically claim a PROCESSING lock.
+	SetNX(ctx context.Context, record *model.IdempotencyRecord, ttl time.Duration) (bool, error)
+
 	// Delete removes an idempotency record (used for cleanup on failure).
 	Delete(ctx context.Context, key string) error
 }

@@ -19,6 +19,7 @@ import (
 // and enable unit testing with a mock.
 type RedisAPI interface {
 	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd
 	Get(ctx context.Context, key string) *redis.StringCmd
 	Del(ctx context.Context, keys ...string) *redis.IntCmd
 	Ping(ctx context.Context) *redis.StatusCmd
@@ -117,6 +118,30 @@ func (c *Client) Set(ctx context.Context, record *model.IdempotencyRecord, ttl t
 	}
 
 	return nil
+}
+
+// SetNX atomically sets an idempotency record only if the key does not exist.
+// Returns true if the key was set (caller claimed it), false if it already exists.
+// Backed by Redis SETNX (SET key value NX EX ttl).
+func (c *Client) SetNX(ctx context.Context, record *model.IdempotencyRecord, ttl time.Duration) (bool, error) {
+	if c.isClosed() {
+		return false, errClientClosed("SetNX")
+	}
+	if record == nil {
+		return false, port.NewValidationError("kvstore: SetNX: record must not be nil")
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		return false, port.NewStorageError("kvstore: SetNX: marshal", err)
+	}
+
+	acquired, err := c.rdb.SetNX(ctx, record.Key, data, ttl).Result()
+	if err != nil {
+		return false, mapError(err, "SetNX")
+	}
+
+	return acquired, nil
 }
 
 // Delete removes an idempotency record by key.

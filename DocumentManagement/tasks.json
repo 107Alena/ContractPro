@@ -300,7 +300,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-004", "DM-TASK-009"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Создан internal/ingress/idempotency/ с IdempotencyGuard, ключами и DB fallback. ФАЙЛЫ: idempotency.go (IdempotencyGuard struct, CheckResult enum (ResultProcess/ResultSkip/ResultReprocess), FallbackChecker type, MetricsCollector interface (IncFallbackTotal/IncCheckTotal), Logger interface (Warn/Info с ...any), NewIdempotencyGuard с panic на nil deps, Check с atomic SETNX claim + ctx.Err() early check, MarkCompleted с TTL 24h, Cleanup с Delete), keys.go (7 key generators: KeyForDPArtifacts, KeyForSemanticTreeRequest, KeyForDiffReady, KeyForLICArtifacts, KeyForLICRequest, KeyForREArtifacts, KeyForRERequest; mustNotEmpty validation; topicShortNames map для 7 incoming topics; формат dm:idem:{topic-short}:{job_id}[:{version_id}]), fallback.go (ArtifactFallback — проверка artifact_descriptors по producer + job_id, panic на unknown producer; DiffFallback — проверка diff по version pair). PORT CHANGES: добавлен SetNX(ctx, record, ttl) (bool, error) в IdempotencyStorePort для atomic SETNX. KVSTORE: добавлен Client.SetNX() с Redis SETNX, mock в тестах обновлён (RedisAPI interface, mockRedis, newInMemoryRedis). CHECK LOGIC: SETNX → acquired=true → ResultProcess; acquired=false → Get → COMPLETED → ResultSkip; PROCESSING fresh → ResultSkip; PROCESSING stuck (≥240s) → Set overwrite → ResultReprocess; Redis error → DB fallback (via FallbackChecker) → ResultProcess/ResultSkip. Ревью: code-reviewer + golang-pro → 2 blocking + 5 warnings исправлено (atomic SETNX вместо GET+SET, ctx.Err() check, single Set overwrite, key validation, Logger any, strings.Contains, unknown producer panic). 53 unit-теста (28 idempotency + 8 fallback + 17 keys). Все тесты PASS с -race."
     },
     {
       "id": "DM-TASK-014",

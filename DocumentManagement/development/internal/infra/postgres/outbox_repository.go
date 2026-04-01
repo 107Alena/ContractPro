@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"contractpro/document-management/internal/domain/port"
 )
 
@@ -127,18 +129,64 @@ func (r *OutboxRepository) MarkPublished(ctx context.Context, ids []string) erro
 	return nil
 }
 
-// DeletePublished removes entries marked as published that are older than
-// the given threshold.
-func (r *OutboxRepository) DeletePublished(ctx context.Context, olderThan time.Time) (int64, error) {
+// DeletePublished removes up to limit entries marked as published that are
+// older than the given threshold. A limit of 0 means delete all matching
+// entries (no limit). Batched deletion avoids long-running transactions and
+// excessive lock contention (BRE-018).
+func (r *OutboxRepository) DeletePublished(ctx context.Context, olderThan time.Time, limit int) (int64, error) {
 	conn := ConnFromCtx(ctx)
 
-	tag, err := conn.Exec(ctx,
-		`DELETE FROM outbox_events
-		WHERE status = 'CONFIRMED' AND published_at < $1`,
-		olderThan,
+	var (
+		tag pgconn.CommandTag
+		err error
 	)
+
+	if limit > 0 {
+		tag, err = conn.Exec(ctx,
+			`DELETE FROM outbox_events
+			WHERE event_id IN (
+				SELECT event_id FROM outbox_events
+				WHERE status = 'CONFIRMED' AND published_at < $1
+				ORDER BY published_at
+				LIMIT $2
+			)`,
+			olderThan, limit,
+		)
+	} else {
+		tag, err = conn.Exec(ctx,
+			`DELETE FROM outbox_events
+			WHERE status = 'CONFIRMED' AND published_at < $1`,
+			olderThan,
+		)
+	}
+
 	if err != nil {
 		return 0, port.NewDatabaseError("delete published outbox entries", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// PendingStats returns the count of PENDING entries and the age in seconds
+// of the oldest PENDING entry. Returns (0, 0, nil) if there are no pending
+// entries. Uses the idx_outbox_pending partial index for efficiency (REV-022).
+func (r *OutboxRepository) PendingStats(ctx context.Context) (int64, float64, error) {
+	conn := ConnFromCtx(ctx)
+
+	var (
+		count    int64
+		ageSecs  float64
+	)
+
+	err := conn.QueryRow(ctx,
+		`SELECT
+			COUNT(*),
+			COALESCE(EXTRACT(EPOCH FROM (now() - MIN(created_at))), 0)
+		FROM outbox_events
+		WHERE status = 'PENDING'`,
+	).Scan(&count, &ageSecs)
+
+	if err != nil {
+		return 0, 0, port.NewDatabaseError("query outbox pending stats", err)
+	}
+	return count, ageSecs, nil
 }

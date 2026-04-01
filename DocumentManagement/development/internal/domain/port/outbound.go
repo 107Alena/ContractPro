@@ -160,9 +160,15 @@ type OutboxRepository interface {
 	// MarkPublished marks the specified outbox entries as published (CONFIRMED).
 	MarkPublished(ctx context.Context, ids []string) error
 
-	// DeletePublished removes entries marked as published that are older than
-	// the given threshold. Returns the number of deleted entries.
-	DeletePublished(ctx context.Context, olderThan time.Time) (int64, error)
+	// DeletePublished removes up to limit entries marked as published that are
+	// older than the given threshold. Returns the number of deleted entries.
+	// A limit of 0 means delete all matching entries (no limit).
+	DeletePublished(ctx context.Context, olderThan time.Time, limit int) (int64, error)
+
+	// PendingStats returns the count of PENDING entries and the age in seconds
+	// of the oldest PENDING entry. Used by the outbox metrics collector (REV-022).
+	// Returns (0, 0, nil) if there are no pending entries.
+	PendingStats(ctx context.Context) (count int64, oldestAgeSeconds float64, err error)
 }
 
 // OutboxEntry represents a single event in the transactional outbox table.

@@ -366,7 +366,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-006", "DM-TASK-007", "DM-TASK-015"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Создан internal/egress/outbox/ с OutboxWriter, OutboxPoller и OutboxMetricsCollector. ФАЙЛЫ: writer.go (OutboxWriter: Write + WriteMultiple + TopicEvent, newUUID с crypto/rand + panic on failure, topic validation, StatusPending constant), poller.go (OutboxPoller: Start/Stop/Done с split stop+done channels для safe graceful shutdown, poll() — WithTransaction → FetchUnpublished → Publish → MarkPublished с pre-allocated publishedIDs и skip-on-failure, cleanup() — batched DELETE LIMIT 1000 loop, at-least-once delivery documented; BrokerPublisher + OutboxMetrics consumer-side interfaces, StatusPending/StatusConfirmed constants), metrics.go (OutboxMetricsCollector: Start/Stop/Done с split channels, periodic PendingStats query → SetPendingCount + SetOldestPendingAge, default interval 5s). ПОРТЫ: расширен OutboxRepository: PendingStats(ctx) (count int64, oldestAgeSeconds float64, err error) + DeletePublished(ctx, olderThan, limit int) с batched DELETE via subquery LIMIT. POSTGRESQL: обновлён outbox_repository.go — PendingStats с COUNT(*)+MIN(created_at)+EXTRACT(EPOCH), DeletePublished с conditional LIMIT subquery. COMPILE-TIME: var _ port.OutboxRepository = (*OutboxRepository)(nil). РЕВЬЮ: code-reviewer + golang-pro → 2 blocking исправлено (Stop/Done channel race → split stop+done, UUID panic on rand failure), 6 warnings (topic validation, context propagation, at-least-once docs, pre-allocate, status constants). 30 outbox unit-тестов + 5 обновлённых postgres-тестов. Все тесты PASS с -race."
     },
     {
       "id": "DM-TASK-017",

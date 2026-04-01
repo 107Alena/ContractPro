@@ -179,20 +179,39 @@ func TestOutboxRepository_MarkPublished_Success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestOutboxRepository_DeletePublished_Success(t *testing.T) {
+func TestOutboxRepository_DeletePublished_NoLimit(t *testing.T) {
 	mock := &mockTx{
-		execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 			assert.Contains(t, sql, "DELETE FROM outbox_events")
 			assert.Contains(t, sql, "status = 'CONFIRMED'")
 			assert.Contains(t, sql, "published_at < $1")
+			assert.NotContains(t, sql, "LIMIT")
+			assert.Len(t, args, 1, "no limit param when limit=0")
 			return pgconn.NewCommandTag("DELETE 42"), nil
 		},
 	}
 	ctx := ctxWithMockTx(mock)
 
-	count, err := NewOutboxRepository().DeletePublished(ctx, time.Now().Add(-48*time.Hour))
+	count, err := NewOutboxRepository().DeletePublished(ctx, time.Now().Add(-48*time.Hour), 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(42), count)
+}
+
+func TestOutboxRepository_DeletePublished_WithLimit(t *testing.T) {
+	mock := &mockTx{
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			assert.Contains(t, sql, "DELETE FROM outbox_events")
+			assert.Contains(t, sql, "LIMIT $2")
+			assert.Len(t, args, 2)
+			assert.Equal(t, 1000, args[1])
+			return pgconn.NewCommandTag("DELETE 500"), nil
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	count, err := NewOutboxRepository().DeletePublished(ctx, time.Now().Add(-48*time.Hour), 1000)
+	require.NoError(t, err)
+	assert.Equal(t, int64(500), count)
 }
 
 func TestOutboxRepository_DeletePublished_DatabaseError(t *testing.T) {
@@ -203,7 +222,63 @@ func TestOutboxRepository_DeletePublished_DatabaseError(t *testing.T) {
 	}
 	ctx := ctxWithMockTx(mock)
 
-	_, err := NewOutboxRepository().DeletePublished(ctx, time.Now())
+	_, err := NewOutboxRepository().DeletePublished(ctx, time.Now(), 0)
+	require.Error(t, err)
+	assert.Equal(t, port.ErrCodeDatabaseFailed, port.ErrorCode(err))
+}
+
+func TestOutboxRepository_PendingStats_WithResults(t *testing.T) {
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			assert.Contains(t, sql, "COUNT(*)")
+			assert.Contains(t, sql, "EXTRACT(EPOCH FROM")
+			assert.Contains(t, sql, "status = 'PENDING'")
+			return &mockRow{
+				scanFn: func(dest ...any) error {
+					*dest[0].(*int64) = 15
+					*dest[1].(*float64) = 120.5
+					return nil
+				},
+			}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	count, age, err := NewOutboxRepository().PendingStats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(15), count)
+	assert.InDelta(t, 120.5, age, 0.001)
+}
+
+func TestOutboxRepository_PendingStats_Empty(t *testing.T) {
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return &mockRow{
+				scanFn: func(dest ...any) error {
+					*dest[0].(*int64) = 0
+					*dest[1].(*float64) = 0
+					return nil
+				},
+			}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	count, age, err := NewOutboxRepository().PendingStats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), count)
+	assert.Equal(t, float64(0), age)
+}
+
+func TestOutboxRepository_PendingStats_DatabaseError(t *testing.T) {
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return &mockRow{err: errors.New("connection lost")}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	_, _, err := NewOutboxRepository().PendingStats(ctx)
 	require.Error(t, err)
 	assert.Equal(t, port.ErrCodeDatabaseFailed, port.ErrorCode(err))
 }

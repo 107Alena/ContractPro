@@ -579,3 +579,79 @@
 - DM-TASK-018 (Artifact Query Service) — зависит от DM-TASK-004 ✅ + DM-TASK-008 ✅ + DM-TASK-012 ✅ + DM-TASK-015 ✅
 
 ---
+
+## DM-TASK-016: Transactional Outbox (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Удалён placeholder `outbox.go`
+- Создано 3 файла реализации + 3 файла тестов в `internal/egress/outbox/`:
+  - `writer.go` — `OutboxWriter` struct:
+    - `Write(ctx, aggregateID, topic, event)` — JSON-сериализация + INSERT одного PENDING entry в текущей транзакции
+    - `WriteMultiple(ctx, aggregateID, items []TopicEvent)` — batch INSERT нескольких entry с shared CreatedAt
+    - `TopicEvent` type — пара (Topic, Event) для batch writes
+    - `newUUID()` — UUID v4 через crypto/rand с panic при ошибке CSPRNG
+    - Topic validation: пустой topic → VALIDATION_ERROR
+    - `StatusPending`/`StatusConfirmed` константы
+  - `poller.go` — `OutboxPoller` struct:
+    - `Start()` / `Stop()` / `Done()` — goroutine lifecycle с split stop+done channels (safe graceful shutdown)
+    - `poll()` — WithTransaction → FetchUnpublished(FOR UPDATE SKIP LOCKED) → Publish → MarkPublished
+    - Pre-allocated publishedIDs, skip-on-failure (partial publish → mark only successful)
+    - At-least-once delivery guarantee documented
+    - `cleanup()` — batched DELETE LIMIT 1000 loop (BRE-018), auto-committed (outside tx)
+    - `BrokerPublisher` interface (consumer-side, satisfied by broker.Client)
+    - `OutboxMetrics` interface (SetPendingCount, SetOldestPendingAge, IncPublished, IncPublishFailed, IncCleanedUp)
+  - `metrics.go` — `OutboxMetricsCollector` struct:
+    - `Start()` / `Stop()` / `Done()` — goroutine lifecycle с split stop+done channels
+    - Periodic `PendingStats` query → SetPendingCount + SetOldestPendingAge (REV-022)
+    - Default interval 5s, immediate collect on Start
+- Расширен `port/outbound.go`:
+  - `OutboxRepository.PendingStats(ctx) (count, oldestAgeSeconds, err)` — новый метод
+  - `OutboxRepository.DeletePublished(ctx, olderThan, limit)` — добавлен limit parameter (0 = unlimited)
+- Обновлён `infra/postgres/outbox_repository.go`:
+  - `PendingStats` — COUNT(*) + EXTRACT(EPOCH FROM (now() - MIN(created_at))) с partial index
+  - `DeletePublished` — conditional LIMIT via subquery + ORDER BY published_at
+  - Добавлен import `pgconn`
+
+**Тесты (35 total):**
+- `writer_test.go` (10 тестов): happy path, empty aggregateID, marshal error, repo error, WriteMultiple happy path, WriteMultiple empty, WriteMultiple marshal error, empty topic, WriteMultiple empty topic, UUID uniqueness
+- `poller_test.go` (15 тестов): 5 constructor panics, poll happy path, poll empty batch, poll partial publish failure, poll all publish fail, poll fetch error, poll mark error, cleanup single batch, cleanup multi batch, cleanup error, Start/Stop lifecycle
+- `metrics_test.go` (8 тестов): 3 constructor panics, 2 interval defaults, collect happy path, collect no pending, collect error, Start/Stop lifecycle
+- `outbox_repository_test.go` (+5 обновлённых/новых): DeletePublished no limit, DeletePublished with limit, DeletePublished error, PendingStats with results, PendingStats empty, PendingStats error
+
+**Проверки:**
+- `go test ./internal/egress/outbox/... -race -count=1` — 30 PASS, no race conditions
+- `go test ./internal/infra/postgres/... -race -count=1` — PASS (включая 5 новых outbox тестов)
+- `go test -count=1 ./...` — ALL PASS
+- `go vet ./...` — OK
+- `make build` — OK, `make test` — OK, `make lint` — OK
+
+**Ревью (code-reviewer + golang-pro):**
+- 2 BLOCKING исправлено:
+  - B1: Stop/Done channel dual semantics → split into stop (signal) + done (completion) channels
+  - B2: Silent UUID crypto/rand error → panic on failure (fatal system condition)
+- 6 WARNING исправлено:
+  - W3: mockTransactor propagates parent context (deadline/cancellation)
+  - W4: topic validation — empty topic returns VALIDATION_ERROR
+  - At-least-once delivery documented in OutboxPoller comment
+  - Pre-allocated publishedIDs slice
+  - Status constants (StatusPending, StatusConfirmed)
+  - Cleanup comment corrected (auto-committed, not "long-running tx")
+
+**Ключевые решения:**
+- OutboxWriter не владеет транзакцией — работает внутри tx caller'а (application service)
+- OutboxPoller владеет своей tx через transactor.WithTransaction
+- Split stop+done channels для safe graceful shutdown (Stop → signal, Done → wait for goroutine exit)
+- UUID v4 через crypto/rand (не google/uuid — нет внешней зависимости), panic при ошибке
+- Batched cleanup (DELETE LIMIT 1000) предотвращает long-running DELETE на больших таблицах
+- Cleanup вне транзакции (auto-commit) — идемпотентный DELETE
+- OutboxMetricsCollector отделён от Poller — независимый lifecycle, не зависит от poll cycle
+
+**Следующие задачи (unblocked by DM-TASK-016):**
+- DM-TASK-017 (Artifact Ingestion Service) — зависит от DM-TASK-004 ✅ + DM-TASK-008 ✅ + DM-TASK-012 ✅ + DM-TASK-016 ✅
+- DM-TASK-020 (Version Management Service) — зависит от DM-TASK-004 ✅ + DM-TASK-008 ✅ + DM-TASK-012 ✅ + DM-TASK-016 ✅
+- DM-TASK-021 (Diff Storage Service) — зависит от DM-TASK-004 ✅ + DM-TASK-008 ✅ + DM-TASK-012 ✅ + DM-TASK-016 ✅
+- DM-TASK-042 (Outbox Poller ordering) — зависит от DM-TASK-016 ✅
+
+---

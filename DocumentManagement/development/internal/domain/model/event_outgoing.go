@@ -153,3 +153,18 @@ type VersionCreated struct {
 	ParentVersionID string     `json:"parent_version_id,omitempty"`
 	CreatedByUserID string     `json:"created_by_user_id"`
 }
+
+// VersionPartiallyAvailable notifies the orchestrator that some artifacts
+// for a version are available but the full pipeline has not completed
+// (e.g., processing artifacts exist but analysis timed out). This allows
+// partial results to be surfaced to the user (BRE-010).
+type VersionPartiallyAvailable struct {
+	EventMeta
+	DocumentID     string         `json:"document_id"`
+	VersionID      string         `json:"version_id"`
+	OrgID          string         `json:"organization_id"`
+	ArtifactStatus ArtifactStatus `json:"artifact_status"`
+	AvailableTypes []ArtifactType `json:"available_types"`
+	FailedStage    string         `json:"failed_stage,omitempty"`
+	ErrorMessage   string         `json:"error_message,omitempty"`
+}

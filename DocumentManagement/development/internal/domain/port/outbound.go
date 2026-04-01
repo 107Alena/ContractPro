@@ -210,6 +210,43 @@ type ObjectStoragePort interface {
 }
 
 // ---------------------------------------------------------------------------
+// Confirmation publisher — publishes confirmation/response events back to
+// the originating domain (DP, LIC, RE) after DM processes their request.
+// ---------------------------------------------------------------------------
+
+// ConfirmationPublisherPort publishes confirmation/response events back to
+// the originating domain (DP, LIC, RE) after DM processes their request.
+// Implemented by: Confirmation Publisher (egress layer).
+type ConfirmationPublisherPort interface {
+	PublishDPArtifactsPersisted(ctx context.Context, event model.DocumentProcessingArtifactsPersisted) error
+	PublishDPArtifactsPersistFailed(ctx context.Context, event model.DocumentProcessingArtifactsPersistFailed) error
+	PublishSemanticTreeProvided(ctx context.Context, event model.SemanticTreeProvided) error
+	PublishArtifactsProvided(ctx context.Context, event model.ArtifactsProvided) error
+	PublishDiffPersisted(ctx context.Context, event model.DocumentVersionDiffPersisted) error
+	PublishDiffPersistFailed(ctx context.Context, event model.DocumentVersionDiffPersistFailed) error
+	PublishLICArtifactsPersisted(ctx context.Context, event model.LegalAnalysisArtifactsPersisted) error
+	PublishLICArtifactsPersistFailed(ctx context.Context, event model.LegalAnalysisArtifactsPersistFailed) error
+	PublishREReportsPersisted(ctx context.Context, event model.ReportsArtifactsPersisted) error
+	PublishREReportsPersistFailed(ctx context.Context, event model.ReportsArtifactsPersistFailed) error
+}
+
+// ---------------------------------------------------------------------------
+// Notification publisher — publishes notification events to downstream
+// domains and the orchestrator after DM completes internal state transitions.
+// ---------------------------------------------------------------------------
+
+// NotificationPublisherPort publishes notification events to downstream
+// domains and the orchestrator after DM completes internal state transitions.
+// Implemented by: Notification Publisher (egress layer).
+type NotificationPublisherPort interface {
+	PublishVersionProcessingArtifactsReady(ctx context.Context, event model.VersionProcessingArtifactsReady) error
+	PublishVersionAnalysisArtifactsReady(ctx context.Context, event model.VersionAnalysisArtifactsReady) error
+	PublishVersionReportsReady(ctx context.Context, event model.VersionReportsReady) error
+	PublishVersionCreated(ctx context.Context, event model.VersionCreated) error
+	PublishVersionPartiallyAvailable(ctx context.Context, event model.VersionPartiallyAvailable) error
+}
+
+// ---------------------------------------------------------------------------
 // Message broker — event publishing for inter-domain communication.
 // ---------------------------------------------------------------------------
 

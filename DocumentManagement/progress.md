@@ -528,3 +528,54 @@
 - DM-TASK-019 (Document Lifecycle) — зависит от DM-TASK-004 ✅ + DM-TASK-012 ✅ (already ready)
 
 ---
+
+## DM-TASK-015: Confirmation Publisher + Notification Publisher (2026-04-01)
+
+**Статус:** done
+
+**План реализации:**
+1. Добавить VersionPartiallyAvailable struct в event_outgoing.go (BRE-010)
+2. Добавить ConfirmationPublisherPort (10 методов) и NotificationPublisherPort (5 методов) в port/outbound.go
+3. Реализовать ConfirmationPublisher в egress/confirmation/ (10 publish методов)
+4. Реализовать NotificationPublisher в egress/notification/ (5 publish методов)
+5. Написать тесты для обоих publishers
+6. Code review через code-reviewer и golang-pro subagents
+
+**Что сделано:**
+- Добавлен `VersionPartiallyAvailable` struct в `event_outgoing.go`:
+  - Поля: DocumentID, VersionID, OrgID, ArtifactStatus, AvailableTypes, FailedStage (omitempty), ErrorMessage (omitempty)
+  - 2 теста: JSON round-trip + omitempty для optional полей
+- Добавлены 2 port interface в `port/outbound.go`:
+  - `ConfirmationPublisherPort` — 10 методов (Persisted/PersistFailed для DP/LIC/RE + SemanticTreeProvided + ArtifactsProvided + DiffPersisted/DiffPersistFailed)
+  - `NotificationPublisherPort` — 5 методов (VersionProcessingArtifactsReady, VersionAnalysisArtifactsReady, VersionReportsReady, VersionCreated, VersionPartiallyAvailable)
+- Реализован `ConfirmationPublisher` в `egress/confirmation/confirmation.go`:
+  - `confirmationTopicMap` — 10 топиков из BrokerConfig
+  - `NewConfirmationPublisher` — panic on nil broker / empty topics
+  - `publishJSON` — JSON marshal → broker.Publish, non-retryable DomainError на marshal failure
+  - 10 public методов, каждый делегирует в publishJSON с правильным топиком
+  - Compile-time check: `var _ port.ConfirmationPublisherPort = (*ConfirmationPublisher)(nil)`
+- Реализован `NotificationPublisher` в `egress/notification/notification.go`:
+  - `notificationTopicMap` — 5 топиков из BrokerConfig
+  - `NewNotificationPublisher` — аналогичная валидация
+  - 5 public методов
+  - Compile-time check: `var _ port.NotificationPublisherPort = (*NotificationPublisher)(nil)`
+- Паттерн: consumer-side `BrokerPublisher` interface per-package (идентичен DP publisher)
+
+**Тесты:**
+- confirmation: 39 тестов (10 correct topic + 3 JSON format + 10 round-trip + 3 error passthrough + 1 marshal error + 1 ctx forwarding + 3 omitempty + 1 interface compliance + 2 constructor panic + 3 correlation_id + 2 correlation_id subtests)
+- notification: 29 тестов (5 correct topic + 3 JSON format + 5 round-trip + 3 error passthrough + 1 marshal error + 1 ctx forwarding + 2 omitempty + 1 interface compliance + 2 constructor panic + 3 correlation_id + 3 correlation_id subtests)
+- `go test ./internal/egress/... -race -count=1` — ALL PASS
+- `go test -count=1 ./...` — ALL PASS
+- `go vet ./...` — OK
+- `make build` — OK, `make test` — OK, `make lint` — OK
+
+**Ревью:**
+- code-reviewer: APPROVED — no critical/blocking issues, high quality code
+- golang-pro: APPROVED — idiomatic Go, goroutine-safe (immutable after construction), no memory issues
+- Замечание (low, inherited from DP): publishJSON uses ErrCodeBrokerFailed for marshal errors instead of ErrCodeInvalidPayload. Kept for DP consistency.
+
+**Следующие задачи (unblocked by DM-TASK-015):**
+- DM-TASK-016 (Transactional Outbox) — зависит от DM-TASK-006 ✅ + DM-TASK-007 ✅ + DM-TASK-015 ✅
+- DM-TASK-018 (Artifact Query Service) — зависит от DM-TASK-004 ✅ + DM-TASK-008 ✅ + DM-TASK-012 ✅ + DM-TASK-015 ✅
+
+---

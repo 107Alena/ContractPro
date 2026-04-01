@@ -574,6 +574,86 @@ func TestVersionCreatedOptionalParentVersionID(t *testing.T) {
 	}
 }
 
+func TestVersionPartiallyAvailableJSONRoundTrip(t *testing.T) {
+	ts := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	event := VersionPartiallyAvailable{
+		EventMeta:      EventMeta{CorrelationID: "corr-15", Timestamp: ts},
+		DocumentID:     "doc-15",
+		VersionID:      "ver-15",
+		OrgID:          "org-15",
+		ArtifactStatus: ArtifactStatusProcessingArtifactsReceived,
+		AvailableTypes: []ArtifactType{
+			ArtifactTypeOCRRaw,
+			ArtifactTypeExtractedText,
+			ArtifactTypeSemanticTree,
+		},
+		FailedStage:  "legal_analysis",
+		ErrorMessage: "LIC analysis timed out",
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var restored VersionPartiallyAvailable
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if restored.CorrelationID != event.CorrelationID {
+		t.Errorf("correlation_id mismatch")
+	}
+	if restored.DocumentID != event.DocumentID {
+		t.Errorf("document_id mismatch")
+	}
+	if restored.VersionID != event.VersionID {
+		t.Errorf("version_id mismatch")
+	}
+	if restored.OrgID != event.OrgID {
+		t.Errorf("organization_id mismatch")
+	}
+	if restored.ArtifactStatus != event.ArtifactStatus {
+		t.Errorf("artifact_status mismatch: got %s, want %s", restored.ArtifactStatus, event.ArtifactStatus)
+	}
+	if len(restored.AvailableTypes) != 3 {
+		t.Errorf("expected 3 available_types, got %d", len(restored.AvailableTypes))
+	}
+	if restored.FailedStage != event.FailedStage {
+		t.Errorf("failed_stage mismatch")
+	}
+	if restored.ErrorMessage != event.ErrorMessage {
+		t.Errorf("error_message mismatch")
+	}
+}
+
+func TestVersionPartiallyAvailableOptionalFieldsOmitted(t *testing.T) {
+	event := VersionPartiallyAvailable{
+		EventMeta:      EventMeta{CorrelationID: "corr-1", Timestamp: time.Now().UTC()},
+		DocumentID:     "doc-1",
+		VersionID:      "ver-1",
+		OrgID:          "org-1",
+		ArtifactStatus: ArtifactStatusProcessingArtifactsReceived,
+		AvailableTypes: []ArtifactType{ArtifactTypeOCRRaw},
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	for _, key := range []string{"failed_stage", "error_message"} {
+		if _, ok := raw[key]; ok {
+			t.Errorf("expected %q to be omitted when empty", key)
+		}
+	}
+}
+
 func TestVersionCreatedOriginTypeSerialization(t *testing.T) {
 	// Verify OriginType serializes as string value.
 	event := VersionCreated{

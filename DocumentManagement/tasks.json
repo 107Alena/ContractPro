@@ -342,7 +342,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-003", "DM-TASK-007"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Созданы ConfirmationPublisher (10 методов) и NotificationPublisher (5 методов) в internal/egress/. ФАЙЛЫ: confirmation/confirmation.go (ConfirmationPublisher struct, confirmationTopicMap, NewConfirmationPublisher с panic на nil broker/empty topics, publishJSON с non-retryable DomainError для marshal failures, 10 publish методов: PublishDPArtifactsPersisted/PersistFailed, PublishSemanticTreeProvided, PublishArtifactsProvided, PublishDiffPersisted/PersistFailed, PublishLICArtifactsPersisted/PersistFailed, PublishREReportsPersisted/PersistFailed), notification/notification.go (NotificationPublisher struct, notificationTopicMap, NewNotificationPublisher, publishJSON, 5 publish методов: PublishVersionProcessingArtifactsReady, PublishVersionAnalysisArtifactsReady, PublishVersionReportsReady, PublishVersionCreated, PublishVersionPartiallyAvailable). ДОМЕННАЯ МОДЕЛЬ: добавлен VersionPartiallyAvailable struct в event_outgoing.go (BRE-010) + 2 теста. ПОРТЫ: добавлены ConfirmationPublisherPort (10 методов) и NotificationPublisherPort (5 методов) в port/outbound.go. COMPILE-TIME: var _ port.ConfirmationPublisherPort = (*ConfirmationPublisher)(nil), var _ port.NotificationPublisherPort = (*NotificationPublisher)(nil). ПАТТЕРН: consumer-side BrokerPublisher interface per-package, идентичен DP publisher. EventMeta (correlation_id, timestamp) propagation протестирован. 68+ unit-тестов (39 confirmation + 29 notification): correct topic, JSON format, round-trip, broker/context error passthrough, marshal error, constructor panic, context forwarding, omitempty, correlation_id preservation. Ревью: code-reviewer + golang-pro → APPROVED, no blocking issues."
     },
     {
       "id": "DM-TASK-016",

@@ -218,7 +218,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-005"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-01",
+      "summary": "Создан internal/infra/kvstore/ с Redis клиентом на go-redis/v9 v9.18.0. ФАЙЛЫ: client.go (RedisAPI interface: Set/Get/Del/Ping/Close, Client struct реализует port.IdempotencyStorePort, NewClient с connection pool + Ping verification, Get с JSON unmarshal → *IdempotencyRecord (nil,nil для not-found), Set с JSON marshal + nil record guard + empty key validation, Delete с empty key guard, Ping для healthcheck, Close с graceful shutdown через sync.Mutex+done channel), errors.go (mapError: context passthrough, redis.Nil→non-retryable defensive guard, generic→StorageFailed retryable; errClientClosed: non-retryable StorageFailed). COMPILE-TIME: var _ port.IdempotencyStorePort = (*Client)(nil). CONFIG: KVStoreConfig (Address required, Password, DB=0, PoolSize=10, Timeout=2s). 39 unit-тестов с mock (8 Get + 7 Set + 5 Delete + 4 nil/empty key + 2 Ping + 3 Close + 4 use-after-close + 4 error mapping + 1 in-memory lifecycle + 1 concurrent access). Ревью: code-reviewer + golang-pro → исправлено: nil record guard, empty-key validation, mapError redis.Nil non-retryable, RedisAPI doc comment."
     },
     {
       "id": "DM-TASK-010",

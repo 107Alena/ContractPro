@@ -468,3 +468,63 @@
 - DM-TASK-044 (Circuit Breaker для Object Storage) — зависит от DM-TASK-008 ✅
 
 ---
+
+## DM-TASK-009: Redis клиент — idempotency store с TTL (2026-04-01)
+
+**Статус:** done
+
+**Что сделано:**
+- Удалён placeholder `kvstore.go`
+- Создано 3 файла в `internal/infra/kvstore/`:
+  - `client.go` — `RedisAPI` interface (Set/Get/Del/Ping/Close), `Client` struct, `NewClient(cfg)`, `newClientWithRedis(api)` для тестов
+  - `errors.go` — `mapError` (context passthrough, redis.Nil→non-retryable, generic→retryable StorageFailed), `errClientClosed` (non-retryable)
+  - `client_test.go` — `mockRedis`, `newInMemoryRedis`, 39 тестов
+- Добавлена зависимость `github.com/redis/go-redis/v9 v9.18.0` в `go.mod`
+
+**Реализация Client:**
+- `Get(ctx, key)` — Redis GET → JSON unmarshal → `*model.IdempotencyRecord` (nil, nil для not-found — per port contract)
+- `Set(ctx, record, ttl)` — JSON marshal → Redis SET с TTL. Nil record guard, empty key в Get/Delete
+- `Delete(ctx, key)` — Redis DEL (delete nonexistent key is not an error)
+- `Ping(ctx)` — healthcheck (не часть порта, используется health handler)
+- `Close()` — graceful shutdown: `sync.Mutex` + `done` channel, idempotentный
+- `isClosed()` — non-blocking check через select на `done` channel
+- Compile-time: `var _ port.IdempotencyStorePort = (*Client)(nil)`
+
+**Error mapping:**
+- `context.Canceled` / `context.DeadlineExceeded` → passthrough (не DomainError)
+- `redis.Nil` → nil, nil в Get; non-retryable defensive guard в mapError
+- Другие Redis ошибки → `port.NewStorageError` (retryable=true, code=STORAGE_FAILED)
+- `errClientClosed` → non-retryable STORAGE_FAILED
+
+**Тесты (39):**
+- Get: success, completed record, not found (nil,nil), Redis error, context canceled, context deadline exceeded, invalid JSON, context forwarding, empty key (8+1=9 get tests)
+- Set: success + JSON round-trip, all fields, Redis error, context canceled, context deadline exceeded, zero TTL, context forwarding, nil record (7+1=8 set tests)
+- Delete: success, key not exists, Redis error, context canceled, context deadline exceeded, context forwarding, empty key (5+2=7 delete tests)
+- Ping: success, Redis error (2)
+- Close: graceful, idempotent, returns error (3)
+- Use-after-close: Get, Set, Delete, Ping (4)
+- Error mapping: context canceled, context deadline exceeded, redis.Nil defensive, unknown error (4)
+- In-memory lifecycle: Set → Get → Update → Get → Delete → Get (1)
+- Concurrent access: 50 goroutines (1)
+
+**Проверки:**
+- `go test ./internal/infra/kvstore/... -race -count=1` — 39 PASS
+- `go test -count=1 -race ./...` — OK (config 20 + model 76 + broker 32 + objectstorage 41 + kvstore 39 + postgres 73 = 281 PASS)
+- `go vet ./...` — OK
+- `go build ./cmd/dm-service/` — OK
+
+**Ревью (code-reviewer + golang-pro):**
+- Исправлено: nil record guard в Set (H-1)
+- Исправлено: empty-key validation в Get/Delete (M-3)
+- Исправлено: mapError redis.Nil → non-retryable (M-1)
+- Исправлено: RedisAPI doc comment (redis.Cmdable → *redis.Client) (M-3)
+- Добавлены: TestSet_NilRecord, TestGet_EmptyKey, TestDelete_EmptyKey, TestDelete_ContextDeadlineExceeded, TestClose_ReturnsError
+- Не исправлено (deferred): H-2 (direct port impl vs adapter layer — design choice), TOCTOU isClosed (go-redis internally safe), errClientClosed non-constructor pattern (intentional — non-retryable)
+
+**Следующие задачи (unblocked by DM-TASK-009):**
+- DM-TASK-011 (Health Check) — зависит от DM-TASK-006 ✅ + DM-TASK-007 ✅ + DM-TASK-008 ✅ + DM-TASK-009 ✅
+- DM-TASK-013 (Idempotency Guard) — зависит от DM-TASK-004 ✅ + DM-TASK-009 ✅
+- DM-TASK-015 (Confirmation Publisher) — зависит от DM-TASK-003 ✅ + DM-TASK-007 ✅ (already ready)
+- DM-TASK-019 (Document Lifecycle) — зависит от DM-TASK-004 ✅ + DM-TASK-012 ✅ (already ready)
+
+---

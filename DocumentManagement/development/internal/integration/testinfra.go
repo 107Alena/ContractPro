@@ -3,6 +3,8 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"sort"
@@ -146,6 +148,10 @@ func (h *testHarness) seedVersion(ver *model.DocumentVersion) {
 type memoryTransactor struct {
 	mu        sync.Mutex
 	callCount int
+	// txMu serializes transaction execution, simulating database-level
+	// row locking (FOR UPDATE). Without this, concurrent transactions
+	// would operate on shared state without isolation.
+	txMu sync.Mutex
 }
 
 func newMemoryTransactor() *memoryTransactor { return &memoryTransactor{} }
@@ -154,6 +160,10 @@ func (t *memoryTransactor) WithTransaction(ctx context.Context, fn func(ctx cont
 	t.mu.Lock()
 	t.callCount++
 	t.mu.Unlock()
+
+	// Serialize transaction execution to simulate DB-level isolation.
+	t.txMu.Lock()
+	defer t.txMu.Unlock()
 	return fn(ctx)
 }
 
@@ -211,7 +221,16 @@ func (r *memoryDocumentRepository) FindByID(ctx context.Context, orgID, docID st
 }
 
 func (r *memoryDocumentRepository) FindByIDForUpdate(ctx context.Context, orgID, docID string) (*model.Document, error) {
-	return r.FindByID(ctx, orgID, docID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	doc, ok := r.docs[r.key(orgID, docID)]
+	if !ok {
+		return nil, port.NewDocumentNotFoundError(orgID, docID)
+	}
+	// Return a copy to prevent concurrent mutation of the shared object,
+	// simulating the isolation provided by SELECT ... FOR UPDATE.
+	cp := *doc
+	return &cp, nil
 }
 
 func (r *memoryDocumentRepository) List(ctx context.Context, orgID string, statusFilter *model.DocumentStatus, page, pageSize int) ([]*model.Document, int, error) {
@@ -289,6 +308,14 @@ func (r *memoryVersionRepository) Insert(ctx context.Context, version *model.Doc
 	if _, ok := r.versions[k]; ok {
 		return port.NewVersionAlreadyExistsError(version.VersionID)
 	}
+	// Simulate DB unique constraint on (org_id, doc_id, version_number).
+	for _, v := range r.versions {
+		if v.OrganizationID == version.OrganizationID &&
+			v.DocumentID == version.DocumentID &&
+			v.VersionNumber == version.VersionNumber {
+			return port.NewVersionAlreadyExistsError(version.VersionID)
+		}
+	}
 	r.versions[k] = version
 	return nil
 }
@@ -304,7 +331,16 @@ func (r *memoryVersionRepository) FindByID(ctx context.Context, orgID, docID, ve
 }
 
 func (r *memoryVersionRepository) FindByIDForUpdate(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
-	return r.FindByID(ctx, orgID, docID, versionID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ver, ok := r.versions[r.vkey(orgID, docID, versionID)]
+	if !ok {
+		return nil, port.NewVersionNotFoundError(versionID)
+	}
+	// Return a copy to prevent concurrent mutation of the shared object,
+	// simulating the isolation provided by SELECT ... FOR UPDATE.
+	cp := *ver
+	return &cp, nil
 }
 
 func (r *memoryVersionRepository) List(ctx context.Context, orgID, docID string, page, pageSize int) ([]*model.DocumentVersion, int, error) {
@@ -863,6 +899,15 @@ func (p *recordingDLQPort) SendToDLQ(ctx context.Context, record model.DLQRecord
 	return nil
 }
 
+// allRecords returns a snapshot of all DLQ records (thread-safe).
+func (p *recordingDLQPort) allRecords() []model.DLQRecord {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := make([]model.DLQRecord, len(p.records))
+	copy(result, p.records)
+	return result
+}
+
 var _ port.DLQPort = (*recordingDLQPort)(nil)
 
 // ---------------------------------------------------------------------------
@@ -1111,6 +1156,16 @@ type noopIdempotencyMetrics struct{}
 
 func (m *noopIdempotencyMetrics) IncFallbackTotal(topic string) {}
 func (m *noopIdempotencyMetrics) IncCheckTotal(result string)   {}
+
+// ---------------------------------------------------------------------------
+// Shared test helpers
+// ---------------------------------------------------------------------------
+
+// sha256HexHelper computes SHA-256 of data and returns it as a hex string.
+func sha256HexHelper(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
 
 // ---------------------------------------------------------------------------
 // Test data helpers

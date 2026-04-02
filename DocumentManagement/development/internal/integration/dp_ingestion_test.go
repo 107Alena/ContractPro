@@ -2,8 +2,6 @@ package integration
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"testing"
 
@@ -692,7 +690,3 @@ func assertIntEqual(t *testing.T, field string, expected, actual int) {
 	}
 }
 
-func sha256HexHelper(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
-}

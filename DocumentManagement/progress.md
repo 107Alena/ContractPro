@@ -1637,9 +1637,35 @@
 - Progressive assertions — verify state at each pipeline stage
 - Async audit verification with time.Sleep(100ms) for goroutine completion
 
+---
+
+## DM-TASK-028: Integration test — error scenarios (2026-04-03)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/integration/error_scenarios_test.go` (569 строк, 5 тестов + 3 test-local fake типа)
+- Улучшена test infrastructure в `testinfra.go` (4 fixes для корректной симуляции concurrent DB behavior)
+
+**Тесты:**
+1. `TestErrorScenario_ObjectStorageFailOnFourthArtifact_CompensationAndRetry` — Object Storage fail на 4-м артефакте → compensation → retry → success
+2. `TestErrorScenario_ConcurrentVersionCreation_BothSucceed` — 2 goroutines с sync barrier → оба succeed с version_numbers {1, 2}
+3. `TestErrorScenario_DocumentNotFound_NoBlobsNoDescriptors` — not-found error, 0 side effects
+4. `TestErrorScenario_RedisUnavailable_FallbackToDB_Success` — failing Redis → DB fallback → success
+5. `TestErrorScenario_TerminalStatus_StatusTransitionError_CompensationRuns` — FULLY_READY → error + compensation
+
+**Test-local fake types:** failingObjectStorage, failingIdempotencyStore, conflictingVersionRepository
+
+**Testinfra fixes (code-reviewer 3B):**
+- `memoryTransactor.WithTransaction` serializes via `txMu`
+- `FindByIDForUpdate` returns shallow copy (prevents data race)
+- `memoryVersionRepository.Insert` checks version_number uniqueness
+- `sha256HexHelper` moved to testinfra.go from dp_ingestion_test.go
+
+**Проверки:** go test -count=1 -race ALL PASS (22 пакета), go vet OK, make build/test/lint OK
+
 **Следующие задачи (high priority pending, deps met):**
 - DM-TASK-024 (Audit Trail) — deps: DM-TASK-012 ✅, DM-TASK-022 ✅
-- DM-TASK-028 (Integration test error scenarios) — deps: DM-TASK-026 ✅
 - DM-TASK-029 (Dockerfile + Docker Compose) — deps: DM-TASK-025 ✅
 - DM-TASK-030 (Tenant isolation enforcement) — deps: DM-TASK-012 ✅, DM-TASK-014 ✅, DM-TASK-022 ✅
 - DM-TASK-040 (REV-005 Archive endpoint) — deps: DM-TASK-022 ✅

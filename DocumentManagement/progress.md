@@ -839,3 +839,68 @@
 - DM-TASK-011 (Health Check) — high priority, blocks DM-TASK-025
 
 ---
+
+## DM-TASK-019: Document Lifecycle Service (2026-04-02)
+
+**Статус:** done
+
+**План реализации:**
+1. Изучить порты (DocumentLifecycleHandler), модели (Document, AuditRecord), паттерны из ArtifactIngestionService
+2. Спроектировать сервис: 5 методов (Create, Get, List, Archive, Delete), 4 зависимости (Transactor, DocRepo, AuditRepo, Logger)
+3. Реализовать lifecycle.go с compile-time interface check
+4. Реализовать lifecycle_test.go с ~35 тестами
+5. Code review → исправления
+6. Полный прогон тестов (go test, go vet, make build/test/lint)
+
+**Что сделано:**
+- Создан `internal/application/lifecycle/lifecycle.go` (~230 строк):
+  - `DocumentLifecycleService` struct с 4 зависимостями + newUUID func
+  - `NewDocumentLifecycleService` с panic на nil deps (4 проверки)
+  - `CreateDocument` — validate(orgID, title, userID) → NewDocument → tx(Insert + AuditInsert)
+  - `GetDocument` — validate(orgID, docID) → FindByID (tenant isolation через organization_id)
+  - `ListDocuments` — validate(orgID, page, pageSize) → clamp pageSize(max 100) → List → nil-slice normalize
+  - `ArchiveDocument` / `DeleteDocument` → shared `transitionDocument` helper: validate → tx(FindByID + TransitionTo + Update + AuditInsert)
+  - `generateUUID` v4 crypto/rand (panic on CSPRNG failure)
+  - Compile-time check: `var _ port.DocumentLifecycleHandler = (*DocumentLifecycleService)(nil)`
+- Создан `internal/application/lifecycle/lifecycle_test.go` (36 тестов):
+  - 5 constructor panics (nil deps)
+  - 7 CreateDocument (happy path + 3 validation + insert fail + audit fail + already exists)
+  - 4 GetDocument (happy path + 2 validation + not found)
+  - 8 ListDocuments (happy path + filter + 3 validation + nil normalize + page size clamp + repo error)
+  - 7 ArchiveDocument (happy path + 2 validation + not found + 2 invalid transition + update fail + audit fail)
+  - 8 DeleteDocument (happy path active + happy path archived + 2 validation + not found + invalid transition + update fail + audit fail)
+
+**Ключевые решения:**
+- Транзакции для всех мутирующих операций (Document + Audit атомарно)
+- Read-операции без транзакций (Get, List — single query)
+- ActorTypeSystem + "system" для archive/delete (port interface не несёт user identity — будет добавлено в DM-TASK-022)
+- ActorTypeUser + createdByUserID для CreateDocument (identity доступна через params)
+- Shared `transitionDocument` для DRY (Archive/Delete отличаются только targetStatus + auditAction)
+- maxPageSize = 100 для защиты от full-table scans
+- Nil-slice normalize для JSON `[]` (не `null`)
+
+**Code Review (code-reviewer):**
+- 1 BLOCKING исправлено: ActorTypeUser → ActorTypeSystem для archive/delete audit records
+- 3 WARNING исправлены: DRY refactor (transitionDocument), json.Marshal error logging
+- 2 WARNING отклонены: title length validation (DB layer handles), StatusFilter validation (defense in depth, но repo handles)
+- 2 WARNING деferred: generateUUID duplication (package-per-package is intentional Go pattern), Logger duplication (same)
+
+**Проверки:**
+- `go test ./internal/application/lifecycle/... -race -count=1` — 36 PASS
+- `go test -count=1 ./...` — ALL PASS (16 пакетов)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Следующие задачи (ready, critical):**
+- DM-TASK-018 (Artifact Query) — blocks DM-TASK-022 (API)
+- DM-TASK-020 (Version Management) — blocks DM-TASK-022
+- DM-TASK-021 (Diff Storage) — blocks DM-TASK-022
+- DM-TASK-036 (REV-001/REV-002 fallback) — unblocked by DM-TASK-017
+- DM-TASK-037 (BRE-001 FOR UPDATE) — unblocked by DM-TASK-017
+- DM-TASK-038 (BRE-003 idempotency TTL) — unblocked by DM-TASK-013
+- DM-TASK-010 (Observability) — high priority, blocks DM-TASK-025
+- DM-TASK-011 (Health Check) — high priority, blocks DM-TASK-025
+
+---

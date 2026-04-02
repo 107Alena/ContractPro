@@ -439,7 +439,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-004", "DM-TASK-012"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-02",
+      "summary": "Создан internal/application/lifecycle/ с DocumentLifecycleService, реализующим port.DocumentLifecycleHandler (5 методов). ФАЙЛЫ: lifecycle.go (~230 строк: DocumentLifecycleService struct, NewDocumentLifecycleService с panic на nil deps, CreateDocument — validate + NewDocument + tx(Insert + AuditInsert), GetDocument — validate + FindByID, ListDocuments — validate + clamp pageSize(100) + List + nil-slice normalize, ArchiveDocument/DeleteDocument — shared transitionDocument helper: validate → tx(FindByID + TransitionTo + Update + AuditInsert); generateUUID v4 crypto/rand), lifecycle_test.go (36 тестов: 5 constructor panics, 7 CreateDocument paths, 4 GetDocument paths, 8 ListDocuments paths, 7 ArchiveDocument paths, 8 DeleteDocument paths). COMPILE-TIME: var _ port.DocumentLifecycleHandler = (*DocumentLifecycleService)(nil). TENANT ISOLATION: все операции через DocumentRepository с organization_id filter. STATE MACHINE: ACTIVE→ARCHIVED, ACTIVE/ARCHIVED→DELETED; DELETED terminal. AUDIT: CreateDocument→DOCUMENT_CREATED (ActorTypeUser + createdByUserID), Archive→DOCUMENT_ARCHIVED (ActorTypeSystem), Delete→DOCUMENT_DELETED (ActorTypeSystem); details с from/to. TRANSACTIONS: CreateDocument, ArchiveDocument, DeleteDocument — doc+audit atomic. DRY: transitionDocument shared helper для Archive/Delete. РЕВЬЮ: code-reviewer → 1 blocking исправлено (ActorTypeUser→ActorTypeSystem для archive/delete), 3 warnings исправлено (DRY refactor, json.Marshal error logging). Все тесты PASS с -race. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-020",

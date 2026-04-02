@@ -904,3 +904,61 @@
 - DM-TASK-011 (Health Check) — high priority, blocks DM-TASK-025
 
 ---
+
+## DM-TASK-020: Version Management Service (2026-04-02)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/application/version/version.go` (~270 строк)
+- Реализует `port.VersionManagementHandler` (3 метода: CreateVersion, GetVersion, ListVersions)
+- Compile-time check: `var _ port.VersionManagementHandler = (*VersionManagementService)(nil)`
+
+**CreateVersion flow:**
+1. `validateCreateParams` — проверка required fields + OriginType validation + SourceFileSize > 0
+2. RE_CHECK: parent version lookup → copy source_file_key
+3. Retry loop (до 3 попыток) с `ctx.Err()` check:
+   - `WithTransaction`: FindByID doc (inside tx для TOCTOU protection) → status check ACTIVE → NextVersionNumber → NewDocumentVersion → Insert → Update doc.current_version_id → Audit VERSION_CREATED → Outbox VersionCreated
+4. Optimistic locking: retry при VersionAlreadyExists (unique constraint на version_number)
+
+**GetVersion / ListVersions:**
+- Стандартные validate + repo call
+- ListVersions: clamp pageSize(100), nil-slice normalize
+
+**Ревью (code-reviewer + golang-pro):**
+- 2 BLOCKING исправлено:
+  - TOCTOU: doc status check перенесён внутрь транзакции (как lifecycle.transitionDocument)
+  - Missing OriginType validation
+- 3 WARNINGS исправлено:
+  - SourceFileSize > 0 validation
+  - ctx.Err() check в retry loop
+  - Doc re-fetch on each retry attempt
+
+**Тесты:** 43 unit-теста:
+- 6 constructor panics
+- 13 CreateVersion happy paths (upload, parent, description, RE_CHECK, all 5 origin types)
+- 10 validation errors (org, doc, origin, filename, filesize×2, user, source_key, RE_CHECK parent×2)
+- 3 doc status errors (not found, archived, deleted + no-retry verify)
+- 5 tx step failures (NextVersionNumber, Insert, Update, Audit, Outbox)
+- 3 optimistic locking (success on retry, exhaust retries, non-conflict no retry)
+- 2 ctx/refetch tests (context cancelled, doc re-fetched inside tx on retry)
+- 5 GetVersion (happy path + 3 validation + not found)
+- 8 ListVersions (happy path + 2 validation + invalid page/size + nil normalize + page clamp + repo error)
+- 1 isValidOriginType helper
+
+**Проверки:**
+- `go test -race -count=1 ./internal/application/version/...` — 43 tests PASS
+- `go test -count=1 ./...` — ALL PASS (16 пакетов)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи (ready, critical):**
+- DM-TASK-018 (Artifact Query) — blocks DM-TASK-022 (API)
+- DM-TASK-021 (Diff Storage) — blocks DM-TASK-022
+- DM-TASK-036 (REV-001/REV-002 fallback) — unblocked by DM-TASK-017
+- DM-TASK-037 (BRE-001 FOR UPDATE) — unblocked by DM-TASK-017
+- DM-TASK-038 (BRE-003 idempotency TTL) — unblocked by DM-TASK-013
+- DM-TASK-010 (Observability) — high priority, blocks DM-TASK-025
+- DM-TASK-011 (Health Check) — high priority, blocks DM-TASK-025
+
+---

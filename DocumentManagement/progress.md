@@ -1406,3 +1406,38 @@
 - DM-TASK-026 (Integration test DP→DM) — deps: DM-TASK-025 ✅
 
 ---
+
+## DM-TASK-039: BRE-005 — SELECT FOR UPDATE на documents при создании версии (2026-04-02)
+
+**Статус:** done
+
+**Что сделано:**
+- Добавлен `FindByIDForUpdate` в `DocumentRepository` interface (port/outbound.go) — SELECT ... FOR UPDATE с row-level exclusive lock
+- Реализован `FindByIDForUpdate` в `postgres/document_repository.go` — SELECT с FOR UPDATE clause, tenant isolation, shared scanDocument helper
+- Обновлён `VersionManagementService.createVersionInTx()` — заменён `FindByID` → `FindByIDForUpdate` внутри транзакции
+  - Сериализация конкурентных создателей версий: NextVersionNumber (MAX+1) и current_version_id update выполняются под lock на document row
+  - Retry loop (3 попытки) сохранён как defense-in-depth
+- Обновлены mocks в `version_test.go` (с forUpdateCallCount tracking) и `lifecycle_test.go` (delegate to FindByID)
+
+**Тесты (8 новых + 1 обновлённый):**
+- 3 postgres adapter: FOR UPDATE SQL clause verification, not found, DB error
+- 5 version service BRE-005: UsesFindByIDForUpdate, ForUpdateErrorPropagates, ForUpdateNotFound, RetryStillUsesForUpdate, AllOriginTypesCallForUpdate (включая RE_CHECK)
+- 1 обновлённый: DocRefetchedInsideTxOnRetry → verifies forUpdateCallCount
+
+**Ревью:**
+- golang-pro → APPROVED plan
+- code-reviewer → APPROVED, 0 blocking, 3 warnings исправлено (defense-in-depth комментарий, RE_CHECK в AllOriginTypes тесте)
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (21 пакет)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи (high priority pending, deps met):**
+- DM-TASK-023 (DLQ + replay + backoff) — deps: DM-TASK-014 ✅, DM-TASK-017 ✅
+- DM-TASK-030 (Tenant isolation enforcement) — deps: DM-TASK-012 ✅, DM-TASK-014 ✅, DM-TASK-022 ✅
+- DM-TASK-026 (Integration test DP→DM) — deps: DM-TASK-025 ✅
+- DM-TASK-041 (Stale Version Watchdog) — deps: DM-TASK-017 ✅, DM-TASK-016 ✅
+- DM-TASK-042 (BRE-006 Outbox Poller) — deps: DM-TASK-016 ✅
+
+---

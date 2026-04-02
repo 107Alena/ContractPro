@@ -29,10 +29,12 @@ func (m *mockTransactor) WithTransaction(ctx context.Context, fn func(ctx contex
 }
 
 type mockDocumentRepo struct {
-	findByIDFn func(ctx context.Context, orgID, docID string) (*model.Document, error)
-	updateFn   func(ctx context.Context, doc *model.Document) error
+	findByIDFn          func(ctx context.Context, orgID, docID string) (*model.Document, error)
+	findByIDForUpdateFn func(ctx context.Context, orgID, docID string) (*model.Document, error)
+	updateFn            func(ctx context.Context, doc *model.Document) error
 
-	updatedDocs []*model.Document
+	updatedDocs          []*model.Document
+	forUpdateCallCount   int
 }
 
 func (m *mockDocumentRepo) Insert(context.Context, *model.Document) error {
@@ -43,6 +45,14 @@ func (m *mockDocumentRepo) FindByID(ctx context.Context, orgID, docID string) (*
 		return m.findByIDFn(ctx, orgID, docID)
 	}
 	return nil, port.NewDocumentNotFoundError(orgID, docID)
+}
+func (m *mockDocumentRepo) FindByIDForUpdate(ctx context.Context, orgID, docID string) (*model.Document, error) {
+	m.forUpdateCallCount++
+	if m.findByIDForUpdateFn != nil {
+		return m.findByIDForUpdateFn(ctx, orgID, docID)
+	}
+	// Fall back to FindByID behavior for tests that don't care about the lock distinction.
+	return m.FindByID(ctx, orgID, docID)
 }
 func (m *mockDocumentRepo) List(context.Context, string, *model.DocumentStatus, int, int) ([]*model.Document, int, error) {
 	panic("not used in version")
@@ -931,9 +941,7 @@ func TestCreateVersion_ContextCancelled_NoRetry(t *testing.T) {
 func TestCreateVersion_DocRefetchedInsideTxOnRetry(t *testing.T) {
 	d := newTestDeps()
 
-	findCount := 0
 	d.docRepo.findByIDFn = func(_ context.Context, orgID, docID string) (*model.Document, error) {
-		findCount++
 		return model.NewDocument(docID, orgID, "Test Document", "user-1"), nil
 	}
 
@@ -956,10 +964,151 @@ func TestCreateVersion_DocRefetchedInsideTxOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Document should be fetched inside each transaction attempt.
-	if findCount != 2 {
-		t.Errorf("expected 2 FindByID calls (one per attempt), got %d", findCount)
+	// Document should be fetched with FOR UPDATE inside each transaction attempt (BRE-005).
+	if d.docRepo.forUpdateCallCount != 2 {
+		t.Errorf("expected 2 FindByIDForUpdate calls (one per attempt), got %d", d.docRepo.forUpdateCallCount)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// BRE-005 tests: SELECT FOR UPDATE on documents during version creation.
+// ---------------------------------------------------------------------------
+
+func TestCreateVersion_BRE005_UsesFindByIDForUpdate(t *testing.T) {
+	// Verify that createVersionInTx calls FindByIDForUpdate (not FindByID)
+	// to acquire a row-level lock on the document.
+	d := newTestDeps()
+	d.withActiveDoc("org-1", "doc-1")
+	svc := d.newService()
+
+	_, err := svc.CreateVersion(context.Background(), defaultCreateParams())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d.docRepo.forUpdateCallCount != 1 {
+		t.Errorf("expected FindByIDForUpdate to be called 1 time, got %d", d.docRepo.forUpdateCallCount)
+	}
+}
+
+func TestCreateVersion_BRE005_ForUpdateErrorPropagates(t *testing.T) {
+	// Verify that an error from FindByIDForUpdate propagates correctly.
+	d := newTestDeps()
+	d.docRepo.findByIDForUpdateFn = func(_ context.Context, _, _ string) (*model.Document, error) {
+		return nil, port.NewDatabaseError("lock timeout", errors.New("lock timeout"))
+	}
+	svc := d.newService()
+
+	_, err := svc.CreateVersion(context.Background(), defaultCreateParams())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if port.ErrorCode(err) != port.ErrCodeDatabaseFailed {
+		t.Errorf("error code = %q, want %q", port.ErrorCode(err), port.ErrCodeDatabaseFailed)
+	}
+}
+
+func TestCreateVersion_BRE005_ForUpdateNotFound(t *testing.T) {
+	// Verify that document-not-found from FOR UPDATE returns correct error.
+	d := newTestDeps()
+	d.docRepo.findByIDForUpdateFn = func(_ context.Context, orgID, docID string) (*model.Document, error) {
+		return nil, port.NewDocumentNotFoundError(orgID, docID)
+	}
+	svc := d.newService()
+
+	_, err := svc.CreateVersion(context.Background(), defaultCreateParams())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if port.ErrorCode(err) != port.ErrCodeDocumentNotFound {
+		t.Errorf("error code = %q, want %q", port.ErrorCode(err), port.ErrCodeDocumentNotFound)
+	}
+}
+
+func TestCreateVersion_BRE005_RetryStillUsesForUpdate(t *testing.T) {
+	// On optimistic locking retry, each attempt should use FindByIDForUpdate.
+	d := newTestDeps()
+	d.docRepo.findByIDFn = func(_ context.Context, orgID, docID string) (*model.Document, error) {
+		return model.NewDocument(docID, orgID, "Test", "user-1"), nil
+	}
+
+	insertAttempt := 0
+	d.versionRepo.insertFn = func(_ context.Context, v *model.DocumentVersion) error {
+		insertAttempt++
+		if insertAttempt <= 2 {
+			return port.NewVersionAlreadyExistsError(v.VersionID)
+		}
+		return nil
+	}
+	versionNum := 0
+	d.versionRepo.nextVersionNumberFn = func(_ context.Context, _, _ string) (int, error) {
+		versionNum++
+		return versionNum, nil
+	}
+	svc := d.newService()
+
+	_, err := svc.CreateVersion(context.Background(), defaultCreateParams())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 3 attempts → 3 FindByIDForUpdate calls.
+	if d.docRepo.forUpdateCallCount != 3 {
+		t.Errorf("expected 3 FindByIDForUpdate calls, got %d", d.docRepo.forUpdateCallCount)
+	}
+}
+
+func TestCreateVersion_BRE005_AllOriginTypesCallForUpdate(t *testing.T) {
+	// Verify FOR UPDATE is called for all origin types (including RE_CHECK).
+	originTypes := []model.OriginType{
+		model.OriginTypeUpload,
+		model.OriginTypeReUpload,
+		model.OriginTypeRecommendationApplied,
+		model.OriginTypeManualEdit,
+	}
+	for _, ot := range originTypes {
+		t.Run(string(ot), func(t *testing.T) {
+			d := newTestDeps()
+			d.withActiveDoc("org-1", "doc-1")
+			svc := d.newService()
+
+			params := defaultCreateParams()
+			params.OriginType = ot
+			_, err := svc.CreateVersion(context.Background(), params)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if d.docRepo.forUpdateCallCount != 1 {
+				t.Errorf("origin=%s: expected 1 FindByIDForUpdate call, got %d", ot, d.docRepo.forUpdateCallCount)
+			}
+		})
+	}
+
+	// RE_CHECK has a different code path (parent version lookup before tx).
+	t.Run("RE_CHECK", func(t *testing.T) {
+		d := newTestDeps()
+		d.withActiveDoc("org-1", "doc-1")
+		// Parent version for RE_CHECK.
+		d.versionRepo.findByIDFn = func(_ context.Context, _, _, vID string) (*model.DocumentVersion, error) {
+			return &model.DocumentVersion{
+				VersionID:      vID,
+				DocumentID:     "doc-1",
+				OrganizationID: "org-1",
+				SourceFileKey:  "org-1/doc-1/uploads/parent.pdf",
+			}, nil
+		}
+		svc := d.newService()
+
+		params := defaultCreateParams()
+		params.OriginType = model.OriginTypeReCheck
+		params.ParentVersionID = "parent-ver-1"
+		params.SourceFileKey = "" // will be copied from parent
+		_, err := svc.CreateVersion(context.Background(), params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if d.docRepo.forUpdateCallCount != 1 {
+			t.Errorf("RE_CHECK: expected 1 FindByIDForUpdate call, got %d", d.docRepo.forUpdateCallCount)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

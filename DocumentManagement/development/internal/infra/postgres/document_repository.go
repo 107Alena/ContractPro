@@ -75,6 +75,31 @@ func (r *DocumentRepository) FindByID(ctx context.Context, organizationID, docum
 	return doc, nil
 }
 
+// FindByIDForUpdate retrieves a document with a row-level exclusive lock
+// (SELECT ... FOR UPDATE). Must be called within a transaction.
+// Serializes concurrent version creation on the same document (BRE-005).
+func (r *DocumentRepository) FindByIDForUpdate(ctx context.Context, organizationID, documentID string) (*model.Document, error) {
+	conn := ConnFromCtx(ctx)
+
+	row := conn.QueryRow(ctx,
+		`SELECT document_id, organization_id, title, current_version_id, status,
+				created_by_user_id, created_at, updated_at, deleted_at
+		FROM documents
+		WHERE document_id = $1 AND organization_id = $2
+		FOR UPDATE`,
+		documentID, organizationID,
+	)
+
+	doc, err := scanDocument(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, port.NewDocumentNotFoundError(organizationID, documentID)
+		}
+		return nil, port.NewDatabaseError("find document by id for update", err)
+	}
+	return doc, nil
+}
+
 // List returns a paginated list of documents for the organization.
 func (r *DocumentRepository) List(ctx context.Context, organizationID string, statusFilter *model.DocumentStatus, page, pageSize int) ([]*model.Document, int, error) {
 	conn := ConnFromCtx(ctx)

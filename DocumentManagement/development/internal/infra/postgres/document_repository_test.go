@@ -121,6 +121,68 @@ func TestDocumentRepository_FindByID_Success(t *testing.T) {
 	assert.Nil(t, doc.DeletedAt)
 }
 
+func TestDocumentRepository_FindByIDForUpdate_Success(t *testing.T) {
+	now := time.Now().UTC()
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			assert.Contains(t, sql, "organization_id = $2")
+			assert.Contains(t, sql, "FOR UPDATE", "query must use FOR UPDATE clause (BRE-005)")
+			assert.Equal(t, "doc-1", args[0])
+			assert.Equal(t, "org-1", args[1])
+			return &mockRow{
+				scanFn: func(dest ...any) error {
+					*dest[0].(*string) = "doc-1"
+					*dest[1].(*string) = "org-1"
+					*dest[2].(*string) = "Title"
+					*dest[3].(**string) = strPtr("ver-1")
+					*dest[4].(*string) = "ACTIVE"
+					*dest[5].(*string) = "user-1"
+					*dest[6].(*time.Time) = now
+					*dest[7].(*time.Time) = now
+					*dest[8].(**time.Time) = nil
+					return nil
+				},
+			}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	doc, err := NewDocumentRepository().FindByIDForUpdate(ctx, "org-1", "doc-1")
+	require.NoError(t, err)
+	assert.Equal(t, "doc-1", doc.DocumentID)
+	assert.Equal(t, "org-1", doc.OrganizationID)
+	assert.Equal(t, model.DocumentStatusActive, doc.Status)
+}
+
+func TestDocumentRepository_FindByIDForUpdate_NotFound(t *testing.T) {
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			assert.Contains(t, sql, "FOR UPDATE")
+			return &mockRow{err: pgx.ErrNoRows}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	_, err := NewDocumentRepository().FindByIDForUpdate(ctx, "org-1", "doc-1")
+	require.Error(t, err)
+	assert.Equal(t, port.ErrCodeDocumentNotFound, port.ErrorCode(err))
+}
+
+func TestDocumentRepository_FindByIDForUpdate_DBError(t *testing.T) {
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			assert.Contains(t, sql, "FOR UPDATE")
+			return &mockRow{err: errors.New("connection reset")}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	_, err := NewDocumentRepository().FindByIDForUpdate(ctx, "org-1", "doc-1")
+	require.Error(t, err)
+	assert.Equal(t, port.ErrCodeDatabaseFailed, port.ErrorCode(err))
+	assert.True(t, port.IsRetryable(err))
+}
+
 func TestDocumentRepository_List_Empty(t *testing.T) {
 	mock := &mockTx{
 		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {

@@ -43,6 +43,16 @@ type DocumentRepository interface {
 	// Returns ErrCodeDocumentNotFound if not found.
 	FindByID(ctx context.Context, organizationID, documentID string) (*model.Document, error)
 
+	// FindByIDForUpdate retrieves a document with a row-level exclusive lock
+	// (SELECT ... FOR UPDATE). Must be called within a transaction.
+	// The lock prevents concurrent transactions from reading/modifying the same
+	// document row until the current transaction commits or rolls back.
+	// Used by Version Management Service to serialize version creation and
+	// prevent race conditions on version_number computation and
+	// current_version_id update (BRE-005).
+	// Returns ErrCodeDocumentNotFound if not found.
+	FindByIDForUpdate(ctx context.Context, organizationID, documentID string) (*model.Document, error)
+
 	// List returns a paginated list of documents for the organization,
 	// optionally filtered by status.
 	List(ctx context.Context, organizationID string, statusFilter *model.DocumentStatus, page, pageSize int) ([]*model.Document, int, error)

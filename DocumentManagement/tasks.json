@@ -863,7 +863,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-020"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-02",
+      "summary": "Реализована защита от race condition при создании версий документа (BRE-005). PORT: добавлен FindByIDForUpdate в DocumentRepository interface — SELECT ... FOR UPDATE с row-level exclusive lock. POSTGRES: FindByIDForUpdate в document_repository.go — SELECT с FOR UPDATE clause, tenant isolation (organization_id = $2), scanDocument shared helper. VERSION SERVICE: createVersionInTx заменён FindByID → FindByIDForUpdate внутри транзакции — сериализация конкурентных создателей версий: NextVersionNumber (MAX+1) и current_version_id update выполняются под lock на document row. Retry loop (3 попытки) сохранён как defense-in-depth. MOCK: FindByIDForUpdate добавлен в mock DocumentRepository (version_test.go, lifecycle_test.go) с forUpdateCallCount tracking. РЕВЬЮ: code-reviewer → APPROVED, 0 blocking, 3 warnings исправлено (W-1: defense-in-depth комментарий, W-3: RE_CHECK в тесте AllOriginTypes). 8 новых тестов: 3 postgres adapter (FOR UPDATE SQL clause, not found, DB error) + 5 version service BRE-005 (UsesFindByIDForUpdate, ForUpdateErrorPropagates, ForUpdateNotFound, RetryStillUsesForUpdate, AllOriginTypesCallForUpdate с RE_CHECK). 1 существующий тест обновлён (DocRefetchedInsideTxOnRetry → verifies forUpdateCallCount). Все тесты PASS с -race -count=1. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-040",

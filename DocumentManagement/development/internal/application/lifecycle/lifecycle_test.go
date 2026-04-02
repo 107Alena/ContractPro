@@ -67,6 +67,10 @@ func (m *mockDocumentRepo) Update(ctx context.Context, doc *model.Document) erro
 	return nil
 }
 
+func (m *mockDocumentRepo) FindByIDForUpdate(ctx context.Context, orgID, docID string) (*model.Document, error) {
+	return m.FindByID(ctx, orgID, docID) // lifecycle does not use FOR UPDATE
+}
+
 func (m *mockDocumentRepo) ExistsByID(context.Context, string, string) (bool, error) {
 	panic("not used in lifecycle")
 }

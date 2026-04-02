@@ -116,6 +116,9 @@ func (s *VersionManagementService) CreateVersion(ctx context.Context, params por
 	}
 
 	// Retry loop for optimistic locking on version_number unique constraint.
+	// With BRE-005 (FOR UPDATE on document row), concurrent version creators are
+	// serialized at the lock, making unique constraint violations unlikely.
+	// The retry remains as defense-in-depth for edge cases (lock timeouts, etc.).
 	// The document status check happens inside the transaction to prevent TOCTOU.
 	var (
 		version *model.DocumentVersion
@@ -213,13 +216,16 @@ func (s *VersionManagementService) ListVersions(ctx context.Context, params port
 // ---------------------------------------------------------------------------
 
 // createVersionInTx executes the version creation within a single DB transaction:
-// FindByID (status check) → NextVersionNumber → Insert version →
+// FindByIDForUpdate (lock + status check) → NextVersionNumber → Insert version →
 // Update document.current_version_id → Audit → Outbox.
 //
-// The document is fetched inside the transaction to prevent TOCTOU race
-// conditions (another request could archive/delete the document between the
-// check and the update). A fresh fetch on each retry also avoids leaking
-// mutations from a rolled-back attempt.
+// The document is locked with SELECT ... FOR UPDATE inside the transaction to:
+// 1. Prevent TOCTOU race conditions (another request could archive/delete the
+//    document between the check and the update).
+// 2. Serialize concurrent version creation: NextVersionNumber (MAX+1) and
+//    current_version_id update execute under the document row lock, preventing
+//    duplicate version_number conflicts (BRE-005).
+// A fresh fetch on each retry also avoids leaking mutations from a rolled-back attempt.
 func (s *VersionManagementService) createVersionInTx(
 	ctx context.Context,
 	params port.CreateVersionParams,
@@ -228,8 +234,9 @@ func (s *VersionManagementService) createVersionInTx(
 	var version *model.DocumentVersion
 
 	err := s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
-		// Fetch document inside transaction for atomicity.
-		doc, err := s.docRepo.FindByID(txCtx, params.OrganizationID, params.DocumentID)
+		// Lock and fetch document inside transaction for atomicity (BRE-005).
+		// FOR UPDATE serializes concurrent version creators on the same document.
+		doc, err := s.docRepo.FindByIDForUpdate(txCtx, params.OrganizationID, params.DocumentID)
 		if err != nil {
 			return err
 		}

@@ -127,7 +127,35 @@ func (s *DiffStorageService) HandleDiffReady(ctx context.Context, event model.Do
 		return err
 	}
 
-	// Step 2: Merge diffs into a single blob.
+	// Step 2: Idempotency pre-check (REV-028). If a diff already exists for
+	// this version pair, skip the blob upload entirely and just confirm.
+	// This avoids overwriting the existing blob with potentially different
+	// content from a reprocessing job, preserving data integrity.
+	existing, findErr := s.diffRepo.FindByVersionPair(ctx, event.OrgID, event.DocumentID,
+		event.BaseVersionID, event.TargetVersionID)
+	if findErr != nil && port.ErrorCode(findErr) != port.ErrCodeDiffNotFound {
+		return findErr
+	}
+	if existing != nil {
+		s.logger.Info("diff already exists for version pair, sending confirmation",
+			"base_version_id", event.BaseVersionID,
+			"target_version_id", event.TargetVersionID,
+			"job_id", event.JobID,
+		)
+		meta := model.EventMeta{CorrelationID: event.CorrelationID, Timestamp: time.Now().UTC()}
+		return s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
+			return s.outboxWriter.Write(txCtx, event.TargetVersionID,
+				model.TopicDMResponsesDiffPersisted,
+				model.DocumentVersionDiffPersisted{
+					EventMeta:  meta,
+					JobID:      event.JobID,
+					DocumentID: event.DocumentID,
+				},
+			)
+		})
+	}
+
+	// Step 3: Merge diffs into a single blob.
 	blob := diffBlob{
 		TextDiffs:       ensureJSONArray(event.TextDiffs),
 		StructuralDiffs: ensureJSONArray(event.StructuralDiffs),
@@ -137,7 +165,7 @@ func (s *DiffStorageService) HandleDiffReady(ctx context.Context, event model.Do
 		return port.NewValidationError(fmt.Sprintf("failed to marshal diff blob: %v", err))
 	}
 
-	// Step 3: Upload blob to Object Storage.
+	// Step 4: Upload blob to Object Storage.
 	storageKey := objectstorage.DiffKey(event.OrgID, event.DocumentID, event.BaseVersionID, event.TargetVersionID)
 	if err := s.objectStorage.PutObject(ctx, storageKey, bytes.NewReader(blobData), objectstorage.ContentTypeJSON); err != nil {
 		return port.NewStorageError(fmt.Sprintf("put diff blob %s", storageKey), err)
@@ -146,9 +174,9 @@ func (s *DiffStorageService) HandleDiffReady(ctx context.Context, event model.Do
 	contentHash := sha256Hex(blobData)
 	meta := model.EventMeta{CorrelationID: event.CorrelationID, Timestamp: time.Now().UTC()}
 
-	// Step 4: DB transaction — insert diff reference, audit, outbox.
+	// Step 5: DB transaction — insert diff reference, audit, outbox.
 	if err := s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
-		// 4a. Insert diff reference.
+		// 5a. Insert diff reference.
 		ref := model.NewVersionDiffReference(
 			s.newUUID(), event.DocumentID, event.OrgID,
 			event.BaseVersionID, event.TargetVersionID,
@@ -156,28 +184,11 @@ func (s *DiffStorageService) HandleDiffReady(ctx context.Context, event model.Do
 			event.TextDiffCount, event.StructuralDiffCount,
 			event.JobID, event.CorrelationID,
 		)
-		if insertErr := s.diffRepo.Insert(txCtx, ref); insertErr != nil {
-			// REV-028: if diff already exists for this version pair,
-			// write DiffPersisted for the current job_id without overwriting.
-			if port.ErrorCode(insertErr) == port.ErrCodeDiffAlreadyExists {
-				s.logger.Info("diff already exists for version pair, sending confirmation",
-					"base_version_id", event.BaseVersionID,
-					"target_version_id", event.TargetVersionID,
-					"job_id", event.JobID,
-				)
-				return s.outboxWriter.Write(txCtx, event.TargetVersionID,
-					model.TopicDMResponsesDiffPersisted,
-					model.DocumentVersionDiffPersisted{
-						EventMeta:  meta,
-						JobID:      event.JobID,
-						DocumentID: event.DocumentID,
-					},
-				)
-			}
-			return insertErr
+		if err := s.diffRepo.Insert(txCtx, ref); err != nil {
+			return err
 		}
 
-		// 4b. Insert audit record.
+		// 5b. Insert audit record.
 		auditDetails, marshalErr := json.Marshal(map[string]any{
 			"base_version_id":       event.BaseVersionID,
 			"target_version_id":     event.TargetVersionID,
@@ -202,7 +213,7 @@ func (s *DiffStorageService) HandleDiffReady(ctx context.Context, event model.Do
 			return err
 		}
 
-		// 4c. Write outbox event (DiffPersisted).
+		// 5c. Write outbox event (DiffPersisted).
 		return s.outboxWriter.Write(txCtx, event.TargetVersionID,
 			model.TopicDMResponsesDiffPersisted,
 			model.DocumentVersionDiffPersisted{
@@ -285,6 +296,9 @@ func validateDiffRequired(orgID, jobID, documentID, baseVersionID, targetVersion
 	if targetVersionID == "" {
 		return port.NewValidationError("target_version_id is required")
 	}
+	if baseVersionID == targetVersionID {
+		return port.NewValidationError("base_version_id and target_version_id must differ")
+	}
 	return nil
 }
 
@@ -301,6 +315,9 @@ func validateGetDiffParams(params port.GetDiffParams) error {
 	}
 	if params.TargetVersionID == "" {
 		return port.NewValidationError("target_version_id is required")
+	}
+	if params.BaseVersionID == params.TargetVersionID {
+		return port.NewValidationError("base_version_id and target_version_id must differ")
 	}
 	return nil
 }

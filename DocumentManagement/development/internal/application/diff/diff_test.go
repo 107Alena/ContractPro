@@ -488,6 +488,7 @@ func TestHandleDiffReady_ValidationErrors(t *testing.T) {
 		{"empty document_id", func(e *model.DocumentVersionDiffReady) { e.DocumentID = "" }, "document_id is required"},
 		{"empty base_version_id", func(e *model.DocumentVersionDiffReady) { e.BaseVersionID = "" }, "base_version_id is required"},
 		{"empty target_version_id", func(e *model.DocumentVersionDiffReady) { e.TargetVersionID = "" }, "target_version_id is required"},
+		{"same base and target", func(e *model.DocumentVersionDiffReady) { e.BaseVersionID = "ver-1"; e.TargetVersionID = "ver-1" }, "must differ"},
 	}
 
 	for _, tt := range tests {
@@ -621,12 +622,29 @@ func TestHandleDiffReady_TransactionFailure_Compensation(t *testing.T) {
 func TestHandleDiffReady_Idempotency_DiffAlreadyExists(t *testing.T) {
 	t.Parallel()
 	deps := newTestDeps()
-	deps.diffRepo.insertErr = port.NewDiffAlreadyExistsError("ver-1", "ver-2")
+	// Pre-check finds existing diff → skip blob upload.
+	deps.diffRepo.findFn = func(ctx context.Context, orgID, docID, baseVersionID, targetVersionID string) (*model.VersionDiffReference, error) {
+		return &model.VersionDiffReference{
+			DiffID:          "existing-diff",
+			DocumentID:      docID,
+			OrganizationID:  orgID,
+			BaseVersionID:   baseVersionID,
+			TargetVersionID: targetVersionID,
+			StorageKey:      "org-1/doc-1/diffs/ver-1_ver-2",
+			JobID:           "old-job",
+		}, nil
+	}
 	svc := deps.newService()
 
-	err := svc.HandleDiffReady(context.Background(), validDiffEvent())
+	event := validDiffEvent()
+	err := svc.HandleDiffReady(context.Background(), event)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No blob should be uploaded (pre-check short-circuits).
+	if len(deps.objectStorage.putCalls) != 0 {
+		t.Errorf("unexpected put calls: %d (blob upload should be skipped)", len(deps.objectStorage.putCalls))
 	}
 
 	// No audit record should be inserted (skip audit for duplicate).
@@ -634,7 +652,12 @@ func TestHandleDiffReady_Idempotency_DiffAlreadyExists(t *testing.T) {
 		t.Errorf("unexpected audit inserts: %d", len(deps.auditRepo.inserted))
 	}
 
-	// DiffPersisted should still be written to outbox.
+	// No diff reference should be inserted.
+	if len(deps.diffRepo.inserted) != 0 {
+		t.Errorf("unexpected diff inserts: %d", len(deps.diffRepo.inserted))
+	}
+
+	// DiffPersisted should still be written to outbox for current job_id.
 	if len(deps.outboxRepo.entries) != 1 {
 		t.Fatalf("expected 1 outbox entry, got %d", len(deps.outboxRepo.entries))
 	}
@@ -650,6 +673,9 @@ func TestHandleDiffReady_Idempotency_DiffAlreadyExists(t *testing.T) {
 	if persisted.JobID != "job-1" {
 		t.Errorf("persisted.JobID = %q, want job-1", persisted.JobID)
 	}
+	if persisted.CorrelationID != "corr-123" {
+		t.Errorf("persisted.CorrelationID = %q, want corr-123", persisted.CorrelationID)
+	}
 
 	// Info log about duplicate.
 	hasDupLog := false
@@ -663,7 +689,7 @@ func TestHandleDiffReady_Idempotency_DiffAlreadyExists(t *testing.T) {
 		t.Error("expected INFO log about existing diff")
 	}
 
-	// No compensation (blob at same key is harmless overwrite).
+	// No compensation needed.
 	if len(deps.objectStorage.deleteCalls) != 0 {
 		t.Errorf("unexpected delete calls: %v", deps.objectStorage.deleteCalls)
 	}
@@ -888,6 +914,7 @@ func TestGetDiff_ValidationErrors(t *testing.T) {
 		{"empty doc_id", port.GetDiffParams{OrganizationID: "o", BaseVersionID: "b", TargetVersionID: "t"}, "document_id is required"},
 		{"empty base_version_id", port.GetDiffParams{OrganizationID: "o", DocumentID: "d", TargetVersionID: "t"}, "base_version_id is required"},
 		{"empty target_version_id", port.GetDiffParams{OrganizationID: "o", DocumentID: "d", BaseVersionID: "b"}, "target_version_id is required"},
+		{"same base and target", port.GetDiffParams{OrganizationID: "o", DocumentID: "d", BaseVersionID: "v", TargetVersionID: "v"}, "must differ"},
 	}
 
 	for _, tt := range tests {
@@ -1025,6 +1052,61 @@ func TestHandleDiffReady_CorrelationIDPreserved(t *testing.T) {
 	// Audit record too.
 	if deps.auditRepo.inserted[0].CorrelationID != "trace-abc-123" {
 		t.Errorf("audit.CorrelationID = %q", deps.auditRepo.inserted[0].CorrelationID)
+	}
+}
+
+func TestHandleDiffReady_TransactorFailure_Compensation(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps()
+	// Transactor wraps fn, runs it successfully, then returns an error
+	// (simulating a commit failure).
+	deps.transactor.fn = func(ctx context.Context, fn func(ctx context.Context) error) error {
+		if err := fn(ctx); err != nil {
+			return err
+		}
+		return port.NewDatabaseError("commit failed", errors.New("connection reset"))
+	}
+	svc := deps.newService()
+
+	err := svc.HandleDiffReady(context.Background(), validDiffEvent())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if port.ErrorCode(err) != port.ErrCodeDatabaseFailed {
+		t.Errorf("error code = %q, want DATABASE_FAILED", port.ErrorCode(err))
+	}
+
+	// Blob was uploaded (inner fn succeeded).
+	if len(deps.objectStorage.putCalls) != 1 {
+		t.Fatalf("expected 1 put call, got %d", len(deps.objectStorage.putCalls))
+	}
+
+	// Compensation must still fire since commit failed.
+	if len(deps.objectStorage.deleteCalls) != 1 {
+		t.Fatalf("expected 1 compensation delete, got %d", len(deps.objectStorage.deleteCalls))
+	}
+}
+
+func TestHandleDiffReady_FindByVersionPairDBError(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps()
+	// Pre-check for existing diff fails with a DB error (not DiffNotFound).
+	deps.diffRepo.findFn = func(ctx context.Context, orgID, docID, baseVersionID, targetVersionID string) (*model.VersionDiffReference, error) {
+		return nil, port.NewDatabaseError("pre-check failed", errors.New("timeout"))
+	}
+	svc := deps.newService()
+
+	err := svc.HandleDiffReady(context.Background(), validDiffEvent())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if port.ErrorCode(err) != port.ErrCodeDatabaseFailed {
+		t.Errorf("error code = %q, want DATABASE_FAILED", port.ErrorCode(err))
+	}
+
+	// No blob should be uploaded.
+	if len(deps.objectStorage.putCalls) != 0 {
+		t.Errorf("unexpected put calls: %d", len(deps.objectStorage.putCalls))
 	}
 }
 

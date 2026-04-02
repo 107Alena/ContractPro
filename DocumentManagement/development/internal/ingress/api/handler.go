@@ -121,12 +121,14 @@ func (h *Handler) Mux(apiRequests *prometheus.CounterVec, apiDuration *prometheu
 	// --- Diffs ---
 	mux.HandleFunc("GET /api/v1/documents/{document_id}/diffs/{base_version_id}/{target_version_id}", h.getDiff)
 
-	// --- Audit ---
-	mux.HandleFunc("GET /api/v1/audit", h.listAuditRecords)
+	// --- Audit (requires "admin" or "auditor" role) ---
+	mux.Handle("GET /api/v1/audit",
+		requireRole("admin", "auditor")(http.HandlerFunc(h.listAuditRecords)))
 
-	// --- Admin: DLQ Replay ---
+	// --- Admin: DLQ Replay (requires "admin" role) ---
 	if h.dlqRepo != nil && h.dlqBroker != nil {
-		mux.HandleFunc("POST /api/v1/admin/dlq/replay", h.replayDLQ)
+		mux.Handle("POST /api/v1/admin/dlq/replay",
+			requireRole("admin")(http.HandlerFunc(h.replayDLQ)))
 	}
 
 	// Execution order: logging → metrics → auth → handler.
@@ -549,7 +551,19 @@ func (h *Handler) listAuditRecords(w http.ResponseWriter, r *http.Request) {
 
 	if v := q.Get("action"); v != "" {
 		action := model.AuditAction(v)
+		if !isValidAuditAction(action) {
+			writeErrorJSON(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid 'action' parameter")
+			return
+		}
 		params.Action = &action
+	}
+	if v := q.Get("actor_type"); v != "" {
+		actorType := model.ActorType(v)
+		if !isValidActorType(actorType) {
+			writeErrorJSON(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid 'actor_type' parameter")
+			return
+		}
+		params.ActorType = &actorType
 	}
 	if v := q.Get("from"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
@@ -630,6 +644,26 @@ func isValidOriginType(t model.OriginType) bool {
 // isValidArtifactType checks if an ArtifactType is one of the known values.
 func isValidArtifactType(t model.ArtifactType) bool {
 	for _, v := range model.AllArtifactTypes {
+		if v == t {
+			return true
+		}
+	}
+	return false
+}
+
+// isValidAuditAction checks if an AuditAction is one of the known values.
+func isValidAuditAction(a model.AuditAction) bool {
+	for _, v := range model.AllAuditActions {
+		if v == a {
+			return true
+		}
+	}
+	return false
+}
+
+// isValidActorType checks if an ActorType is one of the known values.
+func isValidActorType(t model.ActorType) bool {
+	for _, v := range model.AllActorTypes {
 		if v == t {
 			return true
 		}

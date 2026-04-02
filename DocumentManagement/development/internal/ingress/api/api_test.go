@@ -1471,7 +1471,7 @@ func TestDLQReplay_HappyPath(t *testing.T) {
 
 	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
 		dlqReplayRequest{Category: "ingestion", Limit: 10},
-		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "admin"})
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
@@ -1515,7 +1515,7 @@ func TestDLQReplay_MaxReplayExceeded(t *testing.T) {
 
 	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
 		dlqReplayRequest{Category: "ingestion"},
-		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "admin"})
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
@@ -1538,6 +1538,7 @@ func TestDLQReplay_InvalidJSON(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/v1/admin/dlq/replay", strings.NewReader("{invalid"))
 	req.Header.Set("X-Organization-ID", "org-1")
 	req.Header.Set("X-User-ID", "user-1")
+	req.Header.Set("X-User-Role", "admin")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
@@ -1552,7 +1553,7 @@ func TestDLQReplay_InvalidCategory(t *testing.T) {
 
 	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
 		dlqReplayRequest{Category: "invalid_value"},
-		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "admin"})
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rr.Code)
@@ -1578,7 +1579,7 @@ func TestDLQReplay_PublishError(t *testing.T) {
 
 	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
 		dlqReplayRequest{Category: "ingestion"},
-		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "admin"})
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
@@ -1601,7 +1602,7 @@ func TestDLQReplay_DBError(t *testing.T) {
 
 	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
 		dlqReplayRequest{Category: "ingestion"},
-		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "admin"})
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rr.Code)
@@ -1616,7 +1617,7 @@ func TestDLQReplay_WithCorrelationIDFilter(t *testing.T) {
 
 	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
 		dlqReplayRequest{CorrelationID: "corr-123"},
-		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "admin"})
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
@@ -1636,10 +1637,274 @@ func TestDLQReplay_NotEnabledWithoutDeps(t *testing.T) {
 
 	rr := doRequestWithHeaders(mux, "POST", "/api/v1/admin/dlq/replay",
 		dlqReplayRequest{Category: "ingestion"},
-		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "admin"})
 
 	// Without the DLQ route, this should 404.
 	if rr.Code == http.StatusOK {
 		t.Error("expected non-200 when DLQ replay is not enabled")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Role-based access control tests (DM-TASK-024)
+// ---------------------------------------------------------------------------
+
+func TestRequireRole_AuditEndpoint_NoRole_Returns403(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	rr := doRequestWithHeaders(d.handler, "GET", "/api/v1/audit", nil,
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for missing role", rr.Code)
+	}
+	var resp ErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err == nil {
+		if resp.ErrorCode != "FORBIDDEN" {
+			t.Errorf("error_code = %q, want FORBIDDEN", resp.ErrorCode)
+		}
+	}
+}
+
+func TestRequireRole_AuditEndpoint_WrongRole_Returns403(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	rr := doRequestWithHeaders(d.handler, "GET", "/api/v1/audit", nil,
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "viewer"})
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for wrong role", rr.Code)
+	}
+	var resp ErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err == nil {
+		if resp.ErrorCode != "FORBIDDEN" {
+			t.Errorf("error_code = %q, want FORBIDDEN", resp.ErrorCode)
+		}
+	}
+}
+
+func TestRequireRole_AuditEndpoint_AdminRole_Returns200(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	rr := doRequestWithHeaders(d.handler, "GET", "/api/v1/audit", nil,
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "admin"})
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 for admin role", rr.Code)
+	}
+}
+
+func TestRequireRole_AuditEndpoint_AuditorRole_Returns200(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	rr := doRequestWithHeaders(d.handler, "GET", "/api/v1/audit", nil,
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "auditor"})
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 for auditor role", rr.Code)
+	}
+}
+
+func TestRequireRole_DLQReplay_NonAdmin_Returns403(t *testing.T) {
+	t.Parallel()
+	repo := &mockDLQRepo{}
+	broker := &mockDLQBroker{}
+	handler := newDLQReplayHandler(repo, broker, 3)
+
+	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
+		dlqReplayRequest{Category: "ingestion"},
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1", "X-User-Role": "auditor"})
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for non-admin role on DLQ replay", rr.Code)
+	}
+}
+
+func TestRequireRole_DLQReplay_NoRole_Returns403(t *testing.T) {
+	t.Parallel()
+	repo := &mockDLQRepo{}
+	broker := &mockDLQBroker{}
+	handler := newDLQReplayHandler(repo, broker, 3)
+
+	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
+		dlqReplayRequest{Category: "ingestion"},
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for missing role on DLQ replay", rr.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Extended audit endpoint filter tests (DM-TASK-024)
+// ---------------------------------------------------------------------------
+
+func TestListAuditRecords_FilterByActorType(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+
+	var capturedParams port.AuditListParams
+	d.audit.list = func(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
+		capturedParams = params
+		return []*model.AuditRecord{}, 0, nil
+	}
+
+	doRequest(d.handler, "GET", "/api/v1/audit?actor_type=DOMAIN", nil)
+
+	if capturedParams.ActorType == nil {
+		t.Fatal("actor_type filter not parsed")
+	}
+	if *capturedParams.ActorType != model.ActorTypeDomain {
+		t.Errorf("actor_type = %q, want DOMAIN", *capturedParams.ActorType)
+	}
+}
+
+func TestListAuditRecords_InvalidAction_Returns400(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	rr := doRequest(d.handler, "GET", "/api/v1/audit?action=INVALID_ACTION", nil)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for invalid action", rr.Code)
+	}
+}
+
+func TestListAuditRecords_InvalidActorType_Returns400(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	rr := doRequest(d.handler, "GET", "/api/v1/audit?actor_type=UNKNOWN", nil)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for invalid actor_type", rr.Code)
+	}
+}
+
+func TestListAuditRecords_FilterByVersionID(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+
+	var capturedParams port.AuditListParams
+	d.audit.list = func(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
+		capturedParams = params
+		return []*model.AuditRecord{}, 0, nil
+	}
+
+	doRequest(d.handler, "GET", "/api/v1/audit?version_id=ver-42", nil)
+
+	if capturedParams.VersionID != "ver-42" {
+		t.Errorf("version_id = %q, want ver-42", capturedParams.VersionID)
+	}
+}
+
+func TestListAuditRecords_CombinedFilters(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+
+	var capturedParams port.AuditListParams
+	d.audit.list = func(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
+		capturedParams = params
+		return []*model.AuditRecord{}, 0, nil
+	}
+
+	doRequest(d.handler, "GET", "/api/v1/audit?document_id=doc-1&version_id=ver-1&action=ARTIFACT_SAVED&actor_id=DP&actor_type=DOMAIN&from=2026-01-01T00:00:00Z&to=2026-12-31T23:59:59Z&page=2&size=50", nil)
+
+	if capturedParams.DocumentID != "doc-1" {
+		t.Errorf("document_id = %q, want doc-1", capturedParams.DocumentID)
+	}
+	if capturedParams.VersionID != "ver-1" {
+		t.Errorf("version_id = %q, want ver-1", capturedParams.VersionID)
+	}
+	if capturedParams.Action == nil || *capturedParams.Action != model.AuditActionArtifactSaved {
+		t.Errorf("action filter mismatch")
+	}
+	if capturedParams.ActorID != "DP" {
+		t.Errorf("actor_id = %q, want DP", capturedParams.ActorID)
+	}
+	if capturedParams.ActorType == nil || *capturedParams.ActorType != model.ActorTypeDomain {
+		t.Errorf("actor_type filter mismatch")
+	}
+	if capturedParams.Since == nil || capturedParams.Until == nil {
+		t.Error("time range filters not parsed")
+	}
+	if capturedParams.Page != 2 {
+		t.Errorf("page = %d, want 2", capturedParams.Page)
+	}
+	if capturedParams.PageSize != 50 {
+		t.Errorf("size = %d, want 50", capturedParams.PageSize)
+	}
+}
+
+func TestListAuditRecords_EmptyResult(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.audit.list = func(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
+		return []*model.AuditRecord{}, 0, nil
+	}
+
+	rr := doRequest(d.handler, "GET", "/api/v1/audit", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	var resp PaginatedResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 0 {
+		t.Errorf("total = %d, want 0", resp.Total)
+	}
+}
+
+func TestListAuditRecords_Pagination(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+
+	var capturedParams port.AuditListParams
+	d.audit.list = func(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
+		capturedParams = params
+		return []*model.AuditRecord{}, 0, nil
+	}
+
+	doRequest(d.handler, "GET", "/api/v1/audit?page=3&size=25", nil)
+
+	if capturedParams.Page != 3 {
+		t.Errorf("page = %d, want 3", capturedParams.Page)
+	}
+	if capturedParams.PageSize != 25 {
+		t.Errorf("pageSize = %d, want 25", capturedParams.PageSize)
+	}
+}
+
+func TestListAuditRecords_MultipleRecords(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.audit.list = func(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
+		return []*model.AuditRecord{
+			model.NewAuditRecord("a-1", params.OrganizationID, model.AuditActionDocumentCreated, model.ActorTypeUser, "user-1"),
+			model.NewAuditRecord("a-2", params.OrganizationID, model.AuditActionArtifactSaved, model.ActorTypeDomain, "DP"),
+			model.NewAuditRecord("a-3", params.OrganizationID, model.AuditActionArtifactRead, model.ActorTypeDomain, "LIC"),
+		}, 3, nil
+	}
+
+	rr := doRequest(d.handler, "GET", "/api/v1/audit", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	var resp PaginatedResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 3 {
+		t.Errorf("total = %d, want 3", resp.Total)
+	}
+}
+
+func TestListAuditRecords_OrgIDFromAuthContext(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+
+	var capturedParams port.AuditListParams
+	d.audit.list = func(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
+		capturedParams = params
+		return []*model.AuditRecord{}, 0, nil
+	}
+
+	doRequest(d.handler, "GET", "/api/v1/audit", nil)
+
+	if capturedParams.OrganizationID != "org-1" {
+		t.Errorf("org_id = %q, want org-1 (from auth context)", capturedParams.OrganizationID)
 	}
 }

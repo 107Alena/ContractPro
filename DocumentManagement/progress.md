@@ -1672,3 +1672,45 @@
 - DM-TASK-041 (Stale Version Watchdog) — deps: DM-TASK-017 ✅, DM-TASK-016 ✅
 
 ---
+
+## DM-TASK-024: Audit Trail — запись и чтение audit records (2026-04-03)
+
+**Статус:** done
+
+**Что сделано:**
+- Верифицирован и дополнен audit trail для Document Management
+- Добавлен `requireRole` middleware в `internal/ingress/api/auth.go`:
+  - Map-based O(1) lookup, case-sensitive by design (API Gateway normalizes)
+  - Fail-closed для nil/empty/unknown role → 403 FORBIDDEN
+  - Не утекает информация о допустимых ролях
+- Audit endpoint GET /api/v1/audit защищён `requireRole("admin", "auditor")`
+- DLQ replay POST /api/v1/admin/dlq/replay защищён `requireRole("admin")`
+- Добавлен `actor_type` query parameter для audit endpoint
+- Добавлена валидация `action` и `actor_type` enum-значений (isValidAuditAction, isValidActorType) → 400 при невалидных значениях
+- Все 8 action types записываются через 5 application services (verified)
+- Append-only: AuditRepository interface только Insert+List, нет Update/Delete
+
+**Новые тесты:**
+- 18 новых API тестов: 6 role middleware + 2 invalid enum + 10 audit endpoint filters
+- 7 integration тестов в `audit_trail_test.go`:
+  - AllActionTypes — полная верификация 7 records (3×ARTIFACT_SAVED + 3×STATUS_CHANGED + 1×DIFF_SAVED)
+  - ArtifactSavedDetails — проверка details JSON (producer, artifact_types, count)
+  - StatusChangedDetails — проверка from/to
+  - AsyncArtifactRead_SemanticTree — polling-based wait, ActorID=DP
+  - AsyncArtifactRead_GetArtifacts_LIC — ActorID=RE (LIC artifacts → requester RE)
+  - DiffSavedDetails — base/target version IDs, storage_key, content_hash
+  - AppendOnly — compile-time + behavioral verification
+- Обновлены DLQ replay тесты (добавлен X-User-Role: admin)
+
+**Code review:** code-reviewer → 0B + 9W, 5 warnings исправлены (map lookup, case-sensitive doc, enum validation, response body check, polling вместо sleep)
+
+**Проверки:** go test -count=1 -race ALL PASS (22 пакета), go vet OK, make build/test/lint OK
+
+**Следующие задачи (high priority pending, deps met):**
+- DM-TASK-029 (Dockerfile + Docker Compose) — deps: DM-TASK-025 ✅
+- DM-TASK-030 (Tenant isolation enforcement) — deps: DM-TASK-012 ✅, DM-TASK-014 ✅, DM-TASK-022 ✅
+- DM-TASK-040 (REV-005 Archive endpoint) — deps: DM-TASK-022 ✅
+- DM-TASK-041 (Stale Version Watchdog) — deps: DM-TASK-017 ✅, DM-TASK-016 ✅
+- DM-TASK-042 (Outbox Poller FIFO ordering) — deps: DM-TASK-016 ✅
+
+---

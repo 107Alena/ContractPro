@@ -68,3 +68,31 @@ func authMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
+// requireRole returns middleware that checks if the AuthContext contains one of
+// the allowed roles. Returns 403 if the role is missing or not in the allowed
+// set. This is a preparation for future UOM integration — currently the role is
+// read from the X-User-Role header set by the API Gateway.
+//
+// Role comparison is case-sensitive by design: the API Gateway normalizes role
+// values to lowercase before forwarding them via X-User-Role header.
+func requireRole(allowedRoles ...string) func(http.Handler) http.Handler {
+	allowed := make(map[string]struct{}, len(allowedRoles))
+	for _, r := range allowedRoles {
+		allowed[r] = struct{}{}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ac := authFromContext(r.Context())
+			if ac == nil || ac.Role == "" {
+				writeErrorJSON(w, http.StatusForbidden, "FORBIDDEN", "insufficient permissions")
+				return
+			}
+			if _, ok := allowed[ac.Role]; !ok {
+				writeErrorJSON(w, http.StatusForbidden, "FORBIDDEN", "insufficient permissions")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

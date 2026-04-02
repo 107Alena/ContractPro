@@ -1540,3 +1540,62 @@
 - DM-TASK-041 (Stale Version Watchdog) — deps: DM-TASK-017 ✅, DM-TASK-016 ✅
 
 ---
+
+## DM-TASK-026: Integration test DP→DM (end-to-end с in-memory fakes) (2026-04-03)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/integration/` с end-to-end integration тестами
+- `testinfra.go` (~900 строк): 14 in-memory fakes реализующих все outbound ports:
+  - `memoryTransactor` с txCallCount tracking для проверки transactional intent
+  - `memoryDocumentRepository`, `memoryVersionRepository` (с FindByIDForUpdate)
+  - `memoryArtifactRepository`, `memoryAuditRepository` (append-only)
+  - `memoryOutboxRepository` с PendingStats
+  - `memoryObjectStorage` (PutObject/GetObject/HeadObject/DeleteByPrefix)
+  - `memoryIdempotencyStore` (с SetNX)
+  - `memoryDiffRepository`, `recordingDLQPort`, `memoryFallbackResolver`
+  - `captureBroker`, `noopConfirmationPublisher`, `recordingLogger`, noop metrics
+  - `testHarness` wires real services: ArtifactIngestionService, ArtifactQueryService, DiffStorageService, OutboxWriter, IdempotencyGuard
+  - Helpers: `defaultDocument`, `defaultVersion`, `defaultDPEvent`
+- `dp_ingestion_test.go` (~650 строк): 14 integration тестов:
+  1. `TestDPIngestion_HappyPath` — full pipeline: 4 artifacts → blobs + descriptors + status + audit + outbox
+  2. `TestDPIngestion_WithWarnings` — 5 artifacts including warnings
+  3. `TestDPIngestion_ContentHashIntegrity` — SHA-256 blob↔descriptor match
+  4. `TestDPIngestion_IdempotencyDedup` — Check→Process→MarkCompleted→Check→Skip
+  5. `TestDPIngestion_VersionNotFound` — error, no side effects
+  6. `TestDPIngestion_FallbackVersionID` — REV-001+REV-002 fallback
+  7. `TestDPIngestion_OutboxAggregateID` — REV-010 FIFO: aggregate_id=version_id
+  8. `TestDPIngestion_CompensationOnTxFailure` — terminal status → blob compensation
+  9. `TestDPIngestion_ContextCancelled` — no side effects on cancel
+  10. `TestDPIngestion_AuditDetails` — ARTIFACT_SAVED + ARTIFACT_STATUS_CHANGED details
+  11. `TestDPIngestion_StorageKeyConvention` — org/doc/ver/type naming
+  12. `TestDPIngestion_FallbackDocumentNotFound` — fallback not found error
+  13. `TestDPIngestion_TransactionalIntent` — WithTransaction called exactly once
+  14. `TestDPIngestion_EndToEndIdempotency` — guard+handler integration
+
+**Code Review (code-reviewer):** 3B + 5W → все исправлено:
+- B-1: txCallCount tracking для transactor
+- B-2: getBlob returns copy (не alias)
+- B-3: EndToEndIdempotency тест (guard+handler)
+- W-1: make() для slice filter patterns
+- W-2: strings.Contains вместо manual substring
+- W-3: FallbackDocumentNotFound тест
+- W-4: removed unused waitForCondition
+- W-5: ContextCancelled asserts no side effects
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (22 пакета)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи (high priority pending, deps met):**
+- DM-TASK-024 (Audit Trail) — deps: DM-TASK-012 ✅, DM-TASK-022 ✅
+- DM-TASK-027 (Integration test full pipeline) — deps: DM-TASK-026 ✅
+- DM-TASK-028 (Integration test error scenarios) — deps: DM-TASK-026 ✅
+- DM-TASK-029 (Dockerfile + Docker Compose) — deps: DM-TASK-025 ✅
+- DM-TASK-030 (Tenant isolation enforcement) — deps: DM-TASK-012 ✅, DM-TASK-014 ✅, DM-TASK-022 ✅
+- DM-TASK-040 (REV-005 Archive endpoint) — deps: DM-TASK-022 ✅
+- DM-TASK-041 (Stale Version Watchdog) — deps: DM-TASK-017 ✅, DM-TASK-016 ✅
+
+---

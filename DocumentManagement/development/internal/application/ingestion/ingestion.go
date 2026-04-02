@@ -28,19 +28,26 @@ type Logger interface {
 	Error(msg string, keysAndValues ...any)
 }
 
+// FallbackMetrics provides metrics for defensive fallback operations (REV-001/REV-002).
+type FallbackMetrics interface {
+	IncMissingVersionID()
+}
+
 // ArtifactIngestionService receives artifact payloads from producer domains
 // (DP, LIC, RE) and persists them into object storage and the metadata store.
 // It transitions the version's artifact_status through the state machine and
 // publishes confirmation + notification events via the transactional outbox.
 type ArtifactIngestionService struct {
-	transactor    port.Transactor
-	versionRepo   port.VersionRepository
-	artifactRepo  port.ArtifactRepository
-	auditRepo     port.AuditRepository
-	objectStorage port.ObjectStoragePort
-	outboxWriter  *outbox.OutboxWriter
-	logger        Logger
-	newUUID       func() string
+	transactor       port.Transactor
+	versionRepo      port.VersionRepository
+	artifactRepo     port.ArtifactRepository
+	auditRepo        port.AuditRepository
+	objectStorage    port.ObjectStoragePort
+	outboxWriter     *outbox.OutboxWriter
+	fallbackResolver port.DocumentFallbackResolver
+	fallbackMetrics  FallbackMetrics
+	logger           Logger
+	newUUID          func() string
 }
 
 // Compile-time interface check.
@@ -55,6 +62,8 @@ func NewArtifactIngestionService(
 	auditRepo port.AuditRepository,
 	objectStorage port.ObjectStoragePort,
 	outboxWriter *outbox.OutboxWriter,
+	fallbackResolver port.DocumentFallbackResolver,
+	fallbackMetrics FallbackMetrics,
 	logger Logger,
 ) *ArtifactIngestionService {
 	if transactor == nil {
@@ -75,18 +84,26 @@ func NewArtifactIngestionService(
 	if outboxWriter == nil {
 		panic("ingestion: outboxWriter must not be nil")
 	}
+	if fallbackResolver == nil {
+		panic("ingestion: fallbackResolver must not be nil")
+	}
+	if fallbackMetrics == nil {
+		panic("ingestion: fallbackMetrics must not be nil")
+	}
 	if logger == nil {
 		panic("ingestion: logger must not be nil")
 	}
 	return &ArtifactIngestionService{
-		transactor:    transactor,
-		versionRepo:   versionRepo,
-		artifactRepo:  artifactRepo,
-		auditRepo:     auditRepo,
-		objectStorage: objectStorage,
-		outboxWriter:  outboxWriter,
-		logger:        logger,
-		newUUID:       generateUUID,
+		transactor:       transactor,
+		versionRepo:      versionRepo,
+		artifactRepo:     artifactRepo,
+		auditRepo:        auditRepo,
+		objectStorage:    objectStorage,
+		outboxWriter:     outboxWriter,
+		fallbackResolver: fallbackResolver,
+		fallbackMetrics:  fallbackMetrics,
+		logger:           logger,
+		newUUID:          generateUUID,
 	}
 }
 
@@ -99,7 +116,17 @@ func NewArtifactIngestionService(
 // descriptors in the metadata store, transitions artifact_status to
 // PROCESSING_ARTIFACTS_RECEIVED, and publishes confirmation/notification
 // events via the transactional outbox.
+//
+// Defensive fallback (REV-001/REV-002): if DP omits version_id or
+// organization_id, the service resolves them from the documents table.
 func (s *ArtifactIngestionService) HandleDPArtifacts(ctx context.Context, event model.DocumentProcessingArtifactsReady) error {
+	// REV-001/REV-002: resolve missing fields with a single DB lookup when possible.
+	if event.OrgID == "" || event.VersionID == "" {
+		if err := s.resolveDPEventFields(ctx, event.DocumentID, &event.OrgID, &event.VersionID); err != nil {
+			return err
+		}
+	}
+
 	if err := validateRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {
 		return err
 	}
@@ -148,6 +175,13 @@ func (s *ArtifactIngestionService) HandleDPArtifacts(ctx context.Context, event 
 // Stores 8 analysis artifact blobs and transitions artifact_status to
 // ANALYSIS_ARTIFACTS_RECEIVED.
 func (s *ArtifactIngestionService) HandleLICArtifacts(ctx context.Context, event model.LegalAnalysisArtifactsReady) error {
+	// REV-002: resolve organization_id if missing.
+	if event.OrgID == "" {
+		if err := s.resolveOrgID(ctx, event.DocumentID, &event.OrgID); err != nil {
+			return err
+		}
+	}
+
 	if err := validateRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {
 		return err
 	}
@@ -197,6 +231,13 @@ func (s *ArtifactIngestionService) HandleLICArtifacts(ctx context.Context, event
 // DM verifies their existence, records artifact descriptors, and transitions
 // artifact_status to FULLY_READY.
 func (s *ArtifactIngestionService) HandleREArtifacts(ctx context.Context, event model.ReportsArtifactsReady) error {
+	// REV-002: resolve organization_id if missing.
+	if event.OrgID == "" {
+		if err := s.resolveOrgID(ctx, event.DocumentID, &event.OrgID); err != nil {
+			return err
+		}
+	}
+
 	if err := validateRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {
 		return err
 	}
@@ -505,6 +546,59 @@ func appendIfNonEmpty(items []artifactItem, at model.ArtifactType, data json.Raw
 		items = append(items, artifactItem{artifactType: at, data: data})
 	}
 	return items
+}
+
+// ---------------------------------------------------------------------------
+// Defensive fallback resolvers (REV-001/REV-002).
+// TEMPORARY: remove when DP TASK-056 and TASK-057 are completed.
+// ---------------------------------------------------------------------------
+
+// resolveOrgID looks up the organization_id for a document when the incoming
+// event omits it (REV-002). Mutates *target in place and logs a warning.
+func (s *ArtifactIngestionService) resolveOrgID(ctx context.Context, documentID string, target *string) error {
+	orgID, _, err := s.fallbackResolver.ResolveByDocumentID(ctx, documentID)
+	if err != nil {
+		s.logger.Error("REV-002 fallback: failed to resolve organization_id",
+			"document_id", documentID, "error", err)
+		return err
+	}
+	s.logger.Warn("REV-002 fallback: resolved organization_id from DB (event field was empty)",
+		"document_id", documentID, "organization_id", orgID)
+	*target = orgID
+	return nil
+}
+
+// resolveDPEventFields resolves both organization_id and version_id for DP
+// events using a single DB lookup. Used by HandleDPArtifacts to avoid two
+// identical queries when both fields are empty (REV-001/REV-002).
+func (s *ArtifactIngestionService) resolveDPEventFields(
+	ctx context.Context, documentID string,
+	orgTarget, versionTarget *string,
+) error {
+	orgID, versionID, err := s.fallbackResolver.ResolveByDocumentID(ctx, documentID)
+	if err != nil {
+		s.logger.Error("REV-001/REV-002 fallback: failed to resolve document fields",
+			"document_id", documentID, "error", err)
+		return err
+	}
+
+	if *orgTarget == "" {
+		s.logger.Warn("REV-002 fallback: resolved organization_id from DB (event field was empty)",
+			"document_id", documentID, "organization_id", orgID)
+		*orgTarget = orgID
+	}
+
+	if *versionTarget == "" {
+		if versionID == "" {
+			return port.NewValidationError("REV-001 fallback: document " + documentID + " has no current_version_id")
+		}
+		s.logger.Warn("REV-001 fallback: resolved version_id from DB (event field was empty)",
+			"document_id", documentID, "version_id", versionID)
+		s.fallbackMetrics.IncMissingVersionID()
+		*versionTarget = versionID
+	}
+
+	return nil
 }
 
 // ---------------------------------------------------------------------------

@@ -174,13 +174,21 @@ func run() int {
 	// -----------------------------------------------------------------------
 	// Phase 11: Application Services
 	// -----------------------------------------------------------------------
+
+	// TEMPORARY: fallback resolver for REV-001/REV-002 — cross-tenant document
+	// lookup when producer domains omit organization_id or version_id in events.
+	// Remove when DP TASK-056 and TASK-057 are completed.
+	fallbackResolver := postgres.NewFallbackResolver()
+
 	ingestionSvc := ingestion.NewArtifactIngestionService(
 		transactor, versionRepo, artifactRepo, auditRepo, objClient, outboxWriter,
+		fallbackResolver, obs.Metrics,
 		obs.Logger.With("component", "ingestion"),
 	)
 
 	querySvc := query.NewArtifactQueryService(
 		artifactRepo, objClient, confirmPub, auditRepo,
+		fallbackResolver,
 		obs.Logger.With("component", "query"),
 	)
 
@@ -196,6 +204,7 @@ func run() int {
 
 	diffSvc := diff.NewDiffStorageService(
 		transactor, versionRepo, diffRepo, auditRepo, objClient, outboxWriter,
+		fallbackResolver,
 		obs.Logger.With("component", "diff"),
 	)
 

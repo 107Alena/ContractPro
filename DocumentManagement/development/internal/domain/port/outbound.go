@@ -317,3 +317,22 @@ type DLQPort interface {
 	// SendToDLQ publishes a failed message record to the dead letter queue.
 	SendToDLQ(ctx context.Context, record model.DLQRecord) error
 }
+
+// ---------------------------------------------------------------------------
+// Document fallback resolver — cross-tenant lookup for backward compatibility.
+// ---------------------------------------------------------------------------
+
+// DocumentFallbackResolver provides cross-tenant document lookup for backward
+// compatibility with DP versions that don't send version_id or organization_id
+// in events (REV-001/REV-002).
+//
+// TEMPORARY: this port exists until DP TASK-056 and TASK-057 are completed
+// and all producer domains include version_id and organization_id in events.
+//
+// Implemented by: PostgreSQL adapter (infra layer).
+type DocumentFallbackResolver interface {
+	// ResolveByDocumentID retrieves organization_id and current_version_id
+	// for a document by its document_id alone (no tenant filter).
+	// Returns ErrCodeDocumentNotFound if the document does not exist.
+	ResolveByDocumentID(ctx context.Context, documentID string) (organizationID string, currentVersionID string, err error)
+}

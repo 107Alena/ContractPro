@@ -802,7 +802,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-017"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-02",
+      "summary": "Реализован defensive fallback для version_id и organization_id (REV-001/REV-002). НОВЫЙ ПОРТ: DocumentFallbackResolver в port/outbound.go — ResolveByDocumentID(ctx, documentID) → (orgID, currentVersionID, err), cross-tenant lookup. POSTGRESQL ADAPTER: infra/postgres/fallback_resolver.go — FallbackResolver с SELECT organization_id, current_version_id FROM documents WHERE document_id = $1 (no tenant filter, TEMPORARY). INGESTION SERVICE: добавлены fallbackResolver + fallbackMetrics deps; HandleDPArtifacts — resolveDPEventFields (single DB call для обоих полей, REV-001+REV-002); HandleLICArtifacts/HandleREArtifacts — resolveOrgID (REV-002). DIFF SERVICE: добавлен fallbackResolver dep; HandleDiffReady — org_id fallback (REV-002). QUERY SERVICE: добавлен fallbackResolver dep; HandleGetSemanticTree/HandleGetArtifacts — resolveOrgID (REV-002). OBSERVABILITY: IncMissingVersionID() для dm_missing_version_id_total. MAIN.GO: FallbackResolver wiring для всех 3 сервисов. РЕВЬЮ: code-reviewer → 1 optimization (double DB call → single call), 2 warnings (DRY resolveOrgID, missing org_id metric — accepted as temporary). 19 новых fallback тестов: 8 ingestion (DP version_id, DP org_id, both empty, resolver error, empty version fallback, LIC/RE org_id, no fallback when present), 3 diff (org_id, resolver error, no fallback), 4 query (semantic tree org_id, get artifacts org_id, resolver error, no fallback). Все тесты PASS с -race -count=1. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-037",

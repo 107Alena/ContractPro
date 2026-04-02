@@ -27,12 +27,13 @@ type Logger interface {
 // ArtifactQueryService serves artifact retrieval requests from other domains
 // (async via events) and from the REST API (sync).
 type ArtifactQueryService struct {
-	artifactRepo  port.ArtifactRepository
-	objectStorage port.ObjectStoragePort
-	confirmation  port.ConfirmationPublisherPort
-	auditRepo     port.AuditRepository
-	logger        Logger
-	newUUID       func() string
+	artifactRepo     port.ArtifactRepository
+	objectStorage    port.ObjectStoragePort
+	confirmation     port.ConfirmationPublisherPort
+	auditRepo        port.AuditRepository
+	fallbackResolver port.DocumentFallbackResolver
+	logger           Logger
+	newUUID          func() string
 }
 
 // Compile-time interface check.
@@ -45,6 +46,7 @@ func NewArtifactQueryService(
 	objectStorage port.ObjectStoragePort,
 	confirmation port.ConfirmationPublisherPort,
 	auditRepo port.AuditRepository,
+	fallbackResolver port.DocumentFallbackResolver,
 	logger Logger,
 ) *ArtifactQueryService {
 	if artifactRepo == nil {
@@ -59,16 +61,20 @@ func NewArtifactQueryService(
 	if auditRepo == nil {
 		panic("query: auditRepo must not be nil")
 	}
+	if fallbackResolver == nil {
+		panic("query: fallbackResolver must not be nil")
+	}
 	if logger == nil {
 		panic("query: logger must not be nil")
 	}
 	return &ArtifactQueryService{
-		artifactRepo:  artifactRepo,
-		objectStorage: objectStorage,
-		confirmation:  confirmation,
-		auditRepo:     auditRepo,
-		logger:        logger,
-		newUUID:       generateUUID,
+		artifactRepo:     artifactRepo,
+		objectStorage:    objectStorage,
+		confirmation:     confirmation,
+		auditRepo:        auditRepo,
+		fallbackResolver: fallbackResolver,
+		logger:           logger,
+		newUUID:          generateUUID,
 	}
 }
 
@@ -81,6 +87,13 @@ func NewArtifactQueryService(
 // response. On "not found", publishes a response with error fields.
 // On infrastructure failure, returns an error for retry.
 func (s *ArtifactQueryService) HandleGetSemanticTree(ctx context.Context, event model.GetSemanticTreeRequest) error {
+	// REV-002: resolve organization_id if missing.
+	if event.OrgID == "" {
+		if err := s.resolveOrgID(ctx, event.DocumentID, &event.OrgID); err != nil {
+			return err
+		}
+	}
+
 	if err := validateQueryRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {
 		return err
 	}
@@ -140,6 +153,13 @@ func (s *ArtifactQueryService) HandleGetSemanticTree(ctx context.Context, event 
 // Retrieves the requested artifacts and publishes an ArtifactsProvided
 // response with the found artifacts and any missing types.
 func (s *ArtifactQueryService) HandleGetArtifacts(ctx context.Context, event model.GetArtifactsRequest) error {
+	// REV-002: resolve organization_id if missing.
+	if event.OrgID == "" {
+		if err := s.resolveOrgID(ctx, event.DocumentID, &event.OrgID); err != nil {
+			return err
+		}
+	}
+
 	if err := validateQueryRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {
 		return err
 	}
@@ -349,6 +369,26 @@ func inferRequesterDomain(requestedTypes []model.ArtifactType) string {
 		}
 	}
 	return "UNKNOWN"
+}
+
+// ---------------------------------------------------------------------------
+// Defensive fallback resolver (REV-002).
+// TEMPORARY: remove when DP TASK-056 and TASK-057 are completed.
+// ---------------------------------------------------------------------------
+
+// resolveOrgID looks up the organization_id for a document when the incoming
+// event omits it (REV-002). Mutates *target in place and logs a warning.
+func (s *ArtifactQueryService) resolveOrgID(ctx context.Context, documentID string, target *string) error {
+	orgID, _, err := s.fallbackResolver.ResolveByDocumentID(ctx, documentID)
+	if err != nil {
+		s.logger.Error("REV-002 fallback: failed to resolve organization_id",
+			"document_id", documentID, "error", err)
+		return err
+	}
+	s.logger.Warn("REV-002 fallback: resolved organization_id from DB (event field was empty)",
+		"document_id", documentID, "organization_id", orgID)
+	*target = orgID
+	return nil
 }
 
 // validateQueryRequired validates common required fields for async query handlers.

@@ -283,3 +283,13 @@ func (m *Metrics) IncCleanedUp(count int64) {
 		m.OutboxCleanedUp.Add(float64(count))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ingestion.FallbackMetrics interface (REV-001/REV-002)
+// ---------------------------------------------------------------------------
+
+// IncMissingVersionID increments dm_missing_version_id_total.
+// Called when an incoming event lacks version_id and a DB fallback is used.
+func (m *Metrics) IncMissingVersionID() {
+	m.MissingVersionIDTotal.Inc()
+}

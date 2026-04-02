@@ -1293,3 +1293,47 @@
 - DM-TASK-035 (deployment.md) — deps: DM-TASK-029
 
 ---
+
+## DM-TASK-036: REV-001/REV-002 — Defensive fallback для version_id и organization_id (2026-04-02)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `DocumentFallbackResolver` port в `internal/domain/port/outbound.go` — `ResolveByDocumentID(ctx, documentID)` возвращает `(orgID, currentVersionID, err)`, cross-tenant lookup
+- Создан PostgreSQL адаптер `internal/infra/postgres/fallback_resolver.go` — `FallbackResolver` с `SELECT organization_id, current_version_id FROM documents WHERE document_id = $1` (без WHERE organization_id — TEMPORARY)
+- Модифицирован `ArtifactIngestionService`:
+  - Добавлены `fallbackResolver` и `fallbackMetrics` зависимости
+  - `HandleDPArtifacts` — `resolveDPEventFields()` (single DB call для обоих полей: REV-001 version_id + REV-002 org_id)
+  - `HandleLICArtifacts` / `HandleREArtifacts` — `resolveOrgID()` (REV-002 org_id only)
+- Модифицирован `DiffStorageService` — добавлен `fallbackResolver`, org_id fallback в `HandleDiffReady`
+- Модифицирован `ArtifactQueryService` — добавлен `fallbackResolver`, org_id fallback в `HandleGetSemanticTree` и `HandleGetArtifacts`
+- Добавлен `IncMissingVersionID()` в `observability.Metrics` для `dm_missing_version_id_total`
+- Обновлён `main.go` — wiring `FallbackResolver` для всех 3 сервисов
+
+**Ревью (code-reviewer):**
+- 1 optimization: double DB call → single call при пустых org_id + version_id → ИСПРАВЛЕНО
+- 2 warnings accepted (DRY resolveOrgID across packages — acceptable for temporary code; missing org_id metric — not in scope)
+
+**Тесты:**
+- 19 новых fallback тестов:
+  - Ingestion (8): DP version_id fallback, DP org_id fallback, both empty (single call), resolver error, empty version fallback validation, LIC org_id, RE org_id, no fallback when present
+  - Diff (3): org_id fallback, resolver error, no fallback when present
+  - Query (4): semantic tree org_id, get artifacts org_id, resolver error, no fallback when present
+- Обновлены validation tests: удалены "empty org_id" subtests из diff/query (now resolved by fallback)
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (21 пакет)
+- `go vet ./...` — OK
+- `make build` — OK, `make test` — OK, `make lint` — OK
+
+**Паттерны:**
+- TEMPORARY маркировка: все fallback код помечен `// TEMPORARY: remove when DP TASK-056 and TASK-057 are completed`
+- Narrow port: `DocumentFallbackResolver` — отдельный интерфейс, не загрязняет `DocumentRepository`
+- Single DB call: `resolveDPEventFields` для оптимизации при пустых обоих полях
+- Event mutation: exported fields мутируются до вызова validateRequired
+
+**Следующие задачи (critical pending):**
+- DM-TASK-037 (BRE-001: SELECT FOR UPDATE на artifact_status) — deps: DM-TASK-017 ✅
+- DM-TASK-038 (BRE-003: Idempotency Guard short TTL) — deps: DM-TASK-013 ✅
+
+---

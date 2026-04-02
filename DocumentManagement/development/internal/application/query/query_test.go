@@ -207,19 +207,33 @@ func (m *mockLogger) getMessages() []logMsg {
 
 type testDeps struct {
 	artifactRepo  *mockArtifactRepo
-	objectStorage *mockObjectStorage
-	confirmation  *mockConfirmation
-	auditRepo     *mockAuditRepo
-	logger        *mockLogger
+	objectStorage    *mockObjectStorage
+	confirmation     *mockConfirmation
+	auditRepo        *mockAuditRepo
+	fallbackResolver *mockFallbackResolver
+	logger           *mockLogger
+}
+
+type mockFallbackResolver struct {
+	orgID     string
+	versionID string
+	err       error
+	callCount int
+}
+
+func (m *mockFallbackResolver) ResolveByDocumentID(_ context.Context, _ string) (string, string, error) {
+	m.callCount++
+	return m.orgID, m.versionID, m.err
 }
 
 func newTestDeps() *testDeps {
 	return &testDeps{
-		artifactRepo:  &mockArtifactRepo{},
-		objectStorage: &mockObjectStorage{},
-		confirmation:  &mockConfirmation{},
-		auditRepo:     &mockAuditRepo{},
-		logger:        &mockLogger{},
+		artifactRepo:     &mockArtifactRepo{},
+		objectStorage:    &mockObjectStorage{},
+		confirmation:     &mockConfirmation{},
+		auditRepo:        &mockAuditRepo{},
+		fallbackResolver: &mockFallbackResolver{orgID: "org-1", versionID: "ver-1"},
+		logger:           &mockLogger{},
 	}
 }
 
@@ -229,6 +243,7 @@ func (d *testDeps) buildService() *ArtifactQueryService {
 		d.objectStorage,
 		d.confirmation,
 		d.auditRepo,
+		d.fallbackResolver,
 		d.logger,
 	)
 	svc.newUUID = func() string { return "test-uuid" }
@@ -325,19 +340,22 @@ func TestNewArtifactQueryService_PanicsOnNilDeps(t *testing.T) {
 		wantPanic string
 	}{
 		{"nil artifactRepo", func() {
-			NewArtifactQueryService(nil, d.objectStorage, d.confirmation, d.auditRepo, d.logger)
+			NewArtifactQueryService(nil, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.logger)
 		}, "artifactRepo"},
 		{"nil objectStorage", func() {
-			NewArtifactQueryService(d.artifactRepo, nil, d.confirmation, d.auditRepo, d.logger)
+			NewArtifactQueryService(d.artifactRepo, nil, d.confirmation, d.auditRepo, d.fallbackResolver, d.logger)
 		}, "objectStorage"},
 		{"nil confirmation", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, nil, d.auditRepo, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, nil, d.auditRepo, d.fallbackResolver, d.logger)
 		}, "confirmation"},
 		{"nil auditRepo", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, nil, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, nil, d.fallbackResolver, d.logger)
 		}, "auditRepo"},
+		{"nil fallbackResolver", func() {
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, nil, d.logger)
+		}, "fallbackResolver"},
 		{"nil logger", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, nil)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, nil)
 		}, "logger"},
 	}
 
@@ -363,7 +381,7 @@ func TestNewArtifactQueryService_PanicsOnNilDeps(t *testing.T) {
 
 func TestNewArtifactQueryService_Success(t *testing.T) {
 	d := newTestDeps()
-	svc := NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.logger)
+	svc := NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.logger)
 	if svc == nil {
 		t.Fatal("expected non-nil service")
 	}
@@ -529,9 +547,6 @@ func TestHandleGetSemanticTree_ValidationErrors(t *testing.T) {
 		event model.GetSemanticTreeRequest
 		want  string
 	}{
-		{"empty org_id", model.GetSemanticTreeRequest{
-			EventMeta: model.EventMeta{CorrelationID: "c"}, JobID: "j", DocumentID: "d", VersionID: "v",
-		}, "organization_id"},
 		{"empty job_id", model.GetSemanticTreeRequest{
 			EventMeta: model.EventMeta{CorrelationID: "c"}, OrgID: "o", DocumentID: "d", VersionID: "v",
 		}, "job_id"},
@@ -755,10 +770,6 @@ func TestHandleGetArtifacts_ValidationErrors(t *testing.T) {
 		event model.GetArtifactsRequest
 		want  string
 	}{
-		{"empty org_id", model.GetArtifactsRequest{
-			EventMeta: model.EventMeta{CorrelationID: "c"}, JobID: "j", DocumentID: "d", VersionID: "v",
-			ArtifactTypes: []model.ArtifactType{model.ArtifactTypeSemanticTree},
-		}, "organization_id"},
 		{"empty job_id", model.GetArtifactsRequest{
 			EventMeta: model.EventMeta{CorrelationID: "c"}, OrgID: "o", DocumentID: "d", VersionID: "v",
 			ArtifactTypes: []model.ArtifactType{model.ArtifactTypeSemanticTree},
@@ -1220,4 +1231,107 @@ func TestRecordAuditAsync_AuditDetails(t *testing.T) {
 
 func TestInterfaceCompliance(t *testing.T) {
 	var _ port.ArtifactQueryHandler = (*ArtifactQueryService)(nil)
+}
+
+// ---------------------------------------------------------------------------
+// Fallback tests (REV-002).
+// ---------------------------------------------------------------------------
+
+func TestHandleGetSemanticTree_FallbackOrgID(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.orgID = "org-1"
+	treeData := json.RawMessage(`{"nodes":[{"id":"root"}]}`)
+
+	d.artifactRepo.findByVersionAndType = func(_ context.Context, orgID, docID, versionID string, at model.ArtifactType) (*model.ArtifactDescriptor, error) {
+		if orgID != "org-1" {
+			t.Fatalf("expected resolved org_id=org-1, got %q", orgID)
+		}
+		return makeDescriptor("ver-1", model.ArtifactTypeSemanticTree, "org-1/doc-1/ver-1/SEMANTIC_TREE"), nil
+	}
+	d.objectStorage.getObjectFn = func(_ context.Context, key string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(string(treeData))), nil
+	}
+
+	svc := d.buildService()
+	event := makeSemanticTreeEvent()
+	event.OrgID = "" // empty — trigger REV-002 fallback
+
+	err := svc.HandleGetSemanticTree(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if d.fallbackResolver.callCount != 1 {
+		t.Errorf("fallback resolver call count = %d, want 1", d.fallbackResolver.callCount)
+	}
+	// Verify response was published with tree content.
+	if len(d.confirmation.semanticTrees) != 1 {
+		t.Fatalf("expected 1 confirmation, got %d", len(d.confirmation.semanticTrees))
+	}
+}
+
+func TestHandleGetArtifacts_FallbackOrgID(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.orgID = "org-1"
+
+	d.artifactRepo.listByVersionAndTypes = func(_ context.Context, orgID, docID, versionID string, types []model.ArtifactType) ([]*model.ArtifactDescriptor, error) {
+		if orgID != "org-1" {
+			t.Fatalf("expected resolved org_id=org-1, got %q", orgID)
+		}
+		return []*model.ArtifactDescriptor{
+			makeDescriptor("ver-1", model.ArtifactTypeSemanticTree, "key1"),
+		}, nil
+	}
+	d.objectStorage.getObjectFn = func(_ context.Context, key string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(`{"data":"test"}`)), nil
+	}
+
+	svc := d.buildService()
+	event := makeGetArtifactsEvent(model.ArtifactTypeSemanticTree)
+	event.OrgID = "" // empty — trigger REV-002 fallback
+
+	err := svc.HandleGetArtifacts(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if d.fallbackResolver.callCount != 1 {
+		t.Errorf("fallback resolver call count = %d, want 1", d.fallbackResolver.callCount)
+	}
+}
+
+func TestHandleGetSemanticTree_FallbackResolverError(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.err = port.NewDatabaseError("DB unreachable", nil)
+
+	svc := d.buildService()
+	event := makeSemanticTreeEvent()
+	event.OrgID = ""
+
+	err := svc.HandleGetSemanticTree(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected error from fallback resolver")
+	}
+	if !port.IsRetryable(err) {
+		t.Errorf("expected retryable error, got %v", err)
+	}
+}
+
+func TestHandleGetSemanticTree_NoFallbackWhenOrgPresent(t *testing.T) {
+	d := newTestDeps()
+	d.artifactRepo.findByVersionAndType = func(_ context.Context, _, _, _ string, _ model.ArtifactType) (*model.ArtifactDescriptor, error) {
+		return makeDescriptor("ver-1", model.ArtifactTypeSemanticTree, "key1"), nil
+	}
+	d.objectStorage.getObjectFn = func(_ context.Context, _ string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(`{}`)), nil
+	}
+
+	svc := d.buildService()
+	err := svc.HandleGetSemanticTree(context.Background(), makeSemanticTreeEvent())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d.fallbackResolver.callCount != 0 {
+		t.Errorf("fallback resolver should not be called, got %d calls", d.fallbackResolver.callCount)
+	}
 }

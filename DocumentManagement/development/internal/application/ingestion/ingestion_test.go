@@ -203,6 +203,26 @@ func (m *mockOutboxRepo) DeletePublished(context.Context, time.Time, int) (int64
 }
 func (m *mockOutboxRepo) PendingStats(context.Context) (int64, float64, error) { return 0, 0, nil }
 
+type mockFallbackResolver struct {
+	orgID     string
+	versionID string
+	err       error
+	callCount int
+}
+
+func (m *mockFallbackResolver) ResolveByDocumentID(ctx context.Context, documentID string) (string, string, error) {
+	m.callCount++
+	return m.orgID, m.versionID, m.err
+}
+
+type mockFallbackMetrics struct {
+	missingVersionIDCount int
+}
+
+func (m *mockFallbackMetrics) IncMissingVersionID() {
+	m.missingVersionIDCount++
+}
+
 type mockLogger struct {
 	messages []logMsg
 }
@@ -220,34 +240,39 @@ func (m *mockLogger) Error(msg string, _ ...any) { m.messages = append(m.message
 // ---------------------------------------------------------------------------
 
 type testDeps struct {
-	transactor    *mockTransactor
-	versionRepo   *mockVersionRepo
-	artifactRepo  *mockArtifactRepo
-	auditRepo     *mockAuditRepo
-	objectStorage *mockObjectStorage
-	outboxRepo    *mockOutboxRepo
-	outboxWriter  *outbox.OutboxWriter
-	logger        *mockLogger
+	transactor       *mockTransactor
+	versionRepo      *mockVersionRepo
+	artifactRepo     *mockArtifactRepo
+	auditRepo        *mockAuditRepo
+	objectStorage    *mockObjectStorage
+	outboxRepo       *mockOutboxRepo
+	outboxWriter     *outbox.OutboxWriter
+	fallbackResolver *mockFallbackResolver
+	fallbackMetrics  *mockFallbackMetrics
+	logger           *mockLogger
 }
 
 func newTestDeps() *testDeps {
 	outboxRepo := &mockOutboxRepo{}
 	return &testDeps{
-		transactor:    &mockTransactor{},
-		versionRepo:   &mockVersionRepo{},
-		artifactRepo:  &mockArtifactRepo{},
-		auditRepo:     &mockAuditRepo{},
-		objectStorage: newMockObjectStorage(),
-		outboxRepo:    outboxRepo,
-		outboxWriter:  outbox.NewOutboxWriter(outboxRepo),
-		logger:        &mockLogger{},
+		transactor:       &mockTransactor{},
+		versionRepo:      &mockVersionRepo{},
+		artifactRepo:     &mockArtifactRepo{},
+		auditRepo:        &mockAuditRepo{},
+		objectStorage:    newMockObjectStorage(),
+		outboxRepo:       outboxRepo,
+		outboxWriter:     outbox.NewOutboxWriter(outboxRepo),
+		fallbackResolver: &mockFallbackResolver{orgID: "org-001", versionID: "ver-001"},
+		fallbackMetrics:  &mockFallbackMetrics{},
+		logger:           &mockLogger{},
 	}
 }
 
 func (d *testDeps) newService() *ArtifactIngestionService {
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
-		d.auditRepo, d.objectStorage, d.outboxWriter, d.logger,
+		d.auditRepo, d.objectStorage, d.outboxWriter,
+		d.fallbackResolver, d.fallbackMetrics, d.logger,
 	)
 	uuidCounter := 0
 	svc.newUUID = func() string {
@@ -353,25 +378,31 @@ func TestNewArtifactIngestionService_PanicsOnNilDeps(t *testing.T) {
 		fn   func()
 	}{
 		{"nil transactor", func() {
-			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.logger)
+			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
 		}},
 		{"nil versionRepo", func() {
-			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.logger)
+			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
 		}},
 		{"nil artifactRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
 		}},
 		{"nil auditRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
 		}},
 		{"nil objectStorage", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
 		}},
 		{"nil outboxWriter", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.fallbackResolver, d.fallbackMetrics, d.logger)
+		}},
+		{"nil fallbackResolver", func() {
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil, d.fallbackMetrics, d.logger)
+		}},
+		{"nil fallbackMetrics", func() {
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, nil, d.logger)
 		}},
 		{"nil logger", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, nil)
 		}},
 	}
 
@@ -525,11 +556,6 @@ func TestHandleDPArtifacts_ValidationErrors(t *testing.T) {
 		name  string
 		event model.DocumentProcessingArtifactsReady
 	}{
-		{"empty org_id", func() model.DocumentProcessingArtifactsReady {
-			e := validDPEvent()
-			e.OrgID = ""
-			return e
-		}()},
 		{"empty job_id", func() model.DocumentProcessingArtifactsReady {
 			e := validDPEvent()
 			e.JobID = ""
@@ -538,11 +564,6 @@ func TestHandleDPArtifacts_ValidationErrors(t *testing.T) {
 		{"empty document_id", func() model.DocumentProcessingArtifactsReady {
 			e := validDPEvent()
 			e.DocumentID = ""
-			return e
-		}()},
-		{"empty version_id", func() model.DocumentProcessingArtifactsReady {
-			e := validDPEvent()
-			e.VersionID = ""
 			return e
 		}()},
 		{"no artifacts", func() model.DocumentProcessingArtifactsReady {
@@ -742,7 +763,8 @@ func TestHandleDPArtifacts_AuditRepoFailure(t *testing.T) {
 
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
-		auditRepo, d.objectStorage, d.outboxWriter, d.logger,
+		auditRepo, d.objectStorage, d.outboxWriter,
+		d.fallbackResolver, d.fallbackMetrics, d.logger,
 	)
 	uuidCounter := 0
 	svc.newUUID = func() string {
@@ -1170,5 +1192,211 @@ func TestSha256Hex(t *testing.T) {
 	expected := "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
 	if hash != expected {
 		t.Errorf("sha256Hex(hello) = %q, want %q", hash, expected)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Fallback resolver (REV-001 / REV-002).
+// ---------------------------------------------------------------------------
+
+func TestHandleDPArtifacts_FallbackVersionID(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.orgID = "org-001"
+	d.fallbackResolver.versionID = "ver-001"
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	event := validDPEvent()
+	event.VersionID = "" // empty — trigger REV-001 fallback
+
+	err := svc.HandleDPArtifacts(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify fallback was called.
+	if d.fallbackResolver.callCount != 1 {
+		t.Errorf("fallback resolver call count = %d, want 1", d.fallbackResolver.callCount)
+	}
+	// Verify metric incremented.
+	if d.fallbackMetrics.missingVersionIDCount != 1 {
+		t.Errorf("missing version_id metric = %d, want 1", d.fallbackMetrics.missingVersionIDCount)
+	}
+	// Verify WARN log.
+	foundWarn := false
+	for _, m := range d.logger.messages {
+		if m.level == "WARN" && strings.Contains(m.msg, "REV-001") {
+			foundWarn = true
+			break
+		}
+	}
+	if !foundWarn {
+		t.Error("expected WARN log with REV-001 message")
+	}
+	// Verify artifacts were stored (full pipeline ran).
+	if got := len(d.objectStorage.putCalls); got != 5 {
+		t.Errorf("expected 5 put calls, got %d", got)
+	}
+}
+
+func TestHandleDPArtifacts_FallbackOrgID(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.orgID = "org-001"
+	d.fallbackResolver.versionID = "ver-001"
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	event := validDPEvent()
+	event.OrgID = "" // empty — trigger REV-002 fallback
+
+	err := svc.HandleDPArtifacts(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify fallback was called.
+	if d.fallbackResolver.callCount != 1 {
+		t.Errorf("fallback resolver call count = %d, want 1", d.fallbackResolver.callCount)
+	}
+	// Verify WARN log for REV-002.
+	foundWarn := false
+	for _, m := range d.logger.messages {
+		if m.level == "WARN" && strings.Contains(m.msg, "REV-002") {
+			foundWarn = true
+			break
+		}
+	}
+	if !foundWarn {
+		t.Error("expected WARN log with REV-002 message")
+	}
+	// Verify artifacts were stored (full pipeline ran).
+	if got := len(d.objectStorage.putCalls); got != 5 {
+		t.Errorf("expected 5 put calls, got %d", got)
+	}
+}
+
+func TestHandleDPArtifacts_FallbackBothEmpty(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.orgID = "org-001"
+	d.fallbackResolver.versionID = "ver-001"
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	event := validDPEvent()
+	event.OrgID = ""
+	event.VersionID = ""
+
+	err := svc.HandleDPArtifacts(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Fallback called once (combined lookup for both org and version).
+	if d.fallbackResolver.callCount != 1 {
+		t.Errorf("fallback resolver call count = %d, want 1", d.fallbackResolver.callCount)
+	}
+	if d.fallbackMetrics.missingVersionIDCount != 1 {
+		t.Errorf("missing version_id metric = %d, want 1", d.fallbackMetrics.missingVersionIDCount)
+	}
+}
+
+func TestHandleDPArtifacts_FallbackResolverError(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.err = port.NewDatabaseError("DB down", nil)
+
+	svc := d.newService()
+	event := validDPEvent()
+	event.OrgID = ""
+
+	err := svc.HandleDPArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected error from fallback resolver")
+	}
+	if !port.IsRetryable(err) {
+		t.Errorf("expected retryable error, got %v", err)
+	}
+}
+
+func TestHandleDPArtifacts_FallbackVersionIDEmpty(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.orgID = "org-001"
+	d.fallbackResolver.versionID = "" // document has no current version
+
+	svc := d.newService()
+	event := validDPEvent()
+	event.VersionID = ""
+
+	err := svc.HandleDPArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected error when fallback returns empty version_id")
+	}
+	if port.ErrorCode(err) != port.ErrCodeValidation {
+		t.Errorf("error code = %q, want VALIDATION_ERROR", port.ErrorCode(err))
+	}
+}
+
+func TestHandleLICArtifacts_FallbackOrgID(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.orgID = "org-001"
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusProcessingArtifactsReceived)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	event := validLICEvent()
+	event.OrgID = ""
+
+	err := svc.HandleLICArtifacts(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if d.fallbackResolver.callCount != 1 {
+		t.Errorf("fallback resolver call count = %d, want 1", d.fallbackResolver.callCount)
+	}
+}
+
+func TestHandleREArtifacts_FallbackOrgID(t *testing.T) {
+	d := newTestDeps()
+	d.fallbackResolver.orgID = "org-001"
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusAnalysisArtifactsReceived)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	event := validREEvent()
+	event.OrgID = ""
+	// Set up HeadObject results for claim-check.
+	d.objectStorage.headResults["re/exports/report.pdf"] = headResult{size: 1024, exists: true}
+	d.objectStorage.headResults["re/exports/report.docx"] = headResult{size: 2048, exists: true}
+
+	err := svc.HandleREArtifacts(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if d.fallbackResolver.callCount != 1 {
+		t.Errorf("fallback resolver call count = %d, want 1", d.fallbackResolver.callCount)
+	}
+}
+
+func TestHandleDPArtifacts_NoFallbackWhenFieldsPresent(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	// Event with all fields present — no fallback should be called.
+	err := svc.HandleDPArtifacts(context.Background(), validDPEvent())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if d.fallbackResolver.callCount != 0 {
+		t.Errorf("fallback resolver should not have been called, got %d calls", d.fallbackResolver.callCount)
+	}
+	if d.fallbackMetrics.missingVersionIDCount != 0 {
+		t.Errorf("missing version_id metric should be 0, got %d", d.fallbackMetrics.missingVersionIDCount)
 	}
 }

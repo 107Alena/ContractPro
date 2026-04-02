@@ -207,29 +207,43 @@ type testDeps struct {
 	diffRepo      *mockDiffRepo
 	auditRepo     *mockAuditRepo
 	objectStorage *mockObjectStorage
-	outboxRepo    *mockOutboxRepo
-	outboxWriter  *outbox.OutboxWriter
-	logger        *mockLogger
+	outboxRepo       *mockOutboxRepo
+	outboxWriter     *outbox.OutboxWriter
+	fallbackResolver *mockFallbackResolver
+	logger           *mockLogger
+}
+
+type mockFallbackResolver struct {
+	orgID     string
+	versionID string
+	err       error
+	callCount int
+}
+
+func (m *mockFallbackResolver) ResolveByDocumentID(_ context.Context, _ string) (string, string, error) {
+	m.callCount++
+	return m.orgID, m.versionID, m.err
 }
 
 func newTestDeps() *testDeps {
 	outboxRepo := &mockOutboxRepo{}
 	return &testDeps{
-		transactor:    &mockTransactor{},
-		versionRepo:   &mockVersionRepo{},
-		diffRepo:      &mockDiffRepo{},
-		auditRepo:     &mockAuditRepo{},
-		objectStorage: newMockObjectStorage(),
-		outboxRepo:    outboxRepo,
-		outboxWriter:  outbox.NewOutboxWriter(outboxRepo),
-		logger:        &mockLogger{},
+		transactor:       &mockTransactor{},
+		versionRepo:      &mockVersionRepo{},
+		diffRepo:         &mockDiffRepo{},
+		auditRepo:        &mockAuditRepo{},
+		objectStorage:    newMockObjectStorage(),
+		outboxRepo:       outboxRepo,
+		outboxWriter:     outbox.NewOutboxWriter(outboxRepo),
+		fallbackResolver: &mockFallbackResolver{orgID: "org-1", versionID: "ver-1"},
+		logger:           &mockLogger{},
 	}
 }
 
 func (d *testDeps) newService() *DiffStorageService {
 	svc := NewDiffStorageService(
 		d.transactor, d.versionRepo, d.diffRepo, d.auditRepo,
-		d.objectStorage, d.outboxWriter, d.logger,
+		d.objectStorage, d.outboxWriter, d.fallbackResolver, d.logger,
 	)
 	svc.newUUID = func() string { return "test-uuid" }
 	return svc
@@ -269,37 +283,42 @@ func TestNewDiffStorageService_PanicsOnNilDeps(t *testing.T) {
 	}{
 		{
 			name:    "nil transactor",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(nil, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(nil, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
 			wantMsg: "transactor must not be nil",
 		},
 		{
 			name:    "nil versionRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, nil, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, nil, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
 			wantMsg: "versionRepo must not be nil",
 		},
 		{
 			name:    "nil diffRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, nil, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, nil, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
 			wantMsg: "diffRepo must not be nil",
 		},
 		{
 			name:    "nil auditRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, nil, deps.objectStorage, deps.outboxWriter, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, nil, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
 			wantMsg: "auditRepo must not be nil",
 		},
 		{
 			name:    "nil objectStorage",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, nil, deps.outboxWriter, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, nil, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
 			wantMsg: "objectStorage must not be nil",
 		},
 		{
 			name:    "nil outboxWriter",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, nil, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, nil, deps.fallbackResolver, deps.logger) },
 			wantMsg: "outboxWriter must not be nil",
 		},
 		{
+			name:    "nil fallbackResolver",
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, nil, deps.logger) },
+			wantMsg: "fallbackResolver must not be nil",
+		},
+		{
 			name:    "nil logger",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, nil) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, nil) },
 			wantMsg: "logger must not be nil",
 		},
 	}
@@ -483,7 +502,6 @@ func TestHandleDiffReady_ValidationErrors(t *testing.T) {
 		mutate  func(*model.DocumentVersionDiffReady)
 		wantMsg string
 	}{
-		{"empty org_id", func(e *model.DocumentVersionDiffReady) { e.OrgID = "" }, "organization_id is required"},
 		{"empty job_id", func(e *model.DocumentVersionDiffReady) { e.JobID = "" }, "job_id is required"},
 		{"empty document_id", func(e *model.DocumentVersionDiffReady) { e.DocumentID = "" }, "document_id is required"},
 		{"empty base_version_id", func(e *model.DocumentVersionDiffReady) { e.BaseVersionID = "" }, "base_version_id is required"},
@@ -1114,4 +1132,76 @@ func TestHandleDiffReady_InterfaceCompliance(t *testing.T) {
 	t.Parallel()
 	// Verify compile-time interface check is enforced.
 	var _ port.DiffStorageHandler = (*DiffStorageService)(nil)
+}
+
+// ---------------------------------------------------------------------------
+// Fallback tests (REV-002).
+// ---------------------------------------------------------------------------
+
+func TestHandleDiffReady_FallbackOrgID(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps()
+	deps.fallbackResolver.orgID = "org-1"
+	svc := deps.newService()
+
+	event := validDiffEvent()
+	event.OrgID = "" // empty — trigger REV-002 fallback
+
+	err := svc.HandleDiffReady(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify fallback was called.
+	if deps.fallbackResolver.callCount != 1 {
+		t.Errorf("fallback resolver call count = %d, want 1", deps.fallbackResolver.callCount)
+	}
+	// Verify WARN log for REV-002.
+	foundWarn := false
+	for _, m := range deps.logger.messages {
+		if m.level == "WARN" && strings.Contains(m.msg, "REV-002") {
+			foundWarn = true
+			break
+		}
+	}
+	if !foundWarn {
+		t.Error("expected WARN log with REV-002 message")
+	}
+	// Verify diff was stored (pipeline completed).
+	if len(deps.objectStorage.putCalls) != 1 {
+		t.Errorf("expected 1 put call, got %d", len(deps.objectStorage.putCalls))
+	}
+}
+
+func TestHandleDiffReady_FallbackResolverError(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps()
+	deps.fallbackResolver.err = port.NewDatabaseError("DB down", nil)
+
+	svc := deps.newService()
+	event := validDiffEvent()
+	event.OrgID = ""
+
+	err := svc.HandleDiffReady(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected error from fallback resolver")
+	}
+	if !port.IsRetryable(err) {
+		t.Errorf("expected retryable error, got %v", err)
+	}
+}
+
+func TestHandleDiffReady_NoFallbackWhenOrgPresent(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps()
+	svc := deps.newService()
+
+	// Event with org_id present — no fallback.
+	err := svc.HandleDiffReady(context.Background(), validDiffEvent())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deps.fallbackResolver.callCount != 0 {
+		t.Errorf("fallback resolver should not be called, got %d calls", deps.fallbackResolver.callCount)
+	}
 }

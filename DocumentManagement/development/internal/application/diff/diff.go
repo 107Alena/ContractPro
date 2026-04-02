@@ -28,14 +28,15 @@ type Logger interface {
 // into object storage and the metadata store. It publishes confirmation
 // events via the transactional outbox.
 type DiffStorageService struct {
-	transactor    port.Transactor
-	versionRepo   port.VersionRepository
-	diffRepo      port.DiffRepository
-	auditRepo     port.AuditRepository
-	objectStorage port.ObjectStoragePort
-	outboxWriter  *outbox.OutboxWriter
-	logger        Logger
-	newUUID       func() string
+	transactor       port.Transactor
+	versionRepo      port.VersionRepository
+	diffRepo         port.DiffRepository
+	auditRepo        port.AuditRepository
+	objectStorage    port.ObjectStoragePort
+	outboxWriter     *outbox.OutboxWriter
+	fallbackResolver port.DocumentFallbackResolver
+	logger           Logger
+	newUUID          func() string
 }
 
 // Compile-time interface check.
@@ -50,6 +51,7 @@ func NewDiffStorageService(
 	auditRepo port.AuditRepository,
 	objectStorage port.ObjectStoragePort,
 	outboxWriter *outbox.OutboxWriter,
+	fallbackResolver port.DocumentFallbackResolver,
 	logger Logger,
 ) *DiffStorageService {
 	if transactor == nil {
@@ -70,18 +72,22 @@ func NewDiffStorageService(
 	if outboxWriter == nil {
 		panic("diff: outboxWriter must not be nil")
 	}
+	if fallbackResolver == nil {
+		panic("diff: fallbackResolver must not be nil")
+	}
 	if logger == nil {
 		panic("diff: logger must not be nil")
 	}
 	return &DiffStorageService{
-		transactor:    transactor,
-		versionRepo:   versionRepo,
-		diffRepo:      diffRepo,
-		auditRepo:     auditRepo,
-		objectStorage: objectStorage,
-		outboxWriter:  outboxWriter,
-		logger:        logger,
-		newUUID:       generateUUID,
+		transactor:       transactor,
+		versionRepo:      versionRepo,
+		diffRepo:         diffRepo,
+		auditRepo:        auditRepo,
+		objectStorage:    objectStorage,
+		outboxWriter:     outboxWriter,
+		fallbackResolver: fallbackResolver,
+		logger:           logger,
+		newUUID:          generateUUID,
 	}
 }
 
@@ -106,6 +112,19 @@ type diffBlob struct {
 func (s *DiffStorageService) HandleDiffReady(ctx context.Context, event model.DocumentVersionDiffReady) error {
 	if err := ctx.Err(); err != nil {
 		return port.NewTimeoutError("context cancelled before diff storage", err)
+	}
+
+	// REV-002: resolve organization_id if missing.
+	if event.OrgID == "" {
+		orgID, _, err := s.fallbackResolver.ResolveByDocumentID(ctx, event.DocumentID)
+		if err != nil {
+			s.logger.Error("REV-002 fallback: failed to resolve organization_id",
+				"document_id", event.DocumentID, "error", err)
+			return err
+		}
+		s.logger.Warn("REV-002 fallback: resolved organization_id from DB (event field was empty)",
+			"document_id", event.DocumentID, "organization_id", orgID)
+		event.OrgID = orgID
 	}
 
 	if err := validateDiffRequired(event.OrgID, event.JobID, event.DocumentID, event.BaseVersionID, event.TargetVersionID); err != nil {

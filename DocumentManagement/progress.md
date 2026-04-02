@@ -1171,3 +1171,64 @@
 - DM-TASK-025 (Application wiring) — blocked by DM-TASK-022 only
 
 ---
+
+## DM-TASK-022: API Handler — HTTP REST endpoints (2026-04-02)
+
+**Статус:** done
+
+**План:**
+1. Изучить api-specification.yaml, inbound/outbound ports, модели, application services
+2. Спроектировать: auth context extraction, middleware chain, error mapping, router
+3. Реализовать 4 файла: auth.go, middleware.go, response.go, handler.go
+4. Добавить ActorID в AuditListParams + обновить audit_repository
+5. Написать unit-тесты
+6. Code review (code-reviewer + golang-pro)
+7. Исправить замечания
+8. Финальная проверка
+
+**Реализация:**
+- **auth.go**: AuthContext struct (OrganizationID, UserID, Role), authMiddleware с header extraction + regex validation (identifierRe `^[a-zA-Z0-9._-]{1,128}$`) для defense-in-depth
+- **middleware.go**: responseWriter с single-instance sharing (logging reuses metrics wrapper), WriteHeader guard (first-call-wins), Flush()/Unwrap() для http.Flusher+ResponseController; metricsMiddleware (dm_api_requests_total, dm_api_request_duration_seconds, r.Pattern for cardinality); loggingMiddleware
+- **response.go**: ErrorResponse, PaginatedResponse, writeJSON с X-Content-Type-Options:nosniff, writeServiceError — DomainError→HTTP: NotFound→404, Conflict→409, Validation→400, TenantMismatch→404 (hidden), Retryable→500 (generic)
+- **handler.go**: 12 endpoints с Go 1.22+ method-aware routing:
+  - POST /api/v1/documents — CreateDocument
+  - GET /api/v1/documents — ListDocuments (status filter, pagination)
+  - GET /api/v1/documents/{document_id} — GetDocument
+  - DELETE /api/v1/documents/{document_id} — DeleteDocument (soft)
+  - POST /api/v1/documents/{document_id}/archive — ArchiveDocument
+  - POST /api/v1/documents/{document_id}/versions — CreateVersion
+  - GET /api/v1/documents/{document_id}/versions — ListVersions
+  - GET /api/v1/documents/{document_id}/versions/{version_id} — GetVersion (с artifacts)
+  - GET /api/v1/documents/{document_id}/versions/{version_id}/artifacts — ListArtifacts (filter by type/producer)
+  - GET /api/v1/documents/{document_id}/versions/{version_id}/artifacts/{artifact_type} — GetArtifact (JSON inline / blob 302 redirect)
+  - GET /api/v1/documents/{document_id}/diffs/{base_version_id}/{target_version_id} — GetDiff
+  - GET /api/v1/audit — ListAuditRecords (filters: document_id, version_id, action, actor_id, from/to)
+- MaxBytesReader 1MiB на POST bodies
+- Blob redirect: ListArtifacts→descriptor.StorageKey→GeneratePresignedURL (без загрузки контента)
+- isValidDocumentStatus/OriginType/ArtifactType validation на API boundary
+- Pagination: defaults page=1 size=20, max=100
+
+**Изменения в других файлах:**
+- port/outbound.go: добавлен `ActorID string` в `AuditListParams`
+- infra/postgres/audit_repository.go: добавлен `actor_id` filter в динамическом WHERE
+
+**Ревью (code-reviewer + golang-pro):**
+- 5 blocking исправлено: responseWriter double WriteHeader, Flush/Unwrap, MaxBytesReader, blob content discard→ListArtifacts, SOURCE_FILE removed
+- 12 warnings исправлено: auth header validation, status/origin/artifact type validation, X-Content-Type-Options:nosniff, audit date 400 on invalid, middleware comment, test fixes
+
+**Проверки:**
+- `go test ./internal/ingress/api/... -race -count=1` — 55 PASS
+- `go test -count=1 ./...` — ALL PASS (21 packages)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи (ready):**
+- DM-TASK-025 (Application wiring) — high, deps now all done (was blocked by 022)
+- DM-TASK-036 (REV-001/REV-002 fallback) — critical, deps done
+- DM-TASK-037 (BRE-001 FOR UPDATE) — critical, deps done
+- DM-TASK-038 (BRE-003 idempotency TTL) — critical, deps done
+- DM-TASK-023 (DLQ) — high, deps done
+- DM-TASK-024 (Audit Trail) — high, deps now all done (was blocked by 022)
+- DM-TASK-030 (Tenant isolation enforcement) — high, deps now all done
+
+---

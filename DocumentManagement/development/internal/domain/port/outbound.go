@@ -138,6 +138,7 @@ type AuditListParams struct {
 	DocumentID     string              // optional: filter by document
 	VersionID      string              // optional: filter by version
 	Action         *model.AuditAction  // optional: filter by action type
+	ActorID        string              // optional: filter by actor (user_id or domain name)
 	ActorType      *model.ActorType    // optional: filter by actor type
 	Since          *time.Time          // optional: records after this timestamp
 	Until          *time.Time          // optional: records before this timestamp

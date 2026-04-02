@@ -75,6 +75,11 @@ func (r *AuditRepository) List(ctx context.Context, params port.AuditListParams)
 		args = append(args, string(*params.Action))
 		argIdx++
 	}
+	if params.ActorID != "" {
+		where += fmt.Sprintf(" AND actor_id = $%d", argIdx)
+		args = append(args, params.ActorID)
+		argIdx++
+	}
 	if params.ActorType != nil {
 		where += fmt.Sprintf(" AND actor_type = $%d", argIdx)
 		args = append(args, string(*params.ActorType))

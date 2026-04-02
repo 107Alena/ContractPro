@@ -1014,3 +1014,48 @@
 - DM-TASK-011 (Health Check) — high priority, blocks DM-TASK-025
 
 ---
+
+## DM-TASK-018: Artifact Query Service (2026-04-02)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/application/query/query.go` (~310 строк) с `ArtifactQueryService`
+- Реализованы 4 метода интерфейса `port.ArtifactQueryHandler`:
+  - `HandleGetSemanticTree` — async: validate → FindByVersionAndType → not-found → publish error response / infra → return for retry / success → readArtifact → audit → PublishSemanticTreeProvided
+  - `HandleGetArtifacts` — async: validate → ListByVersionAndTypes → read each → missing types detection → audit → PublishArtifactsProvided
+  - `GetArtifact` — sync: validate → FindByVersionAndType → readArtifact → return ArtifactContent
+  - `ListArtifacts` — sync: validate → ListByVersion → nil→[] normalize
+- Создан `query_test.go` — 37 unit-тестов
+
+**Архитектурные решения:**
+- Direct publish через ConfirmationPublisher (не outbox): нет DB writes, не требуется transactional consistency
+- Error handling: infra errors (retryable) → return для retry consumer'ом; not-found → publish response с ErrorCode/ErrorMessage (DP может продолжить)
+- Async audit: recordAuditAsync с goroutine + context.Background() + 5s timeout — не блокирует response path
+- io.LimitReader с 50MB лимитом для защиты от OOM
+- inferRequesterDomain: LIC types → RE requester, DP types → LIC requester
+- Thread-safe mock'и с sync.Mutex для async audit goroutine
+- Polling helpers (waitForAudit, waitForLogs) вместо time.Sleep в тестах
+
+**Ревью (code-reviewer):**
+- APPROVED with warnings
+- W1 (objectstorage import в application layer): matches ingestion pattern, kept as-is
+- W2 (json.Marshal fallback): исправлено — details = `{}` вместо nil
+- W3 (time.Sleep в тестах): исправлено — polling helpers с 2s deadline
+
+**Проверки:**
+- `go test -race -count=1 ./internal/application/query/...` — 37 tests PASS
+- `go test -count=1 ./...` — ALL PASS
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи (ready):**
+- Все critical задачи application layer завершены (017-021 done)
+- DM-TASK-022 (API Handler) — now unblocked (deps: 017✅, 018✅, 019✅, 020✅, 021✅) — HIGH, blocks DM-TASK-025
+- DM-TASK-036 (REV-001/REV-002 fallback) — critical, deps done
+- DM-TASK-037 (BRE-001 FOR UPDATE) — critical, deps done
+- DM-TASK-038 (BRE-003 idempotency TTL) — critical, deps done
+- DM-TASK-010 (Observability) — high, deps done, blocks DM-TASK-025
+- DM-TASK-011 (Health Check) — high, deps done, blocks DM-TASK-025
+
+---

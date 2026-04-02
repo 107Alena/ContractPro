@@ -1591,7 +1591,54 @@
 
 **Следующие задачи (high priority pending, deps met):**
 - DM-TASK-024 (Audit Trail) — deps: DM-TASK-012 ✅, DM-TASK-022 ✅
-- DM-TASK-027 (Integration test full pipeline) — deps: DM-TASK-026 ✅
+- DM-TASK-028 (Integration test error scenarios) — deps: DM-TASK-026 ✅
+- DM-TASK-029 (Dockerfile + Docker Compose) — deps: DM-TASK-025 ✅
+- DM-TASK-030 (Tenant isolation enforcement) — deps: DM-TASK-012 ✅, DM-TASK-014 ✅, DM-TASK-022 ✅
+- DM-TASK-040 (REV-005 Archive endpoint) — deps: DM-TASK-022 ✅
+- DM-TASK-041 (Stale Version Watchdog) — deps: DM-TASK-017 ✅, DM-TASK-016 ✅
+
+---
+
+## DM-TASK-027: Integration test — полный pipeline (DP → LIC → RE) с version lifecycle (2026-04-03)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/integration/full_pipeline_test.go` с 10 integration тестами
+- Расширен `internal/integration/testinfra.go` с новой инфраструктурой:
+  - `recordingConfirmationPublisher` — captures SemanticTreeProvided + ArtifactsProvided events
+  - `newTestHarnessWithRecordingPublisher` — harness variant с recording publisher для query тестов
+  - `defaultLICEvent` — factory для 8-артефактного LIC события
+  - `defaultREEvent` — factory для RE события с pre-seeded blobs (claim-check pattern)
+- Тесты полного pipeline:
+  - `TestFullPipeline_DPtoLICtoRE_FullyReady` — 3 стадии: PENDING→PROCESSING→ANALYSIS→FULLY_READY, 14 artifacts, 6 outbox в правильном порядке, 6 audit, correlation_id propagation
+  - `TestFullPipeline_ListArtifactsAtEachStage` — sync API progressive: 0→4→12→14 artifacts, producer domain verification
+  - `TestFullPipeline_AuditTrailIntegrity` — 3 status transitions from/to, actor_id per producer
+  - `TestFullPipeline_OutOfOrder_LICBeforeDP_Fails` — state machine enforcement, no side effects
+  - `TestFullPipeline_DuplicateDP_AfterLIC_Fails` — backward transition rejected
+- Тесты query service:
+  - `TestGetSemanticTree_HappyPath` — content match, empty errors, async audit ARTIFACT_READ
+  - `TestGetSemanticTree_NotFound` — error fields populated, nil tree
+  - `TestGetArtifacts_HappyPath_AllFound` — 2 artifacts from different producers, content match
+  - `TestGetArtifacts_PartialResponse` — 1 found + 2 missing types
+  - `TestGetArtifacts_AllMissing` — 0 artifacts + all missing
+
+**Проверки:**
+- `go test ./internal/integration/... -race -count=1` — 24 PASS (14 existing + 10 new)
+- `go test -count=1 -race ./...` — ALL PASS (22 пакета)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Паттерны:**
+- Recording publisher для capture published events (vs noop)
+- Claim-check pattern testing (RE pre-seeds blobs → event has BlobReference)
+- Progressive assertions — verify state at each pipeline stage
+- Async audit verification with time.Sleep(100ms) for goroutine completion
+
+**Следующие задачи (high priority pending, deps met):**
+- DM-TASK-024 (Audit Trail) — deps: DM-TASK-012 ✅, DM-TASK-022 ✅
 - DM-TASK-028 (Integration test error scenarios) — deps: DM-TASK-026 ✅
 - DM-TASK-029 (Dockerfile + Docker Compose) — deps: DM-TASK-025 ✅
 - DM-TASK-030 (Tenant isolation enforcement) — deps: DM-TASK-012 ✅, DM-TASK-014 ✅, DM-TASK-022 ✅

@@ -931,6 +931,75 @@ func (b *captureBroker) deliverToTopic(ctx context.Context, topic string, body [
 }
 
 // ---------------------------------------------------------------------------
+// Recording Confirmation Publisher (for query service integration tests)
+// ---------------------------------------------------------------------------
+
+type recordingConfirmationPublisher struct {
+	mu                   sync.Mutex
+	semanticTreeProvided []model.SemanticTreeProvided
+	artifactsProvided    []model.ArtifactsProvided
+}
+
+func newRecordingConfirmationPublisher() *recordingConfirmationPublisher {
+	return &recordingConfirmationPublisher{}
+}
+
+func (p *recordingConfirmationPublisher) PublishDPArtifactsPersisted(_ context.Context, _ model.DocumentProcessingArtifactsPersisted) error {
+	return nil
+}
+func (p *recordingConfirmationPublisher) PublishDPArtifactsPersistFailed(_ context.Context, _ model.DocumentProcessingArtifactsPersistFailed) error {
+	return nil
+}
+func (p *recordingConfirmationPublisher) PublishSemanticTreeProvided(_ context.Context, event model.SemanticTreeProvided) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.semanticTreeProvided = append(p.semanticTreeProvided, event)
+	return nil
+}
+func (p *recordingConfirmationPublisher) PublishArtifactsProvided(_ context.Context, event model.ArtifactsProvided) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.artifactsProvided = append(p.artifactsProvided, event)
+	return nil
+}
+func (p *recordingConfirmationPublisher) PublishDiffPersisted(_ context.Context, _ model.DocumentVersionDiffPersisted) error {
+	return nil
+}
+func (p *recordingConfirmationPublisher) PublishDiffPersistFailed(_ context.Context, _ model.DocumentVersionDiffPersistFailed) error {
+	return nil
+}
+func (p *recordingConfirmationPublisher) PublishLICArtifactsPersisted(_ context.Context, _ model.LegalAnalysisArtifactsPersisted) error {
+	return nil
+}
+func (p *recordingConfirmationPublisher) PublishLICArtifactsPersistFailed(_ context.Context, _ model.LegalAnalysisArtifactsPersistFailed) error {
+	return nil
+}
+func (p *recordingConfirmationPublisher) PublishREReportsPersisted(_ context.Context, _ model.ReportsArtifactsPersisted) error {
+	return nil
+}
+func (p *recordingConfirmationPublisher) PublishREReportsPersistFailed(_ context.Context, _ model.ReportsArtifactsPersistFailed) error {
+	return nil
+}
+
+func (p *recordingConfirmationPublisher) getSemanticTreeProvided() []model.SemanticTreeProvided {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := make([]model.SemanticTreeProvided, len(p.semanticTreeProvided))
+	copy(result, p.semanticTreeProvided)
+	return result
+}
+
+func (p *recordingConfirmationPublisher) getArtifactsProvided() []model.ArtifactsProvided {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := make([]model.ArtifactsProvided, len(p.artifactsProvided))
+	copy(result, p.artifactsProvided)
+	return result
+}
+
+var _ port.ConfirmationPublisherPort = (*recordingConfirmationPublisher)(nil)
+
+// ---------------------------------------------------------------------------
 // Noop Confirmation Publisher (for query service)
 // ---------------------------------------------------------------------------
 
@@ -1070,4 +1139,140 @@ func defaultDPEvent(orgID, docID, versionID, jobID, correlationID string) model.
 		Structure:    json.RawMessage(`{"sections": [{"title": "Section 1"}]}`),
 		SemanticTree: json.RawMessage(`{"nodes": [{"id": "root"}]}`),
 	}
+}
+
+func defaultLICEvent(orgID, docID, versionID, jobID, correlationID string) model.LegalAnalysisArtifactsReady {
+	return model.LegalAnalysisArtifactsReady{
+		EventMeta: model.EventMeta{
+			CorrelationID: correlationID,
+			Timestamp:     time.Now().UTC(),
+		},
+		JobID:                jobID,
+		DocumentID:           docID,
+		VersionID:            versionID,
+		OrgID:                orgID,
+		ClassificationResult: json.RawMessage(`{"type": "supply_agreement"}`),
+		KeyParameters:        json.RawMessage(`{"parties": ["Company A", "Company B"]}`),
+		RiskAnalysis:         json.RawMessage(`{"risks": [{"id": "R1", "severity": "HIGH"}]}`),
+		RiskProfile:          json.RawMessage(`{"overall_risk": "MEDIUM"}`),
+		Recommendations:      json.RawMessage(`{"items": [{"text": "Add force majeure clause"}]}`),
+		Summary:              json.RawMessage(`{"text": "Supply agreement between A and B"}`),
+		DetailedReport:       json.RawMessage(`{"sections": [{"title": "Risk Overview"}]}`),
+		AggregateScore:       json.RawMessage(`{"score": 72}`),
+	}
+}
+
+// defaultREEvent creates a RE event with pre-seeded blobs in object storage.
+// The blobs must exist before calling HandleREArtifacts (claim-check pattern).
+func defaultREEvent(h *testHarness, orgID, docID, versionID, jobID, correlationID string) model.ReportsArtifactsReady {
+	pdfContent := []byte("%PDF-1.4 fake PDF content for testing")
+	docxContent := []byte("PK\x03\x04 fake DOCX content for testing")
+
+	pdfKey := orgID + "/" + docID + "/" + versionID + "/" + "EXPORT_PDF"
+	docxKey := orgID + "/" + docID + "/" + versionID + "/" + "EXPORT_DOCX"
+
+	// Pre-seed blobs in object storage (RE uploads before sending event).
+	_ = h.objectStorage.PutObject(context.Background(), pdfKey, bytes.NewReader(pdfContent), "application/pdf")
+	_ = h.objectStorage.PutObject(context.Background(), docxKey, bytes.NewReader(docxContent), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+	pdfHash := sha256HexHelper(pdfContent)
+	docxHash := sha256HexHelper(docxContent)
+
+	return model.ReportsArtifactsReady{
+		EventMeta: model.EventMeta{
+			CorrelationID: correlationID,
+			Timestamp:     time.Now().UTC(),
+		},
+		JobID:      jobID,
+		DocumentID: docID,
+		VersionID:  versionID,
+		OrgID:      orgID,
+		ExportPDF: &model.BlobReference{
+			StorageKey:  pdfKey,
+			FileName:    "contract_report.pdf",
+			SizeBytes:   int64(len(pdfContent)),
+			ContentHash: pdfHash,
+		},
+		ExportDOCX: &model.BlobReference{
+			StorageKey:  docxKey,
+			FileName:    "contract_report.docx",
+			SizeBytes:   int64(len(docxContent)),
+			ContentHash: docxHash,
+		},
+	}
+}
+
+// newTestHarnessWithRecordingPublisher creates a harness with a recording
+// confirmation publisher (for query service integration tests that verify
+// published SemanticTreeProvided / ArtifactsProvided events).
+func newTestHarnessWithRecordingPublisher(t *testing.T) (*testHarness, *recordingConfirmationPublisher) {
+	t.Helper()
+
+	h := &testHarness{
+		transactor:    newMemoryTransactor(),
+		docRepo:       newMemoryDocumentRepository(),
+		versionRepo:   newMemoryVersionRepository(),
+		artifactRepo:  newMemoryArtifactRepository(),
+		auditRepo:     newMemoryAuditRepository(),
+		outboxRepo:    newMemoryOutboxRepository(),
+		objectStorage: newMemoryObjectStorage(),
+		idemStore:     newMemoryIdempotencyStore(),
+		dlqPort:       newRecordingDLQPort(),
+		diffRepo:      newMemoryDiffRepository(),
+		fallback:      newMemoryFallbackResolver(),
+		broker:        newCaptureBroker(),
+		logger:        newRecordingLogger(),
+	}
+
+	h.outboxWriter = outbox.NewOutboxWriter(h.outboxRepo)
+
+	// Wire ingestion service (same as standard harness).
+	h.ingestion = appIngestion.NewArtifactIngestionService(
+		h.transactor,
+		h.versionRepo,
+		h.artifactRepo,
+		h.auditRepo,
+		h.objectStorage,
+		h.outboxWriter,
+		h.fallback,
+		&noopFallbackMetrics{},
+		h.logger,
+	)
+
+	// Wire query service with recording confirmation publisher.
+	recPublisher := newRecordingConfirmationPublisher()
+	h.query = appQuery.NewArtifactQueryService(
+		h.artifactRepo,
+		h.objectStorage,
+		recPublisher,
+		h.auditRepo,
+		h.fallback,
+		h.logger,
+	)
+
+	// Wire diff service (same as standard harness).
+	h.diffService = appDiff.NewDiffStorageService(
+		h.transactor,
+		h.versionRepo,
+		h.diffRepo,
+		h.auditRepo,
+		h.objectStorage,
+		h.outboxWriter,
+		h.fallback,
+		h.logger,
+	)
+
+	// Wire idempotency guard (same as standard harness).
+	h.idempotencyGuard = idempotency.NewIdempotencyGuard(
+		h.idemStore,
+		config.IdempotencyConfig{
+			TTL:            24 * time.Hour,
+			ProcessingTTL:  120 * time.Second,
+			StuckThreshold: 240 * time.Second,
+		},
+		&noopIdempotencyMetrics{},
+		h.logger,
+	)
+
+	return h, recPublisher
 }

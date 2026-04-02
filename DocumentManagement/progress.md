@@ -1232,3 +1232,64 @@
 - DM-TASK-030 (Tenant isolation enforcement) — high, deps now all done
 
 ---
+
+## DM-TASK-025: Application wiring: main.go с graceful startup/shutdown (2026-04-02)
+
+**Статус:** done
+
+**Что сделано:**
+- Реализован `cmd/dm-service/main.go` (~370 строк) — полный wiring всех компонентов DM-сервиса
+- **Startup (16 фаз):**
+  1. `config.Load()` — env-based конфигурация с DM_ prefix
+  2. `observability.New()` — Logger + Metrics + Tracer
+  3. `postgres.NewPostgresClient()` + `Migrator.Up()` — подключение + миграции
+  4. `kvstore.NewClient()` — Redis для идемпотентности
+  5. `broker.NewClient()` + `DeclareTopology()` — RabbitMQ + queues
+  6. `objectstorage.NewClient()` — S3-compatible хранилище
+  7. Transactor + 6 repositories + `poolOutboxRepository` wrapper
+  8. OutboxWriter
+  9. ConfirmationPublisher (прямая публикация для query responses)
+  10. IdempotencyGuard
+  11. 5 Application Services (ingestion/query/lifecycle/version/diff)
+  12. EventConsumer (7 topics)
+  13. API Handler + `auditPortAdapter`
+  14. OutboxPoller + OutboxMetricsCollector
+  15. Health Handler (3 core: postgres/redis/rabbitmq, 1 non-core: object_storage)
+  16. HTTP servers (API+health на HTTP порту, metrics на отдельном)
+
+- **Shutdown (BRE-019, 8 фаз):** readiness=false → stop outbox poller → stop outbox metrics → close broker → stop HTTP → close Redis → close PostgreSQL → flush observability
+- **3 адаптера:**
+  - `poolSubscribeAdapter` — broker.Subscribe + pgxpool injection в consumer contexts
+  - `poolMiddleware` — pgxpool injection в HTTP request contexts
+  - `poolOutboxRepository` — wraps OutboxRepository для non-transactional operations (cleanup, PendingStats)
+  - `auditPortAdapter` — bridges AuditRepository (Insert/List) → AuditPort (Record/List)
+
+- **Fixes после code review (code-reviewer + golang-pro):**
+  - B-1: `poolOutboxRepository` — предотвращает panic в ConnFromCtx для non-transactional paths
+  - B-2: `errors.Is(err, http.ErrServerClosed)` вместо `!=`
+  - B-3: compile-time interface checks для всех адаптеров
+  - B-4: HTTP startup error detection через errCh
+  - B-5: `sync.Once` для safe double-call shutdown
+  - W: WriteTimeout/IdleTimeout на HTTP servers
+
+**Проверки:**
+- `make build` — OK
+- `make test` — ALL PASS (20 packages)
+- `make lint` (`go vet ./...`) — OK
+- `go test -count=1 -race ./...` — ALL PASS
+
+**Паттерны:**
+- Context-based DI: pgxpool.Pool injection через context.Value (postgres.InjectPool)
+- DP app.go pattern: thin main() + run() → exit code
+- Progressive cleanup: partial startup failure cleans up all opened resources
+- sync.Once shutdown: safe from concurrent/double-call
+
+**Следующие задачи (unblocked by DM-TASK-025):**
+- DM-TASK-026 (Integration test: DP→DM) — deps: DM-TASK-025 ✅
+- DM-TASK-027 (Integration test: full pipeline) — deps: DM-TASK-026
+- DM-TASK-028 (Integration test: error scenarios) — deps: DM-TASK-026
+- DM-TASK-029 (Dockerfile + Docker Compose) — deps: DM-TASK-025 ✅
+- DM-TASK-052 (CLAUDE.md files) — deps: DM-TASK-025 ✅
+- DM-TASK-035 (deployment.md) — deps: DM-TASK-029
+
+---

@@ -962,3 +962,55 @@
 - DM-TASK-011 (Health Check) — high priority, blocks DM-TASK-025
 
 ---
+
+## DM-TASK-021: Diff Storage Service (2026-04-02)
+
+**Статус:** done
+
+**План реализации:**
+1. Изучить порты (DiffStorageHandler, DiffRepository, ObjectStoragePort), модели (VersionDiffReference, DocumentVersionDiffReady/Persisted/PersistFailed), outbox pattern
+2. Спроектировать DiffStorageService: struct, зависимости, HandleDiffReady flow, GetDiff flow, idempotency (REV-028)
+3. Реализовать service + tests
+4. Code review, полная проверка тестов, make targets
+
+**Что сделано:**
+- Создан `internal/application/diff/diff.go` (~260 строк):
+  - `DiffStorageService` struct с 7 зависимостями (transactor, versionRepo, diffRepo, auditRepo, objectStorage, outboxWriter, logger)
+  - `NewDiffStorageService` — constructor с panic на nil deps, `newUUID` hook для тестируемости
+  - `HandleDiffReady` — полный flow: validate 5 полей → FindByID base+target versions → merge TextDiffs+StructuralDiffs в diffBlob (ensureJSONArray для nil→[]) → PutObject (deterministic DiffKey) → WithTransaction(Insert VersionDiffReference + AuditInsert DIFF_SAVED + Outbox Write DiffPersisted)
+  - **REV-028 idempotency**: при DiffAlreadyExists → Write DiffPersisted для текущего job_id без перезаписи, без audit; S3 key deterministic → harmless PutObject overwrite
+  - **Compensation**: при tx failure → compensateDiffBlob (context.Background(), 30s timeout, best-effort)
+  - `GetDiff` — validate params → FindByVersionPair → GetObject → io.ReadAll → return ref+data
+  - Helpers: validateDiffRequired, validateGetDiffParams, ensureJSONArray, sha256Hex, generateUUID, compensateDiffBlob
+  - Compile-time check: `var _ port.DiffStorageHandler = (*DiffStorageService)(nil)`
+- Создан `diff_test.go` с 23 unit-тестами:
+  - 7 constructor panic tests
+  - HandleDiffReady: happy path, nil diffs, 5 validation errors, base/target version not found, PutObject failure, tx failure+compensation, idempotency REV-028, audit failure, outbox failure, context cancelled, aggregate_id, audit details, storage key format, non-conflict DB error, correlation_id preserved, interface compliance
+  - GetDiff: happy path, 4 validation errors, diff not found, storage get failure
+  - Helpers: ensureJSONArray (3 cases), sha256Hex
+
+**Проверки:**
+- `go test ./internal/application/diff/... -race -count=1` — 23 tests PASS
+- `go test -count=1 ./...` — ALL PASS (все 18 пакетов с тестами)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+- Code review (code-reviewer subagent): 0 blocking, 2 warnings (minor, not fixed: io.ReadAll edge case test, generateUUID panic test)
+
+**Ключевые решения:**
+- diffBlob struct для объединения TextDiffs и StructuralDiffs в один S3-объект
+- Deterministic S3 key из version pair → PutObject идемпотентен
+- aggregate_id = targetVersionID для FIFO ordering в outbox (как в ingestion)
+- DiffPersistFailed НЕ публикуется сервисом (outbox недоступен после failed tx), ответственность consumer layer
+- Version validation ДО upload (fail fast)
+
+**Следующие задачи (ready, critical):**
+- DM-TASK-018 (Artifact Query) — единственная critical pending, блокирует DM-TASK-022 (API)
+- DM-TASK-036 (REV-001/REV-002 fallback) — unblocked by DM-TASK-017
+- DM-TASK-037 (BRE-001 FOR UPDATE) — unblocked by DM-TASK-017
+- DM-TASK-038 (BRE-003 idempotency TTL) — unblocked by DM-TASK-013
+- DM-TASK-010 (Observability) — high priority, blocks DM-TASK-025
+- DM-TASK-011 (Health Check) — high priority, blocks DM-TASK-025
+
+---

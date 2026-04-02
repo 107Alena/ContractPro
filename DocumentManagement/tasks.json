@@ -843,7 +843,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-013"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-02",
+      "summary": "Верификация: все acceptance criteria BRE-003 уже реализованы в DM-TASK-013. SETNX PROCESSING с ProcessingTTL=120s (config default, idempotency.go:120). MarkCompleted с TTL=24h (idempotency.go:171). Stuck detection: IsStuck(StuckThreshold=240s) → overwrite + ResultReprocess (idempotency.go:147-158). COMPLETED → ResultSkip без re-publish (BRE-002, idempotency.go:141-143). Consumer processWithIdempotency: ResultSkip → ACK (always return nil). Unit-тесты: TestCheck_ProcessingStuck_ReturnsReprocess, TestCheck_ProcessingFresh_ReturnsSkip, TestCheck_Completed_ReturnsSkip, TestFullLifecycle_ProcessThenSkipOnRedelivery + 35 других тестов. go test -race -count=1 ./... ALL PASS. go vet OK. make build/test/lint OK."
     },
     {
       "id": "DM-TASK-039",

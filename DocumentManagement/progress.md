@@ -1381,3 +1381,28 @@
 - DM-TASK-038 (BRE-003: Idempotency Guard short TTL) — deps: DM-TASK-013 ✅
 
 ---
+
+## DM-TASK-038: BRE-003 — Idempotency Guard short TTL + stuck check (2026-04-02)
+
+**Статус:** done (верификация — все criteria реализованы в DM-TASK-013)
+
+**Acceptance Criteria → реализация:**
+1. SET PROCESSING с TTL 120s (не 24h) → `SetNX(ctx, newRecord, g.cfg.ProcessingTTL)` в `idempotency.go:120`, `ProcessingTTL` default 120s в `sub_configs.go:175`
+2. COMPLETED с TTL 24h → `MarkCompleted` использует `g.cfg.TTL` (24h) в `idempotency.go:171`
+3. Stuck PROCESSING ≥ 240s → re-process → `IsStuck(StuckThreshold)` + overwrite в `idempotency.go:147-158`, `StuckThreshold` default 240s
+4. COMPLETED → ACK без re-publish (BRE-002) → `ResultSkip` в `idempotency.go:141-143`, consumer `processWithIdempotency` → ACK (always nil)
+5. Unit-тесты → 39 тестов в `idempotency_test.go`: `TestCheck_ProcessingStuck_ReturnsReprocess`, `TestCheck_ProcessingFresh_ReturnsSkip`, `TestCheck_Completed_ReturnsSkip`, `TestFullLifecycle_ProcessThenSkipOnRedelivery` и др.
+
+**Проверки:**
+- `go test -race -count=1 ./internal/ingress/idempotency/...` — 39 PASS
+- `go test -count=1 -race ./...` — ALL PASS (21 пакет)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи (high priority pending, deps met):**
+- DM-TASK-023 (DLQ + backoff) — deps: DM-TASK-014 ✅, DM-TASK-017 ✅
+- DM-TASK-039 (BRE-005: FOR UPDATE documents) — deps: DM-TASK-020 ✅
+- DM-TASK-030 (Tenant isolation) — deps: DM-TASK-012 ✅, DM-TASK-014 ✅, DM-TASK-022 ✅
+- DM-TASK-026 (Integration test DP→DM) — deps: DM-TASK-025 ✅
+
+---

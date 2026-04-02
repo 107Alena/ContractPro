@@ -21,6 +21,7 @@ import (
 	"contractpro/document-management/internal/application/version"
 	"contractpro/document-management/internal/config"
 	"contractpro/document-management/internal/egress/confirmation"
+	"contractpro/document-management/internal/egress/dlq"
 	"contractpro/document-management/internal/egress/outbox"
 	"contractpro/document-management/internal/infra/broker"
 	"contractpro/document-management/internal/infra/health"
@@ -41,6 +42,7 @@ var (
 	_ port.AuditPort            = (*auditPortAdapter)(nil)
 	_ consumer.BrokerSubscriber = (*poolSubscribeAdapter)(nil)
 	_ port.OutboxRepository     = (*poolOutboxRepository)(nil)
+	_ port.DLQRepository        = (*poolDLQRepository)(nil)
 )
 
 func main() {
@@ -156,11 +158,24 @@ func run() int {
 	// -----------------------------------------------------------------------
 	outboxWriter := outbox.NewOutboxWriter(outboxRepo)
 
+	// DLQ repository (for replay persistence).
+	dlqRepo := postgres.NewDLQRepository()
+	poolDLQRepo := &poolDLQRepository{inner: dlqRepo, pool: pool}
+
 	// -----------------------------------------------------------------------
 	// Phase 9: Confirmation Publisher (used by query service for direct publish)
 	// Notification events go through the outbox, so no NotificationPublisher is needed here.
 	// -----------------------------------------------------------------------
 	confirmPub := confirmation.NewConfirmationPublisher(brokerClient, cfg.Broker)
+
+	// DLQ Sender — publishes failed messages to DLQ topics and persists to DB.
+	dlqSender := dlq.NewSender(
+		brokerClient, poolDLQRepo, obs.Metrics,
+		obs.Logger.With("component", "dlq"),
+		cfg.Broker.TopicDMDLQIngestionFailed,
+		cfg.Broker.TopicDMDLQQueryFailed,
+		cfg.Broker.TopicDMDLQInvalidMessage,
+	)
 
 	// -----------------------------------------------------------------------
 	// Phase 10: Idempotency Guard
@@ -218,6 +233,7 @@ func run() int {
 		idemGuard,
 		obs.Logger.With("component", "consumer"),
 		obs.Metrics,
+		dlqSender,
 		ingestionSvc,
 		querySvc,
 		diffSvc,
@@ -232,6 +248,7 @@ func run() int {
 			REArtifactsReady:    cfg.Broker.TopicREArtifactsReportsReady,
 			RERequestArtifacts:  cfg.Broker.TopicRERequestsArtifacts,
 		},
+		cfg.Retry,
 	)
 
 	// -----------------------------------------------------------------------
@@ -243,6 +260,7 @@ func run() int {
 		audit, objClient,
 		obs.Logger.With("component", "api"),
 	)
+	apiHandler.WithDLQReplay(poolDLQRepo, brokerClient, cfg.DLQ.MaxReplayCount)
 
 	// -----------------------------------------------------------------------
 	// Phase 14: Outbox Poller + Metrics Collector
@@ -527,6 +545,26 @@ func (r *poolOutboxRepository) DeletePublished(ctx context.Context, olderThan ti
 
 func (r *poolOutboxRepository) PendingStats(ctx context.Context) (int64, float64, error) {
 	return r.inner.PendingStats(postgres.InjectPool(ctx, r.pool))
+}
+
+// poolDLQRepository wraps port.DLQRepository to inject the pgxpool.Pool
+// into every context before delegating. This ensures ConnFromCtx finds
+// the pool in non-transactional paths (DLQ sender, replay endpoint).
+type poolDLQRepository struct {
+	inner port.DLQRepository
+	pool  *pgxpool.Pool
+}
+
+func (r *poolDLQRepository) Insert(ctx context.Context, record *model.DLQRecord) error {
+	return r.inner.Insert(postgres.InjectPool(ctx, r.pool), record)
+}
+
+func (r *poolDLQRepository) FindByFilter(ctx context.Context, params port.DLQFilterParams) ([]*model.DLQRecordWithMeta, error) {
+	return r.inner.FindByFilter(postgres.InjectPool(ctx, r.pool), params)
+}
+
+func (r *poolDLQRepository) IncrementReplayCount(ctx context.Context, id string) error {
+	return r.inner.IncrementReplayCount(postgres.InjectPool(ctx, r.pool), id)
 }
 
 // auditPortAdapter bridges port.AuditRepository (Insert/List) to

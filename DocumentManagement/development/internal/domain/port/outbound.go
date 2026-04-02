@@ -333,8 +333,31 @@ type AuditPort interface {
 // analysis and potential reprocessing.
 // Implemented by: DLQ Sender (egress layer).
 type DLQPort interface {
-	// SendToDLQ publishes a failed message record to the dead letter queue.
+	// SendToDLQ publishes a failed message record to the dead letter queue
+	// and persists it to the DLQ repository for replay support.
 	SendToDLQ(ctx context.Context, record model.DLQRecord) error
+}
+
+// DLQRepository provides durable storage for DLQ records.
+// Used by the admin replay endpoint. Persistence to PostgreSQL (not Redis)
+// ensures records survive TTL expiration (BRE-011).
+type DLQRepository interface {
+	// Insert persists a DLQ record.
+	Insert(ctx context.Context, record *model.DLQRecord) error
+
+	// FindByFilter returns DLQ records matching the given criteria.
+	FindByFilter(ctx context.Context, params DLQFilterParams) ([]*model.DLQRecordWithMeta, error)
+
+	// IncrementReplayCount atomically increments the replay count for a record.
+	IncrementReplayCount(ctx context.Context, id string) error
+}
+
+// DLQFilterParams holds filter criteria for DLQ record queries.
+type DLQFilterParams struct {
+	Category      model.DLQCategory // optional: filter by category
+	CorrelationID string            // optional: filter by correlation_id
+	MaxReplay     int               // exclude records with replay_count >= this value
+	Limit         int               // max results (default: 10, max: 100)
 }
 
 // ---------------------------------------------------------------------------

@@ -1441,3 +1441,102 @@
 - DM-TASK-042 (BRE-006 Outbox Poller) — deps: DM-TASK-016 ✅
 
 ---
+
+## DM-TASK-023: DLQ — отправка необработанных сообщений + replay + backoff (2026-04-03)
+
+**Статус:** done
+
+**Что сделано:**
+
+Реализована полная DLQ (Dead Letter Queue) система для Document Management:
+
+1. **Доменная модель** (`internal/domain/model/dlq.go`):
+   - `DLQCategory` enum: `ingestion`, `query`, `invalid` — определяет целевой DLQ-топик
+   - `Category` field добавлен в `DLQRecord`
+   - `DLQRecordWithMeta` struct — расширение для replay tracking: ID, ReplayCount, LastReplayedAt, CreatedAt
+
+2. **Порты** (`internal/domain/port/outbound.go`):
+   - `DLQRepository` interface: Insert, FindByFilter, IncrementReplayCount
+   - `DLQFilterParams`: фильтрация по category, correlation_id, max_replay, limit
+
+3. **Конфигурация** (`internal/config/`):
+   - `DLQConfig` struct с `DM_DLQ_MAX_REPLAY_COUNT` (default 3, BRE-011)
+   - Добавлен в корневой Config struct
+
+4. **PostgreSQL миграция** (`migrations/000002_dlq_records.up.sql`):
+   - Таблица `dm_dlq_records` с 12 колонками: id (UUID PK), original_topic, original_message (JSONB), error_code, error_message, correlation_id, job_id, category, failed_at, replay_count (default 0), last_replayed_at, created_at
+   - 3 индекса: correlation_id (partial), category, created_at
+
+5. **PostgreSQL DLQ Repository** (`internal/infra/postgres/dlq_repository.go`):
+   - Insert — сохранение DLQ записи
+   - FindByFilter — динамический WHERE + ORDER BY created_at DESC + LIMIT
+   - IncrementReplayCount — атомарный UPDATE replay_count + last_replayed_at
+
+6. **DLQ Sender** (`internal/egress/dlq/sender.go`):
+   - Реализует `port.DLQPort`
+   - Dual-write pattern: DB persist (replay source of truth) → broker publish (alerting/monitoring)
+   - `resolveTopic` по DLQCategory: ingestion → dm.dlq.ingestion-failed, query → dm.dlq.query-failed, invalid → dm.dlq.invalid-message
+   - Consumer-side interfaces: BrokerPublisher, DLQMetrics, Logger
+   - Compile-time check: `var _ port.DLQPort = (*Sender)(nil)`
+   - DB insert failure не блокирует broker publish; broker publish failure не фатальна (logged)
+
+7. **Observability** (`internal/infra/observability/metrics.go`):
+   - `IncDLQMessages(reason string)` helper method для dm_dlq_messages_total counter
+
+8. **Consumer Integration** (`internal/ingress/consumer/consumer.go`):
+   - Добавлены deps: `dlq port.DLQPort`, `retryCfg config.RetryConfig`
+   - `dlqContext` struct: category, rawBody, correlationID, jobID
+   - Все 7 per-topic handlers обновлены:
+     - Invalid JSON → `DLQCategoryInvalid` + sendToDLQ
+     - Validation failure → `DLQCategoryInvalid` + sendToDLQ
+     - Missing required fields (version_id, base/target) → `DLQCategoryInvalid` + sendToDLQ
+   - `processWithIdempotency` обновлён:
+     - Non-retryable errors → sendToDLQ (immediate DLQ)
+     - Retryable errors → applyBackoff (BRE-025, no DLQ)
+   - `sendToDLQ` helper: строит DLQRecord из dlqContext + error, publishes via DLQ port
+   - `applyBackoff`: context-aware time.Sleep с BackoffBase delay
+
+9. **DLQ Replay Admin Endpoint** (`internal/ingress/api/handler.go`):
+   - `POST /api/v1/admin/dlq/replay` — admin-only endpoint (REV-018, BRE-011)
+   - `WithDLQReplay(repo, broker, maxReplay)` — optional setup (disabled if deps nil)
+   - Request: `category` (optional), `correlation_id` (optional), `limit` (default 10, max 100)
+   - Response: `replayed`, `skipped`, `errors`
+   - Flow: FindByFilter → skip if replay_count >= max → Publish to original_topic → IncrementReplayCount
+   - Category validation: only ingestion/query/invalid accepted
+
+10. **Application Wiring** (`cmd/dm-service/main.go`):
+    - DLQRepository + poolDLQRepository adapter (pool injection)
+    - DLQ Sender wiring с 3 topic names из config
+    - Consumer получает dlqSender + cfg.Retry
+    - apiHandler.WithDLQReplay(poolDLQRepo, brokerClient, cfg.DLQ.MaxReplayCount)
+    - Compile-time check: `var _ port.DLQRepository = (*poolDLQRepository)(nil)`
+
+**Тесты (44 новых):**
+- DLQ Sender: 13 тестов (7 constructor panics, success, 4 category routing, DB error continues, broker error non-fatal, JSON round-trip, context cancelled)
+- DLQ Repository: 5 тестов (interface compliance, constructor, 3 panic-on-no-pool)
+- Consumer DLQ: 15 тестов (invalid JSON→DLQ, validation→DLQ, non-retryable→DLQ, retryable→no DLQ, query category semantic tree, query category get artifacts, original message preserved, diff invalid JSON, LIC non-retryable, RE non-retryable, DLQ send error logged, missing version_id, missing base/target version_id, all topics invalid JSON→DLQ from previous tests updated)
+- Backoff: 3 теста (retryable applies delay, context cancelled skips delay, zero backoff no delay)
+- API Replay: 8 тестов (happy path, max replay exceeded, invalid JSON, invalid category, publish error, DB error, correlation_id filter, not enabled without deps)
+- Config: 1 новый тест (DLQ.MaxReplayCount default)
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (21 пакет)
+- `go vet ./...` — OK
+- `make build` — OK, `make test` — OK, `make lint` — OK
+
+**Ключевые решения:**
+- DLQ topic routing через DLQCategory enum (explicit at call site, not inferred by sender)
+- Dual-write: DB первый (source of truth для replay), broker второй (alerting); ни одна ошибка не фатальна
+- Backoff: fixed delay (BackoffBase, default 1s) вместо exponential per-message — consumer всегда ACK, нет per-message retry counter
+- Replay через PostgreSQL (не Redis) — records survive TTL expiration (BRE-011)
+- Max replay count = 3 для защиты от бесконечного цикла (REV-018)
+- Consumer всегда возвращает nil (ACK) — DLQ publish происходит до return nil (at-least-once DLQ semantics)
+
+**Следующие задачи (high priority pending, deps met):**
+- DM-TASK-024 (Audit Trail) — deps: DM-TASK-012 ✅, DM-TASK-022 ✅
+- DM-TASK-026 (Integration test DP→DM) — deps: DM-TASK-025 ✅
+- DM-TASK-030 (Tenant isolation enforcement) — deps: DM-TASK-012 ✅, DM-TASK-014 ✅, DM-TASK-022 ✅
+- DM-TASK-040 (REV-005 Archive endpoint) — deps: DM-TASK-022 ✅
+- DM-TASK-041 (Stale Version Watchdog) — deps: DM-TASK-017 ✅, DM-TASK-016 ✅
+
+---

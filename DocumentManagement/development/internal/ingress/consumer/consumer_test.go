@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"contractpro/document-management/internal/config"
 	"contractpro/document-management/internal/domain/model"
 	"contractpro/document-management/internal/domain/port"
 	"contractpro/document-management/internal/ingress/idempotency"
@@ -288,6 +289,37 @@ func (m *mockMetrics) hasProcessed(topic, status string) bool {
 	return false
 }
 
+type mockDLQ struct {
+	mu      sync.Mutex
+	records []model.DLQRecord
+	sendErr error
+}
+
+func (m *mockDLQ) SendToDLQ(_ context.Context, record model.DLQRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sendErr != nil {
+		return m.sendErr
+	}
+	m.records = append(m.records, record)
+	return nil
+}
+
+func (m *mockDLQ) lastRecord() (model.DLQRecord, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.records) == 0 {
+		return model.DLQRecord{}, false
+	}
+	return m.records[len(m.records)-1], true
+}
+
+func (m *mockDLQ) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.records)
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -309,6 +341,7 @@ type testDeps struct {
 	idempotency  *mockIdempotency
 	logger       *mockLogger
 	metrics      *mockMetrics
+	dlq          *mockDLQ
 	ingestion    *mockIngestion
 	query        *mockQuery
 	diff         *mockDiff
@@ -322,6 +355,7 @@ func newTestDeps() *testDeps {
 		idempotency:  &mockIdempotency{checkResult: idempotency.ResultProcess},
 		logger:       &mockLogger{},
 		metrics:      &mockMetrics{},
+		dlq:          &mockDLQ{},
 		ingestion:    &mockIngestion{},
 		query:        &mockQuery{},
 		diff:         &mockDiff{},
@@ -330,12 +364,20 @@ func newTestDeps() *testDeps {
 	}
 }
 
+func defaultRetryConfig() config.RetryConfig {
+	return config.RetryConfig{
+		MaxAttempts: 3,
+		BackoffBase: 0, // no delay in tests
+	}
+}
+
 func (d *testDeps) newConsumer() *EventConsumer {
 	return NewEventConsumer(
-		d.broker, d.idempotency, d.logger, d.metrics,
+		d.broker, d.idempotency, d.logger, d.metrics, d.dlq,
 		d.ingestion, d.query, d.diff,
 		d.artifactRepo, d.diffRepo,
 		defaultTopics(),
+		defaultRetryConfig(),
 	)
 }
 
@@ -455,42 +497,46 @@ func validREArtifactsEvent() model.ReportsArtifactsReady {
 func TestNewEventConsumer_PanicOnNilDeps(t *testing.T) {
 	d := newTestDeps()
 	topics := defaultTopics()
+	rc := defaultRetryConfig()
 
 	cases := []struct {
 		name    string
 		factory func()
 	}{
 		{"nil broker", func() {
-			NewEventConsumer(nil, d.idempotency, d.logger, d.metrics, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics)
+			NewEventConsumer(nil, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil idempotency", func() {
-			NewEventConsumer(d.broker, nil, d.logger, d.metrics, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics)
+			NewEventConsumer(d.broker, nil, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil logger", func() {
-			NewEventConsumer(d.broker, d.idempotency, nil, d.metrics, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics)
+			NewEventConsumer(d.broker, d.idempotency, nil, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil metrics", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, nil, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics)
+			NewEventConsumer(d.broker, d.idempotency, d.logger, nil, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+		}},
+		{"nil DLQ", func() {
+			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, nil, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil ingestion", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, nil, d.query, d.diff, d.artifactRepo, d.diffRepo, topics)
+			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, nil, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil query", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.ingestion, nil, d.diff, d.artifactRepo, d.diffRepo, topics)
+			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, nil, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil diff handler", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.ingestion, d.query, nil, d.artifactRepo, d.diffRepo, topics)
+			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, nil, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil artifact repo", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.ingestion, d.query, d.diff, nil, d.diffRepo, topics)
+			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, nil, d.diffRepo, topics, rc)
 		}},
 		{"nil diff repo", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.ingestion, d.query, d.diff, d.artifactRepo, nil, topics)
+			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, nil, topics, rc)
 		}},
 		{"empty topic", func() {
 			topics := defaultTopics()
 			topics.DPArtifactsReady = ""
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics)
+			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 	}
 
@@ -1660,5 +1706,401 @@ func TestAllHandlers_AlwaysReturnNil(t *testing.T) {
 				t.Errorf("handler for %s returned non-nil: %v", topic, err)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: DLQ integration (DM-TASK-023)
+// ---------------------------------------------------------------------------
+
+func TestDLQ_InvalidJSON_SentToDLQ(t *testing.T) {
+	d := newTestDeps()
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+	_ = handler(context.Background(), []byte(`{invalid json}`))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryInvalid {
+		t.Errorf("category = %q, want invalid", rec.Category)
+	}
+	if rec.ErrorCode != port.ErrCodeInvalidPayload {
+		t.Errorf("error_code = %q, want %s", rec.ErrorCode, port.ErrCodeInvalidPayload)
+	}
+}
+
+func TestDLQ_ValidationFailure_SentToDLQ(t *testing.T) {
+	d := newTestDeps()
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Event with missing required fields
+	event := model.DocumentProcessingArtifactsReady{
+		EventMeta: model.EventMeta{
+			CorrelationID: "corr-1",
+			Timestamp:     time.Now(),
+		},
+		// Missing JobID and DocumentID
+	}
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryInvalid {
+		t.Errorf("category = %q, want invalid", rec.Category)
+	}
+	if rec.ErrorCode != port.ErrCodeValidation {
+		t.Errorf("error_code = %q, want %s", rec.ErrorCode, port.ErrCodeValidation)
+	}
+}
+
+func TestDLQ_NonRetryableHandlerError_SentToDLQ(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.dpErr = port.NewDocumentNotFoundError("org-1", "doc-1")
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryIngestion {
+		t.Errorf("category = %q, want ingestion", rec.Category)
+	}
+	if rec.ErrorCode != port.ErrCodeDocumentNotFound {
+		t.Errorf("error_code = %q, want %s", rec.ErrorCode, port.ErrCodeDocumentNotFound)
+	}
+	if rec.CorrelationID != event.CorrelationID {
+		t.Errorf("correlation_id = %q, want %s", rec.CorrelationID, event.CorrelationID)
+	}
+}
+
+func TestDLQ_RetryableHandlerError_NotSentToDLQ(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.dpErr = port.NewStorageError("s3 timeout", errors.New("timeout"))
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 0 {
+		t.Errorf("retryable errors should NOT be sent to DLQ, got %d records", d.dlq.count())
+	}
+}
+
+func TestDLQ_QueryCategory_ForSemanticTreeRequest(t *testing.T) {
+	d := newTestDeps()
+	d.query.getTreeErr = port.NewVersionNotFoundError("ver-1")
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := model.GetSemanticTreeRequest{
+		EventMeta:  model.EventMeta{CorrelationID: "corr-1", Timestamp: time.Now()},
+		JobID:      "j1",
+		DocumentID: "doc-1",
+		VersionID:  "ver-1",
+	}
+	handler := d.broker.handlerFor(model.TopicDPRequestsSemanticTree)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryQuery {
+		t.Errorf("category = %q, want query", rec.Category)
+	}
+}
+
+func TestDLQ_QueryCategory_ForGetArtifactsRequest(t *testing.T) {
+	d := newTestDeps()
+	d.query.getArtifactsErr = port.NewVersionNotFoundError("ver-1")
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := model.GetArtifactsRequest{
+		EventMeta:     model.EventMeta{CorrelationID: "corr-1", Timestamp: time.Now()},
+		JobID:         "j1",
+		DocumentID:    "doc-1",
+		VersionID:     "ver-1",
+		ArtifactTypes: []model.ArtifactType{model.ArtifactTypeSemanticTree},
+	}
+	handler := d.broker.handlerFor(model.TopicLICRequestsArtifacts)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryQuery {
+		t.Errorf("category = %q, want query", rec.Category)
+	}
+}
+
+func TestDLQ_OriginalMessagePreserved(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.dpErr = port.NewDocumentNotFoundError("org-1", "doc-1")
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	body := mustMarshal(t, event)
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+	_ = handler(context.Background(), body)
+
+	rec, _ := d.dlq.lastRecord()
+	if string(rec.OriginalMessage) != string(body) {
+		t.Error("original_message in DLQ record does not match original body")
+	}
+}
+
+func TestDLQ_DiffReady_InvalidJSON(t *testing.T) {
+	d := newTestDeps()
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := d.broker.handlerFor(model.TopicDPArtifactsDiffReady)
+	_ = handler(context.Background(), []byte(`not json`))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryInvalid {
+		t.Errorf("category = %q, want invalid", rec.Category)
+	}
+}
+
+func TestDLQ_LICArtifacts_NonRetryable(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.licErr = port.NewDocumentNotFoundError("org-1", "doc-1")
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validLICArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicLICArtifactsAnalysisReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryIngestion {
+		t.Errorf("category = %q, want ingestion", rec.Category)
+	}
+}
+
+func TestDLQ_REArtifacts_NonRetryable(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.reErr = port.NewDocumentNotFoundError("org-1", "doc-1")
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validREArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicREArtifactsReportsReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryIngestion {
+		t.Errorf("category = %q, want ingestion", rec.Category)
+	}
+}
+
+func TestDLQ_SendError_LoggedNotPropagated(t *testing.T) {
+	d := newTestDeps()
+	d.dlq.sendErr = errors.New("DLQ broker down")
+	d.ingestion.dpErr = port.NewDocumentNotFoundError("org-1", "doc-1")
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+	err := handler(context.Background(), mustMarshal(t, event))
+
+	// Handler must still return nil (ACK).
+	if err != nil {
+		t.Fatalf("expected nil, got: %v", err)
+	}
+
+	// DLQ send error should be logged.
+	if !d.logger.hasMessage("failed to send to DLQ") {
+		t.Error("expected log about DLQ send failure")
+	}
+}
+
+func TestDLQ_MissingVersionID_SemanticTree(t *testing.T) {
+	d := newTestDeps()
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := model.GetSemanticTreeRequest{
+		EventMeta:  model.EventMeta{CorrelationID: "corr-1", Timestamp: time.Now()},
+		JobID:      "j1",
+		DocumentID: "doc-1",
+		// Missing VersionID
+	}
+	handler := d.broker.handlerFor(model.TopicDPRequestsSemanticTree)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryInvalid {
+		t.Errorf("category = %q, want invalid", rec.Category)
+	}
+}
+
+func TestDLQ_MissingBaseTargetVersionID_DiffReady(t *testing.T) {
+	d := newTestDeps()
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := model.DocumentVersionDiffReady{
+		EventMeta:  model.EventMeta{CorrelationID: "corr-1", Timestamp: time.Now()},
+		JobID:      "j1",
+		DocumentID: "doc-1",
+		// Missing BaseVersionID and TargetVersionID
+	}
+	handler := d.broker.handlerFor(model.TopicDPArtifactsDiffReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Backoff (BRE-025)
+// ---------------------------------------------------------------------------
+
+func TestBackoff_RetryableError_AppliesDelay(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.dpErr = port.NewStorageError("timeout", errors.New("timeout"))
+	rc := config.RetryConfig{
+		MaxAttempts: 3,
+		BackoffBase: 10 * time.Millisecond, // small for test
+	}
+	c := NewEventConsumer(
+		d.broker, d.idempotency, d.logger, d.metrics, d.dlq,
+		d.ingestion, d.query, d.diff,
+		d.artifactRepo, d.diffRepo,
+		defaultTopics(), rc,
+	)
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+
+	start := time.Now()
+	_ = handler(context.Background(), mustMarshal(t, event))
+	elapsed := time.Since(start)
+
+	// Should have waited at least the backoff duration.
+	if elapsed < 10*time.Millisecond {
+		t.Errorf("expected at least 10ms backoff, got %v", elapsed)
+	}
+
+	// No DLQ record — retryable errors are not sent to DLQ.
+	if d.dlq.count() != 0 {
+		t.Error("retryable errors should not go to DLQ")
+	}
+}
+
+func TestBackoff_ContextCancelled_SkipsDelay(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.dpErr = port.NewStorageError("timeout", errors.New("timeout"))
+	rc := config.RetryConfig{
+		MaxAttempts: 3,
+		BackoffBase: 5 * time.Second, // would block if not cancelled
+	}
+	c := NewEventConsumer(
+		d.broker, d.idempotency, d.logger, d.metrics, d.dlq,
+		d.ingestion, d.query, d.diff,
+		d.artifactRepo, d.diffRepo,
+		defaultTopics(), rc,
+	)
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	start := time.Now()
+	_ = handler(ctx, mustMarshal(t, event))
+	elapsed := time.Since(start)
+
+	// Should return quickly — context was already cancelled.
+	if elapsed > 1*time.Second {
+		t.Errorf("expected fast return on cancelled context, got %v", elapsed)
+	}
+}
+
+func TestBackoff_ZeroBackoff_NoDelay(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.dpErr = port.NewStorageError("timeout", errors.New("timeout"))
+	c := d.newConsumer() // defaultRetryConfig has BackoffBase=0
+
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+
+	start := time.Now()
+	_ = handler(context.Background(), mustMarshal(t, event))
+	elapsed := time.Since(start)
+
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("expected immediate return with zero backoff, got %v", elapsed)
 	}
 }

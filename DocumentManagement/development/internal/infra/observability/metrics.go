@@ -293,3 +293,12 @@ func (m *Metrics) IncCleanedUp(count int64) {
 func (m *Metrics) IncMissingVersionID() {
 	m.MissingVersionIDTotal.Inc()
 }
+
+// ---------------------------------------------------------------------------
+// dlq.DLQMetrics interface
+// ---------------------------------------------------------------------------
+
+// IncDLQMessages increments dm_dlq_messages_total for the given reason.
+func (m *Metrics) IncDLQMessages(reason string) {
+	m.DLQMessages.WithLabelValues(reason).Inc()
+}

@@ -23,6 +23,7 @@ type Config struct {
 	Outbox        OutboxConfig
 	Retention     RetentionConfig
 	Retry         RetryConfig
+	DLQ           DLQConfig
 	Observability ObservabilityConfig
 	Timeout       TimeoutConfig
 }
@@ -48,6 +49,7 @@ func Load() (*Config, error) {
 		Outbox:        loadOutboxConfig(),
 		Retention:     loadRetentionConfig(),
 		Retry:         loadRetryConfig(),
+		DLQ:           loadDLQConfig(),
 		Observability: loadObservabilityConfig(),
 		Timeout:       loadTimeoutConfig(),
 	}

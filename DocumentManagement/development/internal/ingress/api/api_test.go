@@ -1405,3 +1405,241 @@ func TestResponseWriter_DoubleWriteHeader(t *testing.T) {
 		t.Errorf("statusCode = %d, want 201 (first call wins)", rw.statusCode)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// DLQ Replay tests (DM-TASK-023)
+// ---------------------------------------------------------------------------
+
+type mockDLQRepo struct {
+	records    []*model.DLQRecordWithMeta
+	findErr    error
+	incErr     error
+	incCalls   int
+	insertErr  error
+}
+
+func (m *mockDLQRepo) Insert(_ context.Context, _ *model.DLQRecord) error {
+	return m.insertErr
+}
+func (m *mockDLQRepo) FindByFilter(_ context.Context, _ port.DLQFilterParams) ([]*model.DLQRecordWithMeta, error) {
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	return m.records, nil
+}
+func (m *mockDLQRepo) IncrementReplayCount(_ context.Context, _ string) error {
+	m.incCalls++
+	return m.incErr
+}
+
+type mockDLQBroker struct {
+	published []struct{ topic string; payload []byte }
+	pubErr    error
+}
+
+func (m *mockDLQBroker) Publish(_ context.Context, topic string, payload []byte) error {
+	if m.pubErr != nil {
+		return m.pubErr
+	}
+	m.published = append(m.published, struct{ topic string; payload []byte }{topic, payload})
+	return nil
+}
+
+func newDLQReplayHandler(repo *mockDLQRepo, broker *mockDLQBroker, maxReplay int) http.Handler {
+	h := NewHandler(&mockLifecycle{}, &mockVersions{}, &mockQueries{}, &mockDiffs{}, &mockAudit{}, &mockStorage{}, &mockLogger{})
+	h.WithDLQReplay(repo, broker, maxReplay)
+	return h.Mux(nil, nil)
+}
+
+func TestDLQReplay_HappyPath(t *testing.T) {
+	t.Parallel()
+	repo := &mockDLQRepo{
+		records: []*model.DLQRecordWithMeta{
+			{
+				ID: "rec-1",
+				DLQRecord: model.DLQRecord{
+					OriginalTopic:   "dp.artifacts.processing-ready",
+					OriginalMessage: []byte(`{"job_id":"j1"}`),
+					Category:        model.DLQCategoryIngestion,
+				},
+				ReplayCount: 0,
+			},
+		},
+	}
+	broker := &mockDLQBroker{}
+	handler := newDLQReplayHandler(repo, broker, 3)
+
+	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
+		dlqReplayRequest{Category: "ingestion", Limit: 10},
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp dlqReplayResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.Replayed != 1 {
+		t.Errorf("replayed = %d, want 1", resp.Replayed)
+	}
+	if len(broker.published) != 1 {
+		t.Fatalf("expected 1 publish, got %d", len(broker.published))
+	}
+	if broker.published[0].topic != "dp.artifacts.processing-ready" {
+		t.Errorf("published to %q, want dp.artifacts.processing-ready", broker.published[0].topic)
+	}
+	if repo.incCalls != 1 {
+		t.Errorf("expected 1 replay count increment, got %d", repo.incCalls)
+	}
+}
+
+func TestDLQReplay_MaxReplayExceeded(t *testing.T) {
+	t.Parallel()
+	repo := &mockDLQRepo{
+		records: []*model.DLQRecordWithMeta{
+			{
+				ID: "rec-1",
+				DLQRecord: model.DLQRecord{
+					OriginalTopic:   "dp.artifacts.processing-ready",
+					OriginalMessage: []byte(`{"job_id":"j1"}`),
+					Category:        model.DLQCategoryIngestion,
+				},
+				ReplayCount: 3, // already at max
+			},
+		},
+	}
+	broker := &mockDLQBroker{}
+	handler := newDLQReplayHandler(repo, broker, 3)
+
+	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
+		dlqReplayRequest{Category: "ingestion"},
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	var resp dlqReplayResponse
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	if resp.Replayed != 0 {
+		t.Errorf("replayed = %d, want 0", resp.Replayed)
+	}
+	if resp.Skipped != 1 {
+		t.Errorf("skipped = %d, want 1", resp.Skipped)
+	}
+}
+
+func TestDLQReplay_InvalidJSON(t *testing.T) {
+	t.Parallel()
+	handler := newDLQReplayHandler(&mockDLQRepo{}, &mockDLQBroker{}, 3)
+
+	req := httptest.NewRequest("POST", "/api/v1/admin/dlq/replay", strings.NewReader("{invalid"))
+	req.Header.Set("X-Organization-ID", "org-1")
+	req.Header.Set("X-User-ID", "user-1")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestDLQReplay_InvalidCategory(t *testing.T) {
+	t.Parallel()
+	handler := newDLQReplayHandler(&mockDLQRepo{}, &mockDLQBroker{}, 3)
+
+	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
+		dlqReplayRequest{Category: "invalid_value"},
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestDLQReplay_PublishError(t *testing.T) {
+	t.Parallel()
+	repo := &mockDLQRepo{
+		records: []*model.DLQRecordWithMeta{
+			{
+				ID: "rec-1",
+				DLQRecord: model.DLQRecord{
+					OriginalTopic:   "dp.artifacts.processing-ready",
+					OriginalMessage: []byte(`{}`),
+					Category:        model.DLQCategoryIngestion,
+				},
+			},
+		},
+	}
+	broker := &mockDLQBroker{pubErr: io.ErrUnexpectedEOF}
+	handler := newDLQReplayHandler(repo, broker, 3)
+
+	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
+		dlqReplayRequest{Category: "ingestion"},
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	var resp dlqReplayResponse
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	if resp.Replayed != 0 {
+		t.Errorf("replayed = %d, want 0", resp.Replayed)
+	}
+	if len(resp.Errors) != 1 {
+		t.Errorf("errors = %d, want 1", len(resp.Errors))
+	}
+}
+
+func TestDLQReplay_DBError(t *testing.T) {
+	t.Parallel()
+	repo := &mockDLQRepo{findErr: port.NewDatabaseError("query failed", io.ErrUnexpectedEOF)}
+	handler := newDLQReplayHandler(repo, &mockDLQBroker{}, 3)
+
+	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
+		dlqReplayRequest{Category: "ingestion"},
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rr.Code)
+	}
+}
+
+func TestDLQReplay_WithCorrelationIDFilter(t *testing.T) {
+	t.Parallel()
+	repo := &mockDLQRepo{records: []*model.DLQRecordWithMeta{}}
+	broker := &mockDLQBroker{}
+	handler := newDLQReplayHandler(repo, broker, 3)
+
+	rr := doRequestWithHeaders(handler, "POST", "/api/v1/admin/dlq/replay",
+		dlqReplayRequest{CorrelationID: "corr-123"},
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var resp dlqReplayResponse
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	if resp.Replayed != 0 || resp.Skipped != 0 {
+		t.Error("expected empty result for filtered query")
+	}
+}
+
+func TestDLQReplay_NotEnabledWithoutDeps(t *testing.T) {
+	t.Parallel()
+	// Handler without WithDLQReplay should NOT register the replay route.
+	h := NewHandler(&mockLifecycle{}, &mockVersions{}, &mockQueries{}, &mockDiffs{}, &mockAudit{}, &mockStorage{}, &mockLogger{})
+	mux := h.Mux(nil, nil)
+
+	rr := doRequestWithHeaders(mux, "POST", "/api/v1/admin/dlq/replay",
+		dlqReplayRequest{Category: "ingestion"},
+		map[string]string{"X-Organization-ID": "org-1", "X-User-ID": "user-1"})
+
+	// Without the DLQ route, this should 404.
+	if rr.Code == http.StatusOK {
+		t.Error("expected non-200 when DLQ replay is not enabled")
+	}
+}

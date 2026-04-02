@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -22,6 +23,12 @@ type Logger interface {
 	Error(msg string, args ...any)
 }
 
+// BrokerPublisher is the consumer-side interface for publishing messages
+// (used by the DLQ replay endpoint).
+type BrokerPublisher interface {
+	Publish(ctx context.Context, topic string, payload []byte) error
+}
+
 // Handler implements the DM REST API.
 // All endpoints require an authenticated AuthContext (via authMiddleware).
 type Handler struct {
@@ -32,6 +39,11 @@ type Handler struct {
 	audit     port.AuditPort
 	storage   port.ObjectStoragePort
 	logger    Logger
+
+	// DLQ replay dependencies (optional — nil disables the replay endpoint).
+	dlqRepo        port.DLQRepository
+	dlqBroker      BrokerPublisher
+	dlqMaxReplay   int
 }
 
 // NewHandler creates a new API Handler.
@@ -77,6 +89,14 @@ func NewHandler(
 	}
 }
 
+// WithDLQReplay enables the DLQ replay admin endpoint.
+// All three parameters are required for replay to work.
+func (h *Handler) WithDLQReplay(repo port.DLQRepository, broker BrokerPublisher, maxReplay int) {
+	h.dlqRepo = repo
+	h.dlqBroker = broker
+	h.dlqMaxReplay = maxReplay
+}
+
 // Mux returns an http.ServeMux with all API routes registered and middleware applied.
 // Uses Go 1.22+ method-aware routing patterns.
 func (h *Handler) Mux(apiRequests *prometheus.CounterVec, apiDuration *prometheus.HistogramVec) http.Handler {
@@ -103,6 +123,11 @@ func (h *Handler) Mux(apiRequests *prometheus.CounterVec, apiDuration *prometheu
 
 	// --- Audit ---
 	mux.HandleFunc("GET /api/v1/audit", h.listAuditRecords)
+
+	// --- Admin: DLQ Replay ---
+	if h.dlqRepo != nil && h.dlqBroker != nil {
+		mux.HandleFunc("POST /api/v1/admin/dlq/replay", h.replayDLQ)
+	}
 
 	// Execution order: logging → metrics → auth → handler.
 	var handler http.Handler = mux
@@ -610,4 +635,91 @@ func isValidArtifactType(t model.ArtifactType) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Admin: DLQ Replay (REV-018, BRE-011)
+// ---------------------------------------------------------------------------
+
+type dlqReplayRequest struct {
+	Category      string `json:"category"`       // optional: "ingestion", "query", "invalid"
+	CorrelationID string `json:"correlation_id"`  // optional filter
+	Limit         int    `json:"limit"`           // default 10, max 100
+}
+
+type dlqReplayResponse struct {
+	Replayed int      `json:"replayed"`
+	Skipped  int      `json:"skipped"`
+	Errors   []string `json:"errors,omitempty"`
+}
+
+func (h *Handler) replayDLQ(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+
+	var req dlqReplayRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid JSON body")
+		return
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	maxReplay := h.dlqMaxReplay
+	if maxReplay <= 0 {
+		maxReplay = 3
+	}
+
+	var category model.DLQCategory
+	if req.Category != "" {
+		category = model.DLQCategory(req.Category)
+		if category != model.DLQCategoryIngestion &&
+			category != model.DLQCategoryQuery &&
+			category != model.DLQCategoryInvalid {
+			writeErrorJSON(w, http.StatusBadRequest, "VALIDATION_ERROR",
+				"invalid category: must be ingestion, query, or invalid")
+			return
+		}
+	}
+
+	records, err := h.dlqRepo.FindByFilter(r.Context(), port.DLQFilterParams{
+		Category:      category,
+		CorrelationID: req.CorrelationID,
+		MaxReplay:     maxReplay,
+		Limit:         limit,
+	})
+	if err != nil {
+		h.logger.Error("dlq replay: find records failed", "error", err)
+		writeErrorJSON(w, http.StatusInternalServerError, "DATABASE_FAILED", "failed to query DLQ records")
+		return
+	}
+
+	var resp dlqReplayResponse
+	for _, rec := range records {
+		if rec.ReplayCount >= maxReplay {
+			resp.Skipped++
+			continue
+		}
+
+		if pubErr := h.dlqBroker.Publish(r.Context(), rec.OriginalTopic, rec.OriginalMessage); pubErr != nil {
+			h.logger.Error("dlq replay: publish failed",
+				"id", rec.ID, "topic", rec.OriginalTopic, "error", pubErr)
+			resp.Errors = append(resp.Errors, rec.ID+": publish failed")
+			continue
+		}
+
+		if incErr := h.dlqRepo.IncrementReplayCount(r.Context(), rec.ID); incErr != nil {
+			h.logger.Error("dlq replay: increment replay count failed",
+				"id", rec.ID, "error", incErr)
+		}
+
+		resp.Replayed++
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }

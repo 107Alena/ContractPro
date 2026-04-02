@@ -156,6 +156,8 @@ func TestLoad_DefaultValues(t *testing.T) {
 		// Retry
 		{"Retry.MaxAttempts", cfg.Retry.MaxAttempts, 3},
 		{"Retry.BackoffBase", cfg.Retry.BackoffBase, 1 * time.Second},
+		// DLQ
+		{"DLQ.MaxReplayCount", cfg.DLQ.MaxReplayCount, 3},
 		// Observability
 		{"Observability.LogLevel", cfg.Observability.LogLevel, "info"},
 		{"Observability.MetricsPort", cfg.Observability.MetricsPort, 9090},

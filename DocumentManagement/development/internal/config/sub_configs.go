@@ -224,6 +224,17 @@ func loadRetryConfig() RetryConfig {
 	}
 }
 
+// DLQConfig holds Dead Letter Queue settings.
+type DLQConfig struct {
+	MaxReplayCount int // DM_DLQ_MAX_REPLAY_COUNT (default: 3, BRE-011)
+}
+
+func loadDLQConfig() DLQConfig {
+	return DLQConfig{
+		MaxReplayCount: envInt("DM_DLQ_MAX_REPLAY_COUNT", 3),
+	}
+}
+
 // ObservabilityConfig holds logging, metrics, and tracing settings.
 type ObservabilityConfig struct {
 	LogLevel        string // DM_LOG_LEVEL (default: "info")

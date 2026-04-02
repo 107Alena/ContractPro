@@ -17,6 +17,7 @@ func TestDLQRecordJSONRoundTrip(t *testing.T) {
 		CorrelationID:   "corr-1",
 		JobID:           "job-1",
 		FailedAt:        failedAt,
+		Category:        DLQCategoryIngestion,
 	}
 
 	data, err := json.Marshal(record)
@@ -53,6 +54,9 @@ func TestDLQRecordJSONRoundTrip(t *testing.T) {
 	if !restored.FailedAt.Equal(record.FailedAt) {
 		t.Errorf("failed_at mismatch: %v != %v", restored.FailedAt, record.FailedAt)
 	}
+	if restored.Category != record.Category {
+		t.Errorf("category mismatch: %s != %s", restored.Category, record.Category)
+	}
 }
 
 func TestDLQRecordOriginalMessagePreservation(t *testing.T) {
@@ -67,6 +71,7 @@ func TestDLQRecordOriginalMessagePreservation(t *testing.T) {
 		CorrelationID:   "corr-1",
 		JobID:           "job-1",
 		FailedAt:        time.Now().UTC(),
+		Category:        DLQCategoryIngestion,
 	}
 
 	data, err := json.Marshal(record)
@@ -95,6 +100,7 @@ func TestDLQRecordJSONFieldNames(t *testing.T) {
 		CorrelationID:   "corr-1",
 		JobID:           "job-1",
 		FailedAt:        time.Now().UTC(),
+		Category:        DLQCategoryInvalid,
 	}
 
 	data, err := json.Marshal(record)
@@ -109,7 +115,7 @@ func TestDLQRecordJSONFieldNames(t *testing.T) {
 
 	expectedFields := []string{
 		"original_topic", "original_message", "error_code", "error_message",
-		"retry_count", "correlation_id", "job_id", "failed_at",
+		"retry_count", "correlation_id", "job_id", "failed_at", "category",
 	}
 	for _, key := range expectedFields {
 		if _, ok := raw[key]; !ok {

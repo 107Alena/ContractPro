@@ -192,12 +192,18 @@ func TestFullPipeline_AuditTrailIntegrity(t *testing.T) {
 	h.seedVersion(defaultVersion(orgID, docID, versionID))
 
 	// Run full pipeline.
-	_ = h.ingestion.HandleDPArtifacts(context.Background(),
-		defaultDPEvent(orgID, docID, versionID, "job-dp-003", "corr-003"))
-	_ = h.ingestion.HandleLICArtifacts(context.Background(),
-		defaultLICEvent(orgID, docID, versionID, "job-lic-003", "corr-003"))
-	_ = h.ingestion.HandleREArtifacts(context.Background(),
-		defaultREEvent(h, orgID, docID, versionID, "job-re-003", "corr-003"))
+	if err := h.ingestion.HandleDPArtifacts(context.Background(),
+		defaultDPEvent(orgID, docID, versionID, "job-dp-003", "corr-003")); err != nil {
+		t.Fatalf("HandleDPArtifacts: %v", err)
+	}
+	if err := h.ingestion.HandleLICArtifacts(context.Background(),
+		defaultLICEvent(orgID, docID, versionID, "job-lic-003", "corr-003")); err != nil {
+		t.Fatalf("HandleLICArtifacts: %v", err)
+	}
+	if err := h.ingestion.HandleREArtifacts(context.Background(),
+		defaultREEvent(h, orgID, docID, versionID, "job-re-003", "corr-003")); err != nil {
+		t.Fatalf("HandleREArtifacts: %v", err)
+	}
 
 	auditRecords := h.auditRepo.allRecords()
 	assertIntEqual(t, "total audit records", 6, len(auditRecords))
@@ -263,6 +269,54 @@ func TestFullPipeline_OutOfOrder_LICBeforeDP_Fails(t *testing.T) {
 	assertIntEqual(t, "artifacts", 0, len(h.artifactRepo.allArtifacts()))
 	assertIntEqual(t, "outbox", 0, len(h.outboxRepo.allEntries()))
 	assertIntEqual(t, "blobs compensated", 0, h.objectStorage.blobCount())
+
+	// Verify status unchanged after rejection.
+	ver, verErr := h.versionRepo.FindByID(context.Background(), orgID, docID, versionID)
+	if verErr != nil {
+		t.Fatalf("FindByID after rejection: %v", verErr)
+	}
+	assertEqual(t, "status unchanged", string(model.ArtifactStatusPending), string(ver.ArtifactStatus))
+}
+
+// ---------------------------------------------------------------------------
+// Test: Out-of-order RE before LIC fails (state machine enforcement)
+// ---------------------------------------------------------------------------
+
+func TestFullPipeline_OutOfOrder_REBeforeLIC_Fails(t *testing.T) {
+	const (
+		orgID     = "org-fp-004b"
+		docID     = "doc-fp-004b"
+		versionID = "ver-fp-004b"
+	)
+
+	h := newTestHarness(t)
+	h.seedDocument(defaultDocument(orgID, docID))
+	h.seedVersion(defaultVersion(orgID, docID, versionID))
+
+	// DP first (success).
+	if err := h.ingestion.HandleDPArtifacts(context.Background(),
+		defaultDPEvent(orgID, docID, versionID, "job-dp-004b", "corr-004b")); err != nil {
+		t.Fatalf("HandleDPArtifacts: %v", err)
+	}
+
+	// RE before LIC: invalid transition PROCESSING_ARTIFACTS_RECEIVED → FULLY_READY.
+	reEvent := defaultREEvent(h, orgID, docID, versionID, "job-re-004b", "corr-004b")
+	err := h.ingestion.HandleREArtifacts(context.Background(), reEvent)
+	if err == nil {
+		t.Fatal("expected error for out-of-order RE before LIC, got nil")
+	}
+
+	// DP artifacts remain, but RE artifacts should not be saved.
+	assertIntEqual(t, "artifacts (DP only)", 4, len(h.artifactRepo.allArtifacts()))
+	assertIntEqual(t, "outbox (DP only)", 2, len(h.outboxRepo.allEntries()))
+
+	// Verify status unchanged after rejection.
+	ver, verErr := h.versionRepo.FindByID(context.Background(), orgID, docID, versionID)
+	if verErr != nil {
+		t.Fatalf("FindByID after rejection: %v", verErr)
+	}
+	assertEqual(t, "status unchanged",
+		string(model.ArtifactStatusProcessingArtifactsReceived), string(ver.ArtifactStatus))
 }
 
 // ---------------------------------------------------------------------------
@@ -281,10 +335,14 @@ func TestFullPipeline_DuplicateDP_AfterLIC_Fails(t *testing.T) {
 	h.seedVersion(defaultVersion(orgID, docID, versionID))
 
 	// Normal pipeline: DP then LIC.
-	_ = h.ingestion.HandleDPArtifacts(context.Background(),
-		defaultDPEvent(orgID, docID, versionID, "job-dp-005", "corr-005"))
-	_ = h.ingestion.HandleLICArtifacts(context.Background(),
-		defaultLICEvent(orgID, docID, versionID, "job-lic-005", "corr-005"))
+	if err := h.ingestion.HandleDPArtifacts(context.Background(),
+		defaultDPEvent(orgID, docID, versionID, "job-dp-005", "corr-005")); err != nil {
+		t.Fatalf("HandleDPArtifacts setup: %v", err)
+	}
+	if err := h.ingestion.HandleLICArtifacts(context.Background(),
+		defaultLICEvent(orgID, docID, versionID, "job-lic-005", "corr-005")); err != nil {
+		t.Fatalf("HandleLICArtifacts setup: %v", err)
+	}
 
 	snapshotArtifacts := len(h.artifactRepo.allArtifacts())
 	snapshotOutbox := len(h.outboxRepo.allEntries())
@@ -441,10 +499,14 @@ func TestGetArtifacts_HappyPath_AllFound(t *testing.T) {
 	h.seedVersion(defaultVersion(orgID, docID, versionID))
 
 	// Ingest DP and LIC.
-	_ = h.ingestion.HandleDPArtifacts(context.Background(),
-		defaultDPEvent(orgID, docID, versionID, "job-dp-008", correlationID))
-	_ = h.ingestion.HandleLICArtifacts(context.Background(),
-		defaultLICEvent(orgID, docID, versionID, "job-lic-008", correlationID))
+	if err := h.ingestion.HandleDPArtifacts(context.Background(),
+		defaultDPEvent(orgID, docID, versionID, "job-dp-008", correlationID)); err != nil {
+		t.Fatalf("HandleDPArtifacts setup: %v", err)
+	}
+	if err := h.ingestion.HandleLICArtifacts(context.Background(),
+		defaultLICEvent(orgID, docID, versionID, "job-lic-008", correlationID)); err != nil {
+		t.Fatalf("HandleLICArtifacts setup: %v", err)
+	}
 
 	// Request two existing artifacts: one DP and one LIC.
 	request := model.GetArtifactsRequest{
@@ -510,8 +572,10 @@ func TestGetArtifacts_PartialResponse(t *testing.T) {
 	h.seedVersion(defaultVersion(orgID, docID, versionID))
 
 	// Ingest only DP (no LIC).
-	_ = h.ingestion.HandleDPArtifacts(context.Background(),
-		defaultDPEvent(orgID, docID, versionID, "job-dp-009", correlationID))
+	if err := h.ingestion.HandleDPArtifacts(context.Background(),
+		defaultDPEvent(orgID, docID, versionID, "job-dp-009", correlationID)); err != nil {
+		t.Fatalf("HandleDPArtifacts setup: %v", err)
+	}
 
 	// Request both DP and LIC artifacts: SEMANTIC_TREE exists, RISK_ANALYSIS and SUMMARY don't.
 	request := model.GetArtifactsRequest{

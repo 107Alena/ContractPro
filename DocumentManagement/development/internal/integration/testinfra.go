@@ -54,6 +54,12 @@ type testHarness struct {
 
 func newTestHarness(t *testing.T) *testHarness {
 	t.Helper()
+	return newTestHarnessCore(t, &noopConfirmationPublisher{})
+}
+
+// newTestHarnessCore is the shared initialization for all harness variants.
+func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPublisherPort) *testHarness {
+	t.Helper()
 
 	h := &testHarness{
 		transactor:    newMemoryTransactor(),
@@ -90,7 +96,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	h.query = appQuery.NewArtifactQueryService(
 		h.artifactRepo,
 		h.objectStorage,
-		&noopConfirmationPublisher{},
+		confirmationPublisher,
 		h.auditRepo,
 		h.fallback,
 		h.logger,
@@ -1207,72 +1213,6 @@ func defaultREEvent(h *testHarness, orgID, docID, versionID, jobID, correlationI
 // published SemanticTreeProvided / ArtifactsProvided events).
 func newTestHarnessWithRecordingPublisher(t *testing.T) (*testHarness, *recordingConfirmationPublisher) {
 	t.Helper()
-
-	h := &testHarness{
-		transactor:    newMemoryTransactor(),
-		docRepo:       newMemoryDocumentRepository(),
-		versionRepo:   newMemoryVersionRepository(),
-		artifactRepo:  newMemoryArtifactRepository(),
-		auditRepo:     newMemoryAuditRepository(),
-		outboxRepo:    newMemoryOutboxRepository(),
-		objectStorage: newMemoryObjectStorage(),
-		idemStore:     newMemoryIdempotencyStore(),
-		dlqPort:       newRecordingDLQPort(),
-		diffRepo:      newMemoryDiffRepository(),
-		fallback:      newMemoryFallbackResolver(),
-		broker:        newCaptureBroker(),
-		logger:        newRecordingLogger(),
-	}
-
-	h.outboxWriter = outbox.NewOutboxWriter(h.outboxRepo)
-
-	// Wire ingestion service (same as standard harness).
-	h.ingestion = appIngestion.NewArtifactIngestionService(
-		h.transactor,
-		h.versionRepo,
-		h.artifactRepo,
-		h.auditRepo,
-		h.objectStorage,
-		h.outboxWriter,
-		h.fallback,
-		&noopFallbackMetrics{},
-		h.logger,
-	)
-
-	// Wire query service with recording confirmation publisher.
 	recPublisher := newRecordingConfirmationPublisher()
-	h.query = appQuery.NewArtifactQueryService(
-		h.artifactRepo,
-		h.objectStorage,
-		recPublisher,
-		h.auditRepo,
-		h.fallback,
-		h.logger,
-	)
-
-	// Wire diff service (same as standard harness).
-	h.diffService = appDiff.NewDiffStorageService(
-		h.transactor,
-		h.versionRepo,
-		h.diffRepo,
-		h.auditRepo,
-		h.objectStorage,
-		h.outboxWriter,
-		h.fallback,
-		h.logger,
-	)
-
-	// Wire idempotency guard (same as standard harness).
-	h.idempotencyGuard = idempotency.NewIdempotencyGuard(
-		h.idemStore,
-		config.IdempotencyConfig{
-			TTL:            24 * time.Hour,
-			ProcessingTTL:  120 * time.Second,
-			StuckThreshold: 240 * time.Second,
-		},
-		&noopIdempotencyMetrics{},
-		h.logger,
-	)
-
-	return h, recPublisher
+	return newTestHarnessCore(t, recPublisher), recPublisher
 }

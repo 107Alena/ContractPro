@@ -1059,3 +1059,62 @@
 - DM-TASK-011 (Health Check) — high, deps done, blocks DM-TASK-025
 
 ---
+
+## DM-TASK-010: Observability SDK (2026-04-02)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан полный Observability SDK в `internal/infra/observability/` (6 Go файлов + 6 test файлов)
+- **context.go** — `EventContext` struct (CorrelationID, JobID, DocumentID, VersionID, OrganizationID, Stage), `WithEventContext`, `EventContextFrom`, `WithStage`. Аналог DP `JobContext` с расширением для version_id и organization_id
+- **logger.go** — `Logger` struct обёртка над `slog.Logger`, JSON output:
+  - `Info/Warn/Error/Debug(msg, args...)` — без ctx, совместимость с 7 существующими consumer-side Logger interfaces (consumer, idempotency, lifecycle, ingestion, version, query, diff)
+  - `InfoContext/WarnContext/ErrorContext/DebugContext(ctx, msg, args...)` — auto-enrichment из EventContext
+  - `With(args...)` — component-scoped child loggers
+  - `Slog()` — direct access к slog.Logger
+- **metrics.go** — 18 Prometheus метрик в dedicated registry:
+  - Event processing: `dm_events_received_total` counter[topic], `dm_events_processed_total` counter[topic,status], `dm_event_processing_duration_seconds` histogram[topic]
+  - Artifacts: `dm_artifacts_stored_total` counter[producer,artifact_type]
+  - Sync API: `dm_api_requests_total` counter[method,path,status_code], `dm_api_request_duration_seconds` histogram[method,path]
+  - Outbox: `dm_outbox_pending_count` gauge, `dm_outbox_oldest_pending_age_seconds` gauge (REV-022), `dm_outbox_published_total` counter[topic], `dm_outbox_publish_failed_total` counter[topic], `dm_outbox_cleaned_up_total` counter
+  - DLQ: `dm_dlq_messages_total` counter[reason]
+  - Defensive: `dm_missing_version_id_total` counter, `dm_idempotency_fallback_total` counter[topic], `dm_idempotency_check_total` counter[result]
+  - Version health: `dm_stuck_versions_count` gauge
+  - Data integrity: `dm_integrity_check_failures_total` counter
+  - Circuit breaker: `dm_circuit_breaker_state` gauge[component]
+  - Реализованы методы для 3 consumer-side interfaces: consumer.MetricsCollector, idempotency.MetricsCollector, outbox.OutboxMetrics
+- **tracer.go** — OpenTelemetry Tracer с OTLP/HTTP exporter, noop fallback, configurable insecure
+- **handler.go** — MetricsHandler для /metrics endpoint через promhttp
+- **observability.go** — SDK composite: `New(ctx, cfg)` с `service=document-management` attr, `Shutdown(ctx)`
+- **config** — добавлен `TracingInsecure` bool + `DM_TRACING_INSECURE` env var
+
+**Дизайн решения — отличия от DP:**
+- Logger в DM НЕ принимает `ctx` как первый параметр в основных методах (Info/Warn/Error/Debug), потому что все 7 существующих consumer-side Logger interfaces определены без ctx. Вместо этого предоставляются отдельные *Context-методы (InfoContext/WarnContext/ErrorContext/DebugContext)
+- EventContext расширен по сравнению с DP JobContext: добавлены VersionID и OrganizationID (DM — stateful, оперирует версиями и организациями)
+- Metrics содержит 18 DM-специфичных метрик (vs 6 в DP) — отражает сложность stateful сервиса
+- Logger обогащён атрибутом `service=document-management` при инициализации через SDK.New()
+
+**Code review:**
+- code-reviewer + golang-pro → 2 blocking исправлено:
+  - B-1: hardcoded insecure tracer → configurable via TracingInsecure + DM_TRACING_INSECURE
+  - B-2: IncCleanedUp panic on negative → guard added
+- 5 warnings исправлено (dead code, missing tests, globalOTelOnce comment)
+- W-1 (compile-time interface checks): не добавлены в observability пакет — это бы создало circular dependency. Будут добавлены в wiring layer (DM-TASK-025)
+
+**Проверки:**
+- `go test ./internal/infra/observability/... -race -count=1` — 52 PASS
+- `go test -count=1 ./...` — ALL PASS
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Следующие задачи (ready):**
+- DM-TASK-011 (Health Check) — high, deps done, blocks DM-TASK-025
+- DM-TASK-022 (API Handler) — high, deps done, blocks DM-TASK-025
+- DM-TASK-036 (REV-001/REV-002 fallback) — critical, deps done
+- DM-TASK-037 (BRE-001 FOR UPDATE) — critical, deps done
+- DM-TASK-038 (BRE-003 idempotency TTL) — critical, deps done
+- DM-TASK-025 (Application wiring) — blocked by DM-TASK-010✅, DM-TASK-011, DM-TASK-014✅, DM-TASK-022, DM-TASK-016✅
+
+---

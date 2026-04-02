@@ -230,6 +230,7 @@ type ObservabilityConfig struct {
 	MetricsPort     int    // DM_METRICS_PORT (default: 9090)
 	TracingEnabled  bool   // DM_TRACING_ENABLED (default: false)
 	TracingEndpoint string // DM_TRACING_ENDPOINT (default: "")
+	TracingInsecure bool   // DM_TRACING_INSECURE (default: false)
 }
 
 func loadObservabilityConfig() ObservabilityConfig {
@@ -238,6 +239,7 @@ func loadObservabilityConfig() ObservabilityConfig {
 		MetricsPort:     envInt("DM_METRICS_PORT", 9090),
 		TracingEnabled:  envBool("DM_TRACING_ENABLED", false),
 		TracingEndpoint: envString("DM_TRACING_ENDPOINT", ""),
+		TracingInsecure: envBool("DM_TRACING_INSECURE", false),
 	}
 }
 

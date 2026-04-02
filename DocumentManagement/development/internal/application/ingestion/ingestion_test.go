@@ -32,10 +32,12 @@ func (m *mockTransactor) WithTransaction(ctx context.Context, fn func(ctx contex
 }
 
 type mockVersionRepo struct {
-	findByID          func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error)
-	update            func(ctx context.Context, version *model.DocumentVersion) error
-	updatedVersions   []*model.DocumentVersion
-	findByIDCallCount int
+	findByID               func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error)
+	findByIDForUpdate      func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error)
+	update                 func(ctx context.Context, version *model.DocumentVersion) error
+	updatedVersions        []*model.DocumentVersion
+	findByIDCallCount      int
+	findByIDForUpdateCount int
 }
 
 func (m *mockVersionRepo) FindByID(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
@@ -44,6 +46,15 @@ func (m *mockVersionRepo) FindByID(ctx context.Context, orgID, docID, versionID 
 		return m.findByID(ctx, orgID, docID, versionID)
 	}
 	return nil, port.NewVersionNotFoundError(versionID)
+}
+
+func (m *mockVersionRepo) FindByIDForUpdate(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+	m.findByIDForUpdateCount++
+	if m.findByIDForUpdate != nil {
+		return m.findByIDForUpdate(ctx, orgID, docID, versionID)
+	}
+	// Delegate to FindByID by default — unit tests don't exercise real locking.
+	return m.FindByID(ctx, orgID, docID, versionID)
 }
 
 func (m *mockVersionRepo) Update(ctx context.Context, version *model.DocumentVersion) error {
@@ -626,6 +637,10 @@ func TestHandleDPArtifacts_InvalidStatusTransition(t *testing.T) {
 	if port.ErrorCode(err) != port.ErrCodeStatusTransition {
 		t.Errorf("error code = %q, want INVALID_STATUS_TRANSITION", port.ErrorCode(err))
 	}
+	// BRE-001: transition errors are retryable (NACK with requeue to let prior stage finish).
+	if !port.IsRetryable(err) {
+		t.Error("expected retryable error for status transition (BRE-001)")
+	}
 }
 
 func TestHandleDPArtifacts_ObjectStorageFailure_Compensation(t *testing.T) {
@@ -863,6 +878,10 @@ func TestHandleLICArtifacts_InvalidStatusTransition(t *testing.T) {
 	if port.ErrorCode(err) != port.ErrCodeStatusTransition {
 		t.Errorf("error code = %q, want INVALID_STATUS_TRANSITION", port.ErrorCode(err))
 	}
+	// BRE-001: transition errors are retryable.
+	if !port.IsRetryable(err) {
+		t.Error("expected retryable error for status transition (BRE-001)")
+	}
 }
 
 func TestHandleLICArtifacts_ValidationError(t *testing.T) {
@@ -1056,6 +1075,10 @@ func TestHandleREArtifacts_InvalidStatusTransition(t *testing.T) {
 	}
 	if port.ErrorCode(err) != port.ErrCodeStatusTransition {
 		t.Errorf("error code = %q, want INVALID_STATUS_TRANSITION", port.ErrorCode(err))
+	}
+	// BRE-001: transition errors are retryable.
+	if !port.IsRetryable(err) {
+		t.Error("expected retryable error for status transition (BRE-001)")
 	}
 }
 
@@ -1398,5 +1421,150 @@ func TestHandleDPArtifacts_NoFallbackWhenFieldsPresent(t *testing.T) {
 	}
 	if d.fallbackMetrics.missingVersionIDCount != 0 {
 		t.Errorf("missing version_id metric should be 0, got %d", d.fallbackMetrics.missingVersionIDCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: BRE-001 — SELECT FOR UPDATE on artifact_status.
+// ---------------------------------------------------------------------------
+
+func TestBRE001_FindByIDForUpdate_CalledInTransaction(t *testing.T) {
+	// Verify that processIngestion calls FindByIDForUpdate (not FindByID) within
+	// the transaction, providing row-level locking for artifact_status updates.
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	err := svc.HandleDPArtifacts(context.Background(), validDPEvent())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// FindByIDForUpdate must have been called exactly once.
+	if d.versionRepo.findByIDForUpdateCount != 1 {
+		t.Errorf("FindByIDForUpdate call count = %d, want 1", d.versionRepo.findByIDForUpdateCount)
+	}
+}
+
+func TestBRE001_FindByIDForUpdate_UsedForAllProducers(t *testing.T) {
+	// All three producer handlers (DP, LIC, RE) must use FindByIDForUpdate.
+	tests := []struct {
+		name   string
+		status model.ArtifactStatus
+		run    func(svc *ArtifactIngestionService) error
+	}{
+		{
+			name:   "DP",
+			status: model.ArtifactStatusPending,
+			run: func(svc *ArtifactIngestionService) error {
+				return svc.HandleDPArtifacts(context.Background(), validDPEvent())
+			},
+		},
+		{
+			name:   "LIC",
+			status: model.ArtifactStatusProcessingArtifactsReceived,
+			run: func(svc *ArtifactIngestionService) error {
+				return svc.HandleLICArtifacts(context.Background(), validLICEvent())
+			},
+		},
+		{
+			name:   "RE",
+			status: model.ArtifactStatusAnalysisArtifactsReceived,
+			run: func(svc *ArtifactIngestionService) error {
+				event := validREEvent()
+				return svc.HandleREArtifacts(context.Background(), event)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := newTestDeps()
+			version := newTestVersion("org-001", "doc-001", "ver-001", tt.status)
+			setupVersionFind(d, version)
+
+			if tt.name == "RE" {
+				event := validREEvent()
+				d.objectStorage.headResults[event.ExportPDF.StorageKey] = headResult{size: 1024, exists: true}
+				d.objectStorage.headResults[event.ExportDOCX.StorageKey] = headResult{size: 2048, exists: true}
+			}
+
+			svc := d.newService()
+			err := tt.run(svc)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if d.versionRepo.findByIDForUpdateCount != 1 {
+				t.Errorf("FindByIDForUpdate call count = %d, want 1", d.versionRepo.findByIDForUpdateCount)
+			}
+		})
+	}
+}
+
+func TestBRE001_StatusTransitionError_IsRetryable(t *testing.T) {
+	// When a status transition is invalid (e.g., LIC arrives before DP commits),
+	// the error must be retryable so the consumer NACKs with requeue.
+	d := newTestDeps()
+	// PENDING → ANALYSIS_ARTIFACTS_RECEIVED is invalid (requires DP first).
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	err := svc.HandleLICArtifacts(context.Background(), validLICEvent())
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if port.ErrorCode(err) != port.ErrCodeStatusTransition {
+		t.Errorf("error code = %q, want INVALID_STATUS_TRANSITION", port.ErrorCode(err))
+	}
+	if !port.IsRetryable(err) {
+		t.Error("BRE-001: status transition error must be retryable for NACK with requeue")
+	}
+
+	// Message should indicate the transition direction.
+	if !strings.Contains(err.Error(), "PENDING") {
+		t.Errorf("error should contain current status PENDING: %v", err)
+	}
+}
+
+func TestBRE001_FindByIDForUpdate_Error_PropagatesUp(t *testing.T) {
+	// If FindByIDForUpdate fails (e.g., lock timeout), the error propagates.
+	d := newTestDeps()
+	d.versionRepo.findByIDForUpdate = func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+		return nil, port.NewDatabaseError("lock timeout", fmt.Errorf("lock wait timeout"))
+	}
+
+	svc := d.newService()
+	err := svc.HandleDPArtifacts(context.Background(), validDPEvent())
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if port.ErrorCode(err) != port.ErrCodeDatabaseFailed {
+		t.Errorf("error code = %q, want DATABASE_FAILED", port.ErrorCode(err))
+	}
+	if !port.IsRetryable(err) {
+		t.Error("database error should be retryable")
+	}
+}
+
+func TestBRE001_FindByIDForUpdate_VersionNotFound(t *testing.T) {
+	// If the version doesn't exist, FindByIDForUpdate returns not-found error.
+	d := newTestDeps()
+	d.versionRepo.findByIDForUpdate = func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+		return nil, port.NewVersionNotFoundError(versionID)
+	}
+
+	svc := d.newService()
+	err := svc.HandleDPArtifacts(context.Background(), validDPEvent())
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if port.ErrorCode(err) != port.ErrCodeVersionNotFound {
+		t.Errorf("error code = %q, want VERSION_NOT_FOUND", port.ErrorCode(err))
 	}
 }

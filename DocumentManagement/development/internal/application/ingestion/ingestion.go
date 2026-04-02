@@ -337,18 +337,25 @@ func (s *ArtifactIngestionService) processIngestion(ctx context.Context, p inges
 
 	// Step 2: DB transaction — insert descriptors, transition status, audit, outbox.
 	if err := s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
-		// 2a. Find version and validate status transition.
-		version, findErr := s.versionRepo.FindByID(txCtx, p.orgID, p.docID, p.versionID)
+		// 2a. Lock version row (FOR UPDATE) and validate status transition.
+		// SELECT ... FOR UPDATE serializes concurrent artifact_status updates,
+		// preventing race conditions when DP, LIC, and RE events arrive
+		// simultaneously for the same version (BRE-001).
+		version, findErr := s.versionRepo.FindByIDForUpdate(txCtx, p.orgID, p.docID, p.versionID)
 		if findErr != nil {
 			return findErr
 		}
 
 		oldStatus := version.ArtifactStatus
 		if err := version.TransitionArtifactStatus(p.targetStatus); err != nil {
+			// Retryable: true — the transition may become valid after a prior
+			// stage completes (e.g., LIC arrives before DP commits). Currently the
+			// consumer drops the message (always returns nil), but the retryable flag
+			// enables future NACK-with-requeue + bounded retry logic (DM-TASK-023).
 			return &port.DomainError{
 				Code:      port.ErrCodeStatusTransition,
 				Message:   fmt.Sprintf("invalid status transition from %s to %s", oldStatus, p.targetStatus),
-				Retryable: false,
+				Retryable: true,
 				Cause:     err,
 			}
 		}

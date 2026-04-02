@@ -81,6 +81,32 @@ func (r *VersionRepository) FindByID(ctx context.Context, organizationID, docume
 	return v, nil
 }
 
+// FindByIDForUpdate retrieves a version with a row-level exclusive lock
+// (SELECT ... FOR UPDATE). Must be called within a transaction.
+// Serializes concurrent artifact_status transitions (BRE-001).
+func (r *VersionRepository) FindByIDForUpdate(ctx context.Context, organizationID, documentID, versionID string) (*model.DocumentVersion, error) {
+	conn := ConnFromCtx(ctx)
+
+	row := conn.QueryRow(ctx,
+		`SELECT version_id, document_id, organization_id, version_number, parent_version_id,
+				origin_type, origin_description, source_file_key, source_file_name,
+				source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at
+		FROM document_versions
+		WHERE version_id = $1 AND document_id = $2 AND organization_id = $3
+		FOR UPDATE`,
+		versionID, documentID, organizationID,
+	)
+
+	v, err := scanVersion(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, port.NewVersionNotFoundError(versionID)
+		}
+		return nil, port.NewDatabaseError("find version by id for update", err)
+	}
+	return v, nil
+}
+
 // List returns a paginated list of versions for a document.
 func (r *VersionRepository) List(ctx context.Context, organizationID, documentID string, page, pageSize int) ([]*model.DocumentVersion, int, error) {
 	conn := ConnFromCtx(ctx)

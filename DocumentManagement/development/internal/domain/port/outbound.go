@@ -67,6 +67,15 @@ type VersionRepository interface {
 	// Returns ErrCodeVersionNotFound if not found.
 	FindByID(ctx context.Context, organizationID, documentID, versionID string) (*model.DocumentVersion, error)
 
+	// FindByIDForUpdate retrieves a version with a row-level exclusive lock
+	// (SELECT ... FOR UPDATE). Must be called within a transaction.
+	// The lock prevents concurrent transactions from reading/modifying the same
+	// version row until the current transaction commits or rolls back.
+	// Used by Artifact Ingestion Service to serialize artifact_status transitions
+	// and prevent race conditions (BRE-001).
+	// Returns ErrCodeVersionNotFound if not found.
+	FindByIDForUpdate(ctx context.Context, organizationID, documentID, versionID string) (*model.DocumentVersion, error)
+
 	// List returns a paginated list of versions for a document, ordered by version_number descending.
 	List(ctx context.Context, organizationID, documentID string, page, pageSize int) ([]*model.DocumentVersion, int, error)
 

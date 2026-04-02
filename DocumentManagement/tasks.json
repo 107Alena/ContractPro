@@ -822,7 +822,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-017"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-02",
+      "summary": "Реализована защита от race condition при обновлении artifact_status (BRE-001). PORT: добавлен FindByIDForUpdate в VersionRepository interface — SELECT ... FOR UPDATE с row-level exclusive lock. POSTGRES: FindByIDForUpdate в version_repository.go — SELECT с FOR UPDATE clause, tenant isolation (organization_id = $3), scanVersion shared helper. INGESTION: processIngestion заменён FindByID → FindByIDForUpdate внутри транзакции — сериализация конкурентных обновлений DP/LIC/RE. Status transition error → Retryable: true (NACK with requeue для будущей DM-TASK-023). MOCK: FindByIDForUpdate добавлен во все 3 mock реализации (ingestion, diff, version) с делегацией к FindByID. РЕВЬЮ: code-reviewer → APPROVED with 1 warning (W-1: комментарий о NACK → исправлен, указана связь с DM-TASK-023). 8 новых тестов: 5 ingestion BRE-001 (FindByIDForUpdate call count, all 3 producers, retryable status transition, error propagation, version not found) + 3 postgres adapter (FOR UPDATE SQL clause, not found, DB error). 3 существующих теста обновлены (DP/LIC/RE InvalidStatusTransition → verify retryable). Все тесты PASS с -race -count=1. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-038",

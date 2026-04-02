@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +215,82 @@ func TestVersionRepository_NextVersionNumber_Subsequent(t *testing.T) {
 	assert.Equal(t, 5, next)
 }
 
+// ---------------------------------------------------------------------------
+// BRE-001: FindByIDForUpdate tests.
+// ---------------------------------------------------------------------------
+
+func TestVersionRepository_FindByIDForUpdate_Success(t *testing.T) {
+	now := time.Now().UTC()
+	var capturedSQL string
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			capturedSQL = sql
+			assert.Equal(t, "v-1", args[0])
+			assert.Equal(t, "doc-1", args[1])
+			assert.Equal(t, "org-1", args[2])
+			return &mockRow{
+				scanFn: func(dest ...any) error {
+					*dest[0].(*string) = "v-1"
+					*dest[1].(*string) = "doc-1"
+					*dest[2].(*string) = "org-1"
+					*dest[3].(*int) = 1
+					*dest[4].(**string) = nil // no parent
+					*dest[5].(*string) = "UPLOAD"
+					*dest[6].(**string) = nil // no description
+					*dest[7].(*string) = "key"
+					*dest[8].(*string) = "file.pdf"
+					*dest[9].(*int64) = 1024
+					*dest[10].(*string) = "sha256"
+					*dest[11].(*string) = "PROCESSING_ARTIFACTS_RECEIVED"
+					*dest[12].(*string) = "user-1"
+					*dest[13].(*time.Time) = now
+					return nil
+				},
+			}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	v, err := NewVersionRepository().FindByIDForUpdate(ctx, "org-1", "doc-1", "v-1")
+	require.NoError(t, err)
+	assert.Equal(t, "v-1", v.VersionID)
+	assert.Equal(t, model.ArtifactStatusProcessingArtifactsReceived, v.ArtifactStatus)
+
+	// Verify the SQL contains FOR UPDATE.
+	assert.Contains(t, capturedSQL, "FOR UPDATE",
+		"FindByIDForUpdate SQL must contain FOR UPDATE clause")
+	assert.Contains(t, capturedSQL, "organization_id = $3",
+		"FindByIDForUpdate must filter by organization_id")
+}
+
+func TestVersionRepository_FindByIDForUpdate_NotFound(t *testing.T) {
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return &mockRow{err: pgx.ErrNoRows}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	_, err := NewVersionRepository().FindByIDForUpdate(ctx, "org-1", "doc-1", "v-1")
+	require.Error(t, err)
+	assert.Equal(t, port.ErrCodeVersionNotFound, port.ErrorCode(err))
+}
+
+func TestVersionRepository_FindByIDForUpdate_DBError(t *testing.T) {
+	dbErr := fmt.Errorf("connection refused")
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return &mockRow{err: dbErr}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	_, err := NewVersionRepository().FindByIDForUpdate(ctx, "org-1", "doc-1", "v-1")
+	require.Error(t, err)
+	assert.Equal(t, port.ErrCodeDatabaseFailed, port.ErrorCode(err))
+	assert.True(t, port.IsRetryable(err))
+}
+
 func TestVersionRepository_AllQueriesHaveOrgFilter(t *testing.T) {
 	sqlStatements := []string{}
 	mock := &mockTx{
@@ -236,6 +313,7 @@ func TestVersionRepository_AllQueriesHaveOrgFilter(t *testing.T) {
 	v := model.NewDocumentVersion("v", "d", "o", 1, model.OriginTypeUpload, "k", "f", 100, "h", "u")
 	_ = repo.Insert(ctx, v)
 	_, _ = repo.FindByID(ctx, "o", "d", "v")
+	_, _ = repo.FindByIDForUpdate(ctx, "o", "d", "v")
 	_, _, _ = repo.List(ctx, "o", "d", 1, 10)
 	_ = repo.Update(ctx, v)
 	_, _ = repo.NextVersionNumber(ctx, "o", "d")

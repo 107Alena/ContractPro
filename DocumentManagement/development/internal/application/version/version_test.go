@@ -80,6 +80,9 @@ func (m *mockVersionRepo) FindByID(ctx context.Context, orgID, docID, versionID 
 	}
 	return nil, port.NewVersionNotFoundError(versionID)
 }
+func (m *mockVersionRepo) FindByIDForUpdate(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+	return m.FindByID(ctx, orgID, docID, versionID) // version management does not use FOR UPDATE
+}
 func (m *mockVersionRepo) List(ctx context.Context, orgID, docID string, page, pageSize int) ([]*model.DocumentVersion, int, error) {
 	if m.listFn != nil {
 		return m.listFn(ctx, orgID, docID, page, pageSize)

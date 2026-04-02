@@ -49,6 +49,9 @@ func (m *mockVersionRepo) FindByID(ctx context.Context, orgID, docID, versionID 
 	}, nil
 }
 
+func (m *mockVersionRepo) FindByIDForUpdate(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+	return m.FindByID(ctx, orgID, docID, versionID) // diff does not use FOR UPDATE
+}
 func (m *mockVersionRepo) Insert(context.Context, *model.DocumentVersion) error {
 	panic("not used in diff")
 }

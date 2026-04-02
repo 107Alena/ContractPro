@@ -1337,3 +1337,47 @@
 - DM-TASK-038 (BRE-003: Idempotency Guard short TTL) — deps: DM-TASK-013 ✅
 
 ---
+
+## DM-TASK-037: BRE-001 — SELECT FOR UPDATE на artifact_status (2026-04-02)
+
+**Статус:** done
+
+**Что сделано:**
+- **PORT**: добавлен `FindByIDForUpdate` в `VersionRepository` interface (`internal/domain/port/outbound.go`)
+  - SELECT ... FOR UPDATE с row-level exclusive lock
+  - Должен вызываться внутри транзакции
+  - Документация: BRE-001, назначение — сериализация конкурентных artifact_status updates
+- **POSTGRES**: `FindByIDForUpdate` в `internal/infra/postgres/version_repository.go`
+  - Та же SELECT-структура что и `FindByID`, но с `FOR UPDATE` clause
+  - Tenant isolation сохранён (`organization_id = $3`)
+  - Reuse `scanVersion` helper
+- **INGESTION**: `processIngestion` в `internal/application/ingestion/ingestion.go`
+  - Заменён `FindByID` → `FindByIDForUpdate` внутри `WithTransaction`
+  - Status transition error → `Retryable: true` (подготовка к DM-TASK-023: NACK with requeue)
+  - Комментарий уточнён: текущий consumer drops message, retryable flag для будущей DM-TASK-023
+- **MOCK**: `FindByIDForUpdate` добавлен во все 3 mock реализации (ingestion, diff, version)
+  - Делегация к `FindByID` по умолчанию (unit-тесты не тестируют реальную блокировку)
+
+**Ревью:**
+- code-reviewer → APPROVED with 1 warning
+  - W-1: комментарий о NACK → исправлен, указана связь с DM-TASK-023
+
+**Тесты (8 новых + 3 обновлённых):**
+- 5 ingestion BRE-001: FindByIDForUpdate call count, all 3 producers (DP/LIC/RE), retryable status transition, error propagation, version not found
+- 3 postgres adapter: FOR UPDATE SQL clause verification, not found, DB error
+- 3 обновлённых: DP/LIC/RE InvalidStatusTransition → verify `IsRetryable(err) == true`
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (21 пакет)
+- `go vet ./...` — OK
+- `make build` — OK, `make test` — OK, `make lint` — OK
+
+**Паттерны:**
+- Отдельный метод `FindByIDForUpdate` (не флаг на `FindByID`) — locking intent explicit
+- Retryable status transition → подготовка к DM-TASK-023 (DLQ + NACK backoff)
+- Нет риска deadlock: каждая транзакция блокирует ровно 1 строку в document_versions по PK
+
+**Следующие задачи (critical pending):**
+- DM-TASK-038 (BRE-003: Idempotency Guard short TTL) — deps: DM-TASK-013 ✅
+
+---

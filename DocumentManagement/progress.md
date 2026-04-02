@@ -778,3 +778,64 @@
 - DM-TASK-037 (BRE-001 FOR UPDATE) — now unblocked by DM-TASK-017
 
 ---
+
+## DM-TASK-014: Event Consumer (2026-04-02)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/ingress/consumer/consumer.go` (~350 строк) — полная реализация EventConsumer
+- Consumer-side interfaces: `Logger`, `MetricsCollector`, `BrokerSubscriber`, `IdempotencyChecker`
+- `TopicConfig` — 7 incoming topic names из конфигурации
+- `NewEventConsumer` — конструктор с panic на nil deps + empty topics
+- `Start()` — sync.Once + 7 `broker.Subscribe()` вызовов
+- `wrapHandler()` — panic recovery с `debug.Stack()` + always-nil return
+- 7 per-topic handlers:
+  - `handleDPArtifacts` → `ingestion.HandleDPArtifacts` (KeyForDPArtifacts, ArtifactFallback/DP)
+  - `handleGetSemanticTree` → `query.HandleGetSemanticTree` (KeyForSemanticTreeRequest, noopFallback)
+  - `handleDiffReady` → `diff.HandleDiffReady` (KeyForDiffReady, DiffFallback)
+  - `handleLICArtifacts` → `ingestion.HandleLICArtifacts` (KeyForLICArtifacts, ArtifactFallback/LIC)
+  - `handleLICRequestArtifacts` → shared `handleGetArtifactsRequest` (KeyForLICRequest, noopFallback)
+  - `handleREArtifacts` → `ingestion.HandleREArtifacts` (KeyForREArtifacts, ArtifactFallback/RE)
+  - `handleRERequestArtifacts` → shared `handleGetArtifactsRequest` (KeyForRERequest, noopFallback)
+- `processWithIdempotency()` — shared: Check→Skip/Process/Reprocess→handler→MarkCompleted/Cleanup
+- `validateCommon()` — 4 required fields (correlation_id, timestamp, job_id, document_id)
+- `checkSchemaVersion()` — REV-031: WARN на unknown schema_version, обработка продолжается
+- `noopFallback` — для query requests (idempotent reads, no DB state)
+- `rawPreview()` — UTF-8 safe truncation at rune boundary
+
+**Ключевые решения:**
+- Always return nil — prevent poison-pill requeue. Все ошибки обрабатываются внутренне.
+- IdempotencyChecker interface (не конкретный тип) — testability через mock
+- LIC/RE GetArtifactsRequest — shared implementation, различаются по idempotency key (lic-req vs re-req)
+- Fallback: ArtifactFallback для ingestion events (DB check), DiffFallback для diff, noopFallback для queries
+- DLQ integration отложена до DM-TASK-023 (зависит от DM-TASK-014)
+
+**Проверки:**
+- `go test ./internal/ingress/consumer/... -race -count=1` — 70 PASS
+- `go test -count=1 ./...` — ALL PASS (все 30 пакетов)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Code Review (code-reviewer + golang-pro):**
+- 0 BLOCKING issues
+- 10 warnings, исправлены:
+  - debug.Stack() в panic recovery (stack trace для post-mortem)
+  - UTF-8 safe rawPreview (Cyrillic text в артефактах)
+  - Shared mocks fix в subtests (каждый subtest с fresh deps)
+  - +5 missing tests (RE missing version_id, query handler errors, TargetVersionID only empty)
+
+**Следующие задачи (ready, critical):**
+- DM-TASK-018 (Artifact Query) — blocks DM-TASK-022 (API)
+- DM-TASK-019 (Document Lifecycle) — blocks DM-TASK-022
+- DM-TASK-020 (Version Management) — blocks DM-TASK-022
+- DM-TASK-021 (Diff Storage) — blocks DM-TASK-022
+- DM-TASK-036 (REV-001/REV-002 fallback) — now unblocked by DM-TASK-017
+- DM-TASK-037 (BRE-001 FOR UPDATE) — now unblocked by DM-TASK-017
+- DM-TASK-038 (BRE-003 idempotency TTL) — now unblocked by DM-TASK-013
+- DM-TASK-010 (Observability) — high priority, blocks DM-TASK-025
+- DM-TASK-011 (Health Check) — high priority, blocks DM-TASK-025
+
+---

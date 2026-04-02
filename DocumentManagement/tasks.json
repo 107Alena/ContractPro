@@ -260,7 +260,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-006", "DM-TASK-007", "DM-TASK-008", "DM-TASK-009"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-02",
+      "summary": "Создан internal/infra/health/ с HTTP health/readiness handler. ФАЙЛЫ: health.go (~200 строк: Handler struct с atomic.Bool ready flag, ComponentChecker func type, core/nonCore checker maps, HandlerOption functional options, NewHandler с name collision validation + panic guard, GET /healthz — liveness probe always 200, GET /readyz — readiness probe с component breakdown: core checkers block readiness (503 при failure), non-core checkers reported но не блокируют (REV-024); checkAll — concurrent health checks с per-component timeout + panic recovery + deterministic sorted output; WithCheckTimeout option; SetReady/Mux; writeJSON helper; Go 1.22+ method-aware routing 'GET /healthz'), health_test.go (26 тестов). ДИЗАЙН: ComponentChecker func(ctx context.Context) error — функциональный тип для максимальной гибкости (closures); core checkers (postgres, redis, rabbitmq) — обязательные, non-core (object_storage) — информационные (REV-024); concurrent execution через goroutines + sync.Mutex + sync.WaitGroup; panic recovery в goroutines → component reported as 'down'; per-component context.WithTimeout; deterministic JSON output через sort.Slice; name collision guard в конструкторе. РЕВЬЮ: code-reviewer + golang-pro → 0 blocking, 7 warnings исправлено (name collision guard, GET method routing, panic recovery, redundant sort.Strings removed, checked type assertion, POST→405 test). 26 unit-тестов: 3 liveness (200, Content-Type, POST 405), 2 not-ready default, 2 SetReady toggle, 1 all core healthy, 2 core down (single, multiple), 2 non-core REV-024 (down still ready, healthy reported), 1 component breakdown, 1 check timeout, 3 Content-Type, 3 WithCheckTimeout options, 1 nil maps, 1 name collision panic, 1 Mux non-nil, 1 core+non-core down, 1 concurrent execution, 2 panic recovery (core down, non-core still ready). Все тесты PASS с -race. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-012",

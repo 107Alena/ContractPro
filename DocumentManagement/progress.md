@@ -1110,11 +1110,64 @@
 - `make lint` — OK
 
 **Следующие задачи (ready):**
-- DM-TASK-011 (Health Check) — high, deps done, blocks DM-TASK-025
 - DM-TASK-022 (API Handler) — high, deps done, blocks DM-TASK-025
 - DM-TASK-036 (REV-001/REV-002 fallback) — critical, deps done
 - DM-TASK-037 (BRE-001 FOR UPDATE) — critical, deps done
 - DM-TASK-038 (BRE-003 idempotency TTL) — critical, deps done
-- DM-TASK-025 (Application wiring) — blocked by DM-TASK-010✅, DM-TASK-011, DM-TASK-014✅, DM-TASK-022, DM-TASK-016✅
+- DM-TASK-025 (Application wiring) — blocked by DM-TASK-010✅, DM-TASK-011✅, DM-TASK-014✅, DM-TASK-022, DM-TASK-016✅
+
+---
+
+## DM-TASK-011: Health Check Handler (2026-04-02)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/infra/health/health.go` (~200 строк) + `health_test.go` (26 тестов)
+- **Handler struct** — `atomic.Bool` ready flag, core/nonCore checker maps, configurable timeout
+- **ComponentChecker** — `func(ctx context.Context) error` функциональный тип для максимальной гибкости
+- **GET /healthz** — liveness probe, always returns 200 OK `{"status":"ok"}`
+- **GET /readyz** — readiness probe с component breakdown:
+  - Core checkers (postgres, redis, rabbitmq) — обязательные, failure → 503
+  - Non-core checkers (object_storage) — информационные, failure не блокирует readiness (REV-024)
+  - JSON response: `{"status":"ready|not_ready","components":{"name":{"status":"up|down","error":"..."}}}`
+- **Concurrent execution** — goroutines + sync.Mutex + sync.WaitGroup, per-component context.WithTimeout
+- **Panic recovery** — checker panic → component reported as "down", не крашит handler
+- **Go 1.22+ method-aware routing** — `GET /healthz`, `GET /readyz` (POST → 405)
+- **Name collision guard** — panic в конструкторе при одинаковом имени в core и non-core
+- **HandlerOption** — `WithCheckTimeout(d)` functional option, default 5s
+- **SetReady/Mux** — toggle для graceful startup/shutdown
+
+**Дизайн решения — отличия от DP:**
+- DP health handler: простой SetReady toggle без реальных проверок компонентов
+- DM health handler: фактические проверки инфра-клиентов через ComponentChecker:
+  - PostgreSQL → `Ping(ctx)`
+  - Redis → `Ping(ctx)`
+  - RabbitMQ → `IsConnected()`
+  - Object Storage → `HeadObject(ctx, key)` (будет в wiring)
+- Разделение core/non-core для REV-024 compliance
+
+**Code review:**
+- code-reviewer + golang-pro → 0 blocking issues
+- 7 warnings исправлено:
+  - W-01: Name collision guard между core и non-core maps → panic
+  - W-02: HTTP method restriction → Go 1.22+ `GET /healthz` pattern
+  - W-03: Redundant sort.Strings → removed (sort.Slice sufficient)
+  - W-05: POST → 405 test added
+  - W-06: Panic recovery в goroutines + 2 теста
+  - W-07: Checked type assertion в тесте
+
+**Проверки:**
+- `go test ./internal/infra/health/... -race -count=1` — 26 PASS
+- `go test -count=1 ./...` — ALL PASS
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи (ready):**
+- DM-TASK-022 (API Handler) — high, deps done, blocks DM-TASK-025 (и ещё 5 задач)
+- DM-TASK-036 (REV-001/REV-002 fallback) — critical, deps done
+- DM-TASK-037 (BRE-001 FOR UPDATE) — critical, deps done
+- DM-TASK-038 (BRE-003 idempotency TTL) — critical, deps done
+- DM-TASK-025 (Application wiring) — blocked by DM-TASK-022 only
 
 ---

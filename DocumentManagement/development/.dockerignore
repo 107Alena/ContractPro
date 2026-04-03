@@ -1,0 +1,38 @@
+# Binaries
+dm-service
+*.exe
+*.test
+*.out
+
+# Environment files (may contain secrets)
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+docker-compose*
+.dockerignore
+
+# Documentation
+*.md
+
+# Test artifacts
+testdata/
+coverage.out
+coverage.html

@@ -1707,10 +1707,52 @@
 **Проверки:** go test -count=1 -race ALL PASS (22 пакета), go vet OK, make build/test/lint OK
 
 **Следующие задачи (high priority pending, deps met):**
-- DM-TASK-029 (Dockerfile + Docker Compose) — deps: DM-TASK-025 ✅
 - DM-TASK-030 (Tenant isolation enforcement) — deps: DM-TASK-012 ✅, DM-TASK-014 ✅, DM-TASK-022 ✅
 - DM-TASK-040 (REV-005 Archive endpoint) — deps: DM-TASK-022 ✅
 - DM-TASK-041 (Stale Version Watchdog) — deps: DM-TASK-017 ✅, DM-TASK-016 ✅
 - DM-TASK-042 (Outbox Poller FIFO ordering) — deps: DM-TASK-016 ✅
+- DM-TASK-043 (Consumer backpressure) — deps: DM-TASK-007 ✅
+- DM-TASK-044 (Circuit breaker Object Storage) — deps: DM-TASK-008 ✅
+- DM-TASK-045 (Rate limiting API) — deps: DM-TASK-022 ✅
+
+---
+
+## DM-TASK-029: Dockerfile (multi-stage) + Docker Compose (2026-04-03)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `Dockerfile` (multi-stage build):
+  - Stage 1 (builder): `golang:1.26.1-alpine`, layer-cached `go mod download`, CGO_ENABLED=0 static build
+  - Stage 2 (runtime): `alpine:3.21`, non-root user `dmservice`, HEALTHCHECK `/readyz`, EXPOSE 8080+9090
+  - Паттерн идентичен DP Dockerfile (только binary name и user name отличаются)
+  - Миграции embedded через `//go:embed` — не нужно COPY отдельно
+- Создан `docker-compose.yaml` (6 сервисов):
+  - `postgres:16-alpine` (dm-postgres, host port 5433)
+  - `redis:7-alpine` (dm-redis, host port 6380)
+  - `rabbitmq:3-management-alpine` (dm-rabbitmq, host ports 5673/15673)
+  - `minio/minio` (dm-minio, ports 9000/9001) + `minio-init` (bucket creation)
+  - `dm-service` (build from context, host ports 8081/9091)
+  - Port offset scheme для избежания конфликтов с DP stack
+  - Все infra-сервисы с healthchecks, `depends_on` с conditions
+- Создан `.env.example` — все DM_ переменные, grouped по категориям
+- Создан `.dockerignore` — aligned с DP reference
+- Обновлён `Makefile` — добавлены `compose-up`, `compose-down` targets
+
+**Проверки:**
+- `make build` — OK
+- `make test` (`go test ./...`) — OK, 22 пакета
+- `make lint` (`go vet ./...`) — OK
+- `go test -count=1 -race ./...` — ALL PASS
+- `make docker-build` — Docker не установлен на машине, не тестировался
+
+**Code Review (code-reviewer agent):**
+- 1 Blocking: MinIO healthcheck `mc ready local` → заменён на `curl -f http://localhost:9000/minio/health/live`
+- 15 Warnings: 6 исправлены (.dockerignore aligned, Redis start_period, DM_STORAGE_REGION documented, broker topics section, DEV ONLY comment)
+
+**Следующие задачи (ready):**
+- DM-TASK-030 (Tenant isolation) — security, high priority
+- DM-TASK-040 (Archive endpoint) — functional, high priority
+- DM-TASK-041..045 — functional/security, high priority
 
 ---

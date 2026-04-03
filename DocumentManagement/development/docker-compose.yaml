@@ -1,0 +1,147 @@
+# =============================================================================
+# ContractPro — Document Management Development Environment (DEV ONLY)
+# =============================================================================
+# Usage:
+#   docker compose up --build        — build and start all services
+#   docker compose up -d             — start in background
+#   docker compose logs -f dm-service — follow DM service logs
+#   docker compose down              — stop and remove containers
+#   docker compose down -v           — stop and remove containers + volumes
+#
+# Port allocation (offset to avoid conflicts with DP on root docker-compose):
+#   DM API:        localhost:8081
+#   DM Metrics:    localhost:9091
+#   PostgreSQL:    localhost:5433
+#   Redis:         localhost:6380
+#   RabbitMQ AMQP: localhost:5673
+#   RabbitMQ Mgmt: localhost:15673  (http://localhost:15673 — guest/guest)
+#   MinIO S3 API:  localhost:9000
+#   MinIO Console: localhost:9001   (http://localhost:9001 — minioadmin/minioadmin)
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dm-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: dm
+      POSTGRES_PASSWORD: dm_dev_password
+      POSTGRES_DB: dm_dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dm -d dm_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: dm-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: dm-rabbitmq
+    ports:
+      - "5673:5672"     # AMQP
+      - "15673:15672"   # Management UI: http://localhost:15673 (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  minio:
+    image: minio/minio:latest
+    container_name: dm-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console UI: http://localhost:9001 (minioadmin/minioadmin)
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Create the dm-artifacts bucket in MinIO (run-once init container).
+  minio-init:
+    image: minio/mc:latest
+    container_name: dm-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh -c
+    command:
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin
+        mc mb --ignore-existing local/dm-artifacts
+        echo "Bucket dm-artifacts ready"
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Application
+  # ---------------------------------------------------------------------------
+
+  dm-service:
+    build:
+      context: .
+    container_name: dm-service
+    environment:
+      DM_DB_DSN: postgres://dm:dm_dev_password@postgres:5432/dm_dev?sslmode=disable
+      DM_BROKER_ADDRESS: amqp://guest:guest@rabbitmq:5672/
+      DM_KVSTORE_ADDRESS: redis:6379
+      DM_STORAGE_ENDPOINT: http://minio:9000
+      DM_STORAGE_BUCKET: dm-artifacts
+      DM_STORAGE_ACCESS_KEY: minioadmin
+      DM_STORAGE_SECRET_KEY: minioadmin
+      DM_STORAGE_REGION: us-east-1
+      DM_LOG_LEVEL: debug
+    ports:
+      - "8081:8080"   # API + health probes
+      - "9091:9090"   # Metrics
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq-data:
+  minio-data:

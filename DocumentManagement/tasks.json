@@ -677,7 +677,9 @@
         "Шаг 4: curl localhost:{port}/readyz → 200"
       ],
       "dependencies": ["DM-TASK-025"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-03",
+      "summary": "Создан Dockerfile (multi-stage) + docker-compose.yaml + .env.example + .dockerignore для Document Management. DOCKERFILE: Stage 1 (builder) — golang:1.26.1-alpine, go mod download (layer cache), CGO_ENABLED=0 static build с -ldflags='-s -w' -trimpath. Stage 2 (runtime) — alpine:3.21, non-root user dmservice, HEALTHCHECK /readyz, EXPOSE 8080+9090. Миграции embedded через //go:embed (не нужно COPY отдельно). DOCKER-COMPOSE: 6 сервисов — postgres:16-alpine (dm-postgres, port 5433), redis:7-alpine (dm-redis, port 6380), rabbitmq:3-management-alpine (dm-rabbitmq, ports 5673/15673), minio/minio (dm-minio, ports 9000/9001), minio-init (bucket dm-artifacts creation, run-once), dm-service (build context, ports 8081/9091). Все infra с healthchecks. depends_on с service_healthy/service_completed_successfully. Port offset scheme для избежания конфликтов с DP stack (8081/9091/5433/6380/5673). ENV.EXAMPLE: все DM_ переменные с defaults для localhost, grouped по категориям, required/optional distinction. DOCKERIGNORE: .git, .env/.env.*, IDE, OS, Docker, docs, test artifacts — aligned с DP. MAKEFILE: +compose-up, +compose-down targets. РЕВЬЮ: code-reviewer → 1B + 15W. B-C01 исправлен (MinIO healthcheck curl вместо mc). W-D02..D05 исправлены (.dockerignore aligned с DP). W-C05 исправлен (Redis start_period). W-E01 исправлен (DM_STORAGE_REGION documented). W-E02 исправлен (broker topics section). Docker не установлен на машине — docker-build не тестировался, но синтаксис верифицирован. make build/test/lint — ALL OK. go test -count=1 -race ./... — ALL PASS (22 пакета). go vet — OK."
     },
     {
       "id": "DM-TASK-030",

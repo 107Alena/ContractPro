@@ -93,6 +93,12 @@ type Metrics struct {
 	// did not match the document's actual owner (BRE-015 violation).
 	TenantMismatchTotal prometheus.Counter
 
+	// --- Rate limiting (BRE-009) ---
+
+	// RateLimitedTotal counts requests rejected by per-organization rate limiting,
+	// labeled by limit_type (read/write).
+	RateLimitedTotal *prometheus.CounterVec
+
 	// --- Circuit breaker ---
 
 	// CircuitBreakerState tracks the circuit breaker state (0=closed, 1=half-open, 2=open)
@@ -205,6 +211,11 @@ func NewMetrics() *Metrics {
 			Help: "Total number of events with organization_id mismatch (BRE-015).",
 		}),
 
+		RateLimitedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "dm_api_rate_limited_total",
+			Help: "Total number of requests rejected by per-organization rate limiting (BRE-009).",
+		}, []string{"limit_type"}),
+
 		CircuitBreakerState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "dm_circuit_breaker_state",
 			Help: "Circuit breaker state per component (0=closed, 1=half-open, 2=open).",
@@ -233,6 +244,7 @@ func NewMetrics() *Metrics {
 		m.StuckVersionsTotal,
 		m.IntegrityCheckFailures,
 		m.TenantMismatchTotal,
+		m.RateLimitedTotal,
 		m.CircuitBreakerState,
 	)
 
@@ -361,4 +373,14 @@ func (m *Metrics) SetCircuitBreakerState(component string, state float64) {
 // document's actual owner.
 func (m *Metrics) IncTenantMismatch() {
 	m.TenantMismatchTotal.Inc()
+}
+
+// ---------------------------------------------------------------------------
+// api.RateLimitMetrics interface (BRE-009)
+// ---------------------------------------------------------------------------
+
+// IncRateLimited increments dm_api_rate_limited_total for the given limit type
+// (read/write). Called when a request is rejected by per-organization rate limiting.
+func (m *Metrics) IncRateLimited(limitType string) {
+	m.RateLimitedTotal.WithLabelValues(limitType).Inc()
 }

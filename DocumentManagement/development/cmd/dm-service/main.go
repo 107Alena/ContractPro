@@ -293,6 +293,22 @@ func run() int {
 	)
 	apiHandler.WithDLQReplay(poolDLQRepo, brokerClient, cfg.DLQ.MaxReplayCount)
 
+	// Per-organization rate limiting (BRE-009).
+	var orgRateLimiter *api.OrgRateLimiter
+	if cfg.RateLimit.Enabled {
+		orgRateLimiter = api.NewOrgRateLimiter(
+			cfg.RateLimit.ReadRPS,
+			cfg.RateLimit.WriteRPS,
+			cfg.RateLimit.CleanupInterval,
+			cfg.RateLimit.IdleTTL,
+		)
+		apiHandler.WithRateLimit(orgRateLimiter, obs.Metrics)
+		logger.Info("rate limiting enabled",
+			"read_rps", cfg.RateLimit.ReadRPS,
+			"write_rps", cfg.RateLimit.WriteRPS,
+		)
+	}
+
 	// -----------------------------------------------------------------------
 	// Phase 14: Outbox Poller + Metrics Collector
 	// poolOutboxRepo ensures ConnFromCtx finds the pool in non-transactional
@@ -370,6 +386,7 @@ func run() int {
 		shutdownOnce.Do(func() {
 			doShutdown(logger, cfg.Timeout.Shutdown, healthHandler,
 				outboxPoller, outboxMetricsCollector, staleWatchdog,
+				orgRateLimiter,
 				brokerClient, httpServer, metricsServer,
 				kvClient, pgClient, obs)
 		})
@@ -456,6 +473,7 @@ func doShutdown(
 	outboxPoller *outbox.OutboxPoller,
 	outboxMetrics *outbox.OutboxMetricsCollector,
 	staleWatchdog *watchdog.StaleVersionWatchdog,
+	rateLimiter *api.OrgRateLimiter,
 	brokerClient *broker.Client,
 	httpServer *http.Server,
 	metricsServer *http.Server,
@@ -493,6 +511,11 @@ func doShutdown(
 	case <-staleWatchdog.Done():
 	case <-ctx.Done():
 		logger.Warn("stale watchdog stop timeout")
+	}
+
+	// Phase 3.5: Stop rate limiter GC goroutine.
+	if rateLimiter != nil {
+		rateLimiter.Close()
 	}
 
 	// Phase 4: Close broker (stops consumers, drains in-flight handlers).

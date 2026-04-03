@@ -28,6 +28,7 @@ type Config struct {
 	Timeout       TimeoutConfig
 	Watchdog       WatchdogConfig
 	CircuitBreaker CircuitBreakerConfig
+	RateLimit      RateLimitConfig
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -56,6 +57,7 @@ func Load() (*Config, error) {
 		Timeout:       loadTimeoutConfig(),
 		Watchdog:       loadWatchdogConfig(),
 		CircuitBreaker: loadCircuitBreakerConfig(),
+		RateLimit:      loadRateLimitConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -102,6 +104,14 @@ func (c *Config) Validate() error {
 	}
 	if c.CircuitBreaker.Timeout <= 0 {
 		invalid = append(invalid, "DM_CB_TIMEOUT must be positive")
+	}
+	if c.RateLimit.Enabled {
+		if c.RateLimit.ReadRPS <= 0 {
+			invalid = append(invalid, "DM_RATELIMIT_READ_RPS must be positive when rate limiting is enabled")
+		}
+		if c.RateLimit.WriteRPS <= 0 {
+			invalid = append(invalid, "DM_RATELIMIT_WRITE_RPS must be positive when rate limiting is enabled")
+		}
 	}
 
 	var parts []string

@@ -1937,6 +1937,45 @@
 - DM-TASK-040 (Archive endpoint) — вероятно уже реализован через DM-TASK-019 + DM-TASK-022
 - DM-TASK-042 (Outbox FIFO ordering) — частично реализован в DM-TASK-016
 - DM-TASK-043 (Consumer backpressure) — prefetch + concurrency limiter
-- DM-TASK-045 (Rate limiting for sync API)
+
+---
+
+## DM-TASK-045: BRE-009: Rate limiting для sync API (2026-04-04)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/ingress/api/ratelimit.go` (~190 строк):
+  - `OrgRateLimiter` struct — per-organization token bucket с отдельными read/write бюджетами
+  - `golang.org/x/time/rate` v0.12.0 для token bucket алгоритма
+  - `NewOrgRateLimiter(readRPS, writeRPS, cleanupInterval, idleTTL)` с panic на invalid params
+  - `Allow(orgID, isRead)` — Reserve()+Cancel() pattern для точного Retry-After header
+  - Background `gcLoop` goroutine для eviction неактивных organizations
+  - `Close()` с `sync.Once` для безопасного concurrent вызова
+  - `rateLimitMiddleware()` — HTTP middleware с nil-safe passthrough
+  - `RateLimitMetrics` consumer-side interface
+- Конфигурация `RateLimitConfig` в `sub_configs.go`:
+  - `DM_RATELIMIT_READ_RPS` (default: 100), `DM_RATELIMIT_WRITE_RPS` (default: 20)
+  - `DM_RATELIMIT_ENABLED` (default: true), `DM_RATELIMIT_CLEANUP_INTERVAL` (default: 5m)
+  - `DM_RATELIMIT_IDLE_TTL` (default: 10m)
+  - Validation: ReadRPS/WriteRPS > 0 when enabled
+- Метрика `dm_api_rate_limited_total` counter[limit_type] + `IncRateLimited()` bridge
+- Handler: `WithRateLimit()` + middleware chain: logging → metrics → auth → rateLimit → handler
+- Main.go: conditional `NewOrgRateLimiter`, `Close()` в shutdown Phase 3.5
+
+**Дизайнерские решения:**
+- Separate read (GET/HEAD) и write (POST/PUT/DELETE) token buckets per org
+- Burst = RPS (1 секунда мгновенных запросов)
+- Reserve()+Cancel() для точного Retry-After header
+- Background GC + sync.Once Close()
+
+**Ревью (code-reviewer):** 0B + 8W, W2/W5/W8 исправлены
+
+**Тесты:** 23 unit-теста (all PASS с -race -count=1, 25 пакетов)
+
+**Следующие задачи (high priority pending):**
+- DM-TASK-040 (Archive endpoint)
+- DM-TASK-042 (Outbox FIFO ordering)
+- DM-TASK-043 (Consumer backpressure)
 
 ---

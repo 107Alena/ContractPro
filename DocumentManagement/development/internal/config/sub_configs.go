@@ -311,6 +311,25 @@ func loadCircuitBreakerConfig() CircuitBreakerConfig {
 	}
 }
 
+// RateLimitConfig holds per-organization API rate limiting settings (BRE-009).
+type RateLimitConfig struct {
+	ReadRPS    int           // DM_RATELIMIT_READ_RPS (default: 100)
+	WriteRPS   int           // DM_RATELIMIT_WRITE_RPS (default: 20)
+	Enabled    bool          // DM_RATELIMIT_ENABLED (default: true)
+	CleanupInterval time.Duration // DM_RATELIMIT_CLEANUP_INTERVAL (default: 5m)
+	IdleTTL    time.Duration // DM_RATELIMIT_IDLE_TTL (default: 10m)
+}
+
+func loadRateLimitConfig() RateLimitConfig {
+	return RateLimitConfig{
+		ReadRPS:         envInt("DM_RATELIMIT_READ_RPS", 100),
+		WriteRPS:        envInt("DM_RATELIMIT_WRITE_RPS", 20),
+		Enabled:         envBool("DM_RATELIMIT_ENABLED", true),
+		CleanupInterval: envDuration("DM_RATELIMIT_CLEANUP_INTERVAL", 5*time.Minute),
+		IdleTTL:         envDuration("DM_RATELIMIT_IDLE_TTL", 10*time.Minute),
+	}
+}
+
 func loadTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
 		StoragePut:      envDuration("DM_TIMEOUT_STORAGE_PUT", 30*time.Second),

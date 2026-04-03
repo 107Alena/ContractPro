@@ -44,6 +44,10 @@ type Handler struct {
 	dlqRepo        port.DLQRepository
 	dlqBroker      BrokerPublisher
 	dlqMaxReplay   int
+
+	// Rate limiting (optional — nil disables rate limiting).
+	rateLimiter    *OrgRateLimiter
+	rateLimitMetrics RateLimitMetrics
 }
 
 // NewHandler creates a new API Handler.
@@ -97,6 +101,13 @@ func (h *Handler) WithDLQReplay(repo port.DLQRepository, broker BrokerPublisher,
 	h.dlqMaxReplay = maxReplay
 }
 
+// WithRateLimit enables per-organization rate limiting on the API (BRE-009).
+// Pass nil limiter to disable rate limiting.
+func (h *Handler) WithRateLimit(limiter *OrgRateLimiter, metrics RateLimitMetrics) {
+	h.rateLimiter = limiter
+	h.rateLimitMetrics = metrics
+}
+
 // Mux returns an http.ServeMux with all API routes registered and middleware applied.
 // Uses Go 1.22+ method-aware routing patterns.
 func (h *Handler) Mux(apiRequests *prometheus.CounterVec, apiDuration *prometheus.HistogramVec) http.Handler {
@@ -131,8 +142,9 @@ func (h *Handler) Mux(apiRequests *prometheus.CounterVec, apiDuration *prometheu
 			requireRole("admin")(http.HandlerFunc(h.replayDLQ)))
 	}
 
-	// Execution order: logging → metrics → auth → handler.
+	// Execution order: logging → metrics → auth → rateLimit → handler.
 	var handler http.Handler = mux
+	handler = rateLimitMiddleware(h.rateLimiter, h.rateLimitMetrics)(handler)
 	handler = authMiddleware(handler)
 	if apiRequests != nil && apiDuration != nil {
 		handler = metricsMiddleware(apiRequests, apiDuration)(handler)

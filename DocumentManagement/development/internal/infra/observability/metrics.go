@@ -346,6 +346,16 @@ func (m *Metrics) SetStuckVersionsCount(count float64) {
 	m.StuckVersionsCount.Set(count)
 }
 
+// ---------------------------------------------------------------------------
+// circuitbreaker.StateReporter interface (BRE-014)
+// ---------------------------------------------------------------------------
+
+// SetCircuitBreakerState sets the dm_circuit_breaker_state gauge for the given
+// component. Values: 0=closed, 1=half-open, 2=open.
+func (m *Metrics) SetCircuitBreakerState(component string, state float64) {
+	m.CircuitBreakerState.WithLabelValues(component).Set(state)
+}
+
 // IncTenantMismatch increments dm_tenant_mismatch_total.
 // Called when an incoming event's organization_id does not match the
 // document's actual owner.

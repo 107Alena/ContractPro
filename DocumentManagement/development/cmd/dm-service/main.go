@@ -24,6 +24,7 @@ import (
 	"contractpro/document-management/internal/egress/confirmation"
 	"contractpro/document-management/internal/egress/dlq"
 	"contractpro/document-management/internal/egress/outbox"
+	"contractpro/document-management/internal/infra/circuitbreaker"
 	"contractpro/document-management/internal/infra/broker"
 	"contractpro/document-management/internal/infra/health"
 	"contractpro/document-management/internal/infra/kvstore"
@@ -135,9 +136,14 @@ func run() int {
 	}
 
 	// -----------------------------------------------------------------------
-	// Phase 6: Object Storage
+	// Phase 6: Object Storage (with circuit breaker — BRE-014)
 	// -----------------------------------------------------------------------
-	objClient := objectstorage.NewClient(cfg.Storage)
+	rawObjClient := objectstorage.NewClient(cfg.Storage)
+	objClient := circuitbreaker.NewObjectStorageBreaker(
+		rawObjClient,
+		cfg.CircuitBreaker,
+		obs.Metrics,
+	)
 
 	// -----------------------------------------------------------------------
 	// Phase 7: Transactor + Repositories

@@ -1883,7 +1883,60 @@
 - DM-TASK-040 (Archive endpoint) — вероятно уже реализован через DM-TASK-019 + DM-TASK-022
 - DM-TASK-042 (Outbox FIFO ordering) — частично реализован в DM-TASK-016
 - DM-TASK-043 (Consumer backpressure) — prefetch + concurrency limiter
-- DM-TASK-044 (Circuit breaker for Object Storage)
+- DM-TASK-045 (Rate limiting for sync API)
+
+---
+
+## DM-TASK-044: BRE-014: Circuit breaker для Object Storage (2026-04-04)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан новый пакет `internal/infra/circuitbreaker/` (decorator pattern)
+- `ObjectStorageBreaker` оборачивает `port.ObjectStoragePort` с gobreaker v0.5.0
+- 6 методов (PutObject, GetObject, DeleteObject, HeadObject, GeneratePresignedURL, DeleteByPrefix) проходят через circuit breaker
+- `cancelOnCloseReader` для GetObject — cancel fires on body.Close(), не на return (B-1 fix)
+- `IsSuccessful` callback: explicit context.Canceled/DeadlineExceeded + !port.IsRetryable — non-retryable и context errors НЕ trip circuit
+- `withBudget`: context.WithTimeout(35s) если нет deadline или существующий deadline дальше budget
+- `mapCircuitError`: ErrOpenState/ErrTooManyRequests → DomainError{STORAGE_FAILED, retryable}
+- `stateToFloat`: Closed=0, HalfOpen=1, Open=2
+- `ErrCircuitOpen` sentinel error
+
+**Config (5 параметров):**
+- `DM_CB_MAX_REQUESTS` (default 3) — half-open max requests
+- `DM_CB_INTERVAL` (default 60s) — closed-state counting interval
+- `DM_CB_TIMEOUT` (default 30s) — open-to-half-open timeout
+- `DM_CB_FAILURE_THRESHOLD` (default 5) — consecutive failures to trip
+- `DM_CB_PER_EVENT_BUDGET` (default 35s) — per-event retry budget (BRE-014: 30-40s)
+
+**Metrics:**
+- `SetCircuitBreakerState(component, state)` bridge method в observability/metrics.go
+- `dm_circuit_breaker_state` gauge уже зарегистрирован (labels: component)
+
+**Wiring (main.go):**
+- `rawObjClient → circuitbreaker.NewObjectStorageBreaker(rawObjClient, cfg.CircuitBreaker, obs.Metrics)`
+
+**Ревью (code-reviewer):**
+- 1 blocking + 6 warnings
+- B-1 (GetObject cancel) — FIXED (cancelOnCloseReader)
+- W-1 (context errors) — FIXED (explicit check)
+- W-2 (config validation) — FIXED (3 checks)
+- W-5 (budget cap with looser deadline) — FIXED
+
+**Тесты: 29 unit-тестов** (все PASS с -race)
+- Constructor panics (2), initial metric, interface compliance
+- Passthrough (7 subtests), circuit opens after threshold
+- Non-retryable immunity, context error immunity (2)
+- Half-open recovery, half-open re-open, metric callback
+- Budget enforcement (2), GetObject body/error/circuit-open (3)
+- mapCircuitError (5 subtests), stateToFloat (4)
+- Mixed errors reset, per-method circuit-open (4)
+- Budget all methods, state accessor, error chain, max requests enforcement
+
+**Следующие задачи (high priority pending):**
+- DM-TASK-040 (Archive endpoint) — вероятно уже реализован через DM-TASK-019 + DM-TASK-022
+- DM-TASK-042 (Outbox FIFO ordering) — частично реализован в DM-TASK-016
+- DM-TASK-043 (Consumer backpressure) — prefetch + concurrency limiter
 - DM-TASK-045 (Rate limiting for sync API)
 
 ---

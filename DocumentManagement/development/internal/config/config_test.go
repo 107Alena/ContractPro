@@ -543,6 +543,13 @@ func TestValidate_FullConfig(t *testing.T) {
 		KVStore:       KVStoreConfig{Address: "localhost:6379"},
 		HTTP:          HTTPConfig{Port: 8080},
 		Observability: ObservabilityConfig{MetricsPort: 9090},
+		CircuitBreaker: CircuitBreakerConfig{
+			MaxRequests:      3,
+			Interval:         60 * time.Second,
+			Timeout:          30 * time.Second,
+			FailureThreshold: 5,
+			PerEventBudget:   35 * time.Second,
+		},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error, got: %v", err)
@@ -559,6 +566,12 @@ func TestValidate_PortCollision(t *testing.T) {
 		KVStore:       KVStoreConfig{Address: "localhost:6379"},
 		HTTP:          HTTPConfig{Port: 8080},
 		Observability: ObservabilityConfig{MetricsPort: 8080}, // same as HTTP
+		CircuitBreaker: CircuitBreakerConfig{
+			MaxRequests:      3,
+			Timeout:          30 * time.Second,
+			FailureThreshold: 5,
+			PerEventBudget:   35 * time.Second,
+		},
 	}
 	err := cfg.Validate()
 	if err == nil {

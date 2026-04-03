@@ -26,7 +26,8 @@ type Config struct {
 	DLQ           DLQConfig
 	Observability ObservabilityConfig
 	Timeout       TimeoutConfig
-	Watchdog      WatchdogConfig
+	Watchdog       WatchdogConfig
+	CircuitBreaker CircuitBreakerConfig
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -53,7 +54,8 @@ func Load() (*Config, error) {
 		DLQ:           loadDLQConfig(),
 		Observability: loadObservabilityConfig(),
 		Timeout:       loadTimeoutConfig(),
-		Watchdog:      loadWatchdogConfig(),
+		Watchdog:       loadWatchdogConfig(),
+		CircuitBreaker: loadCircuitBreakerConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -91,6 +93,15 @@ func (c *Config) Validate() error {
 
 	if c.HTTP.Port == c.Observability.MetricsPort {
 		invalid = append(invalid, "DM_HTTP_PORT and DM_METRICS_PORT must differ")
+	}
+	if c.CircuitBreaker.PerEventBudget <= 0 {
+		invalid = append(invalid, "DM_CB_PER_EVENT_BUDGET must be positive")
+	}
+	if c.CircuitBreaker.FailureThreshold == 0 {
+		invalid = append(invalid, "DM_CB_FAILURE_THRESHOLD must be > 0")
+	}
+	if c.CircuitBreaker.Timeout <= 0 {
+		invalid = append(invalid, "DM_CB_TIMEOUT must be positive")
 	}
 
 	var parts []string

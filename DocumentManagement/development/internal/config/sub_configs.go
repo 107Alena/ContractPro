@@ -277,6 +277,40 @@ func loadWatchdogConfig() WatchdogConfig {
 	}
 }
 
+// CircuitBreakerConfig holds circuit breaker settings for Object Storage (BRE-014).
+type CircuitBreakerConfig struct {
+	// MaxRequests is the number of requests allowed in half-open state
+	// before deciding whether to close or re-open the circuit.
+	MaxRequests uint32 // DM_CB_MAX_REQUESTS (default: 3)
+
+	// Interval is the cyclic period in closed state for clearing internal
+	// failure counts. 0 means counts never clear until the circuit opens.
+	Interval time.Duration // DM_CB_INTERVAL (default: 60s)
+
+	// Timeout is how long the circuit stays open before transitioning
+	// to half-open.
+	Timeout time.Duration // DM_CB_TIMEOUT (default: 30s)
+
+	// FailureThreshold is the number of consecutive failures required
+	// to trip the circuit from closed to open.
+	FailureThreshold uint32 // DM_CB_FAILURE_THRESHOLD (default: 5)
+
+	// PerEventBudget is the total time budget for all S3 retries within
+	// a single event processing cycle. Applied via context.WithTimeout
+	// if the caller has no earlier deadline (BRE-014: 30-40s).
+	PerEventBudget time.Duration // DM_CB_PER_EVENT_BUDGET (default: 35s)
+}
+
+func loadCircuitBreakerConfig() CircuitBreakerConfig {
+	return CircuitBreakerConfig{
+		MaxRequests:      uint32(envInt("DM_CB_MAX_REQUESTS", 3)),
+		Interval:         envDuration("DM_CB_INTERVAL", 60*time.Second),
+		Timeout:          envDuration("DM_CB_TIMEOUT", 30*time.Second),
+		FailureThreshold: uint32(envInt("DM_CB_FAILURE_THRESHOLD", 5)),
+		PerEventBudget:   envDuration("DM_CB_PER_EVENT_BUDGET", 35*time.Second),
+	}
+}
+
 func loadTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
 		StoragePut:      envDuration("DM_TIMEOUT_STORAGE_PUT", 30*time.Second),

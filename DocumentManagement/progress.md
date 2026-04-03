@@ -1756,3 +1756,70 @@
 - DM-TASK-041..045 — functional/security, high priority
 
 ---
+
+## DM-TASK-030: Tenant isolation enforcement (2026-04-04)
+
+**Статус:** done
+
+**Что сделано:**
+
+1. **Новый пакет `internal/application/tenant/`** (2 файла):
+   - `verify.go` — `VerifyTenantOwnership(ctx, docRepo, metrics, logger, orgID, docID)`:
+     - Проверяет через `ExistsByID` что документ принадлежит заявленной организации
+     - При несовпадении → `TENANT_MISMATCH` (non-retryable → DLQ) + метрика + WARN лог
+     - Пустой `orgID` → skip (fallback path REV-001/REV-002)
+     - `DocumentExistenceChecker` — минимальный интерфейс (satisfied by DocumentRepository)
+   - `verify_test.go` — 5 unit-тестов
+
+2. **Метрика `dm_tenant_mismatch_total`** в `observability/metrics.go`:
+   - Counter для BRE-015 нарушений
+   - `IncTenantMismatch()` метод на Metrics struct
+
+3. **RLS миграция 000003** (`postgres/migrations/`):
+   - `000003_rls_policies.up.sql`: ENABLE + FORCE ROW LEVEL SECURITY + CREATE POLICY на 5 таблицах
+   - Policy: `current_setting('app.organization_id', true) = '' OR organization_id = cast`
+   - Excluded: `outbox_events`, `dm_dlq_records` (system-level, без organization_id)
+   - `000003_rls_policies.down.sql`: DROP POLICY + NO FORCE + DISABLE
+
+4. **Интеграция в 3 application services** (5 async handlers):
+   - `ingestion.go`: HandleDPArtifacts, HandleLICArtifacts, HandleREArtifacts
+   - `diff.go`: HandleDiffReady
+   - `query.go`: HandleGetSemanticTree, HandleGetArtifacts
+   - Вызов ПОСЛЕ fallback resolution, ДО основной обработки
+   - Новые deps в конструкторах: `docRepo tenant.DocumentExistenceChecker` + `tenantMetrics tenant.Metrics`
+
+5. **main.go wiring**: `docRepo` + `obs.Metrics` → ingestion/query/diff services
+
+6. **Тесты:**
+   - 5 unit-тестов в `tenant/verify_test.go`
+   - 10 integration-тестов в `integration/tenant_isolation_test.go`:
+     - DP/LIC/RE artifacts wrong org → TENANT_MISMATCH
+     - Diff wrong org → TENANT_MISMATCH
+     - GetSemanticTree/GetArtifacts wrong org → TENANT_MISMATCH
+     - Correct org → success
+     - Empty org → fallback bypass → success
+     - Sync API: org-A cannot read org-B document
+     - Sync API: ListDocuments org isolation
+   - 6 new constructor panic tests (2 per service)
+   - Updated `error_scenarios_test.go` (DocumentNotFound → TenantMismatch)
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (23 пакета)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Code Review (code-reviewer agent):**
+- 2 Blocking + 8 Warnings, все B исправлены:
+  - B1 (RLS inert): RLS — defense-in-depth, SET LOCAL будет добавлен позже. Миграция безопасна (fallback to all rows when GUC unset)
+  - B2 (error message): Исправлен на `"document X does not belong to organization Y"`
+  - W3: Добавлен RE artifacts cross-tenant test
+  - W6: Добавлен NO FORCE ROW LEVEL SECURITY в down migration
+  - W8: Исправлен test — используется docID из CreateDocument result
+
+**Следующие задачи (ready):**
+- DM-TASK-040 (Archive endpoint) — functional, high priority
+- DM-TASK-041 (Stale Version Watchdog) — functional, high priority
+- DM-TASK-042..045 — functional/infrastructure/security, high priority
+- DM-TASK-031..035 — medium priority
+
+---

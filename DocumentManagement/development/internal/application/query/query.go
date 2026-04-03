@@ -8,6 +8,7 @@ import (
 	"io"
 	"time"
 
+	"contractpro/document-management/internal/application/tenant"
 	"contractpro/document-management/internal/domain/model"
 	"contractpro/document-management/internal/domain/port"
 	"contractpro/document-management/internal/infra/objectstorage"
@@ -32,6 +33,8 @@ type ArtifactQueryService struct {
 	confirmation     port.ConfirmationPublisherPort
 	auditRepo        port.AuditRepository
 	fallbackResolver port.DocumentFallbackResolver
+	docRepo          tenant.DocumentExistenceChecker
+	tenantMetrics    tenant.Metrics
 	logger           Logger
 	newUUID          func() string
 }
@@ -47,6 +50,8 @@ func NewArtifactQueryService(
 	confirmation port.ConfirmationPublisherPort,
 	auditRepo port.AuditRepository,
 	fallbackResolver port.DocumentFallbackResolver,
+	docRepo tenant.DocumentExistenceChecker,
+	tenantMetrics tenant.Metrics,
 	logger Logger,
 ) *ArtifactQueryService {
 	if artifactRepo == nil {
@@ -64,6 +69,12 @@ func NewArtifactQueryService(
 	if fallbackResolver == nil {
 		panic("query: fallbackResolver must not be nil")
 	}
+	if docRepo == nil {
+		panic("query: docRepo must not be nil")
+	}
+	if tenantMetrics == nil {
+		panic("query: tenantMetrics must not be nil")
+	}
 	if logger == nil {
 		panic("query: logger must not be nil")
 	}
@@ -73,6 +84,8 @@ func NewArtifactQueryService(
 		confirmation:     confirmation,
 		auditRepo:        auditRepo,
 		fallbackResolver: fallbackResolver,
+		docRepo:          docRepo,
+		tenantMetrics:    tenantMetrics,
 		logger:           logger,
 		newUUID:          generateUUID,
 	}
@@ -92,6 +105,11 @@ func (s *ArtifactQueryService) HandleGetSemanticTree(ctx context.Context, event 
 		if err := s.resolveOrgID(ctx, event.DocumentID, &event.OrgID); err != nil {
 			return err
 		}
+	}
+
+	// BRE-015: verify document belongs to claimed organization.
+	if err := tenant.VerifyTenantOwnership(ctx, s.docRepo, s.tenantMetrics, s.logger, event.OrgID, event.DocumentID); err != nil {
+		return err
 	}
 
 	if err := validateQueryRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {
@@ -158,6 +176,11 @@ func (s *ArtifactQueryService) HandleGetArtifacts(ctx context.Context, event mod
 		if err := s.resolveOrgID(ctx, event.DocumentID, &event.OrgID); err != nil {
 			return err
 		}
+	}
+
+	// BRE-015: verify document belongs to claimed organization.
+	if err := tenant.VerifyTenantOwnership(ctx, s.docRepo, s.tenantMetrics, s.logger, event.OrgID, event.DocumentID); err != nil {
+		return err
 	}
 
 	if err := validateQueryRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {

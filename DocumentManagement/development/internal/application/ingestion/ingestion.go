@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"contractpro/document-management/internal/application/tenant"
 	"contractpro/document-management/internal/domain/model"
 	"contractpro/document-management/internal/domain/port"
 	"contractpro/document-management/internal/egress/outbox"
@@ -46,6 +47,8 @@ type ArtifactIngestionService struct {
 	outboxWriter     *outbox.OutboxWriter
 	fallbackResolver port.DocumentFallbackResolver
 	fallbackMetrics  FallbackMetrics
+	docRepo          tenant.DocumentExistenceChecker
+	tenantMetrics    tenant.Metrics
 	logger           Logger
 	newUUID          func() string
 }
@@ -64,6 +67,8 @@ func NewArtifactIngestionService(
 	outboxWriter *outbox.OutboxWriter,
 	fallbackResolver port.DocumentFallbackResolver,
 	fallbackMetrics FallbackMetrics,
+	docRepo tenant.DocumentExistenceChecker,
+	tenantMetrics tenant.Metrics,
 	logger Logger,
 ) *ArtifactIngestionService {
 	if transactor == nil {
@@ -90,6 +95,12 @@ func NewArtifactIngestionService(
 	if fallbackMetrics == nil {
 		panic("ingestion: fallbackMetrics must not be nil")
 	}
+	if docRepo == nil {
+		panic("ingestion: docRepo must not be nil")
+	}
+	if tenantMetrics == nil {
+		panic("ingestion: tenantMetrics must not be nil")
+	}
 	if logger == nil {
 		panic("ingestion: logger must not be nil")
 	}
@@ -102,6 +113,8 @@ func NewArtifactIngestionService(
 		outboxWriter:     outboxWriter,
 		fallbackResolver: fallbackResolver,
 		fallbackMetrics:  fallbackMetrics,
+		docRepo:          docRepo,
+		tenantMetrics:    tenantMetrics,
 		logger:           logger,
 		newUUID:          generateUUID,
 	}
@@ -125,6 +138,11 @@ func (s *ArtifactIngestionService) HandleDPArtifacts(ctx context.Context, event 
 		if err := s.resolveDPEventFields(ctx, event.DocumentID, &event.OrgID, &event.VersionID); err != nil {
 			return err
 		}
+	}
+
+	// BRE-015: verify document belongs to claimed organization.
+	if err := tenant.VerifyTenantOwnership(ctx, s.docRepo, s.tenantMetrics, s.logger, event.OrgID, event.DocumentID); err != nil {
+		return err
 	}
 
 	if err := validateRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {
@@ -182,6 +200,11 @@ func (s *ArtifactIngestionService) HandleLICArtifacts(ctx context.Context, event
 		}
 	}
 
+	// BRE-015: verify document belongs to claimed organization.
+	if err := tenant.VerifyTenantOwnership(ctx, s.docRepo, s.tenantMetrics, s.logger, event.OrgID, event.DocumentID); err != nil {
+		return err
+	}
+
 	if err := validateRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {
 		return err
 	}
@@ -236,6 +259,11 @@ func (s *ArtifactIngestionService) HandleREArtifacts(ctx context.Context, event 
 		if err := s.resolveOrgID(ctx, event.DocumentID, &event.OrgID); err != nil {
 			return err
 		}
+	}
+
+	// BRE-015: verify document belongs to claimed organization.
+	if err := tenant.VerifyTenantOwnership(ctx, s.docRepo, s.tenantMetrics, s.logger, event.OrgID, event.DocumentID); err != nil {
+		return err
 	}
 
 	if err := validateRequired(event.OrgID, event.JobID, event.DocumentID, event.VersionID); err != nil {

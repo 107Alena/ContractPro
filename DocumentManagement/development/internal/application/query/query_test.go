@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"contractpro/document-management/internal/application/tenant"
 	"contractpro/document-management/internal/domain/model"
 	"contractpro/document-management/internal/domain/port"
 )
@@ -167,6 +168,23 @@ func (m *mockAuditRepo) List(context.Context, port.AuditListParams) ([]*model.Au
 	panic("not used in query")
 }
 
+type mockDocExistence struct {
+	exists bool
+	err    error
+}
+
+func (m *mockDocExistence) ExistsByID(_ context.Context, _, _ string) (bool, error) {
+	return m.exists, m.err
+}
+
+var _ tenant.DocumentExistenceChecker = (*mockDocExistence)(nil)
+
+type noopTenantMetrics struct{}
+
+func (n *noopTenantMetrics) IncTenantMismatch() {}
+
+var _ tenant.Metrics = (*noopTenantMetrics)(nil)
+
 type mockLogger struct {
 	mu       sync.Mutex
 	messages []logMsg
@@ -206,11 +224,13 @@ func (m *mockLogger) getMessages() []logMsg {
 // ---------------------------------------------------------------------------
 
 type testDeps struct {
-	artifactRepo  *mockArtifactRepo
+	artifactRepo     *mockArtifactRepo
 	objectStorage    *mockObjectStorage
 	confirmation     *mockConfirmation
 	auditRepo        *mockAuditRepo
 	fallbackResolver *mockFallbackResolver
+	docExistence     *mockDocExistence
+	tenantMetrics    *noopTenantMetrics
 	logger           *mockLogger
 }
 
@@ -233,6 +253,8 @@ func newTestDeps() *testDeps {
 		confirmation:     &mockConfirmation{},
 		auditRepo:        &mockAuditRepo{},
 		fallbackResolver: &mockFallbackResolver{orgID: "org-1", versionID: "ver-1"},
+		docExistence:     &mockDocExistence{exists: true},
+		tenantMetrics:    &noopTenantMetrics{},
 		logger:           &mockLogger{},
 	}
 }
@@ -244,6 +266,8 @@ func (d *testDeps) buildService() *ArtifactQueryService {
 		d.confirmation,
 		d.auditRepo,
 		d.fallbackResolver,
+		d.docExistence,
+		d.tenantMetrics,
 		d.logger,
 	)
 	svc.newUUID = func() string { return "test-uuid" }
@@ -340,22 +364,28 @@ func TestNewArtifactQueryService_PanicsOnNilDeps(t *testing.T) {
 		wantPanic string
 	}{
 		{"nil artifactRepo", func() {
-			NewArtifactQueryService(nil, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.logger)
+			NewArtifactQueryService(nil, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
 		}, "artifactRepo"},
 		{"nil objectStorage", func() {
-			NewArtifactQueryService(d.artifactRepo, nil, d.confirmation, d.auditRepo, d.fallbackResolver, d.logger)
+			NewArtifactQueryService(d.artifactRepo, nil, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
 		}, "objectStorage"},
 		{"nil confirmation", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, nil, d.auditRepo, d.fallbackResolver, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, nil, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
 		}, "confirmation"},
 		{"nil auditRepo", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, nil, d.fallbackResolver, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, nil, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
 		}, "auditRepo"},
 		{"nil fallbackResolver", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, nil, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, nil, d.docExistence, d.tenantMetrics, d.logger)
 		}, "fallbackResolver"},
+		{"nil docRepo", func() {
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, nil, d.tenantMetrics, d.logger)
+		}, "docRepo"},
+		{"nil tenantMetrics", func() {
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, nil, d.logger)
+		}, "tenantMetrics"},
 		{"nil logger", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, nil)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, nil)
 		}, "logger"},
 	}
 
@@ -381,7 +411,7 @@ func TestNewArtifactQueryService_PanicsOnNilDeps(t *testing.T) {
 
 func TestNewArtifactQueryService_Success(t *testing.T) {
 	d := newTestDeps()
-	svc := NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.logger)
+	svc := NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
 	if svc == nil {
 		t.Fatal("expected non-nil service")
 	}

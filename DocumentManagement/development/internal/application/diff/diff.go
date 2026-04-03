@@ -11,6 +11,7 @@ import (
 	"io"
 	"time"
 
+	"contractpro/document-management/internal/application/tenant"
 	"contractpro/document-management/internal/domain/model"
 	"contractpro/document-management/internal/domain/port"
 	"contractpro/document-management/internal/egress/outbox"
@@ -35,6 +36,8 @@ type DiffStorageService struct {
 	objectStorage    port.ObjectStoragePort
 	outboxWriter     *outbox.OutboxWriter
 	fallbackResolver port.DocumentFallbackResolver
+	docRepo          tenant.DocumentExistenceChecker
+	tenantMetrics    tenant.Metrics
 	logger           Logger
 	newUUID          func() string
 }
@@ -52,6 +55,8 @@ func NewDiffStorageService(
 	objectStorage port.ObjectStoragePort,
 	outboxWriter *outbox.OutboxWriter,
 	fallbackResolver port.DocumentFallbackResolver,
+	docRepo tenant.DocumentExistenceChecker,
+	tenantMetrics tenant.Metrics,
 	logger Logger,
 ) *DiffStorageService {
 	if transactor == nil {
@@ -75,6 +80,12 @@ func NewDiffStorageService(
 	if fallbackResolver == nil {
 		panic("diff: fallbackResolver must not be nil")
 	}
+	if docRepo == nil {
+		panic("diff: docRepo must not be nil")
+	}
+	if tenantMetrics == nil {
+		panic("diff: tenantMetrics must not be nil")
+	}
 	if logger == nil {
 		panic("diff: logger must not be nil")
 	}
@@ -86,6 +97,8 @@ func NewDiffStorageService(
 		objectStorage:    objectStorage,
 		outboxWriter:     outboxWriter,
 		fallbackResolver: fallbackResolver,
+		docRepo:          docRepo,
+		tenantMetrics:    tenantMetrics,
 		logger:           logger,
 		newUUID:          generateUUID,
 	}
@@ -125,6 +138,11 @@ func (s *DiffStorageService) HandleDiffReady(ctx context.Context, event model.Do
 		s.logger.Warn("REV-002 fallback: resolved organization_id from DB (event field was empty)",
 			"document_id", event.DocumentID, "organization_id", orgID)
 		event.OrgID = orgID
+	}
+
+	// BRE-015: verify document belongs to claimed organization.
+	if err := tenant.VerifyTenantOwnership(ctx, s.docRepo, s.tenantMetrics, s.logger, event.OrgID, event.DocumentID); err != nil {
+		return err
 	}
 
 	if err := validateDiffRequired(event.OrgID, event.JobID, event.DocumentID, event.BaseVersionID, event.TargetVersionID); err != nil {

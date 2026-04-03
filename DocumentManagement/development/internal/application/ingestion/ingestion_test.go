@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"contractpro/document-management/internal/application/tenant"
 	"contractpro/document-management/internal/domain/model"
 	"contractpro/document-management/internal/domain/port"
 	"contractpro/document-management/internal/egress/outbox"
@@ -234,6 +235,23 @@ func (m *mockFallbackMetrics) IncMissingVersionID() {
 	m.missingVersionIDCount++
 }
 
+type mockDocExistence struct {
+	exists bool
+	err    error
+}
+
+func (m *mockDocExistence) ExistsByID(_ context.Context, _, _ string) (bool, error) {
+	return m.exists, m.err
+}
+
+var _ tenant.DocumentExistenceChecker = (*mockDocExistence)(nil)
+
+type noopTenantMetrics struct{}
+
+func (n *noopTenantMetrics) IncTenantMismatch() {}
+
+var _ tenant.Metrics = (*noopTenantMetrics)(nil)
+
 type mockLogger struct {
 	messages []logMsg
 }
@@ -260,6 +278,8 @@ type testDeps struct {
 	outboxWriter     *outbox.OutboxWriter
 	fallbackResolver *mockFallbackResolver
 	fallbackMetrics  *mockFallbackMetrics
+	docExistence     *mockDocExistence
+	tenantMetrics    *noopTenantMetrics
 	logger           *mockLogger
 }
 
@@ -275,6 +295,8 @@ func newTestDeps() *testDeps {
 		outboxWriter:     outbox.NewOutboxWriter(outboxRepo),
 		fallbackResolver: &mockFallbackResolver{orgID: "org-001", versionID: "ver-001"},
 		fallbackMetrics:  &mockFallbackMetrics{},
+		docExistence:     &mockDocExistence{exists: true},
+		tenantMetrics:    &noopTenantMetrics{},
 		logger:           &mockLogger{},
 	}
 }
@@ -283,7 +305,8 @@ func (d *testDeps) newService() *ArtifactIngestionService {
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
-		d.fallbackResolver, d.fallbackMetrics, d.logger,
+		d.fallbackResolver, d.fallbackMetrics,
+		d.docExistence, d.tenantMetrics, d.logger,
 	)
 	uuidCounter := 0
 	svc.newUUID = func() string {
@@ -389,31 +412,37 @@ func TestNewArtifactIngestionService_PanicsOnNilDeps(t *testing.T) {
 		fn   func()
 	}{
 		{"nil transactor", func() {
-			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
+			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
 		}},
 		{"nil versionRepo", func() {
-			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
 		}},
 		{"nil artifactRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
 		}},
 		{"nil auditRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
 		}},
 		{"nil objectStorage", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
 		}},
 		{"nil outboxWriter", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.fallbackResolver, d.fallbackMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
 		}},
 		{"nil fallbackResolver", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil, d.fallbackMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
 		}},
 		{"nil fallbackMetrics", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, nil, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, nil, d.docExistence, d.tenantMetrics, d.logger)
+		}},
+		{"nil docRepo", func() {
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, nil, d.tenantMetrics, d.logger)
+		}},
+		{"nil tenantMetrics", func() {
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, nil, d.logger)
 		}},
 		{"nil logger", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, nil)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, nil)
 		}},
 	}
 
@@ -779,7 +808,8 @@ func TestHandleDPArtifacts_AuditRepoFailure(t *testing.T) {
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
 		auditRepo, d.objectStorage, d.outboxWriter,
-		d.fallbackResolver, d.fallbackMetrics, d.logger,
+		d.fallbackResolver, d.fallbackMetrics,
+		d.docExistence, d.tenantMetrics, d.logger,
 	)
 	uuidCounter := 0
 	svc.newUUID = func() string {

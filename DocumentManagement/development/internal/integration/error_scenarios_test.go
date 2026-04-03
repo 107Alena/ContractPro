@@ -43,15 +43,16 @@ func TestErrorScenario_ObjectStorageFailOnFourthArtifact_CompensationAndRetry(t 
 	// Fail on the 4th PutObject call (SEMANTIC_TREE, order: OCR_RAW, EXTRACTED_TEXT, DOCUMENT_STRUCTURE, SEMANTIC_TREE).
 	failStorage := newFailingObjectStorage(innerStorage, 4)
 
+	docRepo := newMemoryDocumentRepository()
 	outboxWriter := outbox.NewOutboxWriter(outboxRepo)
 	ingestionSvc := ingestion.NewArtifactIngestionService(
 		transactor, versionRepo, artifactRepo, auditRepo,
-		failStorage, outboxWriter, fallback, &noopFallbackMetrics{}, logger,
+		failStorage, outboxWriter, fallback, &noopFallbackMetrics{},
+		docRepo, &noopTenantMetrics{}, logger,
 	)
 
-	// Seed version in PENDING status. The ingestion service looks up the
-	// version (not the document) via FindByIDForUpdate, so only the version
-	// needs to be seeded.
+	// Seed document (for tenant ownership check) and version in PENDING status.
+	docRepo.store(defaultDocument(orgID, docID))
 	ver := defaultVersion(orgID, docID, versionID)
 	versionRepo.store(ver)
 
@@ -263,6 +264,9 @@ func TestErrorScenario_DocumentNotFound_NoBlobsNoDescriptors(t *testing.T) {
 
 	h := newTestHarness(t)
 	// Neither document nor version is seeded — simulating non-existent document.
+	// With tenant isolation (BRE-015), the ownership check fires first and
+	// rejects the event with TENANT_MISMATCH because the document does not
+	// exist under the claimed organization.
 
 	event := defaultDPEvent(orgID, docID, versionID, jobID, "corr-err-003")
 
@@ -271,9 +275,10 @@ func TestErrorScenario_DocumentNotFound_NoBlobsNoDescriptors(t *testing.T) {
 		t.Fatal("expected error for non-existent document/version, got nil")
 	}
 
-	// Should be a not-found error (VERSION_NOT_FOUND from FindByIDForUpdate).
-	if !port.IsNotFound(err) {
-		t.Errorf("expected not-found error, got: %v", err)
+	// With tenant isolation the ownership check rejects the event before
+	// the version lookup, so the error code is TENANT_MISMATCH.
+	if code := port.ErrorCode(err); code != port.ErrCodeTenantMismatch {
+		t.Errorf("expected error code %s, got %s (err: %v)", port.ErrCodeTenantMismatch, code, err)
 	}
 
 	// Assert: NO blobs in object storage (compensation ran).

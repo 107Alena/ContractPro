@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"contractpro/document-management/internal/application/tenant"
 	"contractpro/document-management/internal/domain/model"
 	"contractpro/document-management/internal/domain/port"
 	"contractpro/document-management/internal/egress/outbox"
@@ -188,6 +189,23 @@ func (m *mockOutboxRepo) DeletePublished(context.Context, time.Time, int) (int64
 }
 func (m *mockOutboxRepo) PendingStats(context.Context) (int64, float64, error) { return 0, 0, nil }
 
+type mockDocExistence struct {
+	exists bool
+	err    error
+}
+
+func (m *mockDocExistence) ExistsByID(_ context.Context, _, _ string) (bool, error) {
+	return m.exists, m.err
+}
+
+var _ tenant.DocumentExistenceChecker = (*mockDocExistence)(nil)
+
+type noopTenantMetrics struct{}
+
+func (n *noopTenantMetrics) IncTenantMismatch() {}
+
+var _ tenant.Metrics = (*noopTenantMetrics)(nil)
+
 type mockLogger struct {
 	messages []logMsg
 }
@@ -205,14 +223,16 @@ func (m *mockLogger) Error(msg string, _ ...any) { m.messages = append(m.message
 // ---------------------------------------------------------------------------
 
 type testDeps struct {
-	transactor    *mockTransactor
-	versionRepo   *mockVersionRepo
-	diffRepo      *mockDiffRepo
-	auditRepo     *mockAuditRepo
-	objectStorage *mockObjectStorage
+	transactor       *mockTransactor
+	versionRepo      *mockVersionRepo
+	diffRepo         *mockDiffRepo
+	auditRepo        *mockAuditRepo
+	objectStorage    *mockObjectStorage
 	outboxRepo       *mockOutboxRepo
 	outboxWriter     *outbox.OutboxWriter
 	fallbackResolver *mockFallbackResolver
+	docExistence     *mockDocExistence
+	tenantMetrics    *noopTenantMetrics
 	logger           *mockLogger
 }
 
@@ -239,6 +259,8 @@ func newTestDeps() *testDeps {
 		outboxRepo:       outboxRepo,
 		outboxWriter:     outbox.NewOutboxWriter(outboxRepo),
 		fallbackResolver: &mockFallbackResolver{orgID: "org-1", versionID: "ver-1"},
+		docExistence:     &mockDocExistence{exists: true},
+		tenantMetrics:    &noopTenantMetrics{},
 		logger:           &mockLogger{},
 	}
 }
@@ -246,7 +268,8 @@ func newTestDeps() *testDeps {
 func (d *testDeps) newService() *DiffStorageService {
 	svc := NewDiffStorageService(
 		d.transactor, d.versionRepo, d.diffRepo, d.auditRepo,
-		d.objectStorage, d.outboxWriter, d.fallbackResolver, d.logger,
+		d.objectStorage, d.outboxWriter, d.fallbackResolver,
+		d.docExistence, d.tenantMetrics, d.logger,
 	)
 	svc.newUUID = func() string { return "test-uuid" }
 	return svc
@@ -286,42 +309,52 @@ func TestNewDiffStorageService_PanicsOnNilDeps(t *testing.T) {
 	}{
 		{
 			name:    "nil transactor",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(nil, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(nil, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
 			wantMsg: "transactor must not be nil",
 		},
 		{
 			name:    "nil versionRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, nil, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, nil, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
 			wantMsg: "versionRepo must not be nil",
 		},
 		{
 			name:    "nil diffRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, nil, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, nil, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
 			wantMsg: "diffRepo must not be nil",
 		},
 		{
 			name:    "nil auditRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, nil, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, nil, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
 			wantMsg: "auditRepo must not be nil",
 		},
 		{
 			name:    "nil objectStorage",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, nil, deps.outboxWriter, deps.fallbackResolver, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, nil, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
 			wantMsg: "objectStorage must not be nil",
 		},
 		{
 			name:    "nil outboxWriter",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, nil, deps.fallbackResolver, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, nil, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
 			wantMsg: "outboxWriter must not be nil",
 		},
 		{
 			name:    "nil fallbackResolver",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, nil, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, nil, deps.docExistence, deps.tenantMetrics, deps.logger) },
 			wantMsg: "fallbackResolver must not be nil",
 		},
 		{
+			name:    "nil docRepo",
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, nil, deps.tenantMetrics, deps.logger) },
+			wantMsg: "docRepo must not be nil",
+		},
+		{
+			name:    "nil tenantMetrics",
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, nil, deps.logger) },
+			wantMsg: "tenantMetrics must not be nil",
+		},
+		{
 			name:    "nil logger",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, nil) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, nil) },
 			wantMsg: "logger must not be nil",
 		},
 	}

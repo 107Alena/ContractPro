@@ -83,6 +83,12 @@ type Metrics struct {
 	// IntegrityCheckFailures counts content hash mismatches when reading artifacts.
 	IntegrityCheckFailures prometheus.Counter
 
+	// --- Tenant isolation ---
+
+	// TenantMismatchTotal counts events where the claimed organization_id
+	// did not match the document's actual owner (BRE-015 violation).
+	TenantMismatchTotal prometheus.Counter
+
 	// --- Circuit breaker ---
 
 	// CircuitBreakerState tracks the circuit breaker state (0=closed, 1=half-open, 2=open)
@@ -185,6 +191,11 @@ func NewMetrics() *Metrics {
 			Help: "Total number of content hash mismatches when reading artifacts.",
 		}),
 
+		TenantMismatchTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "dm_tenant_mismatch_total",
+			Help: "Total number of events with organization_id mismatch (BRE-015).",
+		}),
+
 		CircuitBreakerState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "dm_circuit_breaker_state",
 			Help: "Circuit breaker state per component (0=closed, 1=half-open, 2=open).",
@@ -211,6 +222,7 @@ func NewMetrics() *Metrics {
 		m.IdempotencyCheckTotal,
 		m.StuckVersionsCount,
 		m.IntegrityCheckFailures,
+		m.TenantMismatchTotal,
 		m.CircuitBreakerState,
 	)
 
@@ -301,4 +313,15 @@ func (m *Metrics) IncMissingVersionID() {
 // IncDLQMessages increments dm_dlq_messages_total for the given reason.
 func (m *Metrics) IncDLQMessages(reason string) {
 	m.DLQMessages.WithLabelValues(reason).Inc()
+}
+
+// ---------------------------------------------------------------------------
+// tenant.Metrics interface (BRE-015)
+// ---------------------------------------------------------------------------
+
+// IncTenantMismatch increments dm_tenant_mismatch_total.
+// Called when an incoming event's organization_id does not match the
+// document's actual owner.
+func (m *Metrics) IncTenantMismatch() {
+	m.TenantMismatchTotal.Inc()
 }

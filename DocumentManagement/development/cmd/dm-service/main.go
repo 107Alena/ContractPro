@@ -198,12 +198,14 @@ func run() int {
 	ingestionSvc := ingestion.NewArtifactIngestionService(
 		transactor, versionRepo, artifactRepo, auditRepo, objClient, outboxWriter,
 		fallbackResolver, obs.Metrics,
+		docRepo, obs.Metrics,
 		obs.Logger.With("component", "ingestion"),
 	)
 
 	querySvc := query.NewArtifactQueryService(
 		artifactRepo, objClient, confirmPub, auditRepo,
 		fallbackResolver,
+		docRepo, obs.Metrics,
 		obs.Logger.With("component", "query"),
 	)
 
@@ -220,6 +222,7 @@ func run() int {
 	diffSvc := diff.NewDiffStorageService(
 		transactor, versionRepo, diffRepo, auditRepo, objClient, outboxWriter,
 		fallbackResolver,
+		docRepo, obs.Metrics,
 		obs.Logger.With("component", "diff"),
 	)
 

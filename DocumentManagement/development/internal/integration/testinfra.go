@@ -91,6 +91,8 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		h.outboxWriter,
 		h.fallback,
 		&noopFallbackMetrics{},
+		h.docRepo,
+		&noopTenantMetrics{},
 		h.logger,
 	)
 
@@ -101,6 +103,8 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		confirmationPublisher,
 		h.auditRepo,
 		h.fallback,
+		h.docRepo,
+		&noopTenantMetrics{},
 		h.logger,
 	)
 
@@ -113,6 +117,8 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		h.objectStorage,
 		h.outboxWriter,
 		h.fallback,
+		h.docRepo,
+		&noopTenantMetrics{},
 		h.logger,
 	)
 
@@ -1151,6 +1157,10 @@ func (l *recordingLogger) hasMessage(substr string) bool {
 type noopFallbackMetrics struct{}
 
 func (m *noopFallbackMetrics) IncMissingVersionID() {}
+
+type noopTenantMetrics struct{}
+
+func (m *noopTenantMetrics) IncTenantMismatch() {}
 
 type noopIdempotencyMetrics struct{}
 

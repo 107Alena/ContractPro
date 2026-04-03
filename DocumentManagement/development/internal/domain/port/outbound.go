@@ -95,6 +95,18 @@ type VersionRepository interface {
 
 	// NextVersionNumber returns the next sequential version number for a document.
 	NextVersionNumber(ctx context.Context, organizationID, documentID string) (int, error)
+
+	// FindStaleInIntermediateStatus returns versions whose artifact_status is
+	// in a non-terminal state (PENDING, PROCESSING_ARTIFACTS_RECEIVED,
+	// ANALYSIS_ARTIFACTS_RECEIVED, REPORTS_READY) and whose created_at is
+	// older than cutoff. Returns up to limit results ordered by created_at ASC.
+	// Does NOT lock rows — the caller should use FindByIDForUpdate in a
+	// separate per-version transaction for safe transition (DM-TASK-041).
+	//
+	// Cross-tenant: this is a system-level query used by the stale version
+	// watchdog. No organization_id filter is applied. RLS permits cross-tenant
+	// reads when app.organization_id GUC is not set.
+	FindStaleInIntermediateStatus(ctx context.Context, cutoff time.Time, limit int) ([]*model.DocumentVersion, error)
 }
 
 // ArtifactRepository provides CRUD for ArtifactDescriptor entities.

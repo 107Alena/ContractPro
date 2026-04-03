@@ -26,6 +26,7 @@ type Config struct {
 	DLQ           DLQConfig
 	Observability ObservabilityConfig
 	Timeout       TimeoutConfig
+	Watchdog      WatchdogConfig
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -52,6 +53,7 @@ func Load() (*Config, error) {
 		DLQ:           loadDLQConfig(),
 		Observability: loadObservabilityConfig(),
 		Timeout:       loadTimeoutConfig(),
+		Watchdog:      loadWatchdogConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err

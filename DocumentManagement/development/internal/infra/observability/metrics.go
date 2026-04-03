@@ -78,6 +78,10 @@ type Metrics struct {
 	// intermediate artifact_status.
 	StuckVersionsCount prometheus.Gauge
 
+	// StuckVersionsTotal counts the total number of versions transitioned
+	// to PARTIALLY_AVAILABLE by the stale version watchdog (DM-TASK-041).
+	StuckVersionsTotal prometheus.Counter
+
 	// --- Data integrity ---
 
 	// IntegrityCheckFailures counts content hash mismatches when reading artifacts.
@@ -186,6 +190,11 @@ func NewMetrics() *Metrics {
 			Help: "Current number of versions stuck in an intermediate artifact status.",
 		}),
 
+		StuckVersionsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "dm_stuck_versions_total",
+			Help: "Total number of versions transitioned to PARTIALLY_AVAILABLE by the stale version watchdog.",
+		}),
+
 		IntegrityCheckFailures: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "dm_integrity_check_failures_total",
 			Help: "Total number of content hash mismatches when reading artifacts.",
@@ -221,6 +230,7 @@ func NewMetrics() *Metrics {
 		m.IdempotencyFallbackTotal,
 		m.IdempotencyCheckTotal,
 		m.StuckVersionsCount,
+		m.StuckVersionsTotal,
 		m.IntegrityCheckFailures,
 		m.TenantMismatchTotal,
 		m.CircuitBreakerState,
@@ -318,6 +328,23 @@ func (m *Metrics) IncDLQMessages(reason string) {
 // ---------------------------------------------------------------------------
 // tenant.Metrics interface (BRE-015)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// watchdog.WatchdogMetrics interface (DM-TASK-041)
+// ---------------------------------------------------------------------------
+
+// IncStuckVersionsTotal increments dm_stuck_versions_total by count.
+// Non-positive values are ignored (prometheus.Counter.Add panics on negative).
+func (m *Metrics) IncStuckVersionsTotal(count int) {
+	if count > 0 {
+		m.StuckVersionsTotal.Add(float64(count))
+	}
+}
+
+// SetStuckVersionsCount sets the dm_stuck_versions_count gauge.
+func (m *Metrics) SetStuckVersionsCount(count float64) {
+	m.StuckVersionsCount.Set(count)
+}
 
 // IncTenantMismatch increments dm_tenant_mismatch_total.
 // Called when an incoming event's organization_id does not match the

@@ -264,6 +264,19 @@ type TimeoutConfig struct {
 	Shutdown        time.Duration // DM_SHUTDOWN_TIMEOUT (default: 30s)
 }
 
+// WatchdogConfig holds settings for the stale version watchdog background job.
+type WatchdogConfig struct {
+	ScanInterval time.Duration // DM_WATCHDOG_SCAN_INTERVAL (default: 5m)
+	BatchSize    int           // DM_WATCHDOG_BATCH_SIZE (default: 100)
+}
+
+func loadWatchdogConfig() WatchdogConfig {
+	return WatchdogConfig{
+		ScanInterval: envDuration("DM_WATCHDOG_SCAN_INTERVAL", 5*time.Minute),
+		BatchSize:    envInt("DM_WATCHDOG_BATCH_SIZE", 100),
+	}
+}
+
 func loadTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
 		StoragePut:      envDuration("DM_TIMEOUT_STORAGE_PUT", 30*time.Second),

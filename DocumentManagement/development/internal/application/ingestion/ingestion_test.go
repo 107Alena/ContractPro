@@ -75,6 +75,9 @@ func (m *mockVersionRepo) List(context.Context, string, string, int, int) ([]*mo
 func (m *mockVersionRepo) NextVersionNumber(context.Context, string, string) (int, error) {
 	panic("not used in ingestion")
 }
+func (m *mockVersionRepo) FindStaleInIntermediateStatus(context.Context, time.Time, int) ([]*model.DocumentVersion, error) {
+	panic("not used in ingestion")
+}
 
 type mockArtifactRepo struct {
 	inserted  []*model.ArtifactDescriptor

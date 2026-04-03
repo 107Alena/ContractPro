@@ -1823,3 +1823,67 @@
 - DM-TASK-031..035 — medium priority
 
 ---
+
+## DM-TASK-041: Stale Version Watchdog + PARTIALLY_AVAILABLE notification (2026-04-04)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан новый пакет `internal/application/watchdog/` с `StaleVersionWatchdog`
+- Background job с ticker (DM_WATCHDOG_SCAN_INTERVAL default 5m), graceful Start/Stop/Done
+- Логика scan(): SELECT versions в промежуточных состояниях (PENDING, PROCESSING_ARTIFACTS_RECEIVED, ANALYSIS_ARTIFACTS_RECEIVED, REPORTS_READY) старше DM_STALE_VERSION_TIMEOUT (default 30m)
+- Per-version transaction: FindByIDForUpdate (re-read + lock) → IsTerminal skip guard → TransitionArtifactStatus → PARTIALLY_AVAILABLE → Update → ListByVersion (available types) → AuditRecord (ARTIFACT_STATUS_CHANGED, actor=SYSTEM/stale-version-watchdog) → OutboxWriter Write (VersionPartiallyAvailable event)
+- failedStageFromStatus: 4 статуса → document_processing / legal_analysis / report_generation / finalization
+- WatchdogConfig: DM_WATCHDOG_SCAN_INTERVAL (5m), DM_WATCHDOG_BATCH_SIZE (100)
+- Port: FindStaleInIntermediateStatus в VersionRepository — cross-tenant system query (RLS-safe)
+- PostgreSQL: FindStaleInIntermediateStatus — WHERE IN 4 statuses, created_at < cutoff, ORDER BY ASC, LIMIT
+- Observability: dm_stuck_versions_total counter + IncStuckVersionsTotal + SetStuckVersionsCount bridge methods
+- main.go: pool-injecting wrappers (poolVersionRepository, poolArtifactRepository, poolAuditRepository), compile-time checks, Start, shutdown Phase 3
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (25 пакетов)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Тесты (24 unit-теста):**
+- 7 constructor panics + 1 constructor success
+- No stale versions → no side effects
+- Transitions PENDING version: FindByIDForUpdate, Update, audit, outbox, metrics
+- Skips terminal status (FULLY_READY)
+- All 4 intermediate statuses: correct FailedStage + ArtifactStatus in event
+- Partial failure: first audit fails, second version succeeds
+- Available types populated from ListByVersion
+- DB error on find: no panic, logged
+- Audit record fields: org, doc, version, action, actor, details JSON
+- Event fields: DocumentID, VersionID, OrgID, CorrelationID, Timestamp, ErrorMessage
+- FindByIDForUpdate error → failCount
+- Update error → failCount
+- Outbox write error → failCount
+- List artifacts error → failCount
+- 3 versions all transitioned → stuckTotal=3
+- Start/Stop lifecycle
+- Double Stop (safe)
+- failedStageFromStatus helper (5 cases)
+- extractArtifactTypes (2 + nil)
+- generateUUID format + uniqueness
+- Transactor error on second version
+- Gauge updated with stale count
+- Gauge zero when no stale
+
+**Ревью (code-reviewer):**
+- 0 Blocking, 8 Warnings
+- W-1 (cross-tenant doc) — FIXED
+- W-2 (unused gauge) — FIXED (SetStuckVersionsCount called in scan)
+- W-5 (test name) — FIXED (renamed to TestScan_TransactorErrorOnSecondVersion)
+- W-7 (phase numbering) — FIXED
+
+**Следующие задачи (high priority pending):**
+- DM-TASK-040 (Archive endpoint) — вероятно уже реализован через DM-TASK-019 + DM-TASK-022
+- DM-TASK-042 (Outbox FIFO ordering) — частично реализован в DM-TASK-016
+- DM-TASK-043 (Consumer backpressure) — prefetch + concurrency limiter
+- DM-TASK-044 (Circuit breaker for Object Storage)
+- DM-TASK-045 (Rate limiting for sync API)
+
+---

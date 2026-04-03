@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -206,6 +207,50 @@ func (r *VersionRepository) NextVersionNumber(ctx context.Context, organizationI
 		return 0, port.NewDatabaseError("next version number", err)
 	}
 	return next, nil
+}
+
+// FindStaleInIntermediateStatus returns versions stuck in non-terminal states
+// whose created_at is older than cutoff. No row locking — the caller handles
+// locking per-version via FindByIDForUpdate in separate transactions.
+func (r *VersionRepository) FindStaleInIntermediateStatus(ctx context.Context, cutoff time.Time, limit int) ([]*model.DocumentVersion, error) {
+	conn := ConnFromCtx(ctx)
+
+	rows, err := conn.Query(ctx,
+		`SELECT version_id, document_id, organization_id, version_number, parent_version_id,
+				origin_type, origin_description, source_file_key, source_file_name,
+				source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at
+		FROM document_versions
+		WHERE artifact_status IN ($1, $2, $3, $4)
+		  AND created_at < $5
+		ORDER BY created_at ASC
+		LIMIT $6`,
+		string(model.ArtifactStatusPending),
+		string(model.ArtifactStatusProcessingArtifactsReceived),
+		string(model.ArtifactStatusAnalysisArtifactsReceived),
+		string(model.ArtifactStatusReportsReady),
+		cutoff,
+		limit,
+	)
+	if err != nil {
+		return nil, port.NewDatabaseError("find stale versions", err)
+	}
+	defer rows.Close()
+
+	var versions []*model.DocumentVersion
+	for rows.Next() {
+		v, err := scanVersion(rows)
+		if err != nil {
+			return nil, port.NewDatabaseError("scan stale version row", err)
+		}
+		versions = append(versions, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, port.NewDatabaseError("iterate stale version rows", err)
+	}
+	if versions == nil {
+		versions = []*model.DocumentVersion{}
+	}
+	return versions, nil
 }
 
 // scanVersion scans a single version row.

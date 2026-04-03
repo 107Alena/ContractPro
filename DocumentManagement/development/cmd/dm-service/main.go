@@ -19,6 +19,7 @@ import (
 	"contractpro/document-management/internal/application/lifecycle"
 	"contractpro/document-management/internal/application/query"
 	"contractpro/document-management/internal/application/version"
+	"contractpro/document-management/internal/application/watchdog"
 	"contractpro/document-management/internal/config"
 	"contractpro/document-management/internal/egress/confirmation"
 	"contractpro/document-management/internal/egress/dlq"
@@ -43,6 +44,9 @@ var (
 	_ consumer.BrokerSubscriber = (*poolSubscribeAdapter)(nil)
 	_ port.OutboxRepository     = (*poolOutboxRepository)(nil)
 	_ port.DLQRepository        = (*poolDLQRepository)(nil)
+	_ port.VersionRepository    = (*poolVersionRepository)(nil)
+	_ port.ArtifactRepository   = (*poolArtifactRepository)(nil)
+	_ port.AuditRepository      = (*poolAuditRepository)(nil)
 )
 
 func main() {
@@ -227,6 +231,24 @@ func run() int {
 	)
 
 	// -----------------------------------------------------------------------
+	// Phase 11.5: Stale Version Watchdog (DM-TASK-041)
+	// -----------------------------------------------------------------------
+	// The watchdog creates context.Background() in its scan goroutine, so
+	// repositories need pool-injecting wrappers (same pattern as poolOutboxRepo).
+	poolVersionRepo := &poolVersionRepository{inner: versionRepo, pool: pool}
+	poolArtifactRepo := &poolArtifactRepository{inner: artifactRepo, pool: pool}
+	poolAuditRepo := &poolAuditRepository{inner: auditRepo, pool: pool}
+
+	staleWatchdog := watchdog.NewStaleVersionWatchdog(
+		transactor, poolVersionRepo, poolArtifactRepo, poolAuditRepo, outboxWriter,
+		obs.Metrics,
+		obs.Logger.Slog().With("component", "stale-watchdog"),
+		cfg.Timeout.StaleVersion,
+		cfg.Watchdog,
+		cfg.Broker.TopicDMEventsVersionPartiallyAvailable,
+	)
+
+	// -----------------------------------------------------------------------
 	// Phase 12: Event Consumer (subscribes to 7 incoming topics)
 	// -----------------------------------------------------------------------
 	brokerSub := &poolSubscribeAdapter{client: brokerClient, pool: pool}
@@ -341,7 +363,7 @@ func run() int {
 	shutdownFn := func() {
 		shutdownOnce.Do(func() {
 			doShutdown(logger, cfg.Timeout.Shutdown, healthHandler,
-				outboxPoller, outboxMetricsCollector,
+				outboxPoller, outboxMetricsCollector, staleWatchdog,
 				brokerClient, httpServer, metricsServer,
 				kvClient, pgClient, obs)
 		})
@@ -385,9 +407,10 @@ func run() int {
 		return 1
 	}
 
-	// Start outbox poller and metrics collector.
+	// Start outbox poller, metrics collector, and stale version watchdog.
 	outboxPoller.Start()
 	outboxMetricsCollector.Start()
+	staleWatchdog.Start()
 
 	// Mark service ready for traffic.
 	healthHandler.SetReady(true)
@@ -414,17 +437,19 @@ func run() int {
 //  1. readiness=false (new traffic rejected)
 //  2. stop outbox poller (finish current publish batch — needs broker alive)
 //  3. stop outbox metrics collector
-//  4. close broker (stops consumers, drains in-flight handlers)
-//  5. stop HTTP servers (API + metrics)
-//  6. close Redis
-//  7. close PostgreSQL
-//  8. flush observability
+//  4. stop stale version watchdog
+//  5. close broker (stops consumers, drains in-flight handlers)
+//  6. stop HTTP servers (API + metrics)
+//  7. close Redis
+//  8. close PostgreSQL
+//  9. flush observability
 func doShutdown(
 	logger *observability.Logger,
 	timeout time.Duration,
 	healthHandler *health.Handler,
 	outboxPoller *outbox.OutboxPoller,
 	outboxMetrics *outbox.OutboxMetricsCollector,
+	staleWatchdog *watchdog.StaleVersionWatchdog,
 	brokerClient *broker.Client,
 	httpServer *http.Server,
 	metricsServer *http.Server,
@@ -455,13 +480,22 @@ func doShutdown(
 		logger.Warn("outbox metrics stop timeout")
 	}
 
-	// Phase 3: Close broker (stops consumers, drains in-flight handlers).
+	// Phase 3: Stop stale version watchdog.
+	logger.Info("stopping stale version watchdog")
+	staleWatchdog.Stop()
+	select {
+	case <-staleWatchdog.Done():
+	case <-ctx.Done():
+		logger.Warn("stale watchdog stop timeout")
+	}
+
+	// Phase 4: Close broker (stops consumers, drains in-flight handlers).
 	logger.Info("closing broker connection")
 	if err := brokerClient.Close(); err != nil {
 		logger.Error("broker close error", "error", err)
 	}
 
-	// Phase 4: Stop HTTP servers.
+	// Phase 5: Stop HTTP servers.
 	logger.Info("shutting down http servers")
 	if err := httpServer.Shutdown(ctx); err != nil {
 		logger.Error("http server shutdown error", "error", err)
@@ -470,19 +504,19 @@ func doShutdown(
 		logger.Error("metrics server shutdown error", "error", err)
 	}
 
-	// Phase 5: Close Redis.
+	// Phase 6: Close Redis.
 	logger.Info("closing redis")
 	if err := kvClient.Close(); err != nil {
 		logger.Error("redis close error", "error", err)
 	}
 
-	// Phase 6: Close PostgreSQL.
+	// Phase 7: Close PostgreSQL.
 	logger.Info("closing postgres")
 	if err := pgClient.Close(); err != nil {
 		logger.Error("postgres close error", "error", err)
 	}
 
-	// Phase 7: Flush observability (traces from all previous phases).
+	// Phase 8: Flush observability (traces from all previous phases).
 	logger.Info("flushing observability")
 	if err := obs.Shutdown(ctx); err != nil {
 		logger.Error("observability shutdown error", "error", err)
@@ -582,4 +616,80 @@ func (a *auditPortAdapter) Record(ctx context.Context, record *model.AuditRecord
 
 func (a *auditPortAdapter) List(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
 	return a.repo.List(ctx, params)
+}
+
+// poolVersionRepository wraps port.VersionRepository to inject the pgxpool.Pool
+// into every context. Required by the stale version watchdog which creates
+// context.Background() in its scan goroutine.
+type poolVersionRepository struct {
+	inner port.VersionRepository
+	pool  *pgxpool.Pool
+}
+
+func (r *poolVersionRepository) Insert(ctx context.Context, v *model.DocumentVersion) error {
+	return r.inner.Insert(postgres.InjectPool(ctx, r.pool), v)
+}
+
+func (r *poolVersionRepository) FindByID(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+	return r.inner.FindByID(postgres.InjectPool(ctx, r.pool), orgID, docID, versionID)
+}
+
+func (r *poolVersionRepository) FindByIDForUpdate(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+	return r.inner.FindByIDForUpdate(postgres.InjectPool(ctx, r.pool), orgID, docID, versionID)
+}
+
+func (r *poolVersionRepository) List(ctx context.Context, orgID, docID string, page, pageSize int) ([]*model.DocumentVersion, int, error) {
+	return r.inner.List(postgres.InjectPool(ctx, r.pool), orgID, docID, page, pageSize)
+}
+
+func (r *poolVersionRepository) Update(ctx context.Context, v *model.DocumentVersion) error {
+	return r.inner.Update(postgres.InjectPool(ctx, r.pool), v)
+}
+
+func (r *poolVersionRepository) NextVersionNumber(ctx context.Context, orgID, docID string) (int, error) {
+	return r.inner.NextVersionNumber(postgres.InjectPool(ctx, r.pool), orgID, docID)
+}
+
+func (r *poolVersionRepository) FindStaleInIntermediateStatus(ctx context.Context, cutoff time.Time, limit int) ([]*model.DocumentVersion, error) {
+	return r.inner.FindStaleInIntermediateStatus(postgres.InjectPool(ctx, r.pool), cutoff, limit)
+}
+
+// poolArtifactRepository wraps port.ArtifactRepository to inject the pgxpool.Pool.
+type poolArtifactRepository struct {
+	inner port.ArtifactRepository
+	pool  *pgxpool.Pool
+}
+
+func (r *poolArtifactRepository) Insert(ctx context.Context, d *model.ArtifactDescriptor) error {
+	return r.inner.Insert(postgres.InjectPool(ctx, r.pool), d)
+}
+
+func (r *poolArtifactRepository) FindByVersionAndType(ctx context.Context, orgID, docID, versionID string, at model.ArtifactType) (*model.ArtifactDescriptor, error) {
+	return r.inner.FindByVersionAndType(postgres.InjectPool(ctx, r.pool), orgID, docID, versionID, at)
+}
+
+func (r *poolArtifactRepository) ListByVersion(ctx context.Context, orgID, docID, versionID string) ([]*model.ArtifactDescriptor, error) {
+	return r.inner.ListByVersion(postgres.InjectPool(ctx, r.pool), orgID, docID, versionID)
+}
+
+func (r *poolArtifactRepository) ListByVersionAndTypes(ctx context.Context, orgID, docID, versionID string, types []model.ArtifactType) ([]*model.ArtifactDescriptor, error) {
+	return r.inner.ListByVersionAndTypes(postgres.InjectPool(ctx, r.pool), orgID, docID, versionID, types)
+}
+
+func (r *poolArtifactRepository) DeleteByVersion(ctx context.Context, orgID, docID, versionID string) error {
+	return r.inner.DeleteByVersion(postgres.InjectPool(ctx, r.pool), orgID, docID, versionID)
+}
+
+// poolAuditRepository wraps port.AuditRepository to inject the pgxpool.Pool.
+type poolAuditRepository struct {
+	inner port.AuditRepository
+	pool  *pgxpool.Pool
+}
+
+func (r *poolAuditRepository) Insert(ctx context.Context, record *model.AuditRecord) error {
+	return r.inner.Insert(postgres.InjectPool(ctx, r.pool), record)
+}
+
+func (r *poolAuditRepository) List(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
+	return r.inner.List(postgres.InjectPool(ctx, r.pool), params)
 }

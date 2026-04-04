@@ -330,6 +330,23 @@ func loadRateLimitConfig() RateLimitConfig {
 	}
 }
 
+// OrphanCleanupConfig holds settings for the orphan cleanup background job (BRE-008).
+type OrphanCleanupConfig struct {
+	ScanInterval time.Duration // DM_ORPHAN_SCAN_INTERVAL (default: 1h)
+	BatchSize    int           // DM_ORPHAN_BATCH_SIZE (default: 100)
+	GracePeriod  time.Duration // DM_ORPHAN_GRACE_PERIOD (default: 1h)
+	ScanTimeout  time.Duration // DM_ORPHAN_SCAN_TIMEOUT (default: 120s)
+}
+
+func loadOrphanCleanupConfig() OrphanCleanupConfig {
+	return OrphanCleanupConfig{
+		ScanInterval: envDuration("DM_ORPHAN_SCAN_INTERVAL", 1*time.Hour),
+		BatchSize:    envInt("DM_ORPHAN_BATCH_SIZE", 100),
+		GracePeriod:  envDuration("DM_ORPHAN_GRACE_PERIOD", 1*time.Hour),
+		ScanTimeout:  envDuration("DM_ORPHAN_SCAN_TIMEOUT", 120*time.Second),
+	}
+}
+
 // IngestionConfig holds artifact content validation limits (BRE-029).
 type IngestionConfig struct {
 	MaxJSONArtifactBytes int64 // DM_INGESTION_MAX_JSON_BYTES (default: 10 MB)

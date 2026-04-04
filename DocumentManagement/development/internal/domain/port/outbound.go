@@ -373,6 +373,49 @@ type DLQFilterParams struct {
 }
 
 // ---------------------------------------------------------------------------
+// Orphan candidate repository — system-level orphan blob tracking (BRE-008).
+// ---------------------------------------------------------------------------
+
+// OrphanCandidateRepository provides access to the orphan_candidates table
+// for the orphan cleanup background job (BRE-008).
+//
+// This table tracks S3 storage keys that were successfully uploaded but whose
+// corresponding DB transaction (ArtifactDescriptor insert) failed. The cleanup
+// job reads candidates, verifies they are truly orphaned (no ArtifactDescriptor
+// points to them), and deletes the blob from S3.
+//
+// Cross-tenant: orphan_candidates has no organization_id column and is excluded
+// from RLS. All queries are system-level.
+//
+// Implemented by: PostgreSQL adapter (infra layer).
+type OrphanCandidateRepository interface {
+	// FindOlderThan returns orphan candidates whose created_at is older than
+	// the given cutoff, up to limit results ordered by created_at ASC.
+	// Returns an empty slice (not nil) if no candidates match.
+	FindOlderThan(ctx context.Context, cutoff time.Time, limit int) ([]OrphanCandidate, error)
+
+	// ExistsByStorageKey checks whether an ArtifactDescriptor row exists for
+	// the given storage_key (cross-tenant lookup against artifact_descriptors).
+	// Returns true if a row exists (blob is NOT orphaned).
+	ExistsByStorageKey(ctx context.Context, storageKey string) (bool, error)
+
+	// DeleteByKeys removes orphan_candidates rows for the specified storage keys.
+	// Idempotent: keys that don't exist are silently ignored.
+	DeleteByKeys(ctx context.Context, storageKeys []string) error
+
+	// Insert records a new orphan candidate. Used by the compensation path
+	// when DeleteObject fails after a DB transaction rollback (DM-TASK-047).
+	Insert(ctx context.Context, candidate OrphanCandidate) error
+}
+
+// OrphanCandidate represents a row in the orphan_candidates table.
+type OrphanCandidate struct {
+	StorageKey string
+	VersionID  string // may be empty if unknown
+	CreatedAt  time.Time
+}
+
+// ---------------------------------------------------------------------------
 // Document fallback resolver — cross-tenant lookup for backward compatibility.
 // ---------------------------------------------------------------------------
 

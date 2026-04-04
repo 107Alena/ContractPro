@@ -555,6 +555,12 @@ func TestValidate_FullConfig(t *testing.T) {
 			MaxJSONArtifactBytes: 10 * 1024 * 1024,
 			MaxBlobSizeBytes:     100 * 1024 * 1024,
 		},
+		OrphanCleanup: OrphanCleanupConfig{
+			ScanInterval: 1 * time.Hour,
+			BatchSize:    100,
+			GracePeriod:  1 * time.Hour,
+			ScanTimeout:  120 * time.Second,
+		},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error, got: %v", err)
@@ -578,7 +584,8 @@ func TestValidate_PortCollision(t *testing.T) {
 			FailureThreshold: 5,
 			PerEventBudget:   35 * time.Second,
 		},
-		Ingestion: IngestionConfig{MaxJSONArtifactBytes: 10 * 1024 * 1024, MaxBlobSizeBytes: 100 * 1024 * 1024},
+		Ingestion:     IngestionConfig{MaxJSONArtifactBytes: 10 * 1024 * 1024, MaxBlobSizeBytes: 100 * 1024 * 1024},
+		OrphanCleanup: OrphanCleanupConfig{ScanInterval: time.Hour, BatchSize: 100, GracePeriod: time.Hour, ScanTimeout: 120 * time.Second},
 	}
 	err := cfg.Validate()
 	if err == nil {

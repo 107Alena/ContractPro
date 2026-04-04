@@ -30,6 +30,7 @@ type Config struct {
 	CircuitBreaker CircuitBreakerConfig
 	RateLimit      RateLimitConfig
 	Ingestion      IngestionConfig
+	OrphanCleanup  OrphanCleanupConfig
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -60,6 +61,7 @@ func Load() (*Config, error) {
 		CircuitBreaker: loadCircuitBreakerConfig(),
 		RateLimit:      loadRateLimitConfig(),
 		Ingestion:      loadIngestionConfig(),
+		OrphanCleanup:  loadOrphanCleanupConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -118,6 +120,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Ingestion.MaxBlobSizeBytes <= 0 {
 		invalid = append(invalid, "DM_INGESTION_MAX_BLOB_SIZE_BYTES must be positive")
+	}
+	if c.OrphanCleanup.ScanInterval <= 0 {
+		invalid = append(invalid, "DM_ORPHAN_SCAN_INTERVAL must be positive")
+	}
+	if c.OrphanCleanup.BatchSize <= 0 {
+		invalid = append(invalid, "DM_ORPHAN_BATCH_SIZE must be positive")
+	}
+	if c.OrphanCleanup.GracePeriod <= 0 {
+		invalid = append(invalid, "DM_ORPHAN_GRACE_PERIOD must be positive")
+	}
+	if c.OrphanCleanup.ScanTimeout <= 0 {
+		invalid = append(invalid, "DM_ORPHAN_SCAN_TIMEOUT must be positive")
 	}
 	if c.RateLimit.Enabled {
 		if c.RateLimit.ReadRPS <= 0 {

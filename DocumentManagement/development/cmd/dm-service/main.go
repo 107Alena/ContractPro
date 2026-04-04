@@ -17,6 +17,7 @@ import (
 	"contractpro/document-management/internal/application/diff"
 	"contractpro/document-management/internal/application/ingestion"
 	"contractpro/document-management/internal/application/lifecycle"
+	"contractpro/document-management/internal/application/orphancleanup"
 	"contractpro/document-management/internal/application/query"
 	"contractpro/document-management/internal/application/version"
 	"contractpro/document-management/internal/application/watchdog"
@@ -48,7 +49,8 @@ var (
 	_ port.DLQRepository        = (*poolDLQRepository)(nil)
 	_ port.VersionRepository    = (*poolVersionRepository)(nil)
 	_ port.ArtifactRepository   = (*poolArtifactRepository)(nil)
-	_ port.AuditRepository      = (*poolAuditRepository)(nil)
+	_ port.AuditRepository              = (*poolAuditRepository)(nil)
+	_ port.OrphanCandidateRepository    = (*poolOrphanCandidateRepository)(nil)
 )
 
 func main() {
@@ -270,6 +272,20 @@ func run() int {
 	)
 
 	// -----------------------------------------------------------------------
+	// Phase 11.6: Orphan Cleanup Job (BRE-008/DM-TASK-031)
+	// -----------------------------------------------------------------------
+	orphanCandidateRepo := postgres.NewOrphanCandidateRepository()
+	poolOrphanCandidateRepo := &poolOrphanCandidateRepository{inner: orphanCandidateRepo, pool: pool}
+
+	orphanCleanupJob := orphancleanup.NewOrphanCleanupJob(
+		poolOrphanCandidateRepo,
+		objClient,
+		obs.Metrics,
+		obs.Logger.Slog().With("component", "orphan-cleanup"),
+		cfg.OrphanCleanup,
+	)
+
+	// -----------------------------------------------------------------------
 	// Phase 12: Event Consumer (subscribes to 7 incoming topics)
 	// -----------------------------------------------------------------------
 	brokerSub := &poolSubscribeAdapter{client: brokerClient, pool: pool}
@@ -401,6 +417,7 @@ func run() int {
 		shutdownOnce.Do(func() {
 			doShutdown(logger, cfg.Timeout.Shutdown, healthHandler,
 				outboxPoller, outboxMetricsCollector, staleWatchdog,
+				orphanCleanupJob,
 				orgRateLimiter,
 				brokerClient, httpServer, metricsServer,
 				kvClient, pgClient, obs)
@@ -445,10 +462,11 @@ func run() int {
 		return 1
 	}
 
-	// Start outbox poller, metrics collector, and stale version watchdog.
+	// Start outbox poller, metrics collector, stale version watchdog, and orphan cleanup.
 	outboxPoller.Start()
 	outboxMetricsCollector.Start()
 	staleWatchdog.Start()
+	orphanCleanupJob.Start()
 
 	// Mark service ready for traffic.
 	healthHandler.SetReady(true)
@@ -476,11 +494,12 @@ func run() int {
 //  2. stop outbox poller (finish current publish batch — needs broker alive)
 //  3. stop outbox metrics collector
 //  4. stop stale version watchdog
-//  5. close broker (stops consumers, drains in-flight handlers)
-//  6. stop HTTP servers (API + metrics)
-//  7. close Redis
-//  8. close PostgreSQL
-//  9. flush observability
+//  5. stop orphan cleanup job
+//  6. close broker (stops consumers, drains in-flight handlers)
+//  7. stop HTTP servers (API + metrics)
+//  8. close Redis
+//  9. close PostgreSQL
+//  10. flush observability
 func doShutdown(
 	logger *observability.Logger,
 	timeout time.Duration,
@@ -488,6 +507,7 @@ func doShutdown(
 	outboxPoller *outbox.OutboxPoller,
 	outboxMetrics *outbox.OutboxMetricsCollector,
 	staleWatchdog *watchdog.StaleVersionWatchdog,
+	orphanCleanup *orphancleanup.OrphanCleanupJob,
 	rateLimiter *api.OrgRateLimiter,
 	brokerClient *broker.Client,
 	httpServer *http.Server,
@@ -528,7 +548,16 @@ func doShutdown(
 		logger.Warn("stale watchdog stop timeout")
 	}
 
-	// Phase 3.5: Stop rate limiter GC goroutine.
+	// Phase 3.5: Stop orphan cleanup job.
+	logger.Info("stopping orphan cleanup job")
+	orphanCleanup.Stop()
+	select {
+	case <-orphanCleanup.Done():
+	case <-ctx.Done():
+		logger.Warn("orphan cleanup stop timeout")
+	}
+
+	// Phase 3.6: Stop rate limiter GC goroutine.
 	if rateLimiter != nil {
 		rateLimiter.Close()
 	}
@@ -722,6 +751,30 @@ func (r *poolArtifactRepository) ListByVersionAndTypes(ctx context.Context, orgI
 
 func (r *poolArtifactRepository) DeleteByVersion(ctx context.Context, orgID, docID, versionID string) error {
 	return r.inner.DeleteByVersion(postgres.InjectPool(ctx, r.pool), orgID, docID, versionID)
+}
+
+// poolOrphanCandidateRepository wraps port.OrphanCandidateRepository to inject
+// the pgxpool.Pool. Required by the orphan cleanup job which creates
+// context.Background() in its scan goroutine.
+type poolOrphanCandidateRepository struct {
+	inner port.OrphanCandidateRepository
+	pool  *pgxpool.Pool
+}
+
+func (r *poolOrphanCandidateRepository) FindOlderThan(ctx context.Context, cutoff time.Time, limit int) ([]port.OrphanCandidate, error) {
+	return r.inner.FindOlderThan(postgres.InjectPool(ctx, r.pool), cutoff, limit)
+}
+
+func (r *poolOrphanCandidateRepository) ExistsByStorageKey(ctx context.Context, storageKey string) (bool, error) {
+	return r.inner.ExistsByStorageKey(postgres.InjectPool(ctx, r.pool), storageKey)
+}
+
+func (r *poolOrphanCandidateRepository) DeleteByKeys(ctx context.Context, storageKeys []string) error {
+	return r.inner.DeleteByKeys(postgres.InjectPool(ctx, r.pool), storageKeys)
+}
+
+func (r *poolOrphanCandidateRepository) Insert(ctx context.Context, candidate port.OrphanCandidate) error {
+	return r.inner.Insert(postgres.InjectPool(ctx, r.pool), candidate)
 }
 
 // poolAuditRepository wraps port.AuditRepository to inject the pgxpool.Pool.

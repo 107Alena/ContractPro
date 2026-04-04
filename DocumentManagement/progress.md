@@ -2168,12 +2168,56 @@
 - code-reviewer → APPROVED (0 blocking, 2 warnings; W1 fixed — added HandleGetArtifacts integrity mismatch test)
 
 **Следующие задачи (medium priority pending):**
-- DM-TASK-031 (Orphan Cleanup Job) — блокирует DM-TASK-047
 - DM-TASK-032 (Retention Jobs)
 - DM-TASK-033 (Presigned URL generation)
 - DM-TASK-034 (Documentation: configuration.md)
 - DM-TASK-035 (Documentation: deployment.md) — блокирует DM-TASK-051
 - DM-TASK-046 (Audit trigger + RLS)
+- DM-TASK-047 (Orphan candidates table write) — ��еперь ��азблокирован после DM-TASK-031
 - DM-TASK-050 (Migration strategy)
+
+---
+
+## DM-TASK-031: Orphan Cleanup Job (2026-04-04)
+
+**Статус:** done
+
+**План реализации:**
+1. Исследование кода: порты, Object Storage, orphan_candidates табл��ца, watchdog pattern
+2. Проектирование через code-architect subagent: table-based cleanup (не full S3 scan), отдельный пакет
+3. Реализация: порт, config, metrics, postgres repo, cleanup job, main.go wiring
+4. Code review → APPROVED (0B + 5W, 3 исправлены)
+5. Тестирование: go test -race -count=1 ALL PASS, go vet OK, make build/test/lint OK
+
+**Что сделано:**
+- **НОВЫЙ ПАКЕТ:** `internal/application/orphancleanup/` — OrphanCleanupJob background job
+  - Start/Stop/Done с split stop+done channels (как StaleVersionWatchdog)
+  - Ticker-based scan с configurable interval (default 1h)
+  - scan(): FindOlderThan → per-candidate ExistsByStorageKey → DeleteObject / remove from table
+  - TOCTOU safety через GracePeriod 1h (задокументировано комментарием)
+  - Multi-replica safety через S3 idempotency
+- **ПОРТ:** `OrphanCandidateRepository` interface в `port/outbound.go`
+  - FindOlderThan, ExistsByStorageKey (cross-tenant), DeleteByKeys, Insert
+  - OrphanCandidate struct
+- **POSTGRES:** `orphan_candidate_repository.go`
+  - FindOlderThan с ORDER BY created_at ASC LIMIT
+  - ExistsByStorageKey через idx_artifacts_storage_key (cross-tenant, no org filter)
+  - DeleteByKeys с ANY($1)
+  - Insert с ON CONFLICT DO NOTHING
+- **CONFIG:** `OrphanCleanupConfig` — ScanInterval 1h, BatchSize 100, GracePeriod 1h, ScanTimeout 120s
+  - Validation: all fields must be positive
+- **METRICS:** dm_orphan_candidates_count (gauge) + dm_orphans_deleted_total (counter)
+- **MAIN.GO:** poolOrphanCandidateRepository wrapper + job wiring + shutdown Phase 3.5
+
+**Тесты:**
+- 15 orphancleanup unit-тестов: constructor panics, no candidates, all orphans, all false positives, mixed, DB/S3 errors, context cancellation, graceful shutdown, double stop, gauge/counter edge cases
+- 13 postgres repository тестов: CRUD + cross-tenant verification + empty slice guard + error mapping
+- Все 27 пакетов PASS с -race -count=1
+
+**Ключевые решения:**
+- Table-based cleanup (orphan_candidates), не full S3 scan — BRE-008
+- ExistsByStorageKey cross-tenant (no org filter) — orphan_candidates excluded from RLS
+- Grace period 1h prevents race with in-flight DB transactions
+- No Transactor needed — each candidate processed independently, partial failure safe
 
 ---

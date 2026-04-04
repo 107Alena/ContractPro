@@ -99,6 +99,16 @@ type Metrics struct {
 	// labeled by limit_type (read/write).
 	RateLimitedTotal *prometheus.CounterVec
 
+	// --- Orphan cleanup (BRE-008) ---
+
+	// OrphanCandidatesCount is the number of orphan candidates found in the
+	// most recent scan cycle.
+	OrphanCandidatesCount prometheus.Gauge
+
+	// OrphansDeletedTotal is the total number of orphan S3 blobs deleted
+	// across all scan cycles.
+	OrphansDeletedTotal prometheus.Counter
+
 	// --- Circuit breaker ---
 
 	// CircuitBreakerState tracks the circuit breaker state (0=closed, 1=half-open, 2=open)
@@ -216,6 +226,16 @@ func NewMetrics() *Metrics {
 			Help: "Total number of requests rejected by per-organization rate limiting (BRE-009).",
 		}, []string{"limit_type"}),
 
+		OrphanCandidatesCount: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "dm_orphan_candidates_count",
+			Help: "Current number of orphan candidates found in the most recent cleanup scan (BRE-008).",
+		}),
+
+		OrphansDeletedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "dm_orphans_deleted_total",
+			Help: "Total number of orphan S3 blobs deleted by the cleanup job (BRE-008).",
+		}),
+
 		CircuitBreakerState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "dm_circuit_breaker_state",
 			Help: "Circuit breaker state per component (0=closed, 1=half-open, 2=open).",
@@ -245,6 +265,8 @@ func NewMetrics() *Metrics {
 		m.IntegrityCheckFailures,
 		m.TenantMismatchTotal,
 		m.RateLimitedTotal,
+		m.OrphanCandidatesCount,
+		m.OrphansDeletedTotal,
 		m.CircuitBreakerState,
 	)
 
@@ -388,6 +410,23 @@ func (m *Metrics) IncTenantMismatch() {
 // ---------------------------------------------------------------------------
 // api.RateLimitMetrics interface (BRE-009)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// orphancleanup.OrphanCleanupMetrics interface (BRE-008)
+// ---------------------------------------------------------------------------
+
+// IncOrphansDeletedTotal increments dm_orphans_deleted_total by count.
+// Non-positive values are ignored (prometheus.Counter.Add panics on negative).
+func (m *Metrics) IncOrphansDeletedTotal(count int) {
+	if count > 0 {
+		m.OrphansDeletedTotal.Add(float64(count))
+	}
+}
+
+// SetOrphanCandidatesCount sets the dm_orphan_candidates_count gauge.
+func (m *Metrics) SetOrphanCandidatesCount(count float64) {
+	m.OrphanCandidatesCount.Set(count)
+}
 
 // IncRateLimited increments dm_api_rate_limited_total for the given limit type
 // (read/write). Called when a request is rejected by per-organization rate limiting.

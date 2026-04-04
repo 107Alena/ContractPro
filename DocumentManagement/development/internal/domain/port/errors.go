@@ -31,7 +31,8 @@ const (
 
 	// --- Content validation errors (non-retryable) ---
 
-	ErrCodeInvalidContent = "INVALID_CONTENT"
+	ErrCodeInvalidContent        = "INVALID_CONTENT"
+	ErrCodeIntegrityCheckFailed  = "INTEGRITY_CHECK_FAILED"
 
 	// --- Authorization errors (non-retryable) ---
 
@@ -186,6 +187,17 @@ func NewDuplicateEventError(key string) *DomainError {
 // reference). Causes the event to be routed to DLQ (BRE-029).
 func NewInvalidContentError(msg string) *DomainError {
 	return &DomainError{Code: ErrCodeInvalidContent, Message: msg, Retryable: false}
+}
+
+// NewIntegrityCheckError creates a non-retryable error when the content
+// hash of data read from Object Storage does not match the expected hash
+// stored in the ArtifactDescriptor (BRE-027).
+func NewIntegrityCheckError(storageKey, expected, actual string) *DomainError {
+	return &DomainError{
+		Code:      ErrCodeIntegrityCheckFailed,
+		Message:   fmt.Sprintf("content hash mismatch for %s: expected %s, got %s", storageKey, expected, actual),
+		Retryable: false,
+	}
 }
 
 // NewTenantMismatchError creates a non-retryable error when the

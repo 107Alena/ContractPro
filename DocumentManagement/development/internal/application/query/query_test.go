@@ -2,11 +2,14 @@ package query
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -185,6 +188,16 @@ func (n *noopTenantMetrics) IncTenantMismatch() {}
 
 var _ tenant.Metrics = (*noopTenantMetrics)(nil)
 
+type mockQueryMetrics struct {
+	integrityFailures atomic.Int64
+}
+
+func (m *mockQueryMetrics) IncIntegrityCheckFailures() {
+	m.integrityFailures.Add(1)
+}
+
+var _ Metrics = (*mockQueryMetrics)(nil)
+
 type mockLogger struct {
 	mu       sync.Mutex
 	messages []logMsg
@@ -231,6 +244,7 @@ type testDeps struct {
 	fallbackResolver *mockFallbackResolver
 	docExistence     *mockDocExistence
 	tenantMetrics    *noopTenantMetrics
+	queryMetrics     *mockQueryMetrics
 	logger           *mockLogger
 }
 
@@ -255,6 +269,7 @@ func newTestDeps() *testDeps {
 		fallbackResolver: &mockFallbackResolver{orgID: "org-1", versionID: "ver-1"},
 		docExistence:     &mockDocExistence{exists: true},
 		tenantMetrics:    &noopTenantMetrics{},
+		queryMetrics:     &mockQueryMetrics{},
 		logger:           &mockLogger{},
 	}
 }
@@ -268,6 +283,7 @@ func (d *testDeps) buildService() *ArtifactQueryService {
 		d.fallbackResolver,
 		d.docExistence,
 		d.tenantMetrics,
+		d.queryMetrics,
 		d.logger,
 	)
 	svc.newUUID = func() string { return "test-uuid" }
@@ -312,6 +328,18 @@ func waitForLogs(t *testing.T, logger *mockLogger, wantCount int) []logMsg {
 	}
 }
 
+// testSHA256 computes the hex-encoded SHA-256 hash of s.
+func testSHA256(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// defaultContent is the content returned by the default mockObjectStorage.
+const defaultContent = "{}"
+
+// defaultContentHash is the SHA-256 of defaultContent.
+var defaultContentHash = testSHA256(defaultContent)
+
 func makeDescriptor(versionID string, at model.ArtifactType, storageKey string) *model.ArtifactDescriptor {
 	return &model.ArtifactDescriptor{
 		ArtifactID:     "art-" + string(at),
@@ -322,12 +350,19 @@ func makeDescriptor(versionID string, at model.ArtifactType, storageKey string) 
 		ProducerDomain: model.ProducerDomainDP,
 		StorageKey:     storageKey,
 		SizeBytes:      42,
-		ContentHash:    "abc123",
+		ContentHash:    defaultContentHash,
 		SchemaVersion:  "1.0",
 		JobID:          "job-1",
 		CorrelationID:  "corr-1",
 		CreatedAt:      time.Now().UTC(),
 	}
+}
+
+// makeDescriptorForContent creates a descriptor with ContentHash matching the given content.
+func makeDescriptorForContent(versionID string, at model.ArtifactType, storageKey, content string) *model.ArtifactDescriptor {
+	d := makeDescriptor(versionID, at, storageKey)
+	d.ContentHash = testSHA256(content)
+	return d
 }
 
 func makeSemanticTreeEvent() model.GetSemanticTreeRequest {
@@ -364,28 +399,31 @@ func TestNewArtifactQueryService_PanicsOnNilDeps(t *testing.T) {
 		wantPanic string
 	}{
 		{"nil artifactRepo", func() {
-			NewArtifactQueryService(nil, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactQueryService(nil, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.queryMetrics, d.logger)
 		}, "artifactRepo"},
 		{"nil objectStorage", func() {
-			NewArtifactQueryService(d.artifactRepo, nil, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactQueryService(d.artifactRepo, nil, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.queryMetrics, d.logger)
 		}, "objectStorage"},
 		{"nil confirmation", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, nil, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, nil, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.queryMetrics, d.logger)
 		}, "confirmation"},
 		{"nil auditRepo", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, nil, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, nil, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.queryMetrics, d.logger)
 		}, "auditRepo"},
 		{"nil fallbackResolver", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, nil, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, nil, d.docExistence, d.tenantMetrics, d.queryMetrics, d.logger)
 		}, "fallbackResolver"},
 		{"nil docRepo", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, nil, d.tenantMetrics, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, nil, d.tenantMetrics, d.queryMetrics, d.logger)
 		}, "docRepo"},
 		{"nil tenantMetrics", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, nil, d.logger)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, nil, d.queryMetrics, d.logger)
 		}, "tenantMetrics"},
+		{"nil metrics", func() {
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, nil, d.logger)
+		}, "metrics"},
 		{"nil logger", func() {
-			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, nil)
+			NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.queryMetrics, nil)
 		}, "logger"},
 	}
 
@@ -411,7 +449,7 @@ func TestNewArtifactQueryService_PanicsOnNilDeps(t *testing.T) {
 
 func TestNewArtifactQueryService_Success(t *testing.T) {
 	d := newTestDeps()
-	svc := NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.logger)
+	svc := NewArtifactQueryService(d.artifactRepo, d.objectStorage, d.confirmation, d.auditRepo, d.fallbackResolver, d.docExistence, d.tenantMetrics, d.queryMetrics, d.logger)
 	if svc == nil {
 		t.Fatal("expected non-nil service")
 	}
@@ -429,7 +467,7 @@ func TestHandleGetSemanticTree_HappyPath(t *testing.T) {
 		if orgID != "org-1" || docID != "doc-1" || versionID != "ver-1" || at != model.ArtifactTypeSemanticTree {
 			t.Fatalf("unexpected args: %s %s %s %s", orgID, docID, versionID, at)
 		}
-		return makeDescriptor("ver-1", model.ArtifactTypeSemanticTree, "org-1/doc-1/ver-1/SEMANTIC_TREE"), nil
+		return makeDescriptorForContent("ver-1", model.ArtifactTypeSemanticTree, "org-1/doc-1/ver-1/SEMANTIC_TREE", string(treeData)), nil
 	}
 
 	d.objectStorage.getObjectFn = func(_ context.Context, key string) (io.ReadCloser, error) {
@@ -634,10 +672,16 @@ func TestHandleGetArtifacts_HappyPath_AllFound(t *testing.T) {
 	treeContent := `{"nodes":[]}`
 	structContent := `{"sections":[]}`
 
+	contentByType := map[model.ArtifactType]string{
+		model.ArtifactTypeSemanticTree:      treeContent,
+		model.ArtifactTypeDocumentStructure: structContent,
+	}
+
 	d.artifactRepo.listByVersionAndTypes = func(_ context.Context, _, _, _ string, types []model.ArtifactType) ([]*model.ArtifactDescriptor, error) {
 		result := make([]*model.ArtifactDescriptor, 0, len(types))
 		for _, at := range types {
-			result = append(result, makeDescriptor("ver-1", at, "org-1/doc-1/ver-1/"+string(at)))
+			c := contentByType[at]
+			result = append(result, makeDescriptorForContent("ver-1", at, "org-1/doc-1/ver-1/"+string(at), c))
 		}
 		return result, nil
 	}
@@ -872,7 +916,7 @@ func TestGetArtifact_HappyPath(t *testing.T) {
 
 	content := `{"nodes":[]}`
 	d.artifactRepo.findByVersionAndType = func(_ context.Context, orgID, docID, versionID string, at model.ArtifactType) (*model.ArtifactDescriptor, error) {
-		return makeDescriptor(versionID, at, "org-1/doc-1/ver-1/SEMANTIC_TREE"), nil
+		return makeDescriptorForContent(versionID, at, "org-1/doc-1/ver-1/SEMANTIC_TREE", content), nil
 	}
 	d.objectStorage.getObjectFn = func(_ context.Context, _ string) (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader(content)), nil
@@ -900,7 +944,7 @@ func TestGetArtifact_PDF_ContentType(t *testing.T) {
 	d := newTestDeps()
 
 	d.artifactRepo.findByVersionAndType = func(_ context.Context, _, _, versionID string, at model.ArtifactType) (*model.ArtifactDescriptor, error) {
-		return makeDescriptor(versionID, at, "key"), nil
+		return makeDescriptorForContent(versionID, at, "key", "pdf-data"), nil
 	}
 	d.objectStorage.getObjectFn = func(context.Context, string) (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader("pdf-data")), nil
@@ -925,7 +969,7 @@ func TestGetArtifact_DOCX_ContentType(t *testing.T) {
 	d := newTestDeps()
 
 	d.artifactRepo.findByVersionAndType = func(_ context.Context, _, _, versionID string, at model.ArtifactType) (*model.ArtifactDescriptor, error) {
-		return makeDescriptor(versionID, at, "key"), nil
+		return makeDescriptorForContent(versionID, at, "key", "docx-data"), nil
 	}
 	d.objectStorage.getObjectFn = func(context.Context, string) (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader("docx-data")), nil
@@ -1129,7 +1173,7 @@ func TestReadArtifact_SizeLimitExceeded(t *testing.T) {
 	}
 
 	svc := d.buildService()
-	_, err := svc.readArtifact(context.Background(), "key")
+	_, err := svc.readArtifact(context.Background(), "key", "")
 	if err == nil {
 		t.Fatal("expected error for oversized artifact")
 	}
@@ -1149,7 +1193,7 @@ func TestReadArtifact_ReadError(t *testing.T) {
 	}
 
 	svc := d.buildService()
-	_, err := svc.readArtifact(context.Background(), "key")
+	_, err := svc.readArtifact(context.Background(), "key", "")
 	if err == nil {
 		t.Fatal("expected error on read failure")
 	}
@@ -1160,6 +1204,195 @@ type failReader struct{}
 
 func (f *failReader) Read([]byte) (int, error) {
 	return 0, errors.New("read failure")
+}
+
+// ---------------------------------------------------------------------------
+// BRE-027: Content hash verification tests.
+// ---------------------------------------------------------------------------
+
+func TestReadArtifact_IntegrityMatch(t *testing.T) {
+	d := newTestDeps()
+
+	content := `{"verified":"data"}`
+	d.objectStorage.getObjectFn = func(context.Context, string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	svc := d.buildService()
+	data, err := svc.readArtifact(context.Background(), "key", testSHA256(content))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != content {
+		t.Errorf("content mismatch: got %q, want %q", data, content)
+	}
+	if d.queryMetrics.integrityFailures.Load() != 0 {
+		t.Error("integrity failure metric should not be incremented on match")
+	}
+}
+
+func TestReadArtifact_IntegrityMismatch(t *testing.T) {
+	d := newTestDeps()
+
+	content := `{"actual":"data"}`
+	d.objectStorage.getObjectFn = func(context.Context, string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	svc := d.buildService()
+	_, err := svc.readArtifact(context.Background(), "key", "wrong-hash-value")
+	if err == nil {
+		t.Fatal("expected error on hash mismatch")
+	}
+	if port.ErrorCode(err) != port.ErrCodeIntegrityCheckFailed {
+		t.Errorf("error code: got %q, want %q", port.ErrorCode(err), port.ErrCodeIntegrityCheckFailed)
+	}
+	if port.IsRetryable(err) {
+		t.Error("integrity check error should not be retryable")
+	}
+	if !strings.Contains(err.Error(), "wrong-hash-value") {
+		t.Errorf("error should mention expected hash: %v", err)
+	}
+	if !strings.Contains(err.Error(), testSHA256(content)) {
+		t.Errorf("error should mention actual hash: %v", err)
+	}
+
+	// Verify metric was incremented.
+	if d.queryMetrics.integrityFailures.Load() != 1 {
+		t.Errorf("integrity failures: got %d, want 1", d.queryMetrics.integrityFailures.Load())
+	}
+
+	// Verify ERROR log was emitted.
+	msgs := d.logger.getMessages()
+	found := false
+	for _, msg := range msgs {
+		if msg.level == "ERROR" && strings.Contains(msg.msg, "content hash mismatch") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected ERROR log about content hash mismatch")
+	}
+}
+
+func TestReadArtifact_EmptyHash_SkipsVerification(t *testing.T) {
+	d := newTestDeps()
+
+	content := `{"legacy":"artifact"}`
+	d.objectStorage.getObjectFn = func(context.Context, string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	svc := d.buildService()
+	data, err := svc.readArtifact(context.Background(), "key", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != content {
+		t.Errorf("content: got %q, want %q", data, content)
+	}
+
+	// Verify WARN log about skipping verification.
+	msgs := d.logger.getMessages()
+	found := false
+	for _, msg := range msgs {
+		if msg.level == "WARN" && strings.Contains(msg.msg, "skipping integrity check") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected WARN log about skipping integrity check")
+	}
+
+	// No metric increment.
+	if d.queryMetrics.integrityFailures.Load() != 0 {
+		t.Error("integrity failure metric should not be incremented when hash is empty")
+	}
+}
+
+func TestGetArtifact_IntegrityMismatch_ReturnsError(t *testing.T) {
+	d := newTestDeps()
+
+	d.artifactRepo.findByVersionAndType = func(_ context.Context, _, _, versionID string, at model.ArtifactType) (*model.ArtifactDescriptor, error) {
+		desc := makeDescriptor(versionID, at, "key")
+		desc.ContentHash = "stale-hash-from-db"
+		return desc, nil
+	}
+	d.objectStorage.getObjectFn = func(context.Context, string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(`{"corrupted":"data"}`)), nil
+	}
+
+	svc := d.buildService()
+	_, err := svc.GetArtifact(context.Background(), port.GetArtifactParams{
+		OrganizationID: "org-1",
+		DocumentID:     "doc-1",
+		VersionID:      "ver-1",
+		ArtifactType:   model.ArtifactTypeSemanticTree,
+	})
+	if err == nil {
+		t.Fatal("expected integrity check error")
+	}
+	if port.ErrorCode(err) != port.ErrCodeIntegrityCheckFailed {
+		t.Errorf("error code: got %q, want %q", port.ErrorCode(err), port.ErrCodeIntegrityCheckFailed)
+	}
+}
+
+func TestHandleGetSemanticTree_IntegrityMismatch_ReturnsError(t *testing.T) {
+	d := newTestDeps()
+
+	d.artifactRepo.findByVersionAndType = func(context.Context, string, string, string, model.ArtifactType) (*model.ArtifactDescriptor, error) {
+		desc := makeDescriptor("ver-1", model.ArtifactTypeSemanticTree, "key")
+		desc.ContentHash = "bad-hash"
+		return desc, nil
+	}
+	d.objectStorage.getObjectFn = func(context.Context, string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(`{"tree":"data"}`)), nil
+	}
+
+	svc := d.buildService()
+	err := svc.HandleGetSemanticTree(context.Background(), makeSemanticTreeEvent())
+	if err == nil {
+		t.Fatal("expected integrity check error")
+	}
+	if port.ErrorCode(err) != port.ErrCodeIntegrityCheckFailed {
+		t.Errorf("error code: got %q, want %q", port.ErrorCode(err), port.ErrCodeIntegrityCheckFailed)
+	}
+	if len(d.confirmation.semanticTrees) != 0 {
+		t.Error("should not publish on integrity failure")
+	}
+}
+
+func TestHandleGetArtifacts_IntegrityMismatch_ShortCircuits(t *testing.T) {
+	d := newTestDeps()
+
+	d.artifactRepo.listByVersionAndTypes = func(_ context.Context, _, _, _ string, types []model.ArtifactType) ([]*model.ArtifactDescriptor, error) {
+		result := make([]*model.ArtifactDescriptor, 0, len(types))
+		for _, at := range types {
+			desc := makeDescriptor("ver-1", at, "org-1/doc-1/ver-1/"+string(at))
+			desc.ContentHash = "stale-hash"
+			result = append(result, desc)
+		}
+		return result, nil
+	}
+	d.objectStorage.getObjectFn = func(context.Context, string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(`{"data":"value"}`)), nil
+	}
+
+	svc := d.buildService()
+	event := makeGetArtifactsEvent(model.ArtifactTypeSemanticTree, model.ArtifactTypeDocumentStructure)
+	err := svc.HandleGetArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected integrity check error")
+	}
+	if port.ErrorCode(err) != port.ErrCodeIntegrityCheckFailed {
+		t.Errorf("error code: got %q, want %q", port.ErrorCode(err), port.ErrCodeIntegrityCheckFailed)
+	}
+	// Should short-circuit — no ArtifactsProvided event published.
+	if len(d.confirmation.artifacts) != 0 {
+		t.Error("should not publish partial ArtifactsProvided on integrity failure")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1276,7 +1509,7 @@ func TestHandleGetSemanticTree_FallbackOrgID(t *testing.T) {
 		if orgID != "org-1" {
 			t.Fatalf("expected resolved org_id=org-1, got %q", orgID)
 		}
-		return makeDescriptor("ver-1", model.ArtifactTypeSemanticTree, "org-1/doc-1/ver-1/SEMANTIC_TREE"), nil
+		return makeDescriptorForContent("ver-1", model.ArtifactTypeSemanticTree, "org-1/doc-1/ver-1/SEMANTIC_TREE", string(treeData)), nil
 	}
 	d.objectStorage.getObjectFn = func(_ context.Context, key string) (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader(string(treeData))), nil
@@ -1304,16 +1537,17 @@ func TestHandleGetArtifacts_FallbackOrgID(t *testing.T) {
 	d := newTestDeps()
 	d.fallbackResolver.orgID = "org-1"
 
+	artifactContent := `{"data":"test"}`
 	d.artifactRepo.listByVersionAndTypes = func(_ context.Context, orgID, docID, versionID string, types []model.ArtifactType) ([]*model.ArtifactDescriptor, error) {
 		if orgID != "org-1" {
 			t.Fatalf("expected resolved org_id=org-1, got %q", orgID)
 		}
 		return []*model.ArtifactDescriptor{
-			makeDescriptor("ver-1", model.ArtifactTypeSemanticTree, "key1"),
+			makeDescriptorForContent("ver-1", model.ArtifactTypeSemanticTree, "key1", artifactContent),
 		}, nil
 	}
 	d.objectStorage.getObjectFn = func(_ context.Context, key string) (io.ReadCloser, error) {
-		return io.NopCloser(strings.NewReader(`{"data":"test"}`)), nil
+		return io.NopCloser(strings.NewReader(artifactContent)), nil
 	}
 
 	svc := d.buildService()

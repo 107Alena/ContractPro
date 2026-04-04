@@ -230,7 +230,7 @@ func run() int {
 	querySvc := query.NewArtifactQueryService(
 		artifactRepo, objClient, confirmPub, auditRepo,
 		fallbackResolver,
-		docRepo, obs.Metrics,
+		docRepo, obs.Metrics, obs.Metrics,
 		obs.Logger.With("component", "query"),
 	)
 

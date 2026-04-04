@@ -3,6 +3,8 @@ package query
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +27,11 @@ type Logger interface {
 	Error(msg string, keysAndValues ...any)
 }
 
+// Metrics is the consumer-side interface for integrity-related metrics (BRE-027).
+type Metrics interface {
+	IncIntegrityCheckFailures()
+}
+
 // ArtifactQueryService serves artifact retrieval requests from other domains
 // (async via events) and from the REST API (sync).
 type ArtifactQueryService struct {
@@ -35,6 +42,7 @@ type ArtifactQueryService struct {
 	fallbackResolver port.DocumentFallbackResolver
 	docRepo          tenant.DocumentExistenceChecker
 	tenantMetrics    tenant.Metrics
+	metrics          Metrics
 	logger           Logger
 	newUUID          func() string
 }
@@ -52,6 +60,7 @@ func NewArtifactQueryService(
 	fallbackResolver port.DocumentFallbackResolver,
 	docRepo tenant.DocumentExistenceChecker,
 	tenantMetrics tenant.Metrics,
+	metrics Metrics,
 	logger Logger,
 ) *ArtifactQueryService {
 	if artifactRepo == nil {
@@ -75,6 +84,9 @@ func NewArtifactQueryService(
 	if tenantMetrics == nil {
 		panic("query: tenantMetrics must not be nil")
 	}
+	if metrics == nil {
+		panic("query: metrics must not be nil")
+	}
 	if logger == nil {
 		panic("query: logger must not be nil")
 	}
@@ -86,6 +98,7 @@ func NewArtifactQueryService(
 		fallbackResolver: fallbackResolver,
 		docRepo:          docRepo,
 		tenantMetrics:    tenantMetrics,
+		metrics:          metrics,
 		logger:           logger,
 		newUUID:          generateUUID,
 	}
@@ -142,8 +155,8 @@ func (s *ArtifactQueryService) HandleGetSemanticTree(ctx context.Context, event 
 		return err
 	}
 
-	// Read artifact content from object storage.
-	data, err := s.readArtifact(ctx, descriptor.StorageKey)
+	// Read artifact content from object storage (BRE-027: verify content hash).
+	data, err := s.readArtifact(ctx, descriptor.StorageKey, descriptor.ContentHash)
 	if err != nil {
 		return err
 	}
@@ -215,12 +228,12 @@ func (s *ArtifactQueryService) HandleGetArtifacts(ctx context.Context, event mod
 		}
 	}
 
-	// Read content for each found descriptor.
+	// Read content for each found descriptor (BRE-027: verify content hash).
 	artifacts := make(map[model.ArtifactType]json.RawMessage, len(descriptors))
 	for _, d := range descriptors {
-		data, readErr := s.readArtifact(ctx, d.StorageKey)
+		data, readErr := s.readArtifact(ctx, d.StorageKey, d.ContentHash)
 		if readErr != nil {
-			// Infrastructure failure reading artifact content.
+			// Infrastructure failure or integrity check failure.
 			return readErr
 		}
 		artifacts[d.ArtifactType] = json.RawMessage(data)
@@ -269,7 +282,7 @@ func (s *ArtifactQueryService) GetArtifact(ctx context.Context, params port.GetA
 		return nil, err
 	}
 
-	data, err := s.readArtifact(ctx, descriptor.StorageKey)
+	data, err := s.readArtifact(ctx, descriptor.StorageKey, descriptor.ContentHash)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +325,8 @@ func (s *ArtifactQueryService) ListArtifacts(ctx context.Context, organizationID
 // ---------------------------------------------------------------------------
 
 // readArtifact reads artifact content from object storage with a safety size limit.
-func (s *ArtifactQueryService) readArtifact(ctx context.Context, storageKey string) ([]byte, error) {
+// If expectedHash is non-empty, verifies that the SHA-256 of the data matches (BRE-027).
+func (s *ArtifactQueryService) readArtifact(ctx context.Context, storageKey, expectedHash string) ([]byte, error) {
 	reader, err := s.objectStorage.GetObject(ctx, storageKey)
 	if err != nil {
 		return nil, err
@@ -331,6 +345,25 @@ func (s *ArtifactQueryService) readArtifact(ctx context.Context, storageKey stri
 			Retryable: false,
 		}
 	}
+
+	// BRE-027: verify content hash integrity.
+	if expectedHash == "" {
+		s.logger.Warn("content hash empty, skipping integrity check",
+			"storage_key", storageKey)
+	} else {
+		sum := sha256.Sum256(data)
+		actualHash := hex.EncodeToString(sum[:])
+		if actualHash != expectedHash {
+			s.logger.Error("content hash mismatch",
+				"storage_key", storageKey,
+				"expected_hash", expectedHash,
+				"actual_hash", actualHash,
+				"size_bytes", len(data))
+			s.metrics.IncIntegrityCheckFailures()
+			return nil, port.NewIntegrityCheckError(storageKey, expectedHash, actualHash)
+		}
+	}
+
 	return data, nil
 }
 

@@ -1057,7 +1057,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-018"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-04",
+      "summary": "Реализована верификация content hash при чтении артефактов (BRE-027). ПОРТ: добавлен ErrCodeIntegrityCheckFailed = 'INTEGRITY_CHECK_FAILED' + NewIntegrityCheckError(storageKey, expected, actual) non-retryable в port/errors.go. OBSERVABILITY: IncIntegrityCheckFailures() bridge method на *Metrics для dm_integrity_check_failures_total counter. QUERY SERVICE: добавлен consumer-side Metrics interface с IncIntegrityCheckFailures(); metrics Metrics field в ArtifactQueryService + конструктор с nil-panic guard; readArtifact(ctx, storageKey, expectedHash) — после чтения и size check: пустой hash → WARN log + skip (backward compat для legacy артефактов), непустой → sha256.Sum256(data) + hex.EncodeToString → сравнение → mismatch → ERROR log + IncIntegrityCheckFailures() + NewIntegrityCheckError. 3 call sites обновлены: HandleGetSemanticTree, HandleGetArtifacts, GetArtifact — все передают descriptor.ContentHash. MAIN.GO: obs.Metrics передан как query.Metrics. TESTINFRA: noopIntegrityMetrics для integration tests. ТЕСТЫ: mockQueryMetrics с atomic.Int64, testSHA256 helper, makeDescriptorForContent factory; 6 новых BRE-027 тестов (IntegrityMatch — hash совпадает, IntegrityMismatch — error code + non-retryable + metric + ERROR log, EmptyHash_SkipsVerification — WARN log + no metric, GetArtifact_IntegrityMismatch — sync API end-to-end, HandleGetSemanticTree_IntegrityMismatch — async no publish, HandleGetArtifacts_IntegrityMismatch_ShortCircuits — batch short-circuit no partial publish); обновлены 8 существующих тестов (makeDescriptorForContent для matching hashes, readArtifact 3rd param). Ревью: code-reviewer → APPROVED (0B + 2W; W1 fixed). Все тесты PASS с -race -count=1 (26 пакетов). go vet OK. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-049",

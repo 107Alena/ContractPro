@@ -2141,3 +2141,39 @@
 - DM-TASK-035 (Integration tests)
 
 ---
+
+## DM-TASK-048: BRE-027: Content hash verification при чтении артефактов (2026-04-04)
+
+**Статус:** done
+
+**Что сделано:**
+- Добавлен error code `ErrCodeIntegrityCheckFailed` + `NewIntegrityCheckError()` constructor (non-retryable) в `port/errors.go`
+- Добавлен `IncIntegrityCheckFailures()` bridge method в `observability/metrics.go`
+- Добавлен consumer-side `Metrics` interface в `query` package
+- Изменена сигнатура `readArtifact(ctx, storageKey, expectedHash)`:
+  - Пустой hash → WARN log + skip verification (backward compat)
+  - SHA-256 mismatch → ERROR log + metric + non-retryable error
+- Все 3 call sites обновлены: `HandleGetSemanticTree`, `HandleGetArtifacts`, `GetArtifact`
+- `main.go`: `obs.Metrics` передан как `query.Metrics`
+- Integration test infra: `noopIntegrityMetrics`
+- 6 новых unit-тестов BRE-027
+- 8 существующих тестов обновлены (correct content hashes)
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (26 пакетов)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Ревью:**
+- code-reviewer → APPROVED (0 blocking, 2 warnings; W1 fixed — added HandleGetArtifacts integrity mismatch test)
+
+**Следующие задачи (medium priority pending):**
+- DM-TASK-031 (Orphan Cleanup Job) — блокирует DM-TASK-047
+- DM-TASK-032 (Retention Jobs)
+- DM-TASK-033 (Presigned URL generation)
+- DM-TASK-034 (Documentation: configuration.md)
+- DM-TASK-035 (Documentation: deployment.md) — блокирует DM-TASK-051
+- DM-TASK-046 (Audit trigger + RLS)
+- DM-TASK-050 (Migration strategy)
+
+---

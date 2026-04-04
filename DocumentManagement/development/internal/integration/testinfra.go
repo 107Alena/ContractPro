@@ -107,6 +107,7 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		h.fallback,
 		h.docRepo,
 		&noopTenantMetrics{},
+		&noopIntegrityMetrics{},
 		h.logger,
 	)
 
@@ -1200,6 +1201,10 @@ func (m *noopFallbackMetrics) IncMissingVersionID() {}
 type noopTenantMetrics struct{}
 
 func (m *noopTenantMetrics) IncTenantMismatch() {}
+
+type noopIntegrityMetrics struct{}
+
+func (m *noopIntegrityMetrics) IncIntegrityCheckFailures() {}
 
 type noopIdempotencyMetrics struct{}
 

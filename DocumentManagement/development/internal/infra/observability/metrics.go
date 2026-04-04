@@ -368,6 +368,16 @@ func (m *Metrics) SetCircuitBreakerState(component string, state float64) {
 	m.CircuitBreakerState.WithLabelValues(component).Set(state)
 }
 
+// ---------------------------------------------------------------------------
+// query.Metrics interface (BRE-027)
+// ---------------------------------------------------------------------------
+
+// IncIntegrityCheckFailures increments dm_integrity_check_failures_total.
+// Called when a content hash mismatch is detected while reading an artifact.
+func (m *Metrics) IncIntegrityCheckFailures() {
+	m.IntegrityCheckFailures.Inc()
+}
+
 // IncTenantMismatch increments dm_tenant_mismatch_total.
 // Called when an incoming event's organization_id does not match the
 // document's actual owner.

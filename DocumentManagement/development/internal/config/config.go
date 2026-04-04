@@ -29,6 +29,7 @@ type Config struct {
 	Watchdog       WatchdogConfig
 	CircuitBreaker CircuitBreakerConfig
 	RateLimit      RateLimitConfig
+	Ingestion      IngestionConfig
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -58,6 +59,7 @@ func Load() (*Config, error) {
 		Watchdog:       loadWatchdogConfig(),
 		CircuitBreaker: loadCircuitBreakerConfig(),
 		RateLimit:      loadRateLimitConfig(),
+		Ingestion:      loadIngestionConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -111,6 +113,12 @@ func (c *Config) Validate() error {
 	if c.CircuitBreaker.Timeout <= 0 {
 		invalid = append(invalid, "DM_CB_TIMEOUT must be positive")
 	}
+	if c.Ingestion.MaxJSONArtifactBytes <= 0 {
+		invalid = append(invalid, "DM_INGESTION_MAX_JSON_BYTES must be positive")
+	}
+	if c.Ingestion.MaxBlobSizeBytes <= 0 {
+		invalid = append(invalid, "DM_INGESTION_MAX_BLOB_SIZE_BYTES must be positive")
+	}
 	if c.RateLimit.Enabled {
 		if c.RateLimit.ReadRPS <= 0 {
 			invalid = append(invalid, "DM_RATELIMIT_READ_RPS must be positive when rate limiting is enabled")
@@ -160,6 +168,18 @@ func envDuration(key string, defaultVal time.Duration) time.Duration {
 		return defaultVal
 	}
 	parsed, err := time.ParseDuration(v)
+	if err != nil {
+		return defaultVal
+	}
+	return parsed
+}
+
+func envInt64(key string, defaultVal int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultVal
+	}
+	parsed, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
 		return defaultVal
 	}

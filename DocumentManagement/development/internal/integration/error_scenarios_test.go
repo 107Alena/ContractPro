@@ -49,6 +49,7 @@ func TestErrorScenario_ObjectStorageFailOnFourthArtifact_CompensationAndRetry(t 
 		transactor, versionRepo, artifactRepo, auditRepo,
 		failStorage, outboxWriter, fallback, &noopFallbackMetrics{},
 		docRepo, &noopTenantMetrics{}, logger,
+		10*1024*1024, 100*1024*1024,
 	)
 
 	// Seed document (for tenant ownership check) and version in PENDING status.

@@ -223,6 +223,8 @@ func run() int {
 		fallbackResolver, obs.Metrics,
 		docRepo, obs.Metrics,
 		obs.Logger.With("component", "ingestion"),
+		cfg.Ingestion.MaxJSONArtifactBytes,
+		cfg.Ingestion.MaxBlobSizeBytes,
 	)
 
 	querySvc := query.NewArtifactQueryService(

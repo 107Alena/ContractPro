@@ -310,6 +310,8 @@ func (d *testDeps) newService() *ArtifactIngestionService {
 		d.auditRepo, d.objectStorage, d.outboxWriter,
 		d.fallbackResolver, d.fallbackMetrics,
 		d.docExistence, d.tenantMetrics, d.logger,
+		10*1024*1024, // maxJSONBytes: 10 MB
+		100*1024*1024, // maxBlobBytes: 100 MB
 	)
 	uuidCounter := 0
 	svc.newUUID = func() string {
@@ -415,37 +417,43 @@ func TestNewArtifactIngestionService_PanicsOnNilDeps(t *testing.T) {
 		fn   func()
 	}{
 		{"nil transactor", func() {
-			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil versionRepo", func() {
-			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil artifactRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil auditRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil objectStorage", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil outboxWriter", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil fallbackResolver", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil fallbackMetrics", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, nil, d.docExistence, d.tenantMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, nil, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil docRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, nil, d.tenantMetrics, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, nil, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil tenantMetrics", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, nil, d.logger)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, nil, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil logger", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, nil)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, nil, 10*1024*1024, 100*1024*1024)
+		}},
+		{"zero maxJSONBytes", func() {
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 0, 100*1024*1024)
+		}},
+		{"negative maxBlobBytes", func() {
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, -1)
 		}},
 	}
 
@@ -458,6 +466,288 @@ func TestNewArtifactIngestionService_PanicsOnNilDeps(t *testing.T) {
 			}()
 			tt.fn()
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Content validation (BRE-029).
+// ---------------------------------------------------------------------------
+
+func TestValidateArtifacts_OversizedJSONArtifact(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	// Create service with tiny limit (100 bytes) to trigger oversized check.
+	svc := NewArtifactIngestionService(
+		d.transactor, d.versionRepo, d.artifactRepo,
+		d.auditRepo, d.objectStorage, d.outboxWriter,
+		d.fallbackResolver, d.fallbackMetrics,
+		d.docExistence, d.tenantMetrics, d.logger,
+		100, 100*1024*1024,
+	)
+
+	event := validDPEvent()
+	// Make one artifact exceed the 100-byte limit.
+	event.OCRRaw = json.RawMessage(strings.Repeat(`{"x":1}`, 20)) // ~140 bytes
+
+	err := svc.HandleDPArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected INVALID_CONTENT error for oversized JSON artifact")
+	}
+	if port.ErrorCode(err) != port.ErrCodeInvalidContent {
+		t.Errorf("error code = %q, want INVALID_CONTENT", port.ErrorCode(err))
+	}
+	if port.IsRetryable(err) {
+		t.Error("INVALID_CONTENT should be non-retryable")
+	}
+	if !strings.Contains(err.Error(), "OCR_RAW") {
+		t.Errorf("error should mention artifact type OCR_RAW, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "exceeds limit") {
+		t.Errorf("error should mention 'exceeds limit', got: %v", err)
+	}
+	// No S3 calls should have been made.
+	if len(d.objectStorage.putCalls) > 0 {
+		t.Errorf("expected 0 S3 put calls before validation, got %d", len(d.objectStorage.putCalls))
+	}
+}
+
+func TestValidateArtifacts_InvalidJSON(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+
+	event := validDPEvent()
+	event.Text = json.RawMessage(`{not valid json`)
+
+	err := svc.HandleDPArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected INVALID_CONTENT error for invalid JSON")
+	}
+	if port.ErrorCode(err) != port.ErrCodeInvalidContent {
+		t.Errorf("error code = %q, want INVALID_CONTENT", port.ErrorCode(err))
+	}
+	if !strings.Contains(err.Error(), "EXTRACTED_TEXT") {
+		t.Errorf("error should mention artifact type EXTRACTED_TEXT, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not valid JSON") {
+		t.Errorf("error should mention 'not valid JSON', got: %v", err)
+	}
+	// No S3 calls.
+	if len(d.objectStorage.putCalls) > 0 {
+		t.Errorf("expected 0 S3 put calls, got %d", len(d.objectStorage.putCalls))
+	}
+}
+
+func TestValidateArtifacts_BlobRefEmptyStorageKey(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusAnalysisArtifactsReceived)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+
+	event := validREEvent()
+	event.ExportPDF.StorageKey = ""
+
+	err := svc.HandleREArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected INVALID_CONTENT error for empty storage_key")
+	}
+	if port.ErrorCode(err) != port.ErrCodeInvalidContent {
+		t.Errorf("error code = %q, want INVALID_CONTENT", port.ErrorCode(err))
+	}
+	if !strings.Contains(err.Error(), "storage_key must not be empty") {
+		t.Errorf("error should mention 'storage_key must not be empty', got: %v", err)
+	}
+}
+
+func TestValidateArtifacts_BlobRefEmptyContentHash(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusAnalysisArtifactsReceived)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+
+	event := validREEvent()
+	event.ExportPDF.ContentHash = ""
+
+	err := svc.HandleREArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected INVALID_CONTENT error for empty content_hash")
+	}
+	if port.ErrorCode(err) != port.ErrCodeInvalidContent {
+		t.Errorf("error code = %q, want INVALID_CONTENT", port.ErrorCode(err))
+	}
+	if !strings.Contains(err.Error(), "content_hash must not be empty") {
+		t.Errorf("error should mention 'content_hash must not be empty', got: %v", err)
+	}
+}
+
+func TestValidateArtifacts_BlobRefZeroSize(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusAnalysisArtifactsReceived)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+
+	event := validREEvent()
+	event.ExportPDF.SizeBytes = 0
+
+	err := svc.HandleREArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected INVALID_CONTENT error for zero-size blob ref")
+	}
+	if port.ErrorCode(err) != port.ErrCodeInvalidContent {
+		t.Errorf("error code = %q, want INVALID_CONTENT", port.ErrorCode(err))
+	}
+	if !strings.Contains(err.Error(), "EXPORT_PDF") {
+		t.Errorf("error should mention EXPORT_PDF, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "size_bytes must be positive") {
+		t.Errorf("error should mention 'size_bytes must be positive', got: %v", err)
+	}
+}
+
+func TestValidateArtifacts_BlobRefNegativeSize(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusAnalysisArtifactsReceived)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+
+	event := validREEvent()
+	event.ExportDOCX.SizeBytes = -1
+
+	err := svc.HandleREArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected INVALID_CONTENT error for negative-size blob ref")
+	}
+	if port.ErrorCode(err) != port.ErrCodeInvalidContent {
+		t.Errorf("error code = %q, want INVALID_CONTENT", port.ErrorCode(err))
+	}
+}
+
+func TestValidateArtifacts_BlobRefOversized(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusAnalysisArtifactsReceived)
+	setupVersionFind(d, version)
+
+	// Create service with tiny blob limit.
+	svc := NewArtifactIngestionService(
+		d.transactor, d.versionRepo, d.artifactRepo,
+		d.auditRepo, d.objectStorage, d.outboxWriter,
+		d.fallbackResolver, d.fallbackMetrics,
+		d.docExistence, d.tenantMetrics, d.logger,
+		10*1024*1024, 500, // maxBlobBytes = 500
+	)
+
+	event := validREEvent()
+	event.ExportPDF.SizeBytes = 1024 // exceeds 500
+
+	err := svc.HandleREArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected INVALID_CONTENT error for oversized blob ref")
+	}
+	if port.ErrorCode(err) != port.ErrCodeInvalidContent {
+		t.Errorf("error code = %q, want INVALID_CONTENT", port.ErrorCode(err))
+	}
+	if !strings.Contains(err.Error(), "blob size") {
+		t.Errorf("error should mention 'blob size', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "exceeds limit") {
+		t.Errorf("error should mention 'exceeds limit', got: %v", err)
+	}
+}
+
+func TestValidateArtifacts_OversizedLICArtifact(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusProcessingArtifactsReceived)
+	setupVersionFind(d, version)
+
+	// Create service with tiny limit.
+	svc := NewArtifactIngestionService(
+		d.transactor, d.versionRepo, d.artifactRepo,
+		d.auditRepo, d.objectStorage, d.outboxWriter,
+		d.fallbackResolver, d.fallbackMetrics,
+		d.docExistence, d.tenantMetrics, d.logger,
+		50, 100*1024*1024,
+	)
+
+	event := validLICEvent()
+	// First artifact (ClassificationResult) is ~16 bytes which is under 50.
+	// RiskAnalysis is also small. Let's make one big.
+	event.DetailedReport = json.RawMessage(strings.Repeat(`{"a":1}`, 10)) // ~70 bytes > 50
+
+	err := svc.HandleLICArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected INVALID_CONTENT error for oversized LIC artifact")
+	}
+	if port.ErrorCode(err) != port.ErrCodeInvalidContent {
+		t.Errorf("error code = %q, want INVALID_CONTENT", port.ErrorCode(err))
+	}
+}
+
+func TestValidateArtifacts_ValidArtifactsPassThrough(t *testing.T) {
+	// Verify normal-sized, valid JSON artifacts pass validation.
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	err := svc.HandleDPArtifacts(context.Background(), validDPEvent())
+	if err != nil {
+		t.Fatalf("expected no error for valid artifacts, got: %v", err)
+	}
+	// Verify S3 was called (validation passed).
+	if len(d.objectStorage.putCalls) == 0 {
+		t.Error("expected S3 put calls after validation passed")
+	}
+}
+
+func TestValidateArtifacts_SizeCheckBeforeJSONParsing(t *testing.T) {
+	// Ensure size check runs before JSON validity check.
+	// Create invalid JSON that also exceeds size limit.
+	d := newTestDeps()
+	svc := NewArtifactIngestionService(
+		d.transactor, d.versionRepo, d.artifactRepo,
+		d.auditRepo, d.objectStorage, d.outboxWriter,
+		d.fallbackResolver, d.fallbackMetrics,
+		d.docExistence, d.tenantMetrics, d.logger,
+		10, 100*1024*1024,
+	)
+
+	event := validDPEvent()
+	event.OCRRaw = json.RawMessage(strings.Repeat("x", 20)) // 20 bytes > 10 limit, also invalid JSON
+
+	err := svc.HandleDPArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if port.ErrorCode(err) != port.ErrCodeInvalidContent {
+		t.Errorf("error code = %q, want INVALID_CONTENT", port.ErrorCode(err))
+	}
+	// Error message should mention size, not JSON validity.
+	if !strings.Contains(err.Error(), "exceeds limit") {
+		t.Errorf("expected size error first, got: %v", err)
+	}
+}
+
+func TestValidateArtifacts_NoS3CallsOnFailure(t *testing.T) {
+	// Verify that no S3 calls happen when validation fails.
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	event := validDPEvent()
+	event.SemanticTree = json.RawMessage(`{broken`)
+
+	_ = svc.HandleDPArtifacts(context.Background(), event)
+	if len(d.objectStorage.putCalls) > 0 {
+		t.Errorf("expected 0 S3 put calls when validation fails, got %d", len(d.objectStorage.putCalls))
 	}
 }
 
@@ -813,6 +1103,7 @@ func TestHandleDPArtifacts_AuditRepoFailure(t *testing.T) {
 		auditRepo, d.objectStorage, d.outboxWriter,
 		d.fallbackResolver, d.fallbackMetrics,
 		d.docExistence, d.tenantMetrics, d.logger,
+		10*1024*1024, 100*1024*1024,
 	)
 	uuidCounter := 0
 	svc.newUUID = func() string {

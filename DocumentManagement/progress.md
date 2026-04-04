@@ -2022,3 +2022,36 @@
 - DM-TASK-042 (Outbox FIFO ordering — possibly already implemented in DM-TASK-016)
 
 ---
+
+## DM-TASK-049: BRE-029: Валидация содержимого входящих артефактов (2026-04-04)
+
+**Статус:** done
+
+**Что сделано:**
+- Добавлен `ErrCodeInvalidContent` + `NewInvalidContentError()` в `internal/domain/port/errors.go` — non-retryable, route to DLQ
+- Добавлен `IngestionConfig` в `internal/config/sub_configs.go`:
+  - `MaxJSONArtifactBytes` (DM_INGESTION_MAX_JSON_BYTES, default 10 MB)
+  - `MaxBlobSizeBytes` (DM_INGESTION_MAX_BLOB_SIZE_BYTES, default 100 MB)
+- Добавлен `envInt64()` helper в `config.go`
+- Реализован `validateArtifacts()` private method в `ingestion.go`:
+  - **JSON artifacts (DP/LIC):** size limit → json.Valid() (size check first to avoid parsing large payloads)
+  - **Blob refs (RE):** StorageKey non-empty → ContentHash non-empty → SizeBytes positive → SizeBytes within limit
+  - Fail-fast на первом нарушении
+  - Интеграция в `processIngestion()` ПЕРЕД `saveBlobs()` — никакие S3 вызовы при невалидном контенте
+- Обновлены все call sites: `main.go`, `testinfra.go`, `error_scenarios_test.go`, 11 constructor panic tests
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (26 пакетов)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Тесты:** 12 validation tests + 2 constructor panic tests + 4 config tests = 18 новых тестов
+
+**Ревью (code-reviewer):** 0B + 6W; W-1 (StorageKey validation) и W-2 (ContentHash validation) исправлены
+
+**Следующие задачи (medium priority pending):**
+- DM-TASK-048 (Content hash verification при чтении)
+- DM-TASK-031 (Orphan Cleanup Job)
+- DM-TASK-046 (Audit append-only trigger + RLS)
+
+---

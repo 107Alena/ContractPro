@@ -551,6 +551,10 @@ func TestValidate_FullConfig(t *testing.T) {
 			FailureThreshold: 5,
 			PerEventBudget:   35 * time.Second,
 		},
+		Ingestion: IngestionConfig{
+			MaxJSONArtifactBytes: 10 * 1024 * 1024,
+			MaxBlobSizeBytes:     100 * 1024 * 1024,
+		},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error, got: %v", err)
@@ -574,6 +578,7 @@ func TestValidate_PortCollision(t *testing.T) {
 			FailureThreshold: 5,
 			PerEventBudget:   35 * time.Second,
 		},
+		Ingestion: IngestionConfig{MaxJSONArtifactBytes: 10 * 1024 * 1024, MaxBlobSizeBytes: 100 * 1024 * 1024},
 	}
 	err := cfg.Validate()
 	if err == nil {
@@ -613,6 +618,7 @@ func TestValidate_ConsumerConcurrencyZero(t *testing.T) {
 			MaxRequests: 3, Timeout: 30 * time.Second,
 			FailureThreshold: 5, PerEventBudget: 35 * time.Second,
 		},
+		Ingestion: IngestionConfig{MaxJSONArtifactBytes: 10 * 1024 * 1024, MaxBlobSizeBytes: 100 * 1024 * 1024},
 	}
 	err := cfg.Validate()
 	if err == nil {
@@ -636,6 +642,7 @@ func TestValidate_ConsumerPrefetchZero(t *testing.T) {
 			MaxRequests: 3, Timeout: 30 * time.Second,
 			FailureThreshold: 5, PerEventBudget: 35 * time.Second,
 		},
+		Ingestion: IngestionConfig{MaxJSONArtifactBytes: 10 * 1024 * 1024, MaxBlobSizeBytes: 100 * 1024 * 1024},
 	}
 	err := cfg.Validate()
 	if err == nil {
@@ -750,6 +757,87 @@ func TestLoad_BrokerTLS_Override(t *testing.T) {
 	}
 	if !cfg.Broker.TLS {
 		t.Error("Broker.TLS should be true when DM_BROKER_TLS=true")
+	}
+}
+
+// --- Ingestion config validation tests (BRE-029) ---
+
+func TestValidate_IngestionMaxJSONZero(t *testing.T) {
+	cfg := &Config{
+		Database:      DatabaseConfig{DSN: "postgres://localhost/dm"},
+		Broker:        BrokerConfig{Address: "localhost:5672"},
+		Storage:       StorageConfig{Endpoint: "e", Bucket: "b", AccessKey: "ak", SecretKey: "sk"},
+		KVStore:       KVStoreConfig{Address: "localhost:6379"},
+		HTTP:          HTTPConfig{Port: 8080},
+		Consumer:      ConsumerConfig{Prefetch: 10, Concurrency: 5},
+		Observability: ObservabilityConfig{MetricsPort: 9090},
+		CircuitBreaker: CircuitBreakerConfig{
+			MaxRequests: 3, Timeout: 30 * time.Second,
+			FailureThreshold: 5, PerEventBudget: 35 * time.Second,
+		},
+		Ingestion: IngestionConfig{MaxJSONArtifactBytes: 0, MaxBlobSizeBytes: 100 * 1024 * 1024},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for zero MaxJSONArtifactBytes")
+	}
+	if !strings.Contains(err.Error(), "DM_INGESTION_MAX_JSON_BYTES must be positive") {
+		t.Errorf("expected ingestion JSON bytes error, got: %s", err.Error())
+	}
+}
+
+func TestValidate_IngestionMaxBlobNegative(t *testing.T) {
+	cfg := &Config{
+		Database:      DatabaseConfig{DSN: "postgres://localhost/dm"},
+		Broker:        BrokerConfig{Address: "localhost:5672"},
+		Storage:       StorageConfig{Endpoint: "e", Bucket: "b", AccessKey: "ak", SecretKey: "sk"},
+		KVStore:       KVStoreConfig{Address: "localhost:6379"},
+		HTTP:          HTTPConfig{Port: 8080},
+		Consumer:      ConsumerConfig{Prefetch: 10, Concurrency: 5},
+		Observability: ObservabilityConfig{MetricsPort: 9090},
+		CircuitBreaker: CircuitBreakerConfig{
+			MaxRequests: 3, Timeout: 30 * time.Second,
+			FailureThreshold: 5, PerEventBudget: 35 * time.Second,
+		},
+		Ingestion: IngestionConfig{MaxJSONArtifactBytes: 10 * 1024 * 1024, MaxBlobSizeBytes: -1},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for negative MaxBlobSizeBytes")
+	}
+	if !strings.Contains(err.Error(), "DM_INGESTION_MAX_BLOB_SIZE_BYTES must be positive") {
+		t.Errorf("expected ingestion blob bytes error, got: %s", err.Error())
+	}
+}
+
+func TestLoad_IngestionDefaults(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Ingestion.MaxJSONArtifactBytes != 10*1024*1024 {
+		t.Errorf("Ingestion.MaxJSONArtifactBytes = %d, want %d", cfg.Ingestion.MaxJSONArtifactBytes, 10*1024*1024)
+	}
+	if cfg.Ingestion.MaxBlobSizeBytes != 100*1024*1024 {
+		t.Errorf("Ingestion.MaxBlobSizeBytes = %d, want %d", cfg.Ingestion.MaxBlobSizeBytes, 100*1024*1024)
+	}
+}
+
+func TestLoad_IngestionOverrides(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DM_INGESTION_MAX_JSON_BYTES", "5242880")
+	t.Setenv("DM_INGESTION_MAX_BLOB_SIZE_BYTES", "209715200")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Ingestion.MaxJSONArtifactBytes != 5242880 {
+		t.Errorf("Ingestion.MaxJSONArtifactBytes = %d, want 5242880", cfg.Ingestion.MaxJSONArtifactBytes)
+	}
+	if cfg.Ingestion.MaxBlobSizeBytes != 209715200 {
+		t.Errorf("Ingestion.MaxBlobSizeBytes = %d, want 209715200", cfg.Ingestion.MaxBlobSizeBytes)
 	}
 }
 

@@ -29,6 +29,10 @@ const (
 	ErrCodeStatusTransition      = "INVALID_STATUS_TRANSITION"
 	ErrCodeDuplicateEvent        = "DUPLICATE_EVENT"
 
+	// --- Content validation errors (non-retryable) ---
+
+	ErrCodeInvalidContent = "INVALID_CONTENT"
+
 	// --- Authorization errors (non-retryable) ---
 
 	ErrCodeTenantMismatch = "TENANT_MISMATCH"
@@ -175,6 +179,13 @@ func NewDuplicateEventError(key string) *DomainError {
 		Message:   fmt.Sprintf("event %s already processed", key),
 		Retryable: false,
 	}
+}
+
+// NewInvalidContentError creates a non-retryable error for artifact content
+// that fails validation (size limit exceeded, malformed JSON, invalid blob
+// reference). Causes the event to be routed to DLQ (BRE-029).
+func NewInvalidContentError(msg string) *DomainError {
+	return &DomainError{Code: ErrCodeInvalidContent, Message: msg, Retryable: false}
 }
 
 // NewTenantMismatchError creates a non-retryable error when the

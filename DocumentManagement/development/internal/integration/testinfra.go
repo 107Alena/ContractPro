@@ -94,6 +94,8 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		h.docRepo,
 		&noopTenantMetrics{},
 		h.logger,
+		10*1024*1024,  // maxJSONBytes: 10 MB
+		100*1024*1024, // maxBlobBytes: 100 MB
 	)
 
 	// Wire query service.

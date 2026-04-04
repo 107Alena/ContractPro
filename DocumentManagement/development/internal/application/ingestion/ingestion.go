@@ -50,6 +50,8 @@ type ArtifactIngestionService struct {
 	docRepo          tenant.DocumentExistenceChecker
 	tenantMetrics    tenant.Metrics
 	logger           Logger
+	maxJSONBytes     int64 // BRE-029: per-artifact JSON size limit
+	maxBlobBytes     int64 // BRE-029: per-artifact blob size limit
 	newUUID          func() string
 }
 
@@ -70,6 +72,8 @@ func NewArtifactIngestionService(
 	docRepo tenant.DocumentExistenceChecker,
 	tenantMetrics tenant.Metrics,
 	logger Logger,
+	maxJSONBytes int64,
+	maxBlobBytes int64,
 ) *ArtifactIngestionService {
 	if transactor == nil {
 		panic("ingestion: transactor must not be nil")
@@ -104,6 +108,12 @@ func NewArtifactIngestionService(
 	if logger == nil {
 		panic("ingestion: logger must not be nil")
 	}
+	if maxJSONBytes <= 0 {
+		panic("ingestion: maxJSONBytes must be positive")
+	}
+	if maxBlobBytes <= 0 {
+		panic("ingestion: maxBlobBytes must be positive")
+	}
 	return &ArtifactIngestionService{
 		transactor:       transactor,
 		versionRepo:      versionRepo,
@@ -116,6 +126,8 @@ func NewArtifactIngestionService(
 		docRepo:          docRepo,
 		tenantMetrics:    tenantMetrics,
 		logger:           logger,
+		maxJSONBytes:     maxJSONBytes,
+		maxBlobBytes:     maxBlobBytes,
 		newUUID:          generateUUID,
 	}
 }
@@ -356,6 +368,15 @@ func (s *ArtifactIngestionService) processIngestion(ctx context.Context, p inges
 		"artifact_count", len(p.artifacts),
 	)
 
+	// BRE-029: validate artifact content before any storage I/O.
+	if err := s.validateArtifacts(p.artifacts); err != nil {
+		s.logger.Warn("artifact content validation failed",
+			"producer", p.producer, "document_id", p.docID,
+			"version_id", p.versionID, "error", err,
+		)
+		return err
+	}
+
 	// Step 1: Save blobs to Object Storage (or verify refs for RE).
 	blobs, err := s.saveBlobs(ctx, p)
 	if err != nil {
@@ -465,6 +486,63 @@ func (s *ArtifactIngestionService) processIngestion(ctx context.Context, p inges
 		"producer", p.producer, "document_id", p.docID,
 		"version_id", p.versionID, "status", p.targetStatus,
 	)
+	return nil
+}
+
+// validateArtifacts checks content validity before any storage I/O (BRE-029).
+// Returns a non-retryable INVALID_CONTENT error on the first violation.
+// For JSON artifacts (DP/LIC): checks size limit, then validates JSON well-formedness.
+// For blob references (RE claim-check): checks declared size is positive and within limit.
+func (s *ArtifactIngestionService) validateArtifacts(artifacts []artifactItem) error {
+	for _, item := range artifacts {
+		if item.blobRef != nil {
+			// RE claim-check: validate storage_key is present.
+			if item.blobRef.StorageKey == "" {
+				return port.NewInvalidContentError(fmt.Sprintf(
+					"artifact %s: blob reference storage_key must not be empty",
+					item.artifactType,
+				))
+			}
+			// RE claim-check: validate content_hash is present.
+			if item.blobRef.ContentHash == "" {
+				return port.NewInvalidContentError(fmt.Sprintf(
+					"artifact %s: blob reference content_hash must not be empty",
+					item.artifactType,
+				))
+			}
+			// RE claim-check: validate declared size is positive.
+			if item.blobRef.SizeBytes <= 0 {
+				return port.NewInvalidContentError(fmt.Sprintf(
+					"artifact %s: blob reference size_bytes must be positive, got %d",
+					item.artifactType, item.blobRef.SizeBytes,
+				))
+			}
+			// RE claim-check: validate declared size within limit.
+			if item.blobRef.SizeBytes > s.maxBlobBytes {
+				return port.NewInvalidContentError(fmt.Sprintf(
+					"artifact %s: blob size %d exceeds limit %d",
+					item.artifactType, item.blobRef.SizeBytes, s.maxBlobBytes,
+				))
+			}
+			continue
+		}
+
+		// JSON artifact (DP/LIC): check size limit first to avoid parsing large payloads.
+		if int64(len(item.data)) > s.maxJSONBytes {
+			return port.NewInvalidContentError(fmt.Sprintf(
+				"artifact %s: size %d exceeds limit %d",
+				item.artifactType, len(item.data), s.maxJSONBytes,
+			))
+		}
+
+		// JSON artifact: validate JSON well-formedness.
+		if !json.Valid(item.data) {
+			return port.NewInvalidContentError(fmt.Sprintf(
+				"artifact %s: content is not valid JSON",
+				item.artifactType,
+			))
+		}
+	}
 	return nil
 }
 

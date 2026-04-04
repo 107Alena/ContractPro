@@ -1072,7 +1072,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-017"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-04",
+      "summary": "Реализована валидация содержимого входящих артефактов (BRE-029). ПОРТ: добавлен ErrCodeInvalidContent + NewInvalidContentError (non-retryable, route to DLQ) в port/errors.go. CONFIG: IngestionConfig с MaxJSONArtifactBytes (DM_INGESTION_MAX_JSON_BYTES default 10 MB) и MaxBlobSizeBytes (DM_INGESTION_MAX_BLOB_SIZE_BYTES default 100 MB) + envInt64 helper + Validate() checks. INGESTION SERVICE: validateArtifacts() private method — fail-fast на первом нарушении, size check ПЕРЕД json.Valid() для защиты от парсинга больших payload'ов; JSON artifacts (DP/LIC): size limit + json.Valid(); blob refs (RE): StorageKey non-empty + ContentHash non-empty + SizeBytes positive + SizeBytes within limit; интеграция в processIngestion() ПЕРЕД saveBlobs() — никакие S3 вызовы не происходят при невалидном контенте. MAIN.GO: wiring cfg.Ingestion.MaxJSONArtifactBytes и cfg.Ingestion.MaxBlobSizeBytes. РЕВЬЮ: code-reviewer → 0 blocking + 6 warnings; W-1 (StorageKey validation) и W-2 (ContentHash validation) исправлены. 12 новых unit-тестов ingestion (oversized JSON DP/LIC, invalid JSON, blob ref zero/negative size, blob ref oversized, empty StorageKey, empty ContentHash, valid pass-through, size-before-parse ordering, no-S3-on-failure) + 2 constructor panic tests (zero maxJSONBytes, negative maxBlobBytes) + 4 config тестов (validation zero/negative, defaults, overrides). Обновлены все call sites: main.go, testinfra.go, error_scenarios_test.go, 11 panic tests. Все тесты PASS с -race -count=1 (26 пакетов). go vet OK. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-050",

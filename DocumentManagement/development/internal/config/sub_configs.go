@@ -330,6 +330,19 @@ func loadRateLimitConfig() RateLimitConfig {
 	}
 }
 
+// IngestionConfig holds artifact content validation limits (BRE-029).
+type IngestionConfig struct {
+	MaxJSONArtifactBytes int64 // DM_INGESTION_MAX_JSON_BYTES (default: 10 MB)
+	MaxBlobSizeBytes     int64 // DM_INGESTION_MAX_BLOB_SIZE_BYTES (default: 100 MB)
+}
+
+func loadIngestionConfig() IngestionConfig {
+	return IngestionConfig{
+		MaxJSONArtifactBytes: envInt64("DM_INGESTION_MAX_JSON_BYTES", 10*1024*1024),
+		MaxBlobSizeBytes:     envInt64("DM_INGESTION_MAX_BLOB_SIZE_BYTES", 100*1024*1024),
+	}
+}
+
 func loadTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
 		StoragePut:      envDuration("DM_TIMEOUT_STORAGE_PUT", 30*time.Second),

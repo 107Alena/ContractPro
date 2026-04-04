@@ -936,7 +936,7 @@ type poolAuditPartitionManager struct {
 	pool  *pgxpool.Pool
 }
 
-func (m *poolAuditPartitionManager) EnsurePartitions(ctx context.Context, monthsAhead int) error {
+func (m *poolAuditPartitionManager) EnsurePartitions(ctx context.Context, monthsAhead int) (int, error) {
 	return m.inner.EnsurePartitions(postgres.InjectPool(ctx, m.pool), monthsAhead)
 }
 

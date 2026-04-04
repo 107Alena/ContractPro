@@ -222,8 +222,10 @@ func (j *DeletedMetaCleanupJob) scan() {
 func (j *DeletedMetaCleanupJob) deleteDocument(ctx context.Context, doc *model.Document) error {
 	return j.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
 		// 1. Clear current_version_id to break circular FK.
-		doc.CurrentVersionID = ""
-		if err := j.docRepo.Update(txCtx, doc); err != nil {
+		// Copy struct to avoid mutating the caller's slice element (W-2 review fix).
+		docCopy := *doc
+		docCopy.CurrentVersionID = ""
+		if err := j.docRepo.Update(txCtx, &docCopy); err != nil {
 			return err
 		}
 

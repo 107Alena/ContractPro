@@ -18,7 +18,7 @@ type AuditPartitionMetrics interface {
 // PartitionManager manages monthly audit_records partitions.
 // Implemented by postgres.AuditPartitionManager (via pool-injecting wrapper).
 type PartitionManager interface {
-	EnsurePartitions(ctx context.Context, monthsAhead int) error
+	EnsurePartitions(ctx context.Context, monthsAhead int) (int, error)
 	DropPartitionsOlderThan(ctx context.Context, cutoff time.Time) (int, error)
 }
 
@@ -109,12 +109,14 @@ func (j *AuditPartitionJob) scan() {
 	defer cancel()
 
 	// Create future partitions.
-	if err := j.partitionMgr.EnsurePartitions(ctx, j.cfg.AuditMonthsAhead); err != nil {
+	created, err := j.partitionMgr.EnsurePartitions(ctx, j.cfg.AuditMonthsAhead)
+	if err != nil {
 		j.logger.Error("retention audit partition: ensure partitions failed", "error", err)
 		return
 	}
-	// Report creation of monthsAhead+1 partitions (includes current month).
-	j.metrics.IncRetentionAuditPartitionsCreatedTotal(j.cfg.AuditMonthsAhead + 1)
+	if created > 0 {
+		j.metrics.IncRetentionAuditPartitionsCreatedTotal(created)
+	}
 
 	// Drop expired partitions.
 	cutoff := time.Now().UTC().AddDate(0, 0, -j.cfg.AuditDays)

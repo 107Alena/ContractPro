@@ -16,7 +16,9 @@ DROP INDEX IF EXISTS idx_audit_version;
 -- 2. Drop RLS policies on audit_records (from 000003_rls_policies).
 DROP POLICY IF EXISTS tenant_isolation_audit ON audit_records;
 
--- 3. Rename existing table to preserve data.
+-- 3. Lock and rename existing table to preserve data.
+--    ACCESS EXCLUSIVE prevents concurrent inserts during migration (B-3 review fix).
+LOCK TABLE audit_records IN ACCESS EXCLUSIVE MODE;
 ALTER TABLE audit_records RENAME TO audit_records_old;
 
 -- 4. Create partitioned table with identical schema.

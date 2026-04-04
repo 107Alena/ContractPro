@@ -457,7 +457,8 @@ type AuditPartitionManager interface {
 	// EnsurePartitions creates monthly partitions covering the next
 	// monthsAhead months from now. Already-existing partitions are
 	// silently skipped (CREATE TABLE IF NOT EXISTS).
-	EnsurePartitions(ctx context.Context, monthsAhead int) error
+	// Returns the number of partitions actually created.
+	EnsurePartitions(ctx context.Context, monthsAhead int) (int, error)
 
 	// DropPartitionsOlderThan drops partitions whose upper bound is
 	// strictly before cutoff. Returns the number of partitions dropped.

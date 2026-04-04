@@ -20,12 +20,15 @@ type mockPartitionManager struct {
 	mu             sync.Mutex
 }
 
-func (m *mockPartitionManager) EnsurePartitions(_ context.Context, monthsAhead int) error {
+func (m *mockPartitionManager) EnsurePartitions(_ context.Context, monthsAhead int) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ensureCalls++
 	m.ensureMonths = monthsAhead
-	return m.ensureErr
+	if m.ensureErr != nil {
+		return 0, m.ensureErr
+	}
+	return monthsAhead + 1, nil
 }
 
 func (m *mockPartitionManager) DropPartitionsOlderThan(_ context.Context, cutoff time.Time) (int, error) {

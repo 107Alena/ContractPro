@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"contractpro/document-management/internal/domain/port"
 )
 
@@ -23,31 +25,35 @@ func NewAuditPartitionManager() *AuditPartitionManager {
 // EnsurePartitions creates monthly partitions covering the next
 // monthsAhead months from the current month. Already-existing partitions
 // are silently skipped (IF NOT EXISTS).
-func (m *AuditPartitionManager) EnsurePartitions(ctx context.Context, monthsAhead int) error {
+func (m *AuditPartitionManager) EnsurePartitions(ctx context.Context, monthsAhead int) (int, error) {
 	conn := ConnFromCtx(ctx)
 
 	now := time.Now().UTC()
+	created := 0
 	for i := 0; i <= monthsAhead; i++ {
 		start := time.Date(now.Year(), now.Month()+time.Month(i), 1, 0, 0, 0, 0, time.UTC)
 		end := start.AddDate(0, 1, 0)
 
 		partitionName := fmt.Sprintf("audit_records_%04d_%02d", start.Year(), start.Month())
+		// Sanitize identifier to prevent SQL injection (B-1 review fix).
+		safeName := pgx.Identifier{partitionName}.Sanitize()
 
 		sql := fmt.Sprintf(
 			`CREATE TABLE IF NOT EXISTS %s PARTITION OF audit_records
 			 FOR VALUES FROM ('%s') TO ('%s')`,
-			partitionName,
+			safeName,
 			start.Format("2006-01-02"),
 			end.Format("2006-01-02"),
 		)
 
 		if _, err := conn.Exec(ctx, sql); err != nil {
-			return port.NewDatabaseError(
+			return created, port.NewDatabaseError(
 				fmt.Sprintf("create audit partition %s", partitionName), err,
 			)
 		}
+		created++
 	}
-	return nil
+	return created, nil
 }
 
 // DropPartitionsOlderThan drops partitions whose upper bound is before cutoff.
@@ -58,13 +64,14 @@ func (m *AuditPartitionManager) DropPartitionsOlderThan(ctx context.Context, cut
 	conn := ConnFromCtx(ctx)
 
 	// List all child partitions of audit_records (excluding the default partition).
+	// Use regex for precise matching: audit_records_YYYY_MM (B-2 review fix).
 	rows, err := conn.Query(ctx,
 		`SELECT c.relname
 		 FROM pg_inherits i
 		 JOIN pg_class c ON c.oid = i.inhrelid
 		 JOIN pg_class p ON p.oid = i.inhparent
 		 WHERE p.relname = 'audit_records'
-		   AND c.relname LIKE 'audit_records____\___'
+		   AND c.relname ~ '^audit_records_\d{4}_\d{2}$'
 		 ORDER BY c.relname`,
 	)
 	if err != nil {
@@ -95,7 +102,9 @@ func (m *AuditPartitionManager) DropPartitionsOlderThan(ctx context.Context, cut
 		upperBound := time.Date(year, time.Month(month)+1, 1, 0, 0, 0, 0, time.UTC)
 
 		if upperBound.Before(cutoff) {
-			sql := fmt.Sprintf("DROP TABLE IF EXISTS %s", name)
+			// Sanitize identifier to prevent SQL injection (B-1 review fix).
+			safeName := pgx.Identifier{name}.Sanitize()
+			sql := fmt.Sprintf("DROP TABLE IF EXISTS %s", safeName)
 			if _, err := conn.Exec(ctx, sql); err != nil {
 				return dropped, port.NewDatabaseError(
 					fmt.Sprintf("drop audit partition %s", name), err,

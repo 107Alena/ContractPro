@@ -10,6 +10,7 @@ import (
 
 	"contractpro/document-management/internal/config"
 	"contractpro/document-management/internal/domain/port"
+	"contractpro/document-management/internal/infra/concurrency"
 )
 
 // Compile-time interface check.
@@ -71,6 +72,7 @@ type Client struct {
 	mu          sync.RWMutex            // protects conn, pubCh, confirmCh, subs
 	publishMu   sync.Mutex              // serializes publish+confirm for correct ordering
 	subs        []subscription          // active subscriptions (re-subscribe after reconnect)
+	limiter     *concurrency.Semaphore   // global concurrency limiter (BRE-007); nil = synchronous
 	done        chan struct{}            // closed on Close()
 	wg          sync.WaitGroup          // tracks goroutines (reconnect loop, consumers)
 	dialFn      func(addr string) (AMQPAPI, error) // injectable for testing
@@ -144,7 +146,11 @@ func (w *amqpChanWrapper) NotifyClose(receiver chan *amqp.Error) chan *amqp.Erro
 // NewClient creates a Client configured for the given BrokerConfig and ConsumerConfig.
 // It dials the AMQP server (with optional TLS), creates a dedicated publish channel
 // with publisher confirms enabled, and starts the reconnection loop.
-func NewClient(cfg config.BrokerConfig, consumerCfg config.ConsumerConfig) (*Client, error) {
+//
+// The limiter parameter controls consumer backpressure (BRE-007): when non-nil,
+// message handlers are dispatched in goroutines, limited by the semaphore capacity.
+// When nil, messages are processed synchronously (one at a time per subscription).
+func NewClient(cfg config.BrokerConfig, consumerCfg config.ConsumerConfig, limiter *concurrency.Semaphore) (*Client, error) {
 	dialFn := makeDialFn(cfg.TLS)
 
 	conn, err := dialFn(cfg.Address)
@@ -166,6 +172,7 @@ func NewClient(cfg config.BrokerConfig, consumerCfg config.ConsumerConfig) (*Cli
 		conn:        conn,
 		pubCh:       pubCh,
 		confirmCh:   confirmCh,
+		limiter:     limiter,
 		done:        make(chan struct{}),
 		dialFn:      dialFn,
 		cancelCtx:   ctx,
@@ -216,7 +223,8 @@ func setupPublishChannel(conn AMQPAPI) (AMQPChannelAPI, <-chan amqp.Confirmation
 
 // newClientWithAMQP creates a Client with an injected AMQPAPI connection
 // and dial function. Used for testing — does NOT start the reconnect loop.
-func newClientWithAMQP(conn AMQPAPI, dialFn func(string) (AMQPAPI, error), cfg config.BrokerConfig, consumerCfg config.ConsumerConfig) *Client {
+// The limiter parameter may be nil for synchronous processing.
+func newClientWithAMQP(conn AMQPAPI, dialFn func(string) (AMQPAPI, error), cfg config.BrokerConfig, consumerCfg config.ConsumerConfig, limiter *concurrency.Semaphore) *Client {
 	var pubCh AMQPChannelAPI
 	var confirmCh <-chan amqp.Confirmation
 	if conn != nil {
@@ -231,6 +239,7 @@ func newClientWithAMQP(conn AMQPAPI, dialFn func(string) (AMQPAPI, error), cfg c
 		conn:        conn,
 		pubCh:       pubCh,
 		confirmCh:   confirmCh,
+		limiter:     limiter,
 		done:        make(chan struct{}),
 		dialFn:      dialFn,
 		cancelCtx:   ctx,
@@ -358,12 +367,29 @@ func (c *Client) subscribe(queue string, handler MessageHandler) error {
 	return nil
 }
 
-// consumeLoop processes deliveries from the channel. On handler success it
-// Acks the delivery; on handler error it Nacks with requeue. The loop
-// exits when the deliveries channel closes or the done channel is signalled.
+// consumeLoop processes deliveries from the channel.
+//
+// When a concurrency limiter is configured (BRE-007), deliveries are dispatched
+// in goroutines limited by the semaphore capacity. When the semaphore is full,
+// the loop blocks on Acquire — no Ack/Nack is issued, so RabbitMQ respects
+// the prefetch limit and stops delivering messages. This creates natural
+// backpressure from consumer to broker.
+//
+// When no limiter is configured, messages are processed synchronously (one at
+// a time per subscription).
+//
+// On handler success: Ack. On handler error: Nack with requeue.
+// The loop exits when the deliveries channel closes or the done channel is
+// signalled. On exit, it waits for in-flight handlers to complete before
+// closing the AMQP channel.
 func (c *Client) consumeLoop(ch AMQPChannelAPI, deliveries <-chan amqp.Delivery, handler MessageHandler) {
 	defer c.wg.Done()
-	defer ch.Close()
+
+	var handlerWg sync.WaitGroup
+	defer func() {
+		handlerWg.Wait()
+		ch.Close()
+	}()
 
 	for {
 		select {
@@ -373,11 +399,35 @@ func (c *Client) consumeLoop(ch AMQPChannelAPI, deliveries <-chan amqp.Delivery,
 			if !ok {
 				return
 			}
-			if err := handler(c.cancelCtx, d.Body); err != nil {
-				_ = d.Nack(false, true)
-			} else {
-				_ = d.Ack(false)
+
+			if c.limiter == nil {
+				// Synchronous fallback: process inline.
+				if err := handler(c.cancelCtx, d.Body); err != nil {
+					_ = d.Nack(false, true)
+				} else {
+					_ = d.Ack(false)
+				}
+				continue
 			}
+
+			// BRE-007: acquire concurrency slot before dispatching handler.
+			if err := c.limiter.Acquire(c.cancelCtx); err != nil {
+				// Context cancelled (shutdown) — requeue the message.
+				_ = d.Nack(false, true)
+				return
+			}
+
+			handlerWg.Add(1)
+			go func(d amqp.Delivery) {
+				defer handlerWg.Done()
+				defer c.limiter.Release()
+
+				if err := handler(c.cancelCtx, d.Body); err != nil {
+					_ = d.Nack(false, true)
+				} else {
+					_ = d.Ack(false)
+				}
+			}(d)
 		}
 	}
 }

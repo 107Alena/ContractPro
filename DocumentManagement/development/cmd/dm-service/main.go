@@ -25,6 +25,7 @@ import (
 	"contractpro/document-management/internal/egress/dlq"
 	"contractpro/document-management/internal/egress/outbox"
 	"contractpro/document-management/internal/infra/circuitbreaker"
+	"contractpro/document-management/internal/infra/concurrency"
 	"contractpro/document-management/internal/infra/broker"
 	"contractpro/document-management/internal/infra/health"
 	"contractpro/document-management/internal/infra/kvstore"
@@ -116,9 +117,21 @@ func run() int {
 	}
 
 	// -----------------------------------------------------------------------
-	// Phase 5: RabbitMQ + topology
+	// Phase 5: RabbitMQ + topology (with consumer backpressure — BRE-007)
 	// -----------------------------------------------------------------------
-	brokerClient, err := broker.NewClient(cfg.Broker, cfg.Consumer)
+	if cfg.Consumer.Prefetch < cfg.Consumer.Concurrency {
+		logger.Warn("DM_CONSUMER_PREFETCH < DM_CONSUMER_CONCURRENCY: some concurrency slots will always be idle",
+			"prefetch", cfg.Consumer.Prefetch,
+			"concurrency", cfg.Consumer.Concurrency,
+		)
+	}
+
+	consumerLimiter := concurrency.NewSemaphore(
+		cfg.Consumer.Concurrency,
+		obs.Logger.With("component", "concurrency-limiter"),
+	)
+
+	brokerClient, err := broker.NewClient(cfg.Broker, cfg.Consumer, consumerLimiter)
 	if err != nil {
 		logger.Error("broker connect failed", "error", err)
 		_ = kvClient.Close()

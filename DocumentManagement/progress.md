@@ -1979,3 +1979,46 @@
 - DM-TASK-043 (Consumer backpressure)
 
 ---
+
+## DM-TASK-043: BRE-007: Consumer backpressure (2026-04-04)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `internal/infra/concurrency/limiter.go` — channel-based Semaphore:
+  - Acquire(ctx) blocks до освобождения слота или cancellation контекста
+  - Release() освобождает слот, логирует warning при вызове без Acquire
+  - ActiveCount() и Capacity() для наблюдаемости
+  - Consumer-side Logger interface (Debug, Warn) для dependency inversion
+  - Capacity guard: maxConcurrent < 1 → 1
+- Интеграция в `internal/infra/broker/client.go`:
+  - Добавлен `limiter *concurrency.Semaphore` field в Client
+  - NewClient и newClientWithAMQP принимают limiter (nil = synchronous fallback)
+  - consumeLoop переписан: goroutine dispatch с Acquire/Release
+  - Per-loop handlerWg: Wait() перед ch.Close() для graceful shutdown
+  - Acquire cancelled (shutdown) → Nack с requeue
+- Config validation: Concurrency >= 1, Prefetch >= 1
+- main.go: Semaphore wiring + WARN при Prefetch < Concurrency
+
+**Backpressure flow:**
+1. RabbitMQ delivers up to Prefetch (10) unacked messages
+2. consumeLoop reads delivery → limiter.Acquire
+3. If < Concurrency (5) handlers running → goroutine dispatched
+4. When all 5 slots full → Acquire blocks → loop stops reading → no Ack/Nack
+5. RabbitMQ sees unacked count at prefetch → holds messages in queue
+6. Handler finishes → Release + Ack → RabbitMQ delivers next message
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (26 пакетов)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Тесты:** 15 limiter + 6 broker concurrency + 2 config validation = 23 новых теста
+
+**Ревью (code-reviewer):** 0B + 5W, W3 (prefetch warn) исправлен
+
+**Следующие задачи (high priority pending):**
+- DM-TASK-040 (Archive endpoint — possibly already implemented in DM-TASK-019/022)
+- DM-TASK-042 (Outbox FIFO ordering — possibly already implemented in DM-TASK-016)
+
+---

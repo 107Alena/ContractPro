@@ -3,8 +3,10 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 
 	"contractpro/document-management/internal/config"
 	"contractpro/document-management/internal/domain/port"
+	"contractpro/document-management/internal/infra/concurrency"
 )
 
 // ---------------------------------------------------------------------------
@@ -214,7 +217,7 @@ func newTestClient(conn *mockAMQPConn, dialFn func(string) (AMQPAPI, error)) (*C
 		return ch, nil
 	}
 
-	client := newClientWithAMQP(conn, dialFn, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(conn, dialFn, testBrokerConfig(), testConsumerConfig(), nil)
 	return client, confirmCh
 }
 
@@ -334,7 +337,7 @@ func TestPublish_ChannelError(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 	err := client.Publish(context.Background(), "topic", []byte("data"))
 
 	if err == nil {
@@ -371,7 +374,7 @@ func TestPublish_ContextCancelled(t *testing.T) {
 }
 
 func TestPublish_NotConnected(t *testing.T) {
-	client := newClientWithAMQP(nil, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(nil, nil, testBrokerConfig(), testConsumerConfig(), nil)
 	err := client.Publish(context.Background(), "topic", []byte("data"))
 
 	if err == nil {
@@ -428,7 +431,7 @@ func TestSubscribe_Success(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 
 	handler := func(ctx context.Context, body []byte) error {
 		received <- body
@@ -494,7 +497,7 @@ func TestSubscribe_QueueDeclareError(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 	err := client.Subscribe("bad-queue", func(ctx context.Context, body []byte) error { return nil })
 
 	if err == nil {
@@ -532,7 +535,7 @@ func TestSubscribe_HandlerError_Nacks(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 
 	handler := func(ctx context.Context, body []byte) error {
 		return errors.New("processing failed")
@@ -589,7 +592,7 @@ func TestSubscribe_HandlerSuccess_Acks(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 
 	handler := func(ctx context.Context, body []byte) error {
 		return nil
@@ -646,7 +649,7 @@ func TestDeclareTopology_Success(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 
 	err := client.DeclareTopology()
 	if err != nil {
@@ -697,7 +700,7 @@ func TestDeclareTopology_Success(t *testing.T) {
 }
 
 func TestDeclareTopology_NotConnected(t *testing.T) {
-	client := newClientWithAMQP(nil, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(nil, nil, testBrokerConfig(), testConsumerConfig(), nil)
 	err := client.DeclareTopology()
 
 	if err == nil {
@@ -729,7 +732,7 @@ func TestDeclareTopology_QueueDeclareError(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 	err := client.DeclareTopology()
 
 	if err == nil {
@@ -782,7 +785,7 @@ func TestClose_GracefulShutdown(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 
 	err := client.Subscribe("test-queue", func(ctx context.Context, body []byte) error { return nil })
 	if err != nil {
@@ -820,7 +823,7 @@ func TestClose_Idempotent(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 
 	err1 := client.Close()
 	if err1 != nil {
@@ -843,7 +846,7 @@ func TestIsConnected_True(t *testing.T) {
 			return newDefaultMockChannel(), nil
 		},
 	}
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 
 	if !client.IsConnected() {
 		t.Error("expected IsConnected=true for connected client")
@@ -851,7 +854,7 @@ func TestIsConnected_True(t *testing.T) {
 }
 
 func TestIsConnected_FalseWhenNil(t *testing.T) {
-	client := newClientWithAMQP(nil, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(nil, nil, testBrokerConfig(), testConsumerConfig(), nil)
 
 	if client.IsConnected() {
 		t.Error("expected IsConnected=false for nil connection")
@@ -1013,7 +1016,7 @@ func TestReconnectWithBackoff_DialFailsThenSucceeds(t *testing.T) {
 			return newDefaultMockChannel(), nil
 		},
 	}
-	client := newClientWithAMQP(oldMockConn, dialFn, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(oldMockConn, dialFn, testBrokerConfig(), testConsumerConfig(), nil)
 
 	// Register a subscription to verify re-subscribe after reconnect.
 	received := make(chan []byte, 1)
@@ -1065,7 +1068,7 @@ func TestReconnectWithBackoff_StopsOnDone(t *testing.T) {
 		return nil, errors.New("always fail")
 	}
 
-	client := newClientWithAMQP(nil, dialFn, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(nil, dialFn, testBrokerConfig(), testConsumerConfig(), nil)
 
 	// Close done channel after a short delay to stop the reconnect loop.
 	go func() {
@@ -1116,7 +1119,7 @@ func TestReconnectWithBackoff_ReEnablesConfirms(t *testing.T) {
 			return newDefaultMockChannel(), nil
 		},
 	}
-	client := newClientWithAMQP(oldMockConn, dialFn, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(oldMockConn, dialFn, testBrokerConfig(), testConsumerConfig(), nil)
 
 	client.reconnectWithBackoff()
 
@@ -1163,7 +1166,7 @@ func TestSubscribe_CancelContextOnClose(t *testing.T) {
 		},
 	}
 
-	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig())
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
 
 	handler := func(ctx context.Context, body []byte) error {
 		<-ctx.Done()
@@ -1225,4 +1228,425 @@ func TestDLQQueueArgs(t *testing.T) {
 	if args["x-message-ttl"] != int32(dlqMessageTTL) {
 		t.Errorf("x-message-ttl = %v, want %v", args["x-message-ttl"], int32(dlqMessageTTL))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Consumer Backpressure (BRE-007) Tests
+// ---------------------------------------------------------------------------
+
+type testLimiterLogger struct{}
+
+func (l *testLimiterLogger) Debug(msg string, args ...any) {}
+func (l *testLimiterLogger) Warn(msg string, args ...any)  {}
+
+func TestConsumeLoop_WithLimiter_ConcurrentDispatch(t *testing.T) {
+	// Verify that with a limiter, messages are dispatched concurrently.
+	deliveryCh := make(chan amqp.Delivery, 10)
+	var ackCount, nackCount atomic.Int64
+
+	acker := &mockAcknowledger{
+		ackFn:  func(tag uint64, multiple bool) error { ackCount.Add(1); return nil },
+		nackFn: func(tag uint64, multiple bool, requeue bool) error { nackCount.Add(1); return nil },
+	}
+
+	mockConn := &mockAMQPConn{
+		channelFn: func() (AMQPChannelAPI, error) {
+			return &mockAMQPChannel{
+				queueDeclareFn: func(name string, durable, autoDelete, exclusive, noWait bool, args amqp.Table) (amqp.Queue, error) {
+					return amqp.Queue{Name: name}, nil
+				},
+				consumeFn: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+					return deliveryCh, nil
+				},
+			}, nil
+		},
+	}
+
+	limiter := concurrency.NewSemaphore(3, &testLimiterLogger{})
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), limiter)
+
+	var processing atomic.Int64
+	var peak atomic.Int64
+	done := make(chan struct{})
+
+	handler := func(ctx context.Context, body []byte) error {
+		cur := processing.Add(1)
+		for {
+			old := peak.Load()
+			if cur <= old || peak.CompareAndSwap(old, cur) {
+				break
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+		processing.Add(-1)
+		return nil
+	}
+
+	if err := client.Subscribe("test-queue", handler); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Send 6 messages.
+	for i := 0; i < 6; i++ {
+		deliveryCh <- amqp.Delivery{
+			Acknowledger: acker,
+			Body:         []byte(fmt.Sprintf("msg-%d", i)),
+		}
+	}
+
+	go func() {
+		// Wait for all messages to be acked.
+		for ackCount.Load() < 6 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for messages to be processed")
+	}
+
+	if ackCount.Load() != 6 {
+		t.Errorf("expected 6 acks, got %d", ackCount.Load())
+	}
+	if peak.Load() > 3 {
+		t.Errorf("peak concurrent=%d exceeded limiter capacity=3", peak.Load())
+	}
+	if peak.Load() < 2 {
+		t.Errorf("peak concurrent=%d; expected at least 2 concurrent handlers", peak.Load())
+	}
+
+	_ = client.Close()
+}
+
+func TestConsumeLoop_WithLimiter_HandlerError_NacksWithRequeue(t *testing.T) {
+	deliveryCh := make(chan amqp.Delivery, 2)
+	nackCh := make(chan bool, 2)
+
+	acker := &mockAcknowledger{
+		nackFn: func(tag uint64, multiple bool, requeue bool) error {
+			nackCh <- requeue
+			return nil
+		},
+	}
+
+	mockConn := &mockAMQPConn{
+		channelFn: func() (AMQPChannelAPI, error) {
+			return &mockAMQPChannel{
+				queueDeclareFn: func(name string, durable, autoDelete, exclusive, noWait bool, args amqp.Table) (amqp.Queue, error) {
+					return amqp.Queue{Name: name}, nil
+				},
+				consumeFn: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+					return deliveryCh, nil
+				},
+			}, nil
+		},
+	}
+
+	limiter := concurrency.NewSemaphore(2, &testLimiterLogger{})
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), limiter)
+
+	handler := func(ctx context.Context, body []byte) error {
+		return fmt.Errorf("handler error")
+	}
+
+	if err := client.Subscribe("test-queue", handler); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	deliveryCh <- amqp.Delivery{Acknowledger: acker, Body: []byte("fail")}
+
+	select {
+	case requeue := <-nackCh:
+		if !requeue {
+			t.Error("expected Nack with requeue=true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for Nack")
+	}
+
+	_ = client.Close()
+}
+
+func TestConsumeLoop_WithLimiter_GracefulShutdown_WaitsForInflight(t *testing.T) {
+	deliveryCh := make(chan amqp.Delivery, 5)
+	handlerStarted := make(chan struct{})
+	handlerBlocking := make(chan struct{})
+	ackCh := make(chan struct{}, 5)
+
+	acker := &mockAcknowledger{
+		ackFn: func(tag uint64, multiple bool) error {
+			ackCh <- struct{}{}
+			return nil
+		},
+	}
+
+	mockConn := &mockAMQPConn{
+		channelFn: func() (AMQPChannelAPI, error) {
+			return &mockAMQPChannel{
+				queueDeclareFn: func(name string, durable, autoDelete, exclusive, noWait bool, args amqp.Table) (amqp.Queue, error) {
+					return amqp.Queue{Name: name}, nil
+				},
+				consumeFn: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+					return deliveryCh, nil
+				},
+			}, nil
+		},
+	}
+
+	limiter := concurrency.NewSemaphore(2, &testLimiterLogger{})
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), limiter)
+
+	var callCount atomic.Int64
+	handler := func(ctx context.Context, body []byte) error {
+		n := callCount.Add(1)
+		if n == 1 {
+			close(handlerStarted)
+			<-handlerBlocking // block until released
+		}
+		return nil
+	}
+
+	if err := client.Subscribe("test-queue", handler); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Send a message and wait for handler to start.
+	deliveryCh <- amqp.Delivery{Acknowledger: acker, Body: []byte("blocking")}
+	<-handlerStarted
+
+	// Start Close in background — it should wait for the in-flight handler.
+	closeDone := make(chan struct{})
+	go func() {
+		_ = client.Close()
+		close(closeDone)
+	}()
+
+	// Give Close a moment to signal done.
+	time.Sleep(50 * time.Millisecond)
+
+	// Close should NOT be done yet (handler is still blocked).
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before in-flight handler finished")
+	default:
+	}
+
+	// Release the handler.
+	close(handlerBlocking)
+
+	// Now Close should complete.
+	select {
+	case <-closeDone:
+		// success
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return after in-flight handler finished")
+	}
+}
+
+func TestConsumeLoop_WithoutLimiter_SynchronousFallback(t *testing.T) {
+	deliveryCh := make(chan amqp.Delivery, 3)
+	var ackOrder []int
+	var mu sync.Mutex
+	ackDone := make(chan struct{})
+
+	acker := &mockAcknowledger{
+		ackFn: func(tag uint64, multiple bool) error {
+			mu.Lock()
+			ackOrder = append(ackOrder, int(tag))
+			done := len(ackOrder) >= 3
+			mu.Unlock()
+			if done {
+				select {
+				case <-ackDone:
+				default:
+					close(ackDone)
+				}
+			}
+			return nil
+		},
+	}
+
+	mockConn := &mockAMQPConn{
+		channelFn: func() (AMQPChannelAPI, error) {
+			return &mockAMQPChannel{
+				queueDeclareFn: func(name string, durable, autoDelete, exclusive, noWait bool, args amqp.Table) (amqp.Queue, error) {
+					return amqp.Queue{Name: name}, nil
+				},
+				consumeFn: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+					return deliveryCh, nil
+				},
+			}, nil
+		},
+	}
+
+	// No limiter = synchronous.
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), nil)
+
+	handler := func(ctx context.Context, body []byte) error {
+		return nil
+	}
+
+	if err := client.Subscribe("test-queue", handler); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Send 3 messages.
+	for i := 1; i <= 3; i++ {
+		deliveryCh <- amqp.Delivery{
+			Acknowledger: acker,
+			DeliveryTag:  uint64(i),
+			Body:         []byte(fmt.Sprintf("msg-%d", i)),
+		}
+	}
+
+	select {
+	case <-ackDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for messages to be processed")
+	}
+
+	mu.Lock()
+	if len(ackOrder) != 3 {
+		t.Errorf("expected 3 acks, got %d", len(ackOrder))
+	}
+	// In synchronous mode, acks should be in order.
+	for i, tag := range ackOrder {
+		if tag != i+1 {
+			t.Errorf("ack[%d] = %d, expected %d (sequential order)", i, tag, i+1)
+		}
+	}
+	mu.Unlock()
+
+	_ = client.Close()
+}
+
+func TestConsumeLoop_WithLimiter_AcquireCancelled_RequeuesMessage(t *testing.T) {
+	// When Close is called, the limiter's Acquire context is cancelled.
+	// The message should be Nacked with requeue.
+	deliveryCh := make(chan amqp.Delivery, 2)
+	nackCh := make(chan bool, 1)
+
+	acker := &mockAcknowledger{
+		nackFn: func(tag uint64, multiple bool, requeue bool) error {
+			nackCh <- requeue
+			return nil
+		},
+	}
+
+	// Fill limiter to capacity.
+	limiter := concurrency.NewSemaphore(1, &testLimiterLogger{})
+
+	handlerStarted := make(chan struct{})
+	mockConn := &mockAMQPConn{
+		channelFn: func() (AMQPChannelAPI, error) {
+			return &mockAMQPChannel{
+				queueDeclareFn: func(name string, durable, autoDelete, exclusive, noWait bool, args amqp.Table) (amqp.Queue, error) {
+					return amqp.Queue{Name: name}, nil
+				},
+				consumeFn: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+					return deliveryCh, nil
+				},
+			}, nil
+		},
+	}
+
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), limiter)
+
+	handler := func(ctx context.Context, body []byte) error {
+		if string(body) == "blocking" {
+			close(handlerStarted)
+			<-ctx.Done() // block until cancelled
+		}
+		return nil
+	}
+
+	if err := client.Subscribe("test-queue", handler); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// First message fills the only slot.
+	deliveryCh <- amqp.Delivery{
+		Acknowledger: &mockAcknowledger{
+			nackFn: func(tag uint64, multiple bool, requeue bool) error { return nil },
+		},
+		Body: []byte("blocking"),
+	}
+	<-handlerStarted
+
+	// Second message — Acquire will block because slot is full.
+	deliveryCh <- amqp.Delivery{Acknowledger: acker, Body: []byte("queued")}
+
+	// Give time for the second message to reach the Acquire call.
+	time.Sleep(50 * time.Millisecond)
+
+	// Close cancels context → Acquire fails → Nack with requeue.
+	go func() { _ = client.Close() }()
+
+	select {
+	case requeue := <-nackCh:
+		if !requeue {
+			t.Error("expected Nack with requeue=true on acquire cancellation")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for Nack on acquire cancellation")
+	}
+}
+
+func TestConsumeLoop_WithLimiter_ReleasesSlotAfterAck(t *testing.T) {
+	deliveryCh := make(chan amqp.Delivery, 5)
+	var ackCount atomic.Int64
+
+	acker := &mockAcknowledger{
+		ackFn: func(tag uint64, multiple bool) error { ackCount.Add(1); return nil },
+	}
+
+	mockConn := &mockAMQPConn{
+		channelFn: func() (AMQPChannelAPI, error) {
+			return &mockAMQPChannel{
+				queueDeclareFn: func(name string, durable, autoDelete, exclusive, noWait bool, args amqp.Table) (amqp.Queue, error) {
+					return amqp.Queue{Name: name}, nil
+				},
+				consumeFn: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+					return deliveryCh, nil
+				},
+			}, nil
+		},
+	}
+
+	// Capacity 1 — only one at a time, but all should complete.
+	limiter := concurrency.NewSemaphore(1, &testLimiterLogger{})
+	client := newClientWithAMQP(mockConn, nil, testBrokerConfig(), testConsumerConfig(), limiter)
+
+	handler := func(ctx context.Context, body []byte) error {
+		return nil
+	}
+
+	if err := client.Subscribe("test-queue", handler); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Send 5 messages — they must all complete even with capacity=1.
+	for i := 0; i < 5; i++ {
+		deliveryCh <- amqp.Delivery{Acknowledger: acker, Body: []byte("msg")}
+	}
+
+	// Wait for all acks.
+	deadline := time.After(5 * time.Second)
+	for ackCount.Load() < 5 {
+		select {
+		case <-deadline:
+			t.Fatalf("timeout: only %d/5 messages acked", ackCount.Load())
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	if limiter.ActiveCount() != 0 {
+		t.Errorf("expected 0 active slots after all messages processed, got %d", limiter.ActiveCount())
+	}
+
+	_ = client.Close()
 }

@@ -542,6 +542,7 @@ func TestValidate_FullConfig(t *testing.T) {
 		Storage:       StorageConfig{Endpoint: "e", Bucket: "b", AccessKey: "ak", SecretKey: "sk"},
 		KVStore:       KVStoreConfig{Address: "localhost:6379"},
 		HTTP:          HTTPConfig{Port: 8080},
+		Consumer:      ConsumerConfig{Prefetch: 10, Concurrency: 5},
 		Observability: ObservabilityConfig{MetricsPort: 9090},
 		CircuitBreaker: CircuitBreakerConfig{
 			MaxRequests:      3,
@@ -565,6 +566,7 @@ func TestValidate_PortCollision(t *testing.T) {
 		Storage:       StorageConfig{Endpoint: "e", Bucket: "b", AccessKey: "ak", SecretKey: "sk"},
 		KVStore:       KVStoreConfig{Address: "localhost:6379"},
 		HTTP:          HTTPConfig{Port: 8080},
+		Consumer:      ConsumerConfig{Prefetch: 10, Concurrency: 5},
 		Observability: ObservabilityConfig{MetricsPort: 8080}, // same as HTTP
 		CircuitBreaker: CircuitBreakerConfig{
 			MaxRequests:      3,
@@ -593,6 +595,54 @@ func TestLoad_PortCollision_SamePort(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "DM_HTTP_PORT and DM_METRICS_PORT must differ") || !strings.Contains(err.Error(), "invalid:") {
 		t.Errorf("error should mention port collision, got: %s", err.Error())
+	}
+}
+
+// --- Consumer config validation tests (BRE-007) ---
+
+func TestValidate_ConsumerConcurrencyZero(t *testing.T) {
+	cfg := &Config{
+		Database:      DatabaseConfig{DSN: "postgres://localhost/dm"},
+		Broker:        BrokerConfig{Address: "localhost:5672"},
+		Storage:       StorageConfig{Endpoint: "e", Bucket: "b", AccessKey: "ak", SecretKey: "sk"},
+		KVStore:       KVStoreConfig{Address: "localhost:6379"},
+		HTTP:          HTTPConfig{Port: 8080},
+		Consumer:      ConsumerConfig{Prefetch: 10, Concurrency: 0},
+		Observability: ObservabilityConfig{MetricsPort: 9090},
+		CircuitBreaker: CircuitBreakerConfig{
+			MaxRequests: 3, Timeout: 30 * time.Second,
+			FailureThreshold: 5, PerEventBudget: 35 * time.Second,
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for zero concurrency")
+	}
+	if !strings.Contains(err.Error(), "DM_CONSUMER_CONCURRENCY must be >= 1") {
+		t.Errorf("expected concurrency error, got: %s", err.Error())
+	}
+}
+
+func TestValidate_ConsumerPrefetchZero(t *testing.T) {
+	cfg := &Config{
+		Database:      DatabaseConfig{DSN: "postgres://localhost/dm"},
+		Broker:        BrokerConfig{Address: "localhost:5672"},
+		Storage:       StorageConfig{Endpoint: "e", Bucket: "b", AccessKey: "ak", SecretKey: "sk"},
+		KVStore:       KVStoreConfig{Address: "localhost:6379"},
+		HTTP:          HTTPConfig{Port: 8080},
+		Consumer:      ConsumerConfig{Prefetch: 0, Concurrency: 5},
+		Observability: ObservabilityConfig{MetricsPort: 9090},
+		CircuitBreaker: CircuitBreakerConfig{
+			MaxRequests: 3, Timeout: 30 * time.Second,
+			FailureThreshold: 5, PerEventBudget: 35 * time.Second,
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for zero prefetch")
+	}
+	if !strings.Contains(err.Error(), "DM_CONSUMER_PREFETCH must be >= 1") {
+		t.Errorf("expected prefetch error, got: %s", err.Error())
 	}
 }
 

@@ -96,6 +96,12 @@ func (c *Config) Validate() error {
 	if c.HTTP.Port == c.Observability.MetricsPort {
 		invalid = append(invalid, "DM_HTTP_PORT and DM_METRICS_PORT must differ")
 	}
+	if c.Consumer.Concurrency < 1 {
+		invalid = append(invalid, "DM_CONSUMER_CONCURRENCY must be >= 1")
+	}
+	if c.Consumer.Prefetch < 1 {
+		invalid = append(invalid, "DM_CONSUMER_PREFETCH must be >= 1")
+	}
 	if c.CircuitBreaker.PerEventBudget <= 0 {
 		invalid = append(invalid, "DM_CB_PER_EVENT_BUDGET must be positive")
 	}

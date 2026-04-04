@@ -957,7 +957,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-007"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-04",
+      "summary": "Реализован consumer backpressure (BRE-007) для DM. НОВЫЙ ПАКЕТ: internal/infra/concurrency/limiter.go — channel-based Semaphore с Acquire(ctx)/Release, atomic.Int64 active count, consumer-side Logger interface, capacity guard (< 1 → 1), panic на nil logger. BROKER INTEGRATION: добавлен limiter *concurrency.Semaphore field в Client; NewClient и newClientWithAMQP принимают limiter (nil = synchronous fallback); consumeLoop переписан: при наличии limiter — goroutine dispatch с Acquire/Release, per-loop handlerWg для in-flight handlers, handlerWg.Wait() перед ch.Close() (graceful shutdown); при nil limiter — synchronous processing (backward compatible); Acquire cancelled → Nack с requeue. CONFIG VALIDATION: Consumer.Concurrency >= 1, Consumer.Prefetch >= 1 в Validate(). MAIN.GO: concurrency.NewSemaphore(cfg.Consumer.Concurrency, logger) + broker.NewClient(..., limiter) + WARN при Prefetch < Concurrency. BACKPRESSURE FLOW: RabbitMQ delivers up to Prefetch(10) unacked msgs → consumeLoop reads delivery → limiter.Acquire → goroutine handler → Ack/Nack + Release; when all Concurrency(5) slots full → Acquire blocks → loop stops reading → no Ack → RabbitMQ holds messages in queue. РЕВЬЮ: code-reviewer → 0 blocking, 5 warnings (W1: double-Release doc, W2: priority inversion acceptable v1, W3: prefetch<concurrency warn → FIXED, W4: select bias benign, W5: reconnect transient over-count safe). 15 limiter tests (constructor panics, acquire/release, fill/drain, context cancel/timeout, release without acquire, concurrency cap, all tasks complete, logging) + 6 broker concurrency tests (concurrent dispatch peak cap, handler error nack, graceful shutdown waits in-flight, synchronous fallback, acquire cancelled requeue, slot release verify) + 2 config validation tests. Все тесты PASS с -race -count=1 (26 пакетов). go vet OK. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-044",

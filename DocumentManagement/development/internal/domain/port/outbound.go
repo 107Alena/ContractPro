@@ -63,6 +63,17 @@ type DocumentRepository interface {
 
 	// ExistsByID returns true if a document exists for the given organization.
 	ExistsByID(ctx context.Context, organizationID, documentID string) (bool, error)
+
+	// FindDeletedOlderThan returns documents with status=DELETED whose
+	// deleted_at is older than cutoff, up to limit results ordered by
+	// deleted_at ASC. Cross-tenant system-level query (no org filter).
+	// Used by retention blob/metadata cleanup jobs.
+	FindDeletedOlderThan(ctx context.Context, cutoff time.Time, limit int) ([]*model.Document, error)
+
+	// DeleteByID hard-deletes a document row by document_id.
+	// Cross-tenant system-level query. Used by metadata retention cleanup
+	// after all dependent rows are removed. Idempotent: returns nil if absent.
+	DeleteByID(ctx context.Context, documentID string) error
 }
 
 // VersionRepository provides CRUD for DocumentVersion entities.
@@ -95,6 +106,16 @@ type VersionRepository interface {
 
 	// NextVersionNumber returns the next sequential version number for a document.
 	NextVersionNumber(ctx context.Context, organizationID, documentID string) (int, error)
+
+	// DeleteByDocument removes all version rows for a document_id.
+	// Cross-tenant system-level query for retention metadata cleanup.
+	// Must be called AFTER deleting artifacts for each version. Idempotent.
+	DeleteByDocument(ctx context.Context, documentID string) error
+
+	// ListByDocument returns all versions for a document (no org filter).
+	// Cross-tenant system-level query for retention metadata cleanup.
+	// Returns an empty slice (not nil) if no versions exist.
+	ListByDocument(ctx context.Context, documentID string) ([]*model.DocumentVersion, error)
 
 	// FindStaleInIntermediateStatus returns versions whose artifact_status is
 	// in a non-terminal state (PENDING, PROCESSING_ARTIFACTS_RECEIVED,
@@ -161,6 +182,10 @@ type AuditRepository interface {
 
 	// List returns audit records matching the given filter, ordered by created_at descending.
 	List(ctx context.Context, params AuditListParams) ([]*model.AuditRecord, int, error)
+
+	// DeleteByDocument removes all audit records for a document_id.
+	// Cross-tenant system-level query for retention metadata cleanup. Idempotent.
+	DeleteByDocument(ctx context.Context, documentID string) error
 }
 
 // AuditListParams holds the filter and pagination parameters for listing audit records.
@@ -418,6 +443,26 @@ type OrphanCandidate struct {
 // ---------------------------------------------------------------------------
 // Document fallback resolver — cross-tenant lookup for backward compatibility.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Audit partition manager — monthly RANGE partitions on audit_records (REV-027).
+// ---------------------------------------------------------------------------
+
+// AuditPartitionManager manages monthly RANGE partitions on
+// audit_records.created_at. The partitioned table is created by migration
+// 000004_audit_partitions. This interface provides runtime partition
+// lifecycle operations (create future, drop expired).
+// Implemented by: PostgreSQL adapter (infra layer).
+type AuditPartitionManager interface {
+	// EnsurePartitions creates monthly partitions covering the next
+	// monthsAhead months from now. Already-existing partitions are
+	// silently skipped (CREATE TABLE IF NOT EXISTS).
+	EnsurePartitions(ctx context.Context, monthsAhead int) error
+
+	// DropPartitionsOlderThan drops partitions whose upper bound is
+	// strictly before cutoff. Returns the number of partitions dropped.
+	DropPartitionsOlderThan(ctx context.Context, cutoff time.Time) (int, error)
+}
 
 // DocumentFallbackResolver provides cross-tenant document lookup for backward
 // compatibility with DP versions that don't send version_id or organization_id

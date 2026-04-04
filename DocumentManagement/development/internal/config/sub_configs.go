@@ -200,14 +200,27 @@ type RetentionConfig struct {
 	DeletedBlobDays int // DM_RETENTION_DELETED_BLOB_DAYS (default: 30)
 	DeletedMetaDays int // DM_RETENTION_DELETED_META_DAYS (default: 365)
 	AuditDays       int // DM_RETENTION_AUDIT_DAYS (default: 1095)
+
+	BlobScanInterval  time.Duration // DM_RETENTION_BLOB_SCAN_INTERVAL (default: 6h)
+	MetaScanInterval  time.Duration // DM_RETENTION_META_SCAN_INTERVAL (default: 24h)
+	AuditScanInterval time.Duration // DM_RETENTION_AUDIT_SCAN_INTERVAL (default: 24h)
+	BatchSize         int           // DM_RETENTION_BATCH_SIZE (default: 50)
+	ScanTimeout       time.Duration // DM_RETENTION_SCAN_TIMEOUT (default: 300s)
+	AuditMonthsAhead  int           // DM_RETENTION_AUDIT_MONTHS_AHEAD (default: 3)
 }
 
 func loadRetentionConfig() RetentionConfig {
 	return RetentionConfig{
-		ArchiveDays:     envInt("DM_RETENTION_ARCHIVE_DAYS", 90),
-		DeletedBlobDays: envInt("DM_RETENTION_DELETED_BLOB_DAYS", 30),
-		DeletedMetaDays: envInt("DM_RETENTION_DELETED_META_DAYS", 365),
-		AuditDays:       envInt("DM_RETENTION_AUDIT_DAYS", 1095),
+		ArchiveDays:       envInt("DM_RETENTION_ARCHIVE_DAYS", 90),
+		DeletedBlobDays:   envInt("DM_RETENTION_DELETED_BLOB_DAYS", 30),
+		DeletedMetaDays:   envInt("DM_RETENTION_DELETED_META_DAYS", 365),
+		AuditDays:         envInt("DM_RETENTION_AUDIT_DAYS", 1095),
+		BlobScanInterval:  envDuration("DM_RETENTION_BLOB_SCAN_INTERVAL", 6*time.Hour),
+		MetaScanInterval:  envDuration("DM_RETENTION_META_SCAN_INTERVAL", 24*time.Hour),
+		AuditScanInterval: envDuration("DM_RETENTION_AUDIT_SCAN_INTERVAL", 24*time.Hour),
+		BatchSize:         envInt("DM_RETENTION_BATCH_SIZE", 50),
+		ScanTimeout:       envDuration("DM_RETENTION_SCAN_TIMEOUT", 300*time.Second),
+		AuditMonthsAhead:  envInt("DM_RETENTION_AUDIT_MONTHS_AHEAD", 3),
 	}
 }
 

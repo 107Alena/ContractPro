@@ -68,6 +68,12 @@ func (m *mockVersionRepo) NextVersionNumber(context.Context, string, string) (in
 func (m *mockVersionRepo) FindStaleInIntermediateStatus(context.Context, time.Time, int) ([]*model.DocumentVersion, error) {
 	panic("not used in diff")
 }
+func (m *mockVersionRepo) DeleteByDocument(context.Context, string) error {
+	panic("not used in diff")
+}
+func (m *mockVersionRepo) ListByDocument(context.Context, string) ([]*model.DocumentVersion, error) {
+	panic("not used in diff")
+}
 
 type mockDiffRepo struct {
 	inserted  []*model.VersionDiffReference
@@ -111,6 +117,9 @@ func (m *mockAuditRepo) Insert(ctx context.Context, r *model.AuditRecord) error 
 }
 
 func (m *mockAuditRepo) List(context.Context, port.AuditListParams) ([]*model.AuditRecord, int, error) {
+	panic("not used in diff service")
+}
+func (m *mockAuditRepo) DeleteByDocument(context.Context, string) error {
 	panic("not used in diff service")
 }
 

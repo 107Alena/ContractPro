@@ -68,6 +68,14 @@ func (m *mockDocumentRepo) ExistsByID(context.Context, string, string) (bool, er
 	panic("not used in version")
 }
 
+func (m *mockDocumentRepo) FindDeletedOlderThan(context.Context, time.Time, int) ([]*model.Document, error) {
+	panic("not used in version")
+}
+
+func (m *mockDocumentRepo) DeleteByID(context.Context, string) error {
+	panic("not used in version")
+}
+
 type mockVersionRepo struct {
 	insertFn            func(ctx context.Context, version *model.DocumentVersion) error
 	findByIDFn          func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error)
@@ -112,6 +120,14 @@ func (m *mockVersionRepo) NextVersionNumber(ctx context.Context, orgID, docID st
 	return 1, nil
 }
 
+func (m *mockVersionRepo) DeleteByDocument(context.Context, string) error {
+	panic("not used in version management")
+}
+
+func (m *mockVersionRepo) ListByDocument(context.Context, string) ([]*model.DocumentVersion, error) {
+	panic("not used in version management")
+}
+
 type mockAuditRepo struct {
 	inserted  []*model.AuditRecord
 	insertErr error
@@ -125,6 +141,10 @@ func (m *mockAuditRepo) Insert(_ context.Context, r *model.AuditRecord) error {
 	return nil
 }
 func (m *mockAuditRepo) List(context.Context, port.AuditListParams) ([]*model.AuditRecord, int, error) {
+	panic("not used in version")
+}
+
+func (m *mockAuditRepo) DeleteByDocument(context.Context, string) error {
 	panic("not used in version")
 }
 

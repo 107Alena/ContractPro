@@ -170,6 +170,21 @@ func scanAuditWithTotal(rows pgx.Rows) (*model.AuditRecord, int, error) {
 	return &rec, totalCount, nil
 }
 
+// DeleteByDocument removes all audit records for a document_id.
+// Cross-tenant system-level query for retention metadata cleanup. Idempotent.
+func (r *AuditRepository) DeleteByDocument(ctx context.Context, documentID string) error {
+	conn := ConnFromCtx(ctx)
+
+	_, err := conn.Exec(ctx,
+		`DELETE FROM audit_records WHERE document_id = $1`,
+		documentID,
+	)
+	if err != nil {
+		return port.NewDatabaseError("delete audit records by document", err)
+	}
+	return nil
+}
+
 // nullableJSON converts a json.RawMessage to a value suitable for pgx.
 // nil or empty RawMessage → nil (SQL NULL).
 func nullableJSON(data json.RawMessage) any {

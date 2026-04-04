@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"contractpro/document-management/internal/domain/model"
 	"contractpro/document-management/internal/domain/port"
@@ -75,6 +76,14 @@ func (m *mockDocumentRepo) ExistsByID(context.Context, string, string) (bool, er
 	panic("not used in lifecycle")
 }
 
+func (m *mockDocumentRepo) FindDeletedOlderThan(context.Context, time.Time, int) ([]*model.Document, error) {
+	panic("not used in lifecycle")
+}
+
+func (m *mockDocumentRepo) DeleteByID(context.Context, string) error {
+	panic("not used in lifecycle")
+}
+
 type mockAuditRepo struct {
 	inserted  []*model.AuditRecord
 	insertErr error
@@ -89,6 +98,10 @@ func (m *mockAuditRepo) Insert(_ context.Context, r *model.AuditRecord) error {
 }
 
 func (m *mockAuditRepo) List(context.Context, port.AuditListParams) ([]*model.AuditRecord, int, error) {
+	panic("not used in lifecycle")
+}
+
+func (m *mockAuditRepo) DeleteByDocument(context.Context, string) error {
 	panic("not used in lifecycle")
 }
 

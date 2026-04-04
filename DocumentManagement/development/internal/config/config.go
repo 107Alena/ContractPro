@@ -133,6 +133,24 @@ func (c *Config) Validate() error {
 	if c.OrphanCleanup.ScanTimeout <= 0 {
 		invalid = append(invalid, "DM_ORPHAN_SCAN_TIMEOUT must be positive")
 	}
+	if c.Retention.BlobScanInterval <= 0 {
+		invalid = append(invalid, "DM_RETENTION_BLOB_SCAN_INTERVAL must be positive")
+	}
+	if c.Retention.MetaScanInterval <= 0 {
+		invalid = append(invalid, "DM_RETENTION_META_SCAN_INTERVAL must be positive")
+	}
+	if c.Retention.AuditScanInterval <= 0 {
+		invalid = append(invalid, "DM_RETENTION_AUDIT_SCAN_INTERVAL must be positive")
+	}
+	if c.Retention.BatchSize <= 0 {
+		invalid = append(invalid, "DM_RETENTION_BATCH_SIZE must be positive")
+	}
+	if c.Retention.ScanTimeout <= 0 {
+		invalid = append(invalid, "DM_RETENTION_SCAN_TIMEOUT must be positive")
+	}
+	if c.Retention.AuditMonthsAhead <= 0 {
+		invalid = append(invalid, "DM_RETENTION_AUDIT_MONTHS_AHEAD must be positive")
+	}
 	if c.RateLimit.Enabled {
 		if c.RateLimit.ReadRPS <= 0 {
 			invalid = append(invalid, "DM_RATELIMIT_READ_RPS must be positive when rate limiting is enabled")

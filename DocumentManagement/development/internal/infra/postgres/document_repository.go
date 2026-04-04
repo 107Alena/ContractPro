@@ -210,6 +210,59 @@ func (r *DocumentRepository) ExistsByID(ctx context.Context, organizationID, doc
 	return exists, nil
 }
 
+// FindDeletedOlderThan returns documents with status=DELETED whose
+// deleted_at is older than cutoff, up to limit results ordered by deleted_at ASC.
+// Cross-tenant system-level query (no org filter) for retention cleanup.
+func (r *DocumentRepository) FindDeletedOlderThan(ctx context.Context, cutoff time.Time, limit int) ([]*model.Document, error) {
+	conn := ConnFromCtx(ctx)
+
+	rows, err := conn.Query(ctx,
+		`SELECT document_id, organization_id, title, current_version_id, status,
+				created_by_user_id, created_at, updated_at, deleted_at
+		FROM documents
+		WHERE status = 'DELETED' AND deleted_at IS NOT NULL AND deleted_at < $1
+		ORDER BY deleted_at ASC
+		LIMIT $2`,
+		cutoff, limit,
+	)
+	if err != nil {
+		return nil, port.NewDatabaseError("find deleted documents older than", err)
+	}
+	defer rows.Close()
+
+	var docs []*model.Document
+	for rows.Next() {
+		doc, err := scanDocument(rows)
+		if err != nil {
+			return nil, port.NewDatabaseError("scan deleted document row", err)
+		}
+		docs = append(docs, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, port.NewDatabaseError("iterate deleted document rows", err)
+	}
+	if docs == nil {
+		docs = []*model.Document{}
+	}
+	return docs, nil
+}
+
+// DeleteByID hard-deletes a document row by document_id.
+// Cross-tenant system-level query. Idempotent: returns nil if row absent.
+// Used by metadata retention after all dependent rows are removed.
+func (r *DocumentRepository) DeleteByID(ctx context.Context, documentID string) error {
+	conn := ConnFromCtx(ctx)
+
+	_, err := conn.Exec(ctx,
+		`DELETE FROM documents WHERE document_id = $1`,
+		documentID,
+	)
+	if err != nil {
+		return port.NewDatabaseError("delete document by id", err)
+	}
+	return nil
+}
+
 // scanDocument scans a single document row.
 func scanDocument(row pgx.Row) (*model.Document, error) {
 	var (

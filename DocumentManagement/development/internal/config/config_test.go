@@ -561,6 +561,18 @@ func TestValidate_FullConfig(t *testing.T) {
 			GracePeriod:  1 * time.Hour,
 			ScanTimeout:  120 * time.Second,
 		},
+		Retention: RetentionConfig{
+			ArchiveDays:       90,
+			DeletedBlobDays:   30,
+			DeletedMetaDays:   365,
+			AuditDays:         1095,
+			BlobScanInterval:  6 * time.Hour,
+			MetaScanInterval:  24 * time.Hour,
+			AuditScanInterval: 24 * time.Hour,
+			BatchSize:         50,
+			ScanTimeout:       300 * time.Second,
+			AuditMonthsAhead:  3,
+		},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error, got: %v", err)
@@ -586,6 +598,7 @@ func TestValidate_PortCollision(t *testing.T) {
 		},
 		Ingestion:     IngestionConfig{MaxJSONArtifactBytes: 10 * 1024 * 1024, MaxBlobSizeBytes: 100 * 1024 * 1024},
 		OrphanCleanup: OrphanCleanupConfig{ScanInterval: time.Hour, BatchSize: 100, GracePeriod: time.Hour, ScanTimeout: 120 * time.Second},
+		Retention:     RetentionConfig{BlobScanInterval: 6 * time.Hour, MetaScanInterval: 24 * time.Hour, AuditScanInterval: 24 * time.Hour, BatchSize: 50, ScanTimeout: 300 * time.Second, AuditMonthsAhead: 3},
 	}
 	err := cfg.Validate()
 	if err == nil {

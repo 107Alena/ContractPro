@@ -285,6 +285,14 @@ func (r *memoryDocumentRepository) ExistsByID(ctx context.Context, orgID, docID 
 	return ok, nil
 }
 
+func (r *memoryDocumentRepository) FindDeletedOlderThan(_ context.Context, _ time.Time, _ int) ([]*model.Document, error) {
+	return []*model.Document{}, nil
+}
+
+func (r *memoryDocumentRepository) DeleteByID(_ context.Context, _ string) error {
+	return nil
+}
+
 var _ port.DocumentRepository = (*memoryDocumentRepository)(nil)
 
 // ---------------------------------------------------------------------------
@@ -414,6 +422,26 @@ func (r *memoryVersionRepository) FindStaleInIntermediateStatus(_ context.Contex
 		}
 		if len(result) >= limit {
 			break
+		}
+	}
+	if result == nil {
+		result = []*model.DocumentVersion{}
+	}
+	return result, nil
+}
+
+func (r *memoryVersionRepository) DeleteByDocument(_ context.Context, _ string) error {
+	return nil
+}
+
+func (r *memoryVersionRepository) ListByDocument(_ context.Context, documentID string) ([]*model.DocumentVersion, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var result []*model.DocumentVersion
+	for _, v := range r.versions {
+		if v.DocumentID == documentID {
+			cp := *v
+			result = append(result, &cp)
 		}
 	}
 	if result == nil {
@@ -632,6 +660,10 @@ func (r *memoryAuditRepository) allRecords() []*model.AuditRecord {
 	result := make([]*model.AuditRecord, len(r.records))
 	copy(result, r.records)
 	return result
+}
+
+func (r *memoryAuditRepository) DeleteByDocument(_ context.Context, _ string) error {
+	return nil
 }
 
 var _ port.AuditRepository = (*memoryAuditRepository)(nil)

@@ -170,6 +170,9 @@ func (m *mockAuditRepo) getInserted() []*model.AuditRecord {
 func (m *mockAuditRepo) List(context.Context, port.AuditListParams) ([]*model.AuditRecord, int, error) {
 	panic("not used in query")
 }
+func (m *mockAuditRepo) DeleteByDocument(context.Context, string) error {
+	panic("not used in query")
+}
 
 type mockDocExistence struct {
 	exists bool

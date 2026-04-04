@@ -109,6 +109,26 @@ type Metrics struct {
 	// across all scan cycles.
 	OrphansDeletedTotal prometheus.Counter
 
+	// --- Retention jobs ---
+
+	// retentionBlobDeletedTotal counts blobs deleted by the blob cleanup job.
+	retentionBlobDeletedTotal prometheus.Counter
+
+	// retentionBlobScanDocsCount is the number of documents found in the last blob scan.
+	retentionBlobScanDocsCount prometheus.Gauge
+
+	// retentionMetaDeletedTotal counts documents metadata-cleaned by the meta cleanup job.
+	retentionMetaDeletedTotal prometheus.Counter
+
+	// retentionMetaScanDocsCount is the number of documents found in the last meta scan.
+	retentionMetaScanDocsCount prometheus.Gauge
+
+	// retentionAuditPartitionsCreatedTotal counts audit partitions created.
+	retentionAuditPartitionsCreatedTotal prometheus.Counter
+
+	// retentionAuditPartitionsDroppedTotal counts audit partitions dropped.
+	retentionAuditPartitionsDroppedTotal prometheus.Counter
+
 	// --- Circuit breaker ---
 
 	// CircuitBreakerState tracks the circuit breaker state (0=closed, 1=half-open, 2=open)
@@ -236,6 +256,36 @@ func NewMetrics() *Metrics {
 			Help: "Total number of orphan S3 blobs deleted by the cleanup job (BRE-008).",
 		}),
 
+		retentionBlobDeletedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "dm_retention_blob_deleted_total",
+			Help: "Total number of blobs deleted by the blob cleanup job.",
+		}),
+
+		retentionBlobScanDocsCount: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "dm_retention_blob_scan_docs_count",
+			Help: "Number of documents found in the last blob scan.",
+		}),
+
+		retentionMetaDeletedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "dm_retention_meta_deleted_total",
+			Help: "Total number of documents metadata-cleaned by the meta cleanup job.",
+		}),
+
+		retentionMetaScanDocsCount: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "dm_retention_meta_scan_docs_count",
+			Help: "Number of documents found in the last meta scan.",
+		}),
+
+		retentionAuditPartitionsCreatedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "dm_retention_audit_partitions_created_total",
+			Help: "Total number of audit partitions created.",
+		}),
+
+		retentionAuditPartitionsDroppedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "dm_retention_audit_partitions_dropped_total",
+			Help: "Total number of audit partitions dropped.",
+		}),
+
 		CircuitBreakerState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "dm_circuit_breaker_state",
 			Help: "Circuit breaker state per component (0=closed, 1=half-open, 2=open).",
@@ -267,6 +317,12 @@ func NewMetrics() *Metrics {
 		m.RateLimitedTotal,
 		m.OrphanCandidatesCount,
 		m.OrphansDeletedTotal,
+		m.retentionBlobDeletedTotal,
+		m.retentionBlobScanDocsCount,
+		m.retentionMetaDeletedTotal,
+		m.retentionMetaScanDocsCount,
+		m.retentionAuditPartitionsCreatedTotal,
+		m.retentionAuditPartitionsDroppedTotal,
 		m.CircuitBreakerState,
 	)
 
@@ -432,4 +488,50 @@ func (m *Metrics) SetOrphanCandidatesCount(count float64) {
 // (read/write). Called when a request is rejected by per-organization rate limiting.
 func (m *Metrics) IncRateLimited(limitType string) {
 	m.RateLimitedTotal.WithLabelValues(limitType).Inc()
+}
+
+// ---------------------------------------------------------------------------
+// retention.RetentionMetrics interface
+// ---------------------------------------------------------------------------
+
+// IncRetentionBlobDeletedTotal increments dm_retention_blob_deleted_total by count.
+// Non-positive values are ignored (prometheus.Counter.Add panics on negative).
+func (m *Metrics) IncRetentionBlobDeletedTotal(count int) {
+	if count > 0 {
+		m.retentionBlobDeletedTotal.Add(float64(count))
+	}
+}
+
+// SetRetentionBlobScanDocsCount sets the dm_retention_blob_scan_docs_count gauge.
+func (m *Metrics) SetRetentionBlobScanDocsCount(count float64) {
+	m.retentionBlobScanDocsCount.Set(count)
+}
+
+// IncRetentionMetaDeletedTotal increments dm_retention_meta_deleted_total by count.
+// Non-positive values are ignored (prometheus.Counter.Add panics on negative).
+func (m *Metrics) IncRetentionMetaDeletedTotal(count int) {
+	if count > 0 {
+		m.retentionMetaDeletedTotal.Add(float64(count))
+	}
+}
+
+// SetRetentionMetaScanDocsCount sets the dm_retention_meta_scan_docs_count gauge.
+func (m *Metrics) SetRetentionMetaScanDocsCount(count float64) {
+	m.retentionMetaScanDocsCount.Set(count)
+}
+
+// IncRetentionAuditPartitionsCreatedTotal increments dm_retention_audit_partitions_created_total by count.
+// Non-positive values are ignored (prometheus.Counter.Add panics on negative).
+func (m *Metrics) IncRetentionAuditPartitionsCreatedTotal(count int) {
+	if count > 0 {
+		m.retentionAuditPartitionsCreatedTotal.Add(float64(count))
+	}
+}
+
+// IncRetentionAuditPartitionsDroppedTotal increments dm_retention_audit_partitions_dropped_total by count.
+// Non-positive values are ignored (prometheus.Counter.Add panics on negative).
+func (m *Metrics) IncRetentionAuditPartitionsDroppedTotal(count int) {
+	if count > 0 {
+		m.retentionAuditPartitionsDroppedTotal.Add(float64(count))
+	}
 }

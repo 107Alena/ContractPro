@@ -2221,3 +2221,54 @@
 - No Transactor needed — each candidate processed independently, partial failure safe
 
 ---
+
+## DM-TASK-032: Retention Jobs — soft delete cleanup + archive blob + audit partition (2026-04-05)
+
+**Статус:** done
+
+**План реализации:**
+1. Расширить RetentionConfig (BlobScanInterval, MetaScanInterval, AuditScanInterval, BatchSize, ScanTimeout, AuditMonthsAhead)
+2. Добавить port interface методы (FindDeletedOlderThan, DeleteByID, ListByDocument, DeleteByDocument, AuditPartitionManager)
+3. Реализовать PostgreSQL adapter методы + AuditPartitionManager
+4. Создать миграцию 000004 для partition by range на audit_records
+5. Добавить 6 Prometheus метрик для retention jobs
+6. Создать 3 background job в internal/application/retention/
+7. Интегрировать в main.go (wiring + graceful shutdown)
+
+**Реализация:**
+
+НОВЫЙ ПАКЕТ: `internal/application/retention/` (3 job файла + 3 test файла)
+
+1. **DeletedBlobCleanupJob** (`blobcleanup.go`): Периодическая очистка S3 blobs для DELETED документов старше DM_RETENTION_DELETED_BLOB_DAYS (default 30d). Flow: FindDeletedOlderThan → для каждого doc → DeleteByPrefix(org_id/doc_id/). Без DB-мутаций — только blob deletion. Consumer-side interfaces: BlobCleanupMetrics, DeletedDocumentFinder, BlobDeleter.
+
+2. **DeletedMetaCleanupJob** (`metacleanup.go`): Hard-delete метаданных для DELETED документов старше DM_RETENTION_DELETED_META_DAYS (default 365d). Flow per doc в транзакции: clear current_version_id → delete artifacts per version → delete diffs → delete audit → delete versions → delete document. FK deletion order critical. Consumer-side interfaces: MetaCleanupTransactor, MetaCleanupDocumentRepo, MetaCleanupVersionRepo, MetaCleanupArtifactRepo, MetaCleanupDiffRepo, MetaCleanupAuditRepo, MetaCleanupMetrics.
+
+3. **AuditPartitionJob** (`auditpartition.go`): Управление monthly RANGE partitions на audit_records (REV-027). Flow: EnsurePartitions(monthsAhead) → DropPartitionsOlderThan(now - AuditDays). Consumer-side interfaces: PartitionManager, AuditPartitionMetrics.
+
+ПОРТЫ: DocumentRepository + FindDeletedOlderThan + DeleteByID, VersionRepository + DeleteByDocument + ListByDocument, AuditRepository + DeleteByDocument, AuditPartitionManager interface (EnsurePartitions, DropPartitionsOlderThan).
+
+POSTGRESQL: 5 новых repository методов + AuditPartitionManager adapter (pg_catalog query для partition listing, CREATE TABLE IF NOT EXISTS ... PARTITION OF, DROP TABLE IF EXISTS).
+
+МИГРАЦИЯ: 000004_audit_partitions — конвертация audit_records в PARTITION BY RANGE (created_at), PK=(audit_id, created_at), default partition, RLS re-apply.
+
+CONFIG: RetentionConfig + 6 новых env vars (DM_RETENTION_BLOB_SCAN_INTERVAL, DM_RETENTION_META_SCAN_INTERVAL, DM_RETENTION_AUDIT_SCAN_INTERVAL, DM_RETENTION_BATCH_SIZE, DM_RETENTION_SCAN_TIMEOUT, DM_RETENTION_AUDIT_MONTHS_AHEAD) + validation.
+
+OBSERVABILITY: 6 новых Prometheus метрик (dm_retention_blob_deleted_total, dm_retention_blob_scan_docs_count, dm_retention_meta_deleted_total, dm_retention_meta_scan_docs_count, dm_retention_audit_partitions_created_total, dm_retention_audit_partitions_dropped_total).
+
+MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager wrappers, 3 job Start(), shutdown Phases 3.6-3.8.
+
+**Тесты:**
+- 10 blobcleanup tests: 4 constructor panics, happy path, no docs, finder error, partial storage failure, context cancelled, start/stop, double stop
+- 12 metacleanup tests: 8 constructor panics, happy path, multiple docs, no docs, finder error, artifact/diff delete errors, doc no versions, start/stop, double stop, FK delete order verification
+- 10 auditpartition tests: 3 constructor panics, constructor success, happy path, nothing dropped, ensure error, drop error, cutoff verification, start/stop, double stop
+- Updated 8 existing test files (mock interface compliance)
+- Все 28 пакетов PASS с -race -count=1
+
+**Ключевые решения:**
+- Blob cleanup и meta cleanup раздельные jobs (разные интервалы: 6h vs 24h, blob cleanup = fire-and-forget S3, meta cleanup = transactional DB cascade)
+- FK deletion order: artifacts → diffs → audit → versions → document (circular FK break: clear current_version_id first)
+- Cross-tenant queries для retention (system-level, no org filter)
+- Audit partitioning via PARTITION BY RANGE + runtime partition management (CREATE/DROP)
+- S3 lifecycle rules для archived documents — documentation only (no code)
+
+---

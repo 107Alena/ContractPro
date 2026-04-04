@@ -19,6 +19,7 @@ import (
 	"contractpro/document-management/internal/application/lifecycle"
 	"contractpro/document-management/internal/application/orphancleanup"
 	"contractpro/document-management/internal/application/query"
+	"contractpro/document-management/internal/application/retention"
 	"contractpro/document-management/internal/application/version"
 	"contractpro/document-management/internal/application/watchdog"
 	"contractpro/document-management/internal/config"
@@ -51,6 +52,9 @@ var (
 	_ port.ArtifactRepository   = (*poolArtifactRepository)(nil)
 	_ port.AuditRepository              = (*poolAuditRepository)(nil)
 	_ port.OrphanCandidateRepository    = (*poolOrphanCandidateRepository)(nil)
+	_ port.DocumentRepository           = (*poolDocumentRepository)(nil)
+	_ port.DiffRepository               = (*poolDiffRepository)(nil)
+	_ port.AuditPartitionManager        = (*poolAuditPartitionManager)(nil)
 )
 
 func main() {
@@ -286,6 +290,32 @@ func run() int {
 	)
 
 	// -----------------------------------------------------------------------
+	// Phase 11.7: Retention Jobs (DM-TASK-032)
+	// -----------------------------------------------------------------------
+	poolDocRepo := &poolDocumentRepository{inner: docRepo, pool: pool}
+	poolDiffRepo := &poolDiffRepository{inner: diffRepo, pool: pool}
+
+	blobCleanupJob := retention.NewDeletedBlobCleanupJob(
+		poolDocRepo, objClient, obs.Metrics,
+		obs.Logger.Slog().With("component", "retention-blob"),
+		cfg.Retention,
+	)
+	metaCleanupJob := retention.NewDeletedMetaCleanupJob(
+		transactor, poolDocRepo, poolVersionRepo, poolArtifactRepo,
+		poolDiffRepo, poolAuditRepo, obs.Metrics,
+		obs.Logger.Slog().With("component", "retention-meta"),
+		cfg.Retention,
+	)
+
+	auditPartitionMgr := postgres.NewAuditPartitionManager()
+	poolAuditPartMgr := &poolAuditPartitionManager{inner: auditPartitionMgr, pool: pool}
+	auditPartitionJob := retention.NewAuditPartitionJob(
+		poolAuditPartMgr, obs.Metrics,
+		obs.Logger.Slog().With("component", "retention-audit"),
+		cfg.Retention,
+	)
+
+	// -----------------------------------------------------------------------
 	// Phase 12: Event Consumer (subscribes to 7 incoming topics)
 	// -----------------------------------------------------------------------
 	brokerSub := &poolSubscribeAdapter{client: brokerClient, pool: pool}
@@ -418,6 +448,7 @@ func run() int {
 			doShutdown(logger, cfg.Timeout.Shutdown, healthHandler,
 				outboxPoller, outboxMetricsCollector, staleWatchdog,
 				orphanCleanupJob,
+				blobCleanupJob, metaCleanupJob, auditPartitionJob,
 				orgRateLimiter,
 				brokerClient, httpServer, metricsServer,
 				kvClient, pgClient, obs)
@@ -462,11 +493,14 @@ func run() int {
 		return 1
 	}
 
-	// Start outbox poller, metrics collector, stale version watchdog, and orphan cleanup.
+	// Start outbox poller, metrics collector, stale version watchdog, orphan cleanup, and retention jobs.
 	outboxPoller.Start()
 	outboxMetricsCollector.Start()
 	staleWatchdog.Start()
 	orphanCleanupJob.Start()
+	blobCleanupJob.Start()
+	metaCleanupJob.Start()
+	auditPartitionJob.Start()
 
 	// Mark service ready for traffic.
 	healthHandler.SetReady(true)
@@ -508,6 +542,9 @@ func doShutdown(
 	outboxMetrics *outbox.OutboxMetricsCollector,
 	staleWatchdog *watchdog.StaleVersionWatchdog,
 	orphanCleanup *orphancleanup.OrphanCleanupJob,
+	blobCleanup *retention.DeletedBlobCleanupJob,
+	metaCleanup *retention.DeletedMetaCleanupJob,
+	auditPartition *retention.AuditPartitionJob,
 	rateLimiter *api.OrgRateLimiter,
 	brokerClient *broker.Client,
 	httpServer *http.Server,
@@ -557,7 +594,34 @@ func doShutdown(
 		logger.Warn("orphan cleanup stop timeout")
 	}
 
-	// Phase 3.6: Stop rate limiter GC goroutine.
+	// Phase 3.6: Stop retention blob cleanup job.
+	logger.Info("stopping retention blob cleanup")
+	blobCleanup.Stop()
+	select {
+	case <-blobCleanup.Done():
+	case <-ctx.Done():
+		logger.Warn("retention blob cleanup stop timeout")
+	}
+
+	// Phase 3.7: Stop retention meta cleanup job.
+	logger.Info("stopping retention meta cleanup")
+	metaCleanup.Stop()
+	select {
+	case <-metaCleanup.Done():
+	case <-ctx.Done():
+		logger.Warn("retention meta cleanup stop timeout")
+	}
+
+	// Phase 3.8: Stop audit partition job.
+	logger.Info("stopping audit partition job")
+	auditPartition.Stop()
+	select {
+	case <-auditPartition.Done():
+	case <-ctx.Done():
+		logger.Warn("audit partition stop timeout")
+	}
+
+	// Phase 3.9: Stop rate limiter GC goroutine.
 	if rateLimiter != nil {
 		rateLimiter.Close()
 	}
@@ -723,6 +787,14 @@ func (r *poolVersionRepository) NextVersionNumber(ctx context.Context, orgID, do
 	return r.inner.NextVersionNumber(postgres.InjectPool(ctx, r.pool), orgID, docID)
 }
 
+func (r *poolVersionRepository) DeleteByDocument(ctx context.Context, documentID string) error {
+	return r.inner.DeleteByDocument(postgres.InjectPool(ctx, r.pool), documentID)
+}
+
+func (r *poolVersionRepository) ListByDocument(ctx context.Context, documentID string) ([]*model.DocumentVersion, error) {
+	return r.inner.ListByDocument(postgres.InjectPool(ctx, r.pool), documentID)
+}
+
 func (r *poolVersionRepository) FindStaleInIntermediateStatus(ctx context.Context, cutoff time.Time, limit int) ([]*model.DocumentVersion, error) {
 	return r.inner.FindStaleInIntermediateStatus(postgres.InjectPool(ctx, r.pool), cutoff, limit)
 }
@@ -789,4 +861,85 @@ func (r *poolAuditRepository) Insert(ctx context.Context, record *model.AuditRec
 
 func (r *poolAuditRepository) List(ctx context.Context, params port.AuditListParams) ([]*model.AuditRecord, int, error) {
 	return r.inner.List(postgres.InjectPool(ctx, r.pool), params)
+}
+
+func (r *poolAuditRepository) DeleteByDocument(ctx context.Context, documentID string) error {
+	return r.inner.DeleteByDocument(postgres.InjectPool(ctx, r.pool), documentID)
+}
+
+// poolDocumentRepository wraps port.DocumentRepository to inject the pgxpool.Pool.
+// Required by retention jobs which create context.Background() in scan goroutines.
+type poolDocumentRepository struct {
+	inner port.DocumentRepository
+	pool  *pgxpool.Pool
+}
+
+func (r *poolDocumentRepository) Insert(ctx context.Context, doc *model.Document) error {
+	return r.inner.Insert(postgres.InjectPool(ctx, r.pool), doc)
+}
+
+func (r *poolDocumentRepository) FindByID(ctx context.Context, orgID, docID string) (*model.Document, error) {
+	return r.inner.FindByID(postgres.InjectPool(ctx, r.pool), orgID, docID)
+}
+
+func (r *poolDocumentRepository) FindByIDForUpdate(ctx context.Context, orgID, docID string) (*model.Document, error) {
+	return r.inner.FindByIDForUpdate(postgres.InjectPool(ctx, r.pool), orgID, docID)
+}
+
+func (r *poolDocumentRepository) List(ctx context.Context, orgID string, sf *model.DocumentStatus, page, pageSize int) ([]*model.Document, int, error) {
+	return r.inner.List(postgres.InjectPool(ctx, r.pool), orgID, sf, page, pageSize)
+}
+
+func (r *poolDocumentRepository) Update(ctx context.Context, doc *model.Document) error {
+	return r.inner.Update(postgres.InjectPool(ctx, r.pool), doc)
+}
+
+func (r *poolDocumentRepository) ExistsByID(ctx context.Context, orgID, docID string) (bool, error) {
+	return r.inner.ExistsByID(postgres.InjectPool(ctx, r.pool), orgID, docID)
+}
+
+func (r *poolDocumentRepository) FindDeletedOlderThan(ctx context.Context, cutoff time.Time, limit int) ([]*model.Document, error) {
+	return r.inner.FindDeletedOlderThan(postgres.InjectPool(ctx, r.pool), cutoff, limit)
+}
+
+func (r *poolDocumentRepository) DeleteByID(ctx context.Context, documentID string) error {
+	return r.inner.DeleteByID(postgres.InjectPool(ctx, r.pool), documentID)
+}
+
+// poolDiffRepository wraps port.DiffRepository to inject the pgxpool.Pool.
+// Required by retention meta cleanup job.
+type poolDiffRepository struct {
+	inner port.DiffRepository
+	pool  *pgxpool.Pool
+}
+
+func (r *poolDiffRepository) Insert(ctx context.Context, ref *model.VersionDiffReference) error {
+	return r.inner.Insert(postgres.InjectPool(ctx, r.pool), ref)
+}
+
+func (r *poolDiffRepository) FindByVersionPair(ctx context.Context, orgID, docID, baseVersionID, targetVersionID string) (*model.VersionDiffReference, error) {
+	return r.inner.FindByVersionPair(postgres.InjectPool(ctx, r.pool), orgID, docID, baseVersionID, targetVersionID)
+}
+
+func (r *poolDiffRepository) ListByDocument(ctx context.Context, orgID, docID string) ([]*model.VersionDiffReference, error) {
+	return r.inner.ListByDocument(postgres.InjectPool(ctx, r.pool), orgID, docID)
+}
+
+func (r *poolDiffRepository) DeleteByDocument(ctx context.Context, orgID, docID string) error {
+	return r.inner.DeleteByDocument(postgres.InjectPool(ctx, r.pool), orgID, docID)
+}
+
+// poolAuditPartitionManager wraps port.AuditPartitionManager to inject the pgxpool.Pool.
+// Required by audit partition job which creates context.Background() in scan goroutine.
+type poolAuditPartitionManager struct {
+	inner port.AuditPartitionManager
+	pool  *pgxpool.Pool
+}
+
+func (m *poolAuditPartitionManager) EnsurePartitions(ctx context.Context, monthsAhead int) error {
+	return m.inner.EnsurePartitions(postgres.InjectPool(ctx, m.pool), monthsAhead)
+}
+
+func (m *poolAuditPartitionManager) DropPartitionsOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
+	return m.inner.DropPartitionsOlderThan(postgres.InjectPool(ctx, m.pool), cutoff)
 }

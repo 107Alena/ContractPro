@@ -108,6 +108,14 @@ func (m *mockVersionRepo) NextVersionNumber(_ context.Context, _, _ string) (int
 	return m.nextVersionNumber, nil
 }
 
+func (m *mockVersionRepo) DeleteByDocument(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockVersionRepo) ListByDocument(_ context.Context, _ string) ([]*model.DocumentVersion, error) {
+	return []*model.DocumentVersion{}, nil
+}
+
 type mockArtifactRepo struct {
 	mu          sync.Mutex
 	listResult  map[string][]*model.ArtifactDescriptor
@@ -158,6 +166,10 @@ func (m *mockAuditRepo) Insert(_ context.Context, record *model.AuditRecord) err
 
 func (m *mockAuditRepo) List(_ context.Context, _ port.AuditListParams) ([]*model.AuditRecord, int, error) {
 	return nil, 0, nil
+}
+
+func (m *mockAuditRepo) DeleteByDocument(_ context.Context, _ string) error {
+	return nil
 }
 
 type mockOutboxWriter struct {
@@ -498,6 +510,10 @@ func (m *conditionalAuditRepo) Insert(_ context.Context, record *model.AuditReco
 
 func (m *conditionalAuditRepo) List(_ context.Context, _ port.AuditListParams) ([]*model.AuditRecord, int, error) {
 	return nil, 0, nil
+}
+
+func (m *conditionalAuditRepo) DeleteByDocument(_ context.Context, _ string) error {
+	return nil
 }
 
 func TestScan_AvailableTypesPopulated(t *testing.T) {

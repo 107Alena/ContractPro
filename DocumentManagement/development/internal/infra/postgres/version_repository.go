@@ -253,6 +253,59 @@ func (r *VersionRepository) FindStaleInIntermediateStatus(ctx context.Context, c
 	return versions, nil
 }
 
+// DeleteByDocument removes all version rows for a document.
+// Cross-tenant system-level query for retention metadata cleanup.
+// Must be called after document.current_version_id is cleared and
+// after all artifacts for each version are deleted.
+func (r *VersionRepository) DeleteByDocument(ctx context.Context, documentID string) error {
+	conn := ConnFromCtx(ctx)
+
+	_, err := conn.Exec(ctx,
+		`DELETE FROM document_versions WHERE document_id = $1`,
+		documentID,
+	)
+	if err != nil {
+		return port.NewDatabaseError("delete versions by document", err)
+	}
+	return nil
+}
+
+// ListByDocument returns all versions for a document (no org filter).
+// Cross-tenant system-level query for retention metadata cleanup.
+func (r *VersionRepository) ListByDocument(ctx context.Context, documentID string) ([]*model.DocumentVersion, error) {
+	conn := ConnFromCtx(ctx)
+
+	rows, err := conn.Query(ctx,
+		`SELECT version_id, document_id, organization_id, version_number, parent_version_id,
+				origin_type, origin_description, source_file_key, source_file_name,
+				source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at
+		FROM document_versions
+		WHERE document_id = $1
+		ORDER BY version_number ASC`,
+		documentID,
+	)
+	if err != nil {
+		return nil, port.NewDatabaseError("list versions by document", err)
+	}
+	defer rows.Close()
+
+	var versions []*model.DocumentVersion
+	for rows.Next() {
+		v, err := scanVersion(rows)
+		if err != nil {
+			return nil, port.NewDatabaseError("scan version row", err)
+		}
+		versions = append(versions, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, port.NewDatabaseError("iterate version rows", err)
+	}
+	if versions == nil {
+		versions = []*model.DocumentVersion{}
+	}
+	return versions, nil
+}
+
 // scanVersion scans a single version row.
 func scanVersion(row pgx.Row) (*model.DocumentVersion, error) {
 	var (

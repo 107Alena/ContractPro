@@ -78,6 +78,12 @@ func (m *mockVersionRepo) NextVersionNumber(context.Context, string, string) (in
 func (m *mockVersionRepo) FindStaleInIntermediateStatus(context.Context, time.Time, int) ([]*model.DocumentVersion, error) {
 	panic("not used in ingestion")
 }
+func (m *mockVersionRepo) DeleteByDocument(context.Context, string) error {
+	panic("not used in ingestion")
+}
+func (m *mockVersionRepo) ListByDocument(context.Context, string) ([]*model.DocumentVersion, error) {
+	panic("not used in ingestion")
+}
 
 type mockArtifactRepo struct {
 	inserted  []*model.ArtifactDescriptor
@@ -117,6 +123,9 @@ func (m *mockAuditRepo) Insert(ctx context.Context, r *model.AuditRecord) error 
 func (m *mockAuditRepo) List(context.Context, port.AuditListParams) ([]*model.AuditRecord, int, error) {
 	panic("not used in ingestion")
 }
+func (m *mockAuditRepo) DeleteByDocument(context.Context, string) error {
+	panic("not used in ingestion")
+}
 
 type mockAuditRepoWithErr struct {
 	failAfter int
@@ -133,6 +142,9 @@ func (m *mockAuditRepoWithErr) Insert(ctx context.Context, r *model.AuditRecord)
 }
 
 func (m *mockAuditRepoWithErr) List(context.Context, port.AuditListParams) ([]*model.AuditRecord, int, error) {
+	panic("not used in ingestion")
+}
+func (m *mockAuditRepoWithErr) DeleteByDocument(context.Context, string) error {
 	panic("not used in ingestion")
 }
 

@@ -128,7 +128,6 @@ func TestOutboxPoller_Poll_PartialPublishFailure(t *testing.T) {
 		{ID: "e3", Topic: "t3", Payload: []byte(`{}`)},
 	}
 
-	callCount := 0
 	repo := &pollerMockRepo{
 		fetchFn: func(_ context.Context, _ int) ([]port.OutboxEntry, error) {
 			return entries, nil
@@ -136,7 +135,6 @@ func TestOutboxPoller_Poll_PartialPublishFailure(t *testing.T) {
 	}
 	broker := &mockBroker{
 		publishFn: func(_ context.Context, topic string, _ []byte) error {
-			callCount++
 			if topic == "t2" {
 				return errors.New("broker unavailable")
 			}
@@ -310,6 +308,315 @@ func TestOutboxPoller_StartStop(t *testing.T) {
 
 	// Stop should be idempotent.
 	p.Stop()
+}
+
+// ---------------------------------------------------------------------------
+// BRE-006: FIFO ordering + aggregate blocking tests
+// ---------------------------------------------------------------------------
+
+// TestOutboxPoller_Poll_FIFOOrdering verifies that entries are published in the
+// order returned by FetchUnpublished (aggregate_id, created_at). This proves
+// that the poller preserves SQL-level FIFO ordering.
+func TestOutboxPoller_Poll_FIFOOrdering(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []port.OutboxEntry{
+		{ID: "e1", AggregateID: "agg-A", Topic: "t1", Payload: []byte(`{"seq":1}`), CreatedAt: now},
+		{ID: "e2", AggregateID: "agg-A", Topic: "t1", Payload: []byte(`{"seq":2}`), CreatedAt: now.Add(time.Second)},
+		{ID: "e3", AggregateID: "agg-B", Topic: "t2", Payload: []byte(`{"seq":3}`), CreatedAt: now},
+		{ID: "e4", AggregateID: "agg-B", Topic: "t2", Payload: []byte(`{"seq":4}`), CreatedAt: now.Add(time.Second)},
+	}
+
+	repo := &pollerMockRepo{
+		fetchFn: func(_ context.Context, _ int) ([]port.OutboxEntry, error) {
+			return entries, nil
+		},
+	}
+
+	var publishOrder []string
+	broker := &mockBroker{
+		publishFn: func(_ context.Context, _ string, payload []byte) error {
+			publishOrder = append(publishOrder, string(payload))
+			return nil
+		},
+	}
+
+	p := NewOutboxPoller(repo, &mockTransactor{}, broker, &mockMetrics{}, discardLogger(), testOutboxConfig())
+	p.poll()
+
+	// All 4 entries published in exact fetch order (FIFO).
+	require.Len(t, publishOrder, 4)
+	assert.Equal(t, `{"seq":1}`, publishOrder[0])
+	assert.Equal(t, `{"seq":2}`, publishOrder[1])
+	assert.Equal(t, `{"seq":3}`, publishOrder[2])
+	assert.Equal(t, `{"seq":4}`, publishOrder[3])
+
+	// All 4 marked as published.
+	require.Len(t, repo.markCalls, 1)
+	assert.ElementsMatch(t, []string{"e1", "e2", "e3", "e4"}, repo.markCalls[0])
+}
+
+// TestOutboxPoller_Poll_AggregateBlockingOnFailure verifies BRE-006: when an
+// entry fails to publish, all subsequent entries with the same aggregate_id
+// are skipped (they stay PENDING for the next cycle), preserving per-aggregate FIFO.
+func TestOutboxPoller_Poll_AggregateBlockingOnFailure(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []port.OutboxEntry{
+		{ID: "e1", AggregateID: "agg-A", Topic: "t-a1", Payload: []byte(`{}`), CreatedAt: now},                       // agg-A, first
+		{ID: "e2", AggregateID: "agg-A", Topic: "t-a2", Payload: []byte(`{}`), CreatedAt: now.Add(time.Second)},       // agg-A, second → should be SKIPPED
+		{ID: "e3", AggregateID: "agg-B", Topic: "t-b1", Payload: []byte(`{}`), CreatedAt: now},                       // agg-B, first
+		{ID: "e4", AggregateID: "agg-A", Topic: "t-a3", Payload: []byte(`{}`), CreatedAt: now.Add(2 * time.Second)},  // agg-A, third → should be SKIPPED
+		{ID: "e5", AggregateID: "agg-B", Topic: "t-b2", Payload: []byte(`{}`), CreatedAt: now.Add(time.Second)},       // agg-B, second
+	}
+
+	repo := &pollerMockRepo{
+		fetchFn: func(_ context.Context, _ int) ([]port.OutboxEntry, error) {
+			return entries, nil
+		},
+	}
+
+	broker := &mockBroker{
+		publishFn: func(_ context.Context, topic string, _ []byte) error {
+			if topic == "t-a1" {
+				return errors.New("broker error for agg-A first entry")
+			}
+			return nil
+		},
+	}
+	metrics := &mockMetrics{}
+
+	p := NewOutboxPoller(repo, &mockTransactor{}, broker, metrics, discardLogger(), testOutboxConfig())
+	p.poll()
+
+	// Only e1 was attempted for agg-A (failed). e2 and e4 were skipped.
+	// e3 and e5 for agg-B succeeded.
+	require.Len(t, repo.markCalls, 1)
+	assert.ElementsMatch(t, []string{"e3", "e5"}, repo.markCalls[0])
+
+	// Broker was called 3 times: e1 (fail), e3 (ok), e5 (ok). e2 and e4 were skipped.
+	assert.Len(t, broker.publishCalls, 3)
+	assert.Equal(t, "t-a1", broker.publishCalls[0].topic)
+	assert.Equal(t, "t-b1", broker.publishCalls[1].topic)
+	assert.Equal(t, "t-b2", broker.publishCalls[2].topic)
+
+	// Metrics: 2 published (e3, e5), 1 failed (e1).
+	assert.Equal(t, 2, metrics.publishedCount())
+	assert.Equal(t, 1, metrics.publishFailedCount())
+}
+
+// TestOutboxPoller_Poll_EmptyAggregateIDsIndependent verifies that entries
+// without an AggregateID are published independently — a failure on one
+// does not block others (no FIFO ordering constraint).
+func TestOutboxPoller_Poll_EmptyAggregateIDsIndependent(t *testing.T) {
+	entries := []port.OutboxEntry{
+		{ID: "e1", AggregateID: "", Topic: "t-sys1", Payload: []byte(`{}`)},
+		{ID: "e2", AggregateID: "", Topic: "t-sys2", Payload: []byte(`{}`)},
+		{ID: "e3", AggregateID: "", Topic: "t-sys3", Payload: []byte(`{}`)},
+	}
+
+	repo := &pollerMockRepo{
+		fetchFn: func(_ context.Context, _ int) ([]port.OutboxEntry, error) {
+			return entries, nil
+		},
+	}
+
+	broker := &mockBroker{
+		publishFn: func(_ context.Context, topic string, _ []byte) error {
+			if topic == "t-sys2" {
+				return errors.New("one-off failure")
+			}
+			return nil
+		},
+	}
+	metrics := &mockMetrics{}
+
+	p := NewOutboxPoller(repo, &mockTransactor{}, broker, metrics, discardLogger(), testOutboxConfig())
+	p.poll()
+
+	// e1 and e3 published, e2 failed but does NOT block e3 (no aggregate).
+	require.Len(t, repo.markCalls, 1)
+	assert.ElementsMatch(t, []string{"e1", "e3"}, repo.markCalls[0])
+	assert.Equal(t, 2, metrics.publishedCount())
+	assert.Equal(t, 1, metrics.publishFailedCount())
+}
+
+// TestOutboxPoller_Poll_MixedAggregateAndNoAggregate verifies that aggregate
+// blocking doesn't affect entries without an aggregate_id.
+func TestOutboxPoller_Poll_MixedAggregateAndNoAggregate(t *testing.T) {
+	entries := []port.OutboxEntry{
+		{ID: "e1", AggregateID: "agg-X", Topic: "t1", Payload: []byte(`{}`)},  // agg-X, fails
+		{ID: "e2", AggregateID: "",       Topic: "t2", Payload: []byte(`{}`)},  // no aggregate, should succeed
+		{ID: "e3", AggregateID: "agg-X", Topic: "t3", Payload: []byte(`{}`)},  // agg-X, blocked
+		{ID: "e4", AggregateID: "",       Topic: "t4", Payload: []byte(`{}`)},  // no aggregate, should succeed
+		{ID: "e5", AggregateID: "agg-Y", Topic: "t5", Payload: []byte(`{}`)},  // agg-Y, should succeed
+	}
+
+	repo := &pollerMockRepo{
+		fetchFn: func(_ context.Context, _ int) ([]port.OutboxEntry, error) {
+			return entries, nil
+		},
+	}
+
+	broker := &mockBroker{
+		publishFn: func(_ context.Context, topic string, _ []byte) error {
+			if topic == "t1" {
+				return errors.New("agg-X failure")
+			}
+			return nil
+		},
+	}
+	metrics := &mockMetrics{}
+
+	p := NewOutboxPoller(repo, &mockTransactor{}, broker, metrics, discardLogger(), testOutboxConfig())
+	p.poll()
+
+	// e1 failed (agg-X), e3 blocked (agg-X), e2/e4 succeed (no agg), e5 succeeds (agg-Y).
+	require.Len(t, repo.markCalls, 1)
+	assert.ElementsMatch(t, []string{"e2", "e4", "e5"}, repo.markCalls[0])
+	assert.Equal(t, 3, metrics.publishedCount())
+	assert.Equal(t, 1, metrics.publishFailedCount())
+}
+
+// TestOutboxPoller_Poll_AllAggregatesFail verifies that when every aggregate
+// has a failed entry, no entries are marked and the batch ends cleanly.
+func TestOutboxPoller_Poll_AllAggregatesFail(t *testing.T) {
+	entries := []port.OutboxEntry{
+		{ID: "e1", AggregateID: "agg-A", Topic: "t1", Payload: []byte(`{}`)},
+		{ID: "e2", AggregateID: "agg-A", Topic: "t2", Payload: []byte(`{}`)},
+		{ID: "e3", AggregateID: "agg-B", Topic: "t3", Payload: []byte(`{}`)},
+	}
+
+	repo := &pollerMockRepo{
+		fetchFn: func(_ context.Context, _ int) ([]port.OutboxEntry, error) {
+			return entries, nil
+		},
+	}
+
+	broker := &mockBroker{
+		publishFn: func(_ context.Context, _ string, _ []byte) error {
+			return errors.New("total broker failure")
+		},
+	}
+	metrics := &mockMetrics{}
+
+	p := NewOutboxPoller(repo, &mockTransactor{}, broker, metrics, discardLogger(), testOutboxConfig())
+	p.poll()
+
+	// e1 failed (agg-A), e2 blocked (agg-A), e3 failed (agg-B).
+	assert.Empty(t, repo.markCalls)
+
+	// Broker called only 2 times: e1 (fail), e3 (fail). e2 skipped by blocking.
+	assert.Len(t, broker.publishCalls, 2)
+	assert.Equal(t, 0, metrics.publishedCount())
+	assert.Equal(t, 2, metrics.publishFailedCount())
+}
+
+// TestOutboxPoller_ConcurrentPollers verifies that two pollers operating on
+// disjoint entry sets (simulating SKIP LOCKED) don't process the same entries
+// and both complete successfully. Each poller has its own repo to model the
+// real-world behavior where SKIP LOCKED gives each poller a separate partition.
+func TestOutboxPoller_ConcurrentPollers(t *testing.T) {
+	// Each poller gets its own repo — simulates SKIP LOCKED partitioning.
+	repoA := &pollerMockRepo{
+		fetchFn: func(_ context.Context, _ int) ([]port.OutboxEntry, error) {
+			return []port.OutboxEntry{
+				{ID: "e1", AggregateID: "agg-A", Topic: "t1", Payload: []byte(`{"poller":"A","seq":1}`)},
+				{ID: "e2", AggregateID: "agg-A", Topic: "t1", Payload: []byte(`{"poller":"A","seq":2}`)},
+			}, nil
+		},
+	}
+	repoB := &pollerMockRepo{
+		fetchFn: func(_ context.Context, _ int) ([]port.OutboxEntry, error) {
+			return []port.OutboxEntry{
+				{ID: "e3", AggregateID: "agg-B", Topic: "t2", Payload: []byte(`{"poller":"B","seq":1}`)},
+				{ID: "e4", AggregateID: "agg-B", Topic: "t2", Payload: []byte(`{"poller":"B","seq":2}`)},
+			}, nil
+		},
+	}
+
+	brokerA := &mockBroker{}
+	brokerB := &mockBroker{}
+	metricsA := &mockMetrics{}
+	metricsB := &mockMetrics{}
+
+	pollerA := NewOutboxPoller(repoA, &mockTransactor{}, brokerA, metricsA, discardLogger(), testOutboxConfig())
+	pollerB := NewOutboxPoller(repoB, &mockTransactor{}, brokerB, metricsB, discardLogger(), testOutboxConfig())
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		pollerA.poll()
+	}()
+	go func() {
+		defer wg.Done()
+		pollerB.poll()
+	}()
+	wg.Wait()
+
+	// Each poller processed its own entries.
+	assert.Equal(t, 2, metricsA.publishedCount(), "poller A published 2 entries")
+	assert.Equal(t, 2, metricsB.publishedCount(), "poller B published 2 entries")
+	assert.Equal(t, 0, metricsA.publishFailedCount())
+	assert.Equal(t, 0, metricsB.publishFailedCount())
+
+	// Verify no overlap: distinct payloads across pollers.
+	allPublished := make(map[string]bool)
+	for _, call := range brokerA.publishCalls {
+		allPublished[string(call.payload)] = true
+	}
+	for _, call := range brokerB.publishCalls {
+		assert.False(t, allPublished[string(call.payload)], "pollers processed overlapping entries")
+		allPublished[string(call.payload)] = true
+	}
+	assert.Len(t, allPublished, 4, "all 4 entries processed exactly once across both pollers")
+
+	// Each poller marked its own entries independently.
+	require.Len(t, repoA.markCalls, 1)
+	assert.ElementsMatch(t, []string{"e1", "e2"}, repoA.markCalls[0])
+	require.Len(t, repoB.markCalls, 1)
+	assert.ElementsMatch(t, []string{"e3", "e4"}, repoB.markCalls[0])
+}
+
+// TestOutboxPoller_Poll_AggregateBlockingDoesNotPersistAcrossCycles verifies
+// that the failedAggs tracking is per-poll-cycle and doesn't carry over.
+func TestOutboxPoller_Poll_AggregateBlockingDoesNotPersistAcrossCycles(t *testing.T) {
+	callNum := 0
+	repo := &pollerMockRepo{
+		fetchFn: func(_ context.Context, _ int) ([]port.OutboxEntry, error) {
+			callNum++
+			if callNum == 1 {
+				return []port.OutboxEntry{
+					{ID: "e1", AggregateID: "agg-A", Topic: "t1", Payload: []byte(`{}`)},
+				}, nil
+			}
+			return []port.OutboxEntry{
+				{ID: "e2", AggregateID: "agg-A", Topic: "t2", Payload: []byte(`{}`)},
+			}, nil
+		},
+	}
+
+	brokerCallNum := 0
+	broker := &mockBroker{
+		publishFn: func(_ context.Context, _ string, _ []byte) error {
+			brokerCallNum++
+			if brokerCallNum == 1 {
+				return errors.New("transient error")
+			}
+			return nil
+		},
+	}
+	metrics := &mockMetrics{}
+
+	p := NewOutboxPoller(repo, &mockTransactor{}, broker, metrics, discardLogger(), testOutboxConfig())
+
+	// Cycle 1: e1 fails.
+	p.poll()
+	assert.Equal(t, 0, metrics.publishedCount())
+	assert.Equal(t, 1, metrics.publishFailedCount())
+
+	// Cycle 2: agg-A retry succeeds — failedAggs was reset.
+	p.poll()
+	assert.Equal(t, 1, metrics.publishedCount())
 }
 
 // ---------------------------------------------------------------------------

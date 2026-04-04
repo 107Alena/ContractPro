@@ -60,6 +60,11 @@ func (r *OutboxRepository) Insert(ctx context.Context, entries ...port.OutboxEnt
 // FetchUnpublished retrieves up to limit outbox entries that have not been
 // published yet, using FOR UPDATE SKIP LOCKED for concurrent poller safety.
 //
+// Ordering: aggregate_id NULLS FIRST, created_at. Events without an aggregate
+// (NULL) sort first because they have no ordering constraint and can be
+// published independently. Within each aggregate, events are ordered by
+// created_at for FIFO delivery (BRE-006).
+//
 // FIFO caveat: SKIP LOCKED operates at the row level. When multiple pollers
 // run concurrently, poller B may skip rows locked by poller A and pick up
 // later entries for the same aggregate, breaking strict per-aggregate FIFO.
@@ -71,7 +76,7 @@ func (r *OutboxRepository) FetchUnpublished(ctx context.Context, limit int) ([]p
 		`SELECT event_id, aggregate_id, topic, payload, status, created_at, published_at
 		FROM outbox_events
 		WHERE status = 'PENDING'
-		ORDER BY aggregate_id, created_at
+		ORDER BY aggregate_id NULLS FIRST, created_at
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED`,
 		limit,

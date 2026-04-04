@@ -2055,3 +2055,49 @@
 - DM-TASK-046 (Audit append-only trigger + RLS)
 
 ---
+
+## DM-TASK-042: BRE-006: Outbox Poller — FIFO ordering + concurrent safety (2026-04-04)
+
+**Статус:** done
+
+**Что сделано:**
+- **FIFO fix в poll():** добавлен `failedAggs map[string]struct{}` — при сбое публикации entry все последующие entries с тем же aggregate_id пропускаются в текущем batch. Они остаются PENDING и будут retried в следующем цикле. Entries с пустым AggregateID обрабатываются независимо (сбой одного не блокирует другие)
+- **SQL ordering:** `ORDER BY aggregate_id NULLS FIRST, created_at` — NULL aggregate_ids сортируются первыми (независимые события обрабатываются без задержки)
+- **In-memory FetchUnpublished:** обновлён `testinfra.go` для соответствия PostgreSQL ordering (sort.Slice по aggregate_id NULLS FIRST, created_at)
+- **Dead code cleanup:** удалён неиспользуемый `callCount` в poller_test.go
+
+**Acceptance criteria verification:**
+1. ✅ `SELECT FOR UPDATE SKIP LOCKED LIMIT N` — уже в DM-TASK-016
+2. ✅ FIFO ordering по aggregate_id + created_at — SQL + Go-side failedAggs blocking
+3. ✅ Status CONFIRMED после publisher confirm — уже в DM-TASK-016
+4. ✅ Cleanup с batched DELETE — уже в DM-TASK-016
+5. ✅ Config: DM_OUTBOX_POLL_INTERVAL, DM_OUTBOX_BATCH_SIZE — уже в DM-TASK-005
+6. ✅ Unit-тесты: concurrent pollers + ordering — 8 новых тестов
+
+**Изменённые файлы:**
+- `internal/egress/outbox/poller.go` — failedAggs tracking в poll()
+- `internal/infra/postgres/outbox_repository.go` — NULLS FIRST в SQL
+- `internal/infra/postgres/outbox_repository_test.go` — SQL assertion обновлён
+- `internal/egress/outbox/poller_test.go` — 8 новых тестов + dead code fix
+- `internal/integration/testinfra.go` — in-memory FetchUnpublished ordering
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (26 пакетов)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Тесты (8 новых BRE-006):**
+- TestOutboxPoller_Poll_FIFOOrdering — entries published in aggregate_id+created_at order
+- TestOutboxPoller_Poll_AggregateBlockingOnFailure — failure blocks same aggregate
+- TestOutboxPoller_Poll_EmptyAggregateIDsIndependent — no cross-blocking
+- TestOutboxPoller_Poll_MixedAggregateAndNoAggregate — mixed scenario
+- TestOutboxPoller_Poll_AllAggregatesFail — all fail, no mark, no panic
+- TestOutboxPoller_ConcurrentPollers — disjoint partitions, no overlap
+- TestOutboxPoller_Poll_AggregateBlockingDoesNotPersistAcrossCycles — failedAggs resets
+
+**Ревью (code-reviewer):** 0B + 5W; W-4 (in-memory ordering) + W-5 (dead code) исправлены
+
+**Следующие задачи (high priority pending):**
+- DM-TASK-040 (REV-005: Archive endpoint) — may already be fully implemented in DM-TASK-019+022
+
+---

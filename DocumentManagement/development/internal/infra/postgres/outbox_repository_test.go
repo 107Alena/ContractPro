@@ -91,7 +91,7 @@ func TestOutboxRepository_FetchUnpublished_Empty(t *testing.T) {
 	mock := &mockTx{
 		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 			assert.Contains(t, sql, "FOR UPDATE SKIP LOCKED")
-			assert.Contains(t, sql, "ORDER BY aggregate_id, created_at")
+			assert.Contains(t, sql, "ORDER BY aggregate_id NULLS FIRST, created_at")
 			assert.Contains(t, sql, "status = 'PENDING'")
 			assert.Equal(t, 50, args[0])
 			return &mockRows{}, nil

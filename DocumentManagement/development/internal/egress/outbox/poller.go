@@ -150,6 +150,13 @@ func (p *OutboxPoller) run() {
 // poll fetches a batch of PENDING entries, publishes each to the broker,
 // and marks successfully published entries as CONFIRMED.
 //
+// FIFO guarantee (BRE-006): entries are fetched ORDER BY aggregate_id, created_at.
+// When publishing fails for an entry, all subsequent entries with the same
+// aggregate_id are skipped in the current batch. They remain PENDING and will
+// be retried on the next poll cycle, preserving per-aggregate event ordering.
+// Entries with empty AggregateID have no ordering constraint and are published
+// independently — a failure on one does not block others.
+//
 // Note: BrokerPublisher.Publish must be synchronous (blocking until the broker
 // confirms delivery). If Publish returns nil, the message is guaranteed to be
 // in the broker. This is required for the at-least-once guarantee.
@@ -166,8 +173,24 @@ func (p *OutboxPoller) poll() {
 			return nil
 		}
 
+		// failedAggs tracks aggregate IDs that had a publish failure in this batch.
+		// Subsequent entries for the same aggregate are skipped to preserve FIFO.
+		failedAggs := make(map[string]struct{})
 		publishedIDs := make([]string, 0, len(entries))
+
 		for _, entry := range entries {
+			// BRE-006: skip entries whose aggregate already had a failure in this batch.
+			if entry.AggregateID != "" {
+				if _, blocked := failedAggs[entry.AggregateID]; blocked {
+					p.logger.Warn("outbox poller: skipping entry — prior failure in same aggregate",
+						"entry_id", entry.ID,
+						"aggregate_id", entry.AggregateID,
+						"topic", entry.Topic,
+					)
+					continue
+				}
+			}
+
 			if pubErr := p.broker.Publish(txCtx, entry.Topic, entry.Payload); pubErr != nil {
 				p.logger.Error("outbox poller: publish failed",
 					"entry_id", entry.ID,
@@ -175,7 +198,9 @@ func (p *OutboxPoller) poll() {
 					"error", pubErr,
 				)
 				p.metrics.IncPublishFailed(entry.Topic)
-				// Skip this entry; it stays PENDING and will be retried on next cycle.
+				if entry.AggregateID != "" {
+					failedAggs[entry.AggregateID] = struct{}{}
+				}
 				continue
 			}
 			publishedIDs = append(publishedIDs, entry.ID)

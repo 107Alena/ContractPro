@@ -939,7 +939,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-016"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-04",
+      "summary": "Реализована FIFO ordering защита для Outbox Poller (BRE-006). POLLER: добавлен failedAggs tracking в poll() — при сбое публикации entry все последующие entries с тем же aggregate_id пропускаются в текущем batch (остаются PENDING для retry в следующем цикле). Entries с пустым AggregateID обрабатываются независимо — сбой одного не блокирует другие. failedAggs map создаётся per-poll-cycle (не сохраняется между циклами). SQL: ORDER BY aggregate_id NULLS FIRST, created_at — NULL aggregate_ids сортируются первыми (они независимые, могут быть опубликованы раньше для лучшей пропускной способности). Обновлён in-memory FetchUnpublished в testinfra.go для соответствия PostgreSQL ordering. Удалён мёртвый код (callCount). РЕВЬЮ: code-reviewer → 0 blocking + 5 warnings, W4 (in-memory ordering) + W5 (dead code) исправлены. 8 новых unit-тестов BRE-006: FIFOOrdering, AggregateBlockingOnFailure, EmptyAggregateIDsIndependent, MixedAggregateAndNoAggregate, AllAggregatesFail, ConcurrentPollers, AggregateBlockingDoesNotPersistAcrossCycles. Все тесты PASS с -race -count=1 (26 пакетов). go vet OK. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-043",

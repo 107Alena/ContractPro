@@ -658,16 +658,30 @@ func (r *memoryOutboxRepository) Insert(ctx context.Context, entries ...port.Out
 func (r *memoryOutboxRepository) FetchUnpublished(ctx context.Context, limit int) ([]port.OutboxEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	var result []port.OutboxEntry
+	var pending []port.OutboxEntry
 	for _, e := range r.entries {
 		if e.Status == "PENDING" {
-			result = append(result, e)
-			if len(result) >= limit {
-				break
-			}
+			pending = append(pending, e)
 		}
 	}
-	return result, nil
+	// Match PostgreSQL ORDER BY aggregate_id NULLS FIRST, created_at (BRE-006).
+	sort.Slice(pending, func(i, j int) bool {
+		ai, aj := pending[i].AggregateID, pending[j].AggregateID
+		if ai == "" && aj != "" {
+			return true // NULL (empty) sorts first
+		}
+		if ai != "" && aj == "" {
+			return false
+		}
+		if ai != aj {
+			return ai < aj
+		}
+		return pending[i].CreatedAt.Before(pending[j].CreatedAt)
+	})
+	if len(pending) > limit {
+		pending = pending[:limit]
+	}
+	return pending, nil
 }
 
 func (r *memoryOutboxRepository) MarkPublished(ctx context.Context, ids []string) error {

@@ -2101,3 +2101,43 @@
 - DM-TASK-040 (REV-005: Archive endpoint) — may already be fully implemented in DM-TASK-019+022
 
 ---
+
+## DM-TASK-040: REV-005: Endpoint архивации д��кумента POST /documents/{id}/archive (2026-04-04)
+
+**Статус:** done
+
+**Что сделано:**
+- Основная реализация уже была выполнена в DM-TASK-022 (handler + lifecycle service + state machine)
+- Endpoint: `POST /api/v1/documents/{document_id}/archive` в `handler.go:260-277`
+- Lifecycle: `ArchiveDocument` → `transitionDocument(ARCHIVED, AuditActionDocumentArchived)` в `lifecycle.go:164-167`
+- State machine: `ACTIVE → ARCHIVED` разрешён, все остальные переходы → `ErrCodeStatusTransition` → HTTP 409
+- Audit: запись с `from`/`to` details, `ActorTypeSystem`/"system"
+- Tenant isolation: `FindByID` фильтрует по `organization_id`
+
+**Добавлено в этой задаче:**
+- `TestArchiveDocument_Conflict_AlreadyArchived` — проверка 409 при архивации уже архивированного документа
+- `TestArchiveDocument_Conflict_Deleted` — проверка 409 при архивации удалённого документа
+- `TestArchiveDocument_NotFound` — проверка 404 при архивации несуществующего документа
+- Улучшен `TestArchiveDocument_Happy` — добавлена проверка response body `status=ARCHIVED`
+
+**Покрытие тестами:**
+- API уровень: 4 теста (happy, already archived 409, deleted 409, not found 404)
+- Lifecycle уровень: 8 тестов (happy, empty orgID, empty docID, not found, from archived, from deleted, update fails, audit fails)
+
+**Ревью (code-reviewer):** APPROVED (0 blocking, 3 warnings: W1 actor hardcoded as system — known, W2 response body assertion — fixed, W3 non-atomic read-after-write — accepted pattern)
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (26 пакетов)
+- `go vet ./...` — OK
+- `make build` — OK
+- `make test` — OK
+- `make lint` — OK
+
+**Следующие задачи (medium priority pending):**
+- DM-TASK-031 (Orphan blob cleanup)
+- DM-TASK-032 (Metadata retention: archive/delete/purge)
+- DM-TASK-033 (Full-text search)
+- DM-TASK-034 (Graceful shutdown)
+- DM-TASK-035 (Integration tests)
+
+---

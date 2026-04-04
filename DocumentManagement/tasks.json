@@ -897,7 +897,9 @@
         "Шаг 2: go test ./internal/application/lifecycle/... -race -count=1"
       ],
       "dependencies": ["DM-TASK-022"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-04",
+      "summary": "Endpoint POST /api/v1/documents/{document_id}/archive полностью реализован (основная реализация в DM-TASK-022). Handler: archiveDocument в handler.go — auth context extraction, delegate to lifecycle.ArchiveDocument, re-fetch via GetDocument, return 200 JSON. Lifecycle: ArchiveDocument → transitionDocument с DocumentStatusArchived + AuditActionDocumentArchived, транзакционная проверка ValidateDocumentTransition, audit record с details {from,to}. Ошибки: status!=ACTIVE → ErrCodeStatusTransition → 409 Conflict, not found → 404. Добавлены 3 API-теста: TestArchiveDocument_Conflict_AlreadyArchived (409), TestArchiveDocument_Conflict_Deleted (409), TestArchiveDocument_NotFound (404). Улучшен TestArchiveDocument_Happy: проверка response body status=ARCHIVED. Итого покрытие: 4 API-теста + 8 lifecycle-тестов. Code review: APPROVED (0 blocking). go test -race -count=1 ./... ALL PASS (26 пакетов)."
     },
     {
       "id": "DM-TASK-041",

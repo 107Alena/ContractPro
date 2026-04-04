@@ -635,9 +635,17 @@ func TestArchiveDocument_Happy(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if got := resp["status"]; got != string(model.DocumentStatusArchived) {
+		t.Errorf("status = %v, want %s", got, model.DocumentStatusArchived)
+	}
 }
 
-func TestArchiveDocument_Conflict(t *testing.T) {
+func TestArchiveDocument_Conflict_AlreadyArchived(t *testing.T) {
 	t.Parallel()
 	d := newTestDeps()
 	d.lifecycle.archiveDoc = func(ctx context.Context, orgID, docID string) error {
@@ -647,6 +655,32 @@ func TestArchiveDocument_Conflict(t *testing.T) {
 	rr := doRequest(d.handler, "POST", "/api/v1/documents/doc-1/archive", nil)
 	if rr.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409", rr.Code)
+	}
+}
+
+func TestArchiveDocument_Conflict_Deleted(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.lifecycle.archiveDoc = func(ctx context.Context, orgID, docID string) error {
+		return port.NewStatusTransitionError("DELETED", "ARCHIVED")
+	}
+
+	rr := doRequest(d.handler, "POST", "/api/v1/documents/doc-1/archive", nil)
+	if rr.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", rr.Code)
+	}
+}
+
+func TestArchiveDocument_NotFound(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.lifecycle.archiveDoc = func(ctx context.Context, orgID, docID string) error {
+		return port.NewDocumentNotFoundError(orgID, docID)
+	}
+
+	rr := doRequest(d.handler, "POST", "/api/v1/documents/doc-1/archive", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
 	}
 }
 

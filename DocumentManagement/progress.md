@@ -2394,3 +2394,67 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 - DM-TASK-052 (CLAUDE.md files) — low, infrastructure
 
 ---
+
+## DM-TASK-050: Стратегия миграций PostgreSQL — REV-030/BRE-022 (2026-04-05)
+
+**Статус:** done
+
+**Что сделано:**
+
+Реализована стратегия миграций PostgreSQL через init-container pattern:
+
+1. **Отдельный бинарник `dm-migrate`** (`cmd/dm-migrate/main.go`):
+   - CLI tool с командами: `up`, `down --confirm-destroy`, `goto <N>`, `version`
+   - `parseCommand()` валидирует команду/аргументы ДО подключения к БД
+   - Команда `down` защищена обязательным `--confirm-destroy` для предотвращения случайного удаления
+
+2. **main.go** — schema version check:
+   - `migrator.Up()` заменён на проверку schema version
+   - Fail fast при: version=0 (миграции не применены), dirty state
+   - Рекомендация: "run dm-migrate up before starting dm-service"
+
+3. **Docker infra**:
+   - **Dockerfile**: второй `go build` для `dm-migrate`, оба бинарника в runtime image
+   - **docker-compose**: `dm-migrate` init-container → `dm-service` depends_on `service_completed_successfully`
+   - **Makefile**: `+build-migrate` target
+
+4. **Migration safety**:
+   - 000002 обёрнут в `BEGIN/COMMIT` для атомарности
+   - Online safety analysis всех 5 миграций (000004 = maintenance window при данных)
+   - Concurrent migration safety: PostgreSQL advisory lock
+
+5. **Документация**: `architecture/migration-strategy.md`
+   - Архитектура init-container, файлы миграций
+   - Online safety таблица, rollback процедура, dirty state recovery
+   - Рекомендации для будущих миграций (CREATE INDEX CONCURRENTLY, lock_timeout)
+
+**Новые файлы:**
+- `cmd/dm-migrate/main.go` (~160 строк)
+- `cmd/dm-migrate/main_test.go` (15 тестов)
+- `internal/infra/postgres/migrate_test.go` (9 тестов)
+- `architecture/migration-strategy.md` (~170 строк)
+
+**Изменённые файлы:**
+- `cmd/dm-service/main.go` — Phase 3: migrator.Up() → version check
+- `Dockerfile` — second build target
+- `docker-compose.yaml` — dm-migrate init-container
+- `Makefile` — +build-migrate
+- `000002_dlq_records.up.sql` — +BEGIN/COMMIT
+- `.gitignore` — +/dm-migrate
+
+**Консультации:**
+- database-administrator: online-safety review 5 миграций (000001-003,005 safe; 000004 maintenance window)
+- code-architect: Approach B — dedicated binary (не flag на main binary)
+- code-reviewer: 3B + 5W → все B исправлены (--confirm-destroy, parseCommand tests, concurrent safety doc)
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (30 пакетов)
+- `go vet ./...` — OK
+- `make build/build-migrate/test/lint` — ALL OK
+
+**Следующие задачи:**
+- DM-TASK-034 (Configuration docs) — medium, infrastructure
+- DM-TASK-035 (Deployment docs) — medium, infrastructure
+- DM-TASK-052 (CLAUDE.md files) — low, infrastructure
+
+---

@@ -85,7 +85,7 @@ func run() int {
 	logger := obs.Logger.With("component", "app")
 
 	// -----------------------------------------------------------------------
-	// Phase 3: PostgreSQL + migrations
+	// Phase 3: PostgreSQL (migrations are applied by dm-migrate init-container)
 	// -----------------------------------------------------------------------
 	pgClient, err := postgres.NewPostgresClient(ctx, cfg.Database)
 	if err != nil {
@@ -94,6 +94,9 @@ func run() int {
 		return 1
 	}
 
+	// Verify that migrations have been applied by the init-container.
+	// This is a safety net — if schema is at version 0 or dirty, the
+	// init-container did not run (or failed). Fail fast.
 	migrator, err := postgres.NewMigrator(cfg.Database.DSN)
 	if err != nil {
 		logger.Error("migrator init failed", "error", err)
@@ -101,15 +104,28 @@ func run() int {
 		_ = obs.Shutdown(ctx)
 		return 1
 	}
-	if err := migrator.Up(); err != nil {
-		logger.Error("migration up failed", "error", err)
-		_ = migrator.Close()
+	schemaVer, schemaDirty, err := migrator.Version()
+	_ = migrator.Close()
+	if err != nil {
+		logger.Error("schema version check failed", "error", err)
 		_ = pgClient.Close()
 		_ = obs.Shutdown(ctx)
 		return 1
 	}
-	_ = migrator.Close()
-	logger.Info("database migrations applied")
+	if schemaVer == 0 {
+		logger.Error("schema not initialized — run dm-migrate up before starting dm-service")
+		_ = pgClient.Close()
+		_ = obs.Shutdown(ctx)
+		return 1
+	}
+	if schemaDirty {
+		logger.Error("schema is in dirty state — resolve manually with dm-migrate",
+			"version", schemaVer)
+		_ = pgClient.Close()
+		_ = obs.Shutdown(ctx)
+		return 1
+	}
+	logger.Info("schema version verified", "version", schemaVer)
 
 	// -----------------------------------------------------------------------
 	// Phase 4: Redis

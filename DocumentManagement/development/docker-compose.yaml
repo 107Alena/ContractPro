@@ -110,6 +110,22 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------------
+  # Database Migrations (init-container — runs before dm-service starts)
+  # ---------------------------------------------------------------------------
+
+  dm-migrate:
+    build:
+      context: .
+    container_name: dm-migrate
+    entrypoint: ["/usr/local/bin/dm-migrate", "up"]
+    environment:
+      DM_DB_DSN: postgres://dm:dm_dev_password@postgres:5432/dm_dev?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
   # Application
   # ---------------------------------------------------------------------------
 
@@ -131,8 +147,8 @@ services:
       - "8081:8080"   # API + health probes
       - "9091:9090"   # Metrics
     depends_on:
-      postgres:
-        condition: service_healthy
+      dm-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq:

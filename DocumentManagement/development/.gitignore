@@ -1,5 +1,6 @@
 # Binaries
 /dm-service
+/dm-migrate
 *.exe
 *.exe~
 *.dll

@@ -20,6 +20,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /dm-service \
     ./cmd/dm-service/
 
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -trimpath \
+    -o /dm-migrate \
+    ./cmd/dm-migrate/
+
 # ============================================================================
 # Stage 2: Production
 # ============================================================================
@@ -30,6 +36,7 @@ RUN apk add --no-cache ca-certificates tzdata \
     && adduser -S -G dmservice -H -D -s /sbin/nologin dmservice
 
 COPY --from=builder /dm-service /usr/local/bin/dm-service
+COPY --from=builder /dm-migrate /usr/local/bin/dm-migrate
 
 # API + health probe port (configurable via DM_HTTP_PORT, default 8080).
 EXPOSE 8080

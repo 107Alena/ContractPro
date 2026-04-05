@@ -1111,7 +1111,9 @@
         "Шаг 3: migrate up повторно — идемпотентно"
       ],
       "dependencies": ["DM-TASK-006"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-05",
+      "summary": "Реализована стратегия миграций PostgreSQL (REV-030/BRE-022). НОВЫЙ БИНАРНИК: cmd/dm-migrate/main.go — CLI tool с командами up/down/goto/version. Команда down защищена флагом --confirm-destroy для предотвращения случайного удаления данных. parseCommand() валидирует команду/аргументы ДО подключения к БД. MAIN.GO: migrator.Up() заменён на schema version check (fail fast при version=0 или dirty state). DOCKERFILE: second build target dm-migrate, обе бинарники в runtime image. DOCKER-COMPOSE: dm-migrate init-container с entrypoint /usr/local/bin/dm-migrate up, depends_on postgres:service_healthy; dm-service depends_on dm-migrate:service_completed_successfully (гарантия: миграции до app). МИГРАЦИЯ 000002: обёрнута в BEGIN/COMMIT для атомарности (рекомендация database-administrator). .GITIGNORE: +/dm-migrate. MAKEFILE: +build-migrate target. ДОКУМЕНТАЦИЯ: architecture/migration-strategy.md — полное описание стратегии, online safety analysis (000004 = maintenance window при данных), concurrent migration safety (advisory lock), rollback процедура, dirty state recovery, рекомендации для будущих миграций (CREATE INDEX CONCURRENTLY, lock_timeout). ТЕСТЫ: migrate_test.go (9 тестов: AllFilesEmbedded, SequentialVersioning, FilesNotEmpty, UpFilesHaveTransactions, DownFilesExist, SourceDriverCreation, PgxDSNConversion, CurrentVersionCount, OnlineSafetyAnnotation) + main_test.go (15 тестов: 10 parseCommand + 5 run-level). КОНСУЛЬТАЦИИ: database-administrator (online-safety review 5 миграций), code-architect (init-container strategy, Approach B), code-reviewer (3B+5W → все B исправлены: B-1 --confirm-destroy guard, B-2 parseCommand тесты без DB, B-3 concurrent safety doc). Все тесты PASS с -race -count=1 (30 пакетов). go vet OK. make build/build-migrate/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-051",

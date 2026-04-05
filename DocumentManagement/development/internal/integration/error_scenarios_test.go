@@ -45,10 +45,11 @@ func TestErrorScenario_ObjectStorageFailOnFourthArtifact_CompensationAndRetry(t 
 
 	docRepo := newMemoryDocumentRepository()
 	outboxWriter := outbox.NewOutboxWriter(outboxRepo)
+	orphanInserter := newRecordingOrphanInserter()
 	ingestionSvc := ingestion.NewArtifactIngestionService(
 		transactor, versionRepo, artifactRepo, auditRepo,
 		failStorage, outboxWriter, fallback, &noopFallbackMetrics{},
-		docRepo, &noopTenantMetrics{}, logger,
+		docRepo, &noopTenantMetrics{}, orphanInserter, logger,
 		10*1024*1024, 100*1024*1024,
 	)
 

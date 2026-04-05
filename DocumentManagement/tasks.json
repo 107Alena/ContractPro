@@ -1046,7 +1046,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-031"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-05",
+      "summary": "Реализована регистрация orphan candidates при compensation в ingestion и diff сервисах (BRE-008). INGESTION: добавлен OrphanCandidateInserter consumer-side interface, orphanRepo field в ArtifactIngestionService, registerOrphanCandidates() — INSERT для каждого uploaded blob в orphan_candidates ПЕРЕД compensate() (crash safety). Два call sites: saveBlobs failure и DB tx failure. Отдельный context.Background() с 10s timeout. INSERT failures логируются ERROR но не блокируют обработку. Claim-check blobs (RE, uploaded=false) пропускаются. DIFF: аналогичный паттерн — OrphanCandidateInserter, orphanRepo, registerOrphanCandidate() для single diff blob. Вызов ПЕРЕД compensateDiffBlob(). MAIN.GO: orphanCandidateRepo + poolOrphanCandidateRepo перемещены из Phase 11.6 в Phase 11 (до application services), wired в ingestion + diff constructors. ТЕСТЫ: 5 ingestion (RegisteredOnTxFailure, RegisteredOnSaveBlobsFailure, NotRegisteredOnSuccess, InsertFailureDoesNotBlock, SkipsClaimCheckBlobs) + 3 diff (RegisteredOnTxFailure, NotRegisteredOnSuccess, InsertFailureDoesNotBlock) + 2 nil panic tests (ingestion + diff). Updated: testinfra.go (+recordingOrphanInserter thread-safe), error_scenarios_test.go. Консультация: backend-reliability-engineer → Option A (INSERT first, compensate second). РЕВЬЮ: code-reviewer → APPROVED (0B + 2W). Все тесты PASS с -race -count=1 (28 пакетов). go vet OK. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-048",

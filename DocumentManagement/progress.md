@@ -2314,3 +2314,40 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 - DM-TASK-050 (Migration strategy) — medium, infrastructure
 
 ---
+
+## DM-TASK-047: BRE-008 Orphan candidates table (2026-04-05)
+
+**Статус:** done
+
+**Что сделано:**
+- Добавлена регистрация orphan candidates при compensation в ingestion и diff сервисах
+- Паттерн: INSERT orphan candidates ПЕРВЫМ, compensate ВТОРЫМ (crash safety)
+- Файлы изменены:
+  - `internal/application/ingestion/ingestion.go`: +`OrphanCandidateInserter` interface, +`orphanRepo` field, +`registerOrphanCandidates()` метод
+  - `internal/application/diff/diff.go`: +`OrphanCandidateInserter` interface, +`orphanRepo` field, +`registerOrphanCandidate()` метод
+  - `cmd/dm-service/main.go`: orphanCandidateRepo перемещён из Phase 11.6 в Phase 11, wired в ingestion+diff
+  - `internal/integration/testinfra.go`: +`recordingOrphanInserter` (thread-safe)
+  - `internal/integration/error_scenarios_test.go`: обновлён constructor call
+  - `internal/application/ingestion/ingestion_test.go`: +5 тестов, +`mockOrphanInserter`, +nil panic test
+  - `internal/application/diff/diff_test.go`: +3 теста, +`mockOrphanInserter`, +nil panic test
+
+**Дизайн-решения:**
+- Отдельный `context.Background()` с 10s timeout для INSERT (независимый от compensation 30s и оригинального контекста)
+- INSERT failures логируются ERROR но НЕ блокируют обработку (best-effort)
+- Claim-check blobs (RE, `uploaded=false`) пропускаются — DM не загружал их
+- consumer-side `OrphanCandidateInserter` interface (ISP) — один метод Insert()
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (28 пакетов)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+- Code review (code-reviewer) — APPROVED (0 blocking)
+
+**Следующие задачи:**
+- DM-TASK-033 (Presigned URL generation) — medium, functional
+- DM-TASK-034 (Configuration docs) — medium, infrastructure
+- DM-TASK-035 (Deployment docs) — medium, infrastructure
+- DM-TASK-050 (Migration strategy) — medium, infrastructure
+- DM-TASK-052 (CLAUDE.md files) — low, infrastructure
+
+---

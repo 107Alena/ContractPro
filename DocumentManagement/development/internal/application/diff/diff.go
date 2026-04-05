@@ -25,6 +25,13 @@ type Logger interface {
 	Error(msg string, keysAndValues ...any)
 }
 
+// OrphanCandidateInserter is the subset of port.OrphanCandidateRepository
+// needed by DiffStorageService — used to register orphan blob candidates
+// when compensation cannot immediately delete them (BRE-008).
+type OrphanCandidateInserter interface {
+	Insert(ctx context.Context, candidate port.OrphanCandidate) error
+}
+
 // DiffStorageService receives diff results from DP and persists them
 // into object storage and the metadata store. It publishes confirmation
 // events via the transactional outbox.
@@ -38,6 +45,7 @@ type DiffStorageService struct {
 	fallbackResolver port.DocumentFallbackResolver
 	docRepo          tenant.DocumentExistenceChecker
 	tenantMetrics    tenant.Metrics
+	orphanRepo       OrphanCandidateInserter // BRE-008 / DM-TASK-047
 	logger           Logger
 	newUUID          func() string
 }
@@ -57,6 +65,7 @@ func NewDiffStorageService(
 	fallbackResolver port.DocumentFallbackResolver,
 	docRepo tenant.DocumentExistenceChecker,
 	tenantMetrics tenant.Metrics,
+	orphanRepo OrphanCandidateInserter,
 	logger Logger,
 ) *DiffStorageService {
 	if transactor == nil {
@@ -86,6 +95,9 @@ func NewDiffStorageService(
 	if tenantMetrics == nil {
 		panic("diff: tenantMetrics must not be nil")
 	}
+	if orphanRepo == nil {
+		panic("diff: orphanRepo must not be nil")
+	}
 	if logger == nil {
 		panic("diff: logger must not be nil")
 	}
@@ -99,6 +111,7 @@ func NewDiffStorageService(
 		fallbackResolver: fallbackResolver,
 		docRepo:          docRepo,
 		tenantMetrics:    tenantMetrics,
+		orphanRepo:       orphanRepo,
 		logger:           logger,
 		newUUID:          generateUUID,
 	}
@@ -266,6 +279,9 @@ func (s *DiffStorageService) HandleDiffReady(ctx context.Context, event model.Do
 			"target_version_id", event.TargetVersionID,
 			"error", err,
 		)
+		// BRE-008: register orphan candidate before compensation so cleanup
+		// job can handle it even if compensation or process crashes.
+		s.registerOrphanCandidate(storageKey, event.TargetVersionID)
 		s.compensateDiffBlob(storageKey)
 		return err
 	}
@@ -366,6 +382,31 @@ func ensureJSONArray(data json.RawMessage) json.RawMessage {
 		return json.RawMessage("[]")
 	}
 	return data
+}
+
+// registerOrphanCandidate inserts the diff blob key into orphan_candidates
+// so the OrphanCleanupJob can delete it later if compensation fails or the
+// process crashes (BRE-008 / DM-TASK-047).
+//
+// Uses a separate context.Background() with a short timeout — independent of
+// both the original request context and the compensation context.
+// Best-effort: INSERT failure is logged but never blocks processing.
+func (s *DiffStorageService) registerOrphanCandidate(storageKey, versionID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	candidate := port.OrphanCandidate{
+		StorageKey: storageKey,
+		VersionID:  versionID,
+		CreatedAt:  time.Now().UTC(),
+	}
+	if err := s.orphanRepo.Insert(ctx, candidate); err != nil {
+		s.logger.Error("BRE-008: failed to register orphan candidate",
+			"storage_key", storageKey,
+			"version_id", versionID,
+			"error", err,
+		)
+	}
 }
 
 // compensateDiffBlob deletes the uploaded blob from Object Storage on failure.

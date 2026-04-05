@@ -224,10 +224,18 @@ func run() int {
 	// Remove when DP TASK-056 and TASK-057 are completed.
 	fallbackResolver := postgres.NewFallbackResolver()
 
+	// BRE-008 / DM-TASK-047: orphan candidate repository — used by ingestion
+	// and diff services to register orphan blob candidates on compensation.
+	// The pool-injecting wrapper is needed because registerOrphanCandidates
+	// uses context.Background() (no pgxpool in context).
+	orphanCandidateRepo := postgres.NewOrphanCandidateRepository()
+	poolOrphanCandidateRepo := &poolOrphanCandidateRepository{inner: orphanCandidateRepo, pool: pool}
+
 	ingestionSvc := ingestion.NewArtifactIngestionService(
 		transactor, versionRepo, artifactRepo, auditRepo, objClient, outboxWriter,
 		fallbackResolver, obs.Metrics,
 		docRepo, obs.Metrics,
+		poolOrphanCandidateRepo,
 		obs.Logger.With("component", "ingestion"),
 		cfg.Ingestion.MaxJSONArtifactBytes,
 		cfg.Ingestion.MaxBlobSizeBytes,
@@ -254,6 +262,7 @@ func run() int {
 		transactor, versionRepo, diffRepo, auditRepo, objClient, outboxWriter,
 		fallbackResolver,
 		docRepo, obs.Metrics,
+		poolOrphanCandidateRepo,
 		obs.Logger.With("component", "diff"),
 	)
 
@@ -278,8 +287,8 @@ func run() int {
 	// -----------------------------------------------------------------------
 	// Phase 11.6: Orphan Cleanup Job (BRE-008/DM-TASK-031)
 	// -----------------------------------------------------------------------
-	orphanCandidateRepo := postgres.NewOrphanCandidateRepository()
-	poolOrphanCandidateRepo := &poolOrphanCandidateRepository{inner: orphanCandidateRepo, pool: pool}
+	// orphanCandidateRepo and poolOrphanCandidateRepo are created in Phase 11
+	// (shared with ingestion and diff services for orphan candidate registration).
 
 	orphanCleanupJob := orphancleanup.NewOrphanCleanupJob(
 		poolOrphanCandidateRepo,

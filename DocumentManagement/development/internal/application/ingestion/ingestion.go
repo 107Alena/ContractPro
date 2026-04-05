@@ -34,6 +34,13 @@ type FallbackMetrics interface {
 	IncMissingVersionID()
 }
 
+// OrphanCandidateInserter is the subset of port.OrphanCandidateRepository
+// needed by ArtifactIngestionService — used to register orphan blob
+// candidates when compensation cannot immediately delete them (BRE-008).
+type OrphanCandidateInserter interface {
+	Insert(ctx context.Context, candidate port.OrphanCandidate) error
+}
+
 // ArtifactIngestionService receives artifact payloads from producer domains
 // (DP, LIC, RE) and persists them into object storage and the metadata store.
 // It transitions the version's artifact_status through the state machine and
@@ -49,6 +56,7 @@ type ArtifactIngestionService struct {
 	fallbackMetrics  FallbackMetrics
 	docRepo          tenant.DocumentExistenceChecker
 	tenantMetrics    tenant.Metrics
+	orphanRepo       OrphanCandidateInserter // BRE-008 / DM-TASK-047
 	logger           Logger
 	maxJSONBytes     int64 // BRE-029: per-artifact JSON size limit
 	maxBlobBytes     int64 // BRE-029: per-artifact blob size limit
@@ -71,6 +79,7 @@ func NewArtifactIngestionService(
 	fallbackMetrics FallbackMetrics,
 	docRepo tenant.DocumentExistenceChecker,
 	tenantMetrics tenant.Metrics,
+	orphanRepo OrphanCandidateInserter,
 	logger Logger,
 	maxJSONBytes int64,
 	maxBlobBytes int64,
@@ -105,6 +114,9 @@ func NewArtifactIngestionService(
 	if tenantMetrics == nil {
 		panic("ingestion: tenantMetrics must not be nil")
 	}
+	if orphanRepo == nil {
+		panic("ingestion: orphanRepo must not be nil")
+	}
 	if logger == nil {
 		panic("ingestion: logger must not be nil")
 	}
@@ -125,6 +137,7 @@ func NewArtifactIngestionService(
 		fallbackMetrics:  fallbackMetrics,
 		docRepo:          docRepo,
 		tenantMetrics:    tenantMetrics,
+		orphanRepo:       orphanRepo,
 		logger:           logger,
 		maxJSONBytes:     maxJSONBytes,
 		maxBlobBytes:     maxBlobBytes,
@@ -380,6 +393,9 @@ func (s *ArtifactIngestionService) processIngestion(ctx context.Context, p inges
 	// Step 1: Save blobs to Object Storage (or verify refs for RE).
 	blobs, err := s.saveBlobs(ctx, p)
 	if err != nil {
+		// BRE-008: register orphan candidates before compensation so cleanup
+		// job can handle them even if compensation or process crashes.
+		s.registerOrphanCandidates(blobs, p.versionID)
 		s.compensate(blobs)
 		return err
 	}
@@ -477,6 +493,9 @@ func (s *ArtifactIngestionService) processIngestion(ctx context.Context, p inges
 			"producer", p.producer, "document_id", p.docID,
 			"version_id", p.versionID, "error", err,
 		)
+		// BRE-008: register orphan candidates before compensation so cleanup
+		// job can handle them even if compensation or process crashes.
+		s.registerOrphanCandidates(blobs, p.versionID)
 		// Compensate uploaded blobs: DB rolled back but blobs persist in S3.
 		s.compensate(blobs)
 		return err
@@ -590,6 +609,36 @@ func (s *ArtifactIngestionService) saveBlobs(ctx context.Context, p ingestionPar
 	}
 
 	return blobs, nil
+}
+
+// registerOrphanCandidates inserts uploaded blob keys into orphan_candidates
+// so the OrphanCleanupJob can delete them later if compensation fails or the
+// process crashes (BRE-008 / DM-TASK-047).
+//
+// Uses a separate context.Background() with a short timeout — independent of
+// both the original request context and the compensation context.
+// Best-effort: INSERT failures are logged but never block processing.
+func (s *ArtifactIngestionService) registerOrphanCandidates(blobs []savedBlob, versionID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for _, blob := range blobs {
+		if !blob.uploaded {
+			continue
+		}
+		candidate := port.OrphanCandidate{
+			StorageKey: blob.storageKey,
+			VersionID:  versionID,
+			CreatedAt:  time.Now().UTC(),
+		}
+		if err := s.orphanRepo.Insert(ctx, candidate); err != nil {
+			s.logger.Error("BRE-008: failed to register orphan candidate",
+				"storage_key", blob.storageKey,
+				"version_id", versionID,
+				"error", err,
+			)
+		}
+	}
 }
 
 // compensate deletes already-uploaded blobs from Object Storage on failure.

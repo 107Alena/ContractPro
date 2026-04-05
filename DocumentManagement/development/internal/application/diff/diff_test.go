@@ -218,6 +218,19 @@ func (n *noopTenantMetrics) IncTenantMismatch() {}
 
 var _ tenant.Metrics = (*noopTenantMetrics)(nil)
 
+type mockOrphanInserter struct {
+	inserted []port.OrphanCandidate
+	err      error
+}
+
+func (m *mockOrphanInserter) Insert(_ context.Context, c port.OrphanCandidate) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.inserted = append(m.inserted, c)
+	return nil
+}
+
 type mockLogger struct {
 	messages []logMsg
 }
@@ -245,6 +258,7 @@ type testDeps struct {
 	fallbackResolver *mockFallbackResolver
 	docExistence     *mockDocExistence
 	tenantMetrics    *noopTenantMetrics
+	orphanInserter   *mockOrphanInserter
 	logger           *mockLogger
 }
 
@@ -273,6 +287,7 @@ func newTestDeps() *testDeps {
 		fallbackResolver: &mockFallbackResolver{orgID: "org-1", versionID: "ver-1"},
 		docExistence:     &mockDocExistence{exists: true},
 		tenantMetrics:    &noopTenantMetrics{},
+		orphanInserter:   &mockOrphanInserter{},
 		logger:           &mockLogger{},
 	}
 }
@@ -281,7 +296,7 @@ func (d *testDeps) newService() *DiffStorageService {
 	svc := NewDiffStorageService(
 		d.transactor, d.versionRepo, d.diffRepo, d.auditRepo,
 		d.objectStorage, d.outboxWriter, d.fallbackResolver,
-		d.docExistence, d.tenantMetrics, d.logger,
+		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 	)
 	svc.newUUID = func() string { return "test-uuid" }
 	return svc
@@ -321,52 +336,57 @@ func TestNewDiffStorageService_PanicsOnNilDeps(t *testing.T) {
 	}{
 		{
 			name:    "nil transactor",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(nil, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(nil, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.orphanInserter, deps.logger) },
 			wantMsg: "transactor must not be nil",
 		},
 		{
 			name:    "nil versionRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, nil, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, nil, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.orphanInserter, deps.logger) },
 			wantMsg: "versionRepo must not be nil",
 		},
 		{
 			name:    "nil diffRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, nil, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, nil, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.orphanInserter, deps.logger) },
 			wantMsg: "diffRepo must not be nil",
 		},
 		{
 			name:    "nil auditRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, nil, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, nil, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.orphanInserter, deps.logger) },
 			wantMsg: "auditRepo must not be nil",
 		},
 		{
 			name:    "nil objectStorage",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, nil, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, nil, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.orphanInserter, deps.logger) },
 			wantMsg: "objectStorage must not be nil",
 		},
 		{
 			name:    "nil outboxWriter",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, nil, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, nil, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.orphanInserter, deps.logger) },
 			wantMsg: "outboxWriter must not be nil",
 		},
 		{
 			name:    "nil fallbackResolver",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, nil, deps.docExistence, deps.tenantMetrics, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, nil, deps.docExistence, deps.tenantMetrics, deps.orphanInserter, deps.logger) },
 			wantMsg: "fallbackResolver must not be nil",
 		},
 		{
 			name:    "nil docRepo",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, nil, deps.tenantMetrics, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, nil, deps.tenantMetrics, deps.orphanInserter, deps.logger) },
 			wantMsg: "docRepo must not be nil",
 		},
 		{
 			name:    "nil tenantMetrics",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, nil, deps.logger) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, nil, deps.orphanInserter, deps.logger) },
 			wantMsg: "tenantMetrics must not be nil",
 		},
 		{
+			name:    "nil orphanRepo",
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, nil, deps.logger) },
+			wantMsg: "orphanRepo must not be nil",
+		},
+		{
 			name:    "nil logger",
-			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, nil) },
+			setup:   func() *DiffStorageService { return NewDiffStorageService(deps.transactor, deps.versionRepo, deps.diffRepo, deps.auditRepo, deps.objectStorage, deps.outboxWriter, deps.fallbackResolver, deps.docExistence, deps.tenantMetrics, deps.orphanInserter, nil) },
 			wantMsg: "logger must not be nil",
 		},
 	}
@@ -1251,5 +1271,96 @@ func TestHandleDiffReady_NoFallbackWhenOrgPresent(t *testing.T) {
 	}
 	if deps.fallbackResolver.callCount != 0 {
 		t.Errorf("fallback resolver should not be called, got %d calls", deps.fallbackResolver.callCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Orphan candidate registration (BRE-008 / DM-TASK-047).
+// ---------------------------------------------------------------------------
+
+func TestHandleDiffReady_OrphanCandidate_RegisteredOnTxFailure(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps()
+	svc := deps.newService()
+
+	// Make the transaction fail after PutObject succeeds.
+	deps.transactor.fn = func(ctx context.Context, fn func(ctx context.Context) error) error {
+		return port.NewDatabaseError("commit failed", errors.New("connection reset"))
+	}
+
+	err := svc.HandleDiffReady(context.Background(), validDiffEvent())
+	if err == nil {
+		t.Fatal("expected error from transaction failure")
+	}
+
+	// One orphan candidate should be registered (the diff blob).
+	if len(deps.orphanInserter.inserted) != 1 {
+		t.Fatalf("orphan candidates = %d, want 1", len(deps.orphanInserter.inserted))
+	}
+	c := deps.orphanInserter.inserted[0]
+	if c.VersionID != "ver-2" {
+		t.Errorf("orphan candidate version_id = %q, want ver-2", c.VersionID)
+	}
+	if c.StorageKey == "" {
+		t.Error("orphan candidate storage_key must not be empty")
+	}
+
+	// Compensation should also have run.
+	if len(deps.objectStorage.deleteCalls) != 1 {
+		t.Errorf("delete calls = %d, want 1", len(deps.objectStorage.deleteCalls))
+	}
+}
+
+func TestHandleDiffReady_OrphanCandidate_NotRegisteredOnSuccess(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps()
+	svc := deps.newService()
+
+	err := svc.HandleDiffReady(context.Background(), validDiffEvent())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(deps.orphanInserter.inserted) != 0 {
+		t.Errorf("orphan candidates = %d, want 0 (no orphans on success)",
+			len(deps.orphanInserter.inserted))
+	}
+}
+
+func TestHandleDiffReady_OrphanCandidate_InsertFailureDoesNotBlock(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps()
+	deps.orphanInserter.err = errors.New("DB connection refused")
+
+	// Make the transaction fail to trigger compensation path.
+	deps.transactor.fn = func(ctx context.Context, fn func(ctx context.Context) error) error {
+		return port.NewDatabaseError("commit failed", errors.New("connection reset"))
+	}
+
+	svc := deps.newService()
+	err := svc.HandleDiffReady(context.Background(), validDiffEvent())
+
+	// The error should be the original tx failure, not the orphan insert error.
+	if err == nil {
+		t.Fatal("expected error from transaction failure")
+	}
+	if port.ErrorCode(err) != port.ErrCodeDatabaseFailed {
+		t.Errorf("error code = %q, want DATABASE_ERROR", port.ErrorCode(err))
+	}
+
+	// Compensation should still have run.
+	if len(deps.objectStorage.deleteCalls) != 1 {
+		t.Errorf("delete calls = %d, want 1 (compensation still runs)", len(deps.objectStorage.deleteCalls))
+	}
+
+	// ERROR log about orphan candidate.
+	hasOrphanLog := false
+	for _, msg := range deps.logger.messages {
+		if msg.level == "ERROR" && strings.Contains(msg.msg, "orphan candidate") {
+			hasOrphanLog = true
+			break
+		}
+	}
+	if !hasOrphanLog {
+		t.Error("expected ERROR log about orphan candidate INSERT failure")
 	}
 }

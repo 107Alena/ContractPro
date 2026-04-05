@@ -30,17 +30,18 @@ import (
 
 type testHarness struct {
 	// In-memory stores.
-	transactor    *memoryTransactor
-	docRepo       *memoryDocumentRepository
-	versionRepo   *memoryVersionRepository
-	artifactRepo  *memoryArtifactRepository
-	auditRepo     *memoryAuditRepository
-	outboxRepo    *memoryOutboxRepository
-	objectStorage *memoryObjectStorage
-	idemStore     *memoryIdempotencyStore
-	dlqPort       *recordingDLQPort
-	diffRepo      *memoryDiffRepository
-	fallback      *memoryFallbackResolver
+	transactor      *memoryTransactor
+	docRepo         *memoryDocumentRepository
+	versionRepo     *memoryVersionRepository
+	artifactRepo    *memoryArtifactRepository
+	auditRepo       *memoryAuditRepository
+	outboxRepo      *memoryOutboxRepository
+	objectStorage   *memoryObjectStorage
+	idemStore       *memoryIdempotencyStore
+	dlqPort         *recordingDLQPort
+	diffRepo        *memoryDiffRepository
+	fallback        *memoryFallbackResolver
+	orphanInserter  *recordingOrphanInserter // BRE-008 / DM-TASK-047
 
 	// Real application services.
 	ingestion       *appIngestion.ArtifactIngestionService
@@ -64,19 +65,20 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 	t.Helper()
 
 	h := &testHarness{
-		transactor:    newMemoryTransactor(),
-		docRepo:       newMemoryDocumentRepository(),
-		versionRepo:   newMemoryVersionRepository(),
-		artifactRepo:  newMemoryArtifactRepository(),
-		auditRepo:     newMemoryAuditRepository(),
-		outboxRepo:    newMemoryOutboxRepository(),
-		objectStorage: newMemoryObjectStorage(),
-		idemStore:     newMemoryIdempotencyStore(),
-		dlqPort:       newRecordingDLQPort(),
-		diffRepo:      newMemoryDiffRepository(),
-		fallback:      newMemoryFallbackResolver(),
-		broker:        newCaptureBroker(),
-		logger:        newRecordingLogger(),
+		transactor:     newMemoryTransactor(),
+		docRepo:        newMemoryDocumentRepository(),
+		versionRepo:    newMemoryVersionRepository(),
+		artifactRepo:   newMemoryArtifactRepository(),
+		auditRepo:      newMemoryAuditRepository(),
+		outboxRepo:     newMemoryOutboxRepository(),
+		objectStorage:  newMemoryObjectStorage(),
+		idemStore:      newMemoryIdempotencyStore(),
+		dlqPort:        newRecordingDLQPort(),
+		diffRepo:       newMemoryDiffRepository(),
+		fallback:       newMemoryFallbackResolver(),
+		orphanInserter: newRecordingOrphanInserter(),
+		broker:         newCaptureBroker(),
+		logger:         newRecordingLogger(),
 	}
 
 	h.outboxWriter = outbox.NewOutboxWriter(h.outboxRepo)
@@ -93,6 +95,7 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		&noopFallbackMetrics{},
 		h.docRepo,
 		&noopTenantMetrics{},
+		h.orphanInserter,
 		h.logger,
 		10*1024*1024,  // maxJSONBytes: 10 MB
 		100*1024*1024, // maxBlobBytes: 100 MB
@@ -122,6 +125,7 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		h.fallback,
 		h.docRepo,
 		&noopTenantMetrics{},
+		h.orphanInserter,
 		h.logger,
 	)
 
@@ -1237,6 +1241,36 @@ func (m *noopTenantMetrics) IncTenantMismatch() {}
 type noopIntegrityMetrics struct{}
 
 func (m *noopIntegrityMetrics) IncIntegrityCheckFailures() {}
+
+// recordingOrphanInserter records orphan candidate INSERTs for test verification.
+// Thread-safe for use with -race.
+type recordingOrphanInserter struct {
+	mu         sync.Mutex
+	candidates []port.OrphanCandidate
+	err        error // optional: inject INSERT failure
+}
+
+func newRecordingOrphanInserter() *recordingOrphanInserter {
+	return &recordingOrphanInserter{}
+}
+
+func (r *recordingOrphanInserter) Insert(_ context.Context, c port.OrphanCandidate) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
+	}
+	r.candidates = append(r.candidates, c)
+	return nil
+}
+
+func (r *recordingOrphanInserter) allCandidates() []port.OrphanCandidate {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]port.OrphanCandidate, len(r.candidates))
+	copy(out, r.candidates)
+	return out
+}
 
 type noopIdempotencyMetrics struct{}
 

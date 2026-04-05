@@ -267,6 +267,19 @@ func (n *noopTenantMetrics) IncTenantMismatch() {}
 
 var _ tenant.Metrics = (*noopTenantMetrics)(nil)
 
+type mockOrphanInserter struct {
+	inserted []port.OrphanCandidate
+	err      error
+}
+
+func (m *mockOrphanInserter) Insert(_ context.Context, c port.OrphanCandidate) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.inserted = append(m.inserted, c)
+	return nil
+}
+
 type mockLogger struct {
 	messages []logMsg
 }
@@ -295,6 +308,7 @@ type testDeps struct {
 	fallbackMetrics  *mockFallbackMetrics
 	docExistence     *mockDocExistence
 	tenantMetrics    *noopTenantMetrics
+	orphanInserter   *mockOrphanInserter
 	logger           *mockLogger
 }
 
@@ -312,6 +326,7 @@ func newTestDeps() *testDeps {
 		fallbackMetrics:  &mockFallbackMetrics{},
 		docExistence:     &mockDocExistence{exists: true},
 		tenantMetrics:    &noopTenantMetrics{},
+		orphanInserter:   &mockOrphanInserter{},
 		logger:           &mockLogger{},
 	}
 }
@@ -321,7 +336,7 @@ func (d *testDeps) newService() *ArtifactIngestionService {
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
 		d.fallbackResolver, d.fallbackMetrics,
-		d.docExistence, d.tenantMetrics, d.logger,
+		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		10*1024*1024, // maxJSONBytes: 10 MB
 		100*1024*1024, // maxBlobBytes: 100 MB
 	)
@@ -429,43 +444,46 @@ func TestNewArtifactIngestionService_PanicsOnNilDeps(t *testing.T) {
 		fn   func()
 	}{
 		{"nil transactor", func() {
-			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil versionRepo", func() {
-			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil artifactRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil auditRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil objectStorage", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil outboxWriter", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil fallbackResolver", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil fallbackMetrics", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, nil, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, nil, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil docRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, nil, d.tenantMetrics, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, nil, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil tenantMetrics", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, nil, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, nil, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+		}},
+		{"nil orphanRepo", func() {
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, nil, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil logger", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, nil, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, nil, 10*1024*1024, 100*1024*1024)
 		}},
 		{"zero maxJSONBytes", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 0, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 0, 100*1024*1024)
 		}},
 		{"negative maxBlobBytes", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.logger, 10*1024*1024, -1)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, -1)
 		}},
 	}
 
@@ -495,7 +513,7 @@ func TestValidateArtifacts_OversizedJSONArtifact(t *testing.T) {
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
 		d.fallbackResolver, d.fallbackMetrics,
-		d.docExistence, d.tenantMetrics, d.logger,
+		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		100, 100*1024*1024,
 	)
 
@@ -652,7 +670,7 @@ func TestValidateArtifacts_BlobRefOversized(t *testing.T) {
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
 		d.fallbackResolver, d.fallbackMetrics,
-		d.docExistence, d.tenantMetrics, d.logger,
+		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		10*1024*1024, 500, // maxBlobBytes = 500
 	)
 
@@ -684,7 +702,7 @@ func TestValidateArtifacts_OversizedLICArtifact(t *testing.T) {
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
 		d.fallbackResolver, d.fallbackMetrics,
-		d.docExistence, d.tenantMetrics, d.logger,
+		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		50, 100*1024*1024,
 	)
 
@@ -727,7 +745,7 @@ func TestValidateArtifacts_SizeCheckBeforeJSONParsing(t *testing.T) {
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
 		d.fallbackResolver, d.fallbackMetrics,
-		d.docExistence, d.tenantMetrics, d.logger,
+		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		10, 100*1024*1024,
 	)
 
@@ -1114,7 +1132,7 @@ func TestHandleDPArtifacts_AuditRepoFailure(t *testing.T) {
 		d.transactor, d.versionRepo, d.artifactRepo,
 		auditRepo, d.objectStorage, d.outboxWriter,
 		d.fallbackResolver, d.fallbackMetrics,
-		d.docExistence, d.tenantMetrics, d.logger,
+		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		10*1024*1024, 100*1024*1024,
 	)
 	uuidCounter := 0
@@ -1902,5 +1920,167 @@ func TestBRE001_FindByIDForUpdate_VersionNotFound(t *testing.T) {
 	}
 	if port.ErrorCode(err) != port.ErrCodeVersionNotFound {
 		t.Errorf("error code = %q, want VERSION_NOT_FOUND", port.ErrorCode(err))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Orphan candidate registration (BRE-008 / DM-TASK-047).
+// ---------------------------------------------------------------------------
+
+func TestOrphanCandidate_RegisteredOnTxFailure(t *testing.T) {
+	// When the DB transaction fails after blobs are uploaded, orphan
+	// candidates must be registered BEFORE compensation runs.
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	// Make the transaction fail.
+	d.transactor.fn = func(ctx context.Context, fn func(ctx context.Context) error) error {
+		return port.NewDatabaseError("commit failed", errors.New("connection reset"))
+	}
+
+	svc := d.newService()
+	_ = svc.HandleDPArtifacts(context.Background(), validDPEvent())
+
+	// 4 JSON artifacts uploaded (OCR_RAW, EXTRACTED_TEXT, DOCUMENT_STRUCTURE, SEMANTIC_TREE — WARNINGS ignored since it's the 5th).
+	// Actually the event has 5 artifacts (OCR_RAW, EXTRACTED_TEXT, DOCUMENT_STRUCTURE, SEMANTIC_TREE, PROCESSING_WARNINGS).
+	// All 5 should have been saved to S3 and then registered as orphan candidates.
+	if len(d.orphanInserter.inserted) == 0 {
+		t.Fatal("expected orphan candidates to be registered, got 0")
+	}
+	// Verify the count matches the number of uploaded blobs.
+	blobCount := len(d.objectStorage.putCalls)
+	if len(d.orphanInserter.inserted) != blobCount {
+		t.Errorf("orphan candidates = %d, want %d (matching uploaded blob count)",
+			len(d.orphanInserter.inserted), blobCount)
+	}
+
+	// Verify version_id is set on each candidate.
+	for _, c := range d.orphanInserter.inserted {
+		if c.VersionID != "ver-001" {
+			t.Errorf("orphan candidate version_id = %q, want ver-001", c.VersionID)
+		}
+		if c.StorageKey == "" {
+			t.Error("orphan candidate storage_key must not be empty")
+		}
+		if c.CreatedAt.IsZero() {
+			t.Error("orphan candidate created_at must not be zero")
+		}
+	}
+
+	// Compensation should also have run (DeleteObject calls).
+	if len(d.objectStorage.deleteCalls) != blobCount {
+		t.Errorf("delete calls = %d, want %d (compensation runs after orphan registration)",
+			len(d.objectStorage.deleteCalls), blobCount)
+	}
+}
+
+func TestOrphanCandidate_RegisteredOnSaveBlobsFailure(t *testing.T) {
+	// When saveBlobs fails mid-way (e.g., 3rd out of 5 artifacts), orphan
+	// candidates should be registered for the blobs that WERE uploaded.
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	// Fail on the 3rd PutObject call (after 2 successful uploads).
+	d.objectStorage.putErrAfter = 2
+	d.objectStorage.putErr = port.NewStorageError("put failed", errors.New("timeout"))
+
+	svc := d.newService()
+	_ = svc.HandleDPArtifacts(context.Background(), validDPEvent())
+
+	// 2 blobs were uploaded before the 3rd failed.
+	if len(d.orphanInserter.inserted) != 2 {
+		t.Errorf("orphan candidates = %d, want 2 (blobs uploaded before failure)",
+			len(d.orphanInserter.inserted))
+	}
+}
+
+func TestOrphanCandidate_NotRegisteredOnSuccess(t *testing.T) {
+	// On successful ingestion, no orphan candidates should be registered.
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	err := svc.HandleDPArtifacts(context.Background(), validDPEvent())
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(d.orphanInserter.inserted) != 0 {
+		t.Errorf("orphan candidates = %d, want 0 (no orphans on success)",
+			len(d.orphanInserter.inserted))
+	}
+}
+
+func TestOrphanCandidate_InsertFailureDoesNotBlockProcessing(t *testing.T) {
+	// If orphan candidate INSERT fails, the flow should continue —
+	// compensation still runs, and the error is logged but not propagated.
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	setupVersionFind(d, version)
+
+	// Make orphan INSERT fail.
+	d.orphanInserter.err = errors.New("DB connection refused")
+
+	// Make the transaction fail to trigger compensation path.
+	d.transactor.fn = func(ctx context.Context, fn func(ctx context.Context) error) error {
+		return port.NewDatabaseError("commit failed", errors.New("connection reset"))
+	}
+
+	svc := d.newService()
+	err := svc.HandleDPArtifacts(context.Background(), validDPEvent())
+
+	// The ingestion error should be the original tx failure, not the orphan insert error.
+	if err == nil {
+		t.Fatal("expected error from transaction failure")
+	}
+	if port.ErrorCode(err) != port.ErrCodeDatabaseFailed {
+		t.Errorf("error code = %q, want DATABASE_ERROR", port.ErrorCode(err))
+	}
+
+	// Compensation should still have run despite orphan INSERT failure.
+	if len(d.objectStorage.deleteCalls) == 0 {
+		t.Error("expected compensation delete calls even when orphan INSERT fails")
+	}
+
+	// ERROR log should mention orphan candidate failure.
+	hasOrphanLog := false
+	for _, msg := range d.logger.messages {
+		if msg.level == "ERROR" && strings.Contains(msg.msg, "orphan candidate") {
+			hasOrphanLog = true
+			break
+		}
+	}
+	if !hasOrphanLog {
+		t.Error("expected ERROR log about orphan candidate INSERT failure")
+	}
+}
+
+func TestOrphanCandidate_SkipsClaimCheckBlobs(t *testing.T) {
+	// RE claim-check blobs (uploaded=false) should NOT be registered as
+	// orphan candidates — DM did not upload them.
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusAnalysisArtifactsReceived)
+	setupVersionFind(d, version)
+
+	// Pre-seed blobs for claim-check verification.
+	event := validREEvent()
+	d.objectStorage.headResults[event.ExportPDF.StorageKey] = headResult{size: 1024, exists: true}
+	d.objectStorage.headResults[event.ExportDOCX.StorageKey] = headResult{size: 2048, exists: true}
+
+	// Make the transaction fail to trigger compensation.
+	d.transactor.fn = func(ctx context.Context, fn func(ctx context.Context) error) error {
+		return port.NewDatabaseError("commit failed", errors.New("tx error"))
+	}
+
+	svc := d.newService()
+	_ = svc.HandleREArtifacts(context.Background(), event)
+
+	// No orphan candidates should be registered for claim-check blobs.
+	if len(d.orphanInserter.inserted) != 0 {
+		t.Errorf("orphan candidates = %d, want 0 (claim-check blobs are not uploaded by DM)",
+			len(d.orphanInserter.inserted))
 	}
 }

@@ -2567,3 +2567,37 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 - DM-TASK-052 (CLAUDE.md files) — low, infrastructure — единственная оставшаяся задача
 
 ---
+
+## DM-TASK-052: CLAUDE.md файлы для каждого пакета DM (2026-04-05)
+
+**Статус:** done
+
+**Что сделано:**
+- Создано 8 CLAUDE.md файлов, аналогично структуре DocumentProcessing (11 файлов — минус DP-специфичные engine/pdf/app)
+- Корневой `development/CLAUDE.md` — overview: module, build commands, configuration, code structure, architecture pattern, pipelines, external dependencies
+- `internal/domain/CLAUDE.md` — model (11 source files: entities, state machines, events, topics, DLQ) + port (5 inbound + 18 outbound interfaces, 20 error codes)
+- `internal/application/CLAUDE.md` — 5 services (ingestion, query, lifecycle, version, diff) + tenant utility + 5 background jobs (watchdog, orphancleanup, 3 retention)
+- `internal/infra/CLAUDE.md` — postgres (client, transactor, context, migrator, 9 repositories, 5 migrations), broker, objectstorage, kvstore, observability, health, concurrency, circuitbreaker
+- `internal/ingress/CLAUDE.md` — consumer (7 topics), idempotency (Redis guard + DB fallback), api (13 endpoints, auth, rate limiting)
+- `internal/egress/CLAUDE.md` — confirmation (10 types), notification (5 types), outbox (writer + poller + metrics), dlq (sender)
+- `internal/config/CLAUDE.md` — Load() + 18 sub-configs
+- `internal/integration/CLAUDE.md` — testinfra (14 in-memory fakes), 5 test files
+
+**План реализации:**
+1. Изучить структуру пакетов DM (28 пакетов) и DP CLAUDE.md (11 файлов) как reference
+2. Запустить 4 Explore-агента параллельно для анализа domain/application/infra/ingress+egress
+3. Написать 8 CLAUDE.md файлов (per-layer, не per-package — как в DP)
+4. Ревью documentation-engineer
+5. Исправить замечания, тестирование
+
+**Консультации:**
+- documentation-engineer: ревью 8 файлов → 5 issues (file count 14→11, error code count 16→20, SOURCE_FILE route clarification, ArtifactStatus non-linear note, endpoint count) → все исправлены
+
+**Тесты:**
+- `go test -count=1 ./...` — ALL PASS (30 пакетов)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Все 52 задачи DM завершены.** Доменная область Document Management полностью реализована.
+
+---

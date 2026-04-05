@@ -1153,7 +1153,9 @@
         "Шаг 1: каждый пакет с .go файлами имеет CLAUDE.md"
       ],
       "dependencies": ["DM-TASK-025"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-05",
+      "summary": "Созданы 8 CLAUDE.md файлов для Document Management (аналогично DP — 11 файлов, минус DP-специфичные пакеты engine/pdf/app). ФАЙЛЫ: 1) development/CLAUDE.md — root overview (module, build commands, config, code structure, architecture pattern, pipelines, external deps), 2) internal/domain/CLAUDE.md — model (11 source files: entities, state machines, events, topics, DLQ) + port (5 inbound + 18 outbound interfaces, 20 error codes), 3) internal/application/CLAUDE.md — 5 services (ingestion, query, lifecycle, version, diff) + tenant utility + 5 background jobs (watchdog, orphancleanup, 3 retention), 4) internal/infra/CLAUDE.md — postgres (client, transactor, context, migrator, 9 repositories, 5 migrations), broker (RabbitMQ + reconnect), objectstorage (S3 + keys), kvstore (Redis), observability (logger, 30+ metrics, tracer), health, concurrency (semaphore), circuitbreaker, 5) internal/ingress/CLAUDE.md — consumer (7 topics, idempotency integration, DLQ routing, backoff), idempotency (Redis guard + DB fallback, 7 key generators), api (13 endpoints, auth middleware, rate limiting, response helpers), 6) internal/egress/CLAUDE.md — confirmation (10 types), notification (5 types), outbox (writer + poller + metrics collector), dlq (dual-write sender), 7) internal/config/CLAUDE.md — Load() + 18 sub-configs, 8) internal/integration/CLAUDE.md — testinfra (14 in-memory fakes), 5 test files (47+ tests). Структура аналогична DP: per-layer CLAUDE.md, не per-package. Ревью: documentation-engineer → 5 issues (file count 14→11, error code count 16→20, SOURCE_FILE route clarification, ArtifactStatus non-linear note) → все исправлены. Все тесты PASS с -count=1 (30 пакетов). go vet OK. make build/test/lint — ALL OK."
     }
   ]
 }

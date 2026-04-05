@@ -2498,3 +2498,34 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 - DM-TASK-052 (CLAUDE.md files) — low, infrastructure
 
 ---
+
+## DM-TASK-034: Документация configuration.md (2026-04-05)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `DocumentManagement/architecture/configuration.md` — полный справочник всех 94 переменных окружения `DM_*`
+- Структура аналогична `DocumentProcessing/architecture/configuration.md`, расширена:
+  - Содержание с 8 разделами и быстрой навигацией
+  - Семантическая группировка (5 tier): Инфраструктура, Приём и обработка событий, Устойчивость, Фоновые задачи, Observability
+  - Колонка «Заметки» со ссылками на BRE/REV/NFR требования
+- 18 sub-config блоков: Database (4), Broker (2 + 25 topics), Storage (6), KVStore (5), HTTP (1), Consumer (2), Ingestion (2), Idempotency (3), Retry (2), Timeouts (6), Circuit Breaker (5), Rate Limit (5), DLQ (1), Outbox (4), Retention (10), Watchdog (2), Orphan Cleanup (4), Observability (5)
+- Обязательные переменные (7) выделены в отдельную таблицу с примерами значений
+- Все ограничения из `Validate()` документированы
+- Топики: 7 входящих + 10 confirmation + 5 notification + 3 DLQ = 25 topic vars
+- Пример `.env` со всеми 94 переменными (required uncommented, optional commented с defaults)
+
+**Консультации:**
+- documentation-engineer — семантическая группировка 5 tier одобрена
+- code-reviewer — 0 missing vars в таблицах, 10 missing в `.env` пример → все исправлены
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (30 пакетов, документация не влияет на код)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи:**
+- DM-TASK-051 (RPO/RTO strategy) — low, infrastructure
+- DM-TASK-052 (CLAUDE.md files) — low, infrastructure
+
+---

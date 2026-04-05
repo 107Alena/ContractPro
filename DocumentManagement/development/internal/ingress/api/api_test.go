@@ -1029,6 +1029,166 @@ func TestGetArtifact_NotFound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// SOURCE_FILE presigned URL tests (DM-TASK-033)
+// ---------------------------------------------------------------------------
+
+func TestGetArtifact_SourceFile_PresignedURL(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.versions.getVersion = func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+		return &model.DocumentVersion{
+			VersionID:      versionID,
+			DocumentID:     docID,
+			OrganizationID: orgID,
+			SourceFileKey:  "org-1/doc-1/v-1/source.pdf",
+		}, nil
+	}
+	var capturedKey string
+	var capturedExpiry time.Duration
+	d.storage.generatePresigned = func(ctx context.Context, key string, expiry time.Duration) (string, error) {
+		capturedKey = key
+		capturedExpiry = expiry
+		return "https://s3.example.com/presigned-source", nil
+	}
+
+	rr := doRequest(d.handler, "GET", "/api/v1/documents/doc-1/versions/v-1/artifacts/SOURCE_FILE", nil)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if loc != "https://s3.example.com/presigned-source" {
+		t.Errorf("Location = %q, want presigned URL", loc)
+	}
+	if capturedKey != "org-1/doc-1/v-1/source.pdf" {
+		t.Errorf("presigned key = %q, want org-1/doc-1/v-1/source.pdf", capturedKey)
+	}
+	if capturedExpiry != 15*time.Minute {
+		t.Errorf("presigned TTL = %v, want 15m", capturedExpiry)
+	}
+}
+
+func TestGetArtifact_SourceFile_VersionNotFound(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.versions.getVersion = func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+		return nil, port.NewVersionNotFoundError(versionID)
+	}
+
+	rr := doRequest(d.handler, "GET", "/api/v1/documents/doc-1/versions/v-1/artifacts/SOURCE_FILE", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+func TestGetArtifact_SourceFile_EmptyKey(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.versions.getVersion = func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+		return &model.DocumentVersion{
+			VersionID:     versionID,
+			SourceFileKey: "", // no source file
+		}, nil
+	}
+
+	rr := doRequest(d.handler, "GET", "/api/v1/documents/doc-1/versions/v-1/artifacts/SOURCE_FILE", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for empty source_file_key", rr.Code)
+	}
+}
+
+func TestGetArtifact_SourceFile_PresignedError(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.versions.getVersion = func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+		return &model.DocumentVersion{
+			VersionID:     versionID,
+			SourceFileKey: "org-1/doc-1/v-1/source.pdf",
+		}, nil
+	}
+	d.storage.generatePresigned = func(ctx context.Context, key string, expiry time.Duration) (string, error) {
+		return "", port.NewStorageError("s3 fail", nil)
+	}
+
+	rr := doRequest(d.handler, "GET", "/api/v1/documents/doc-1/versions/v-1/artifacts/SOURCE_FILE", nil)
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rr.Code)
+	}
+}
+
+func TestGetArtifact_SourceFile_TenantIsolation(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	var capturedOrgID string
+	d.versions.getVersion = func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error) {
+		capturedOrgID = orgID
+		return &model.DocumentVersion{
+			VersionID:     versionID,
+			SourceFileKey: "org-1/doc-1/v-1/source.pdf",
+		}, nil
+	}
+
+	rr := doRequest(d.handler, "GET", "/api/v1/documents/doc-1/versions/v-1/artifacts/SOURCE_FILE", nil)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rr.Code)
+	}
+	if capturedOrgID != "org-1" {
+		t.Errorf("organization_id = %q, want org-1", capturedOrgID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Presigned URL TTL verification (DM-TASK-033)
+// ---------------------------------------------------------------------------
+
+func TestGetArtifact_BlobRedirect_VerifyTTL(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.queries.listArtifacts = func(ctx context.Context, orgID, docID, versionID string) ([]*model.ArtifactDescriptor, error) {
+		return []*model.ArtifactDescriptor{
+			{ArtifactID: "a-1", ArtifactType: model.ArtifactTypeExportPDF, StorageKey: "key"},
+		}, nil
+	}
+	var capturedExpiry time.Duration
+	d.storage.generatePresigned = func(ctx context.Context, key string, expiry time.Duration) (string, error) {
+		capturedExpiry = expiry
+		return "https://s3.example.com/presigned", nil
+	}
+
+	rr := doRequest(d.handler, "GET", "/api/v1/documents/doc-1/versions/v-1/artifacts/EXPORT_PDF", nil)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rr.Code)
+	}
+	if capturedExpiry != 15*time.Minute {
+		t.Errorf("presigned TTL = %v, want 15m", capturedExpiry)
+	}
+}
+
+func TestGetArtifact_DOCX_BlobRedirect(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	d.queries.listArtifacts = func(ctx context.Context, orgID, docID, versionID string) ([]*model.ArtifactDescriptor, error) {
+		return []*model.ArtifactDescriptor{
+			{ArtifactID: "a-1", ArtifactType: model.ArtifactTypeExportDOCX, StorageKey: "org-1/doc-1/v-1/EXPORT_DOCX"},
+		}, nil
+	}
+	d.storage.generatePresigned = func(ctx context.Context, key string, expiry time.Duration) (string, error) {
+		if key != "org-1/doc-1/v-1/EXPORT_DOCX" {
+			t.Errorf("presigned key = %q, want org-1/doc-1/v-1/EXPORT_DOCX", key)
+		}
+		return "https://s3.example.com/presigned-docx", nil
+	}
+
+	rr := doRequest(d.handler, "GET", "/api/v1/documents/doc-1/versions/v-1/artifacts/EXPORT_DOCX", nil)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if loc != "https://s3.example.com/presigned-docx" {
+		t.Errorf("Location = %q, want presigned DOCX URL", loc)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Diff endpoint tests
 // ---------------------------------------------------------------------------
 

@@ -762,7 +762,9 @@
         "Шаг 2: go test ./internal/ingress/api/... -race -count=1"
       ],
       "dependencies": ["DM-TASK-018", "DM-TASK-022"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-05",
+      "summary": "Реализована полная поддержка presigned URL для всех blob-типов артефактов. EXPORT_PDF/EXPORT_DOCX → 302 redirect уже реализовано в DM-TASK-022 через IsBlobArtifact() → ListArtifacts → GeneratePresignedURL. JSON artifacts → 200 inline content через GetArtifact(). Новое: SOURCE_FILE поддержка как API-layer convenience — sourceFileType const, getSourceFile() метод в handler.go: GetVersion → SourceFileKey → GeneratePresignedURL → 302. SOURCE_FILE — НЕ доменный ArtifactType (хранится на DocumentVersion, не как ArtifactDescriptor), обрабатывается ДО isValidArtifactType проверки. TTL: 15 минут (presignedURLTTL const). Tenant isolation: organization_id из AuthContext передаётся в GetVersion. Консультация: code-architect → Option B (API-layer convenience). РЕВЬЮ: code-reviewer → APPROVED (0B + 1W operational). 7 новых тестов: SourceFile_PresignedURL (happy + key/TTL capture), SourceFile_VersionNotFound (404), SourceFile_EmptyKey (404), SourceFile_PresignedError (500), SourceFile_TenantIsolation (org_id passthrough), BlobRedirect_VerifyTTL (15m), DOCX_BlobRedirect. Все тесты PASS с -race -count=1 (28 пакетов). go vet OK. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-034",

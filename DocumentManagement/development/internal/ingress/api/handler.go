@@ -426,11 +426,26 @@ func filterArtifacts(artifacts []*model.ArtifactDescriptor, artifactType, produc
 
 const presignedURLTTL = 15 * time.Minute
 
+// sourceFileType is the pseudo-artifact type for the original uploaded file.
+// It is NOT a domain ArtifactType — the source file is stored on DocumentVersion,
+// not as an ArtifactDescriptor. Exposed via the artifacts endpoint as a convenience.
+const sourceFileType = "SOURCE_FILE"
+
 func (h *Handler) getArtifact(w http.ResponseWriter, r *http.Request) {
 	ac := authFromContext(r.Context())
 	docID := r.PathValue("document_id")
 	versionID := r.PathValue("version_id")
-	artifactType := model.ArtifactType(r.PathValue("artifact_type"))
+	rawType := r.PathValue("artifact_type")
+
+	// SOURCE_FILE is an API-layer convenience — the original uploaded PDF is stored
+	// as version.SourceFileKey, not as an ArtifactDescriptor. Handle it before
+	// artifact type validation to keep the domain model clean.
+	if rawType == sourceFileType {
+		h.getSourceFile(w, r, ac, docID, versionID)
+		return
+	}
+
+	artifactType := model.ArtifactType(rawType)
 
 	// Validate artifact type against known types.
 	if !isValidArtifactType(artifactType) {
@@ -483,6 +498,28 @@ func (h *Handler) getArtifact(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content.Content)
+}
+
+// getSourceFile handles the SOURCE_FILE pseudo-artifact type.
+// Looks up the version's SourceFileKey and redirects to a presigned URL.
+func (h *Handler) getSourceFile(w http.ResponseWriter, r *http.Request, ac *AuthContext, docID, versionID string) {
+	version, err := h.versions.GetVersion(r.Context(), ac.OrganizationID, docID, versionID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	if version.SourceFileKey == "" {
+		writeErrorJSON(w, http.StatusNotFound, "ARTIFACT_NOT_FOUND", "source file not available for this version")
+		return
+	}
+
+	url, err := h.storage.GeneratePresignedURL(r.Context(), version.SourceFileKey, presignedURLTTL)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	http.Redirect(w, r, url, http.StatusFound)
 }
 
 // ---------------------------------------------------------------------------

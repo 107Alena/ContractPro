@@ -2351,3 +2351,46 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 - DM-TASK-052 (CLAUDE.md files) — low, infrastructure
 
 ---
+
+## DM-TASK-033: Presigned URL generation для blob-артефактов (2026-04-05)
+
+**Статус:** done
+
+**Что сделано:**
+- Основная функциональность (EXPORT_PDF/EXPORT_DOCX → 302, JSON → 200) уже реализована в DM-TASK-022
+- Добавлена поддержка SOURCE_FILE как API-layer convenience:
+  - `sourceFileType` const и `getSourceFile()` метод в `handler.go`
+  - SOURCE_FILE обрабатывается ДО `isValidArtifactType` проверки (не доменный ArtifactType)
+  - Поток: `GetVersion()` → `SourceFileKey` → `GeneratePresignedURL(15min)` → HTTP 302
+- Tenant isolation: `organization_id` из AuthContext передаётся в GetVersion
+- Пустой `SourceFileKey` → 404 (не 500)
+
+**Файлы:**
+- `internal/ingress/api/handler.go` — +sourceFileType const, +getSourceFile(), getArtifact() refactored с rawType early check
+- `internal/ingress/api/api_test.go` — +7 тестов
+
+**Тесты (7 новых):**
+- SourceFile_PresignedURL: happy path с key/TTL capture (15m verified)
+- SourceFile_VersionNotFound: 404
+- SourceFile_EmptyKey: 404 for empty source_file_key
+- SourceFile_PresignedError: 500 on S3 failure
+- SourceFile_TenantIsolation: org_id passthrough verified
+- BlobRedirect_VerifyTTL: 15 min TTL for EXPORT_PDF
+- DOCX_BlobRedirect: EXPORT_DOCX redirect с correct key
+
+**Консультации:**
+- code-architect: Option B — SOURCE_FILE как API-layer convenience, без изменения доменной модели
+- code-reviewer: APPROVED (0B + 1W operational — presigned URL в redirect Location header)
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (28 пакетов)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи:**
+- DM-TASK-034 (Configuration docs) — medium, infrastructure
+- DM-TASK-035 (Deployment docs) — medium, infrastructure
+- DM-TASK-050 (Migration strategy) — medium, infrastructure
+- DM-TASK-052 (CLAUDE.md files) — low, infrastructure
+
+---

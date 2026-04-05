@@ -490,7 +490,7 @@ curl http://localhost:9090/metrics
 
 **Managed (рекомендуется):**
 - Yandex Managed PostgreSQL с автоматическим failover (synchronous replication)
-- Point-in-time recovery с WAL archiving (RPO ≤ 15 мин)
+- Point-in-time recovery с WAL archiving (RPO ≤ 15 мин). Подробнее: [раздел 10](#10-резервное-копирование-и-восстановление-bre-021rev-033)
 - RTO: автоматический failover < 60 сек
 
 **Self-hosted:**
@@ -706,9 +706,597 @@ docker stats
 
 ---
 
-## 10. Справочная информация
+## 10. Резервное копирование и восстановление (BRE-021/REV-033)
 
-### 10.1. Порты
+> Требования: **NFR-2.3 — RPO ≤ 15 минут, RTO ≤ 2 часа.**
+> Все процедуры рассчитаны на Yandex Managed PostgreSQL 16 + Yandex Object Storage.
+> Self-hosted альтернатива (WAL-G) описана в разделе 10.8.
+
+### 10.1. Целевые показатели и бюджет RPO/RTO
+
+**RPO (Recovery Point Objective) — максимально допустимая потеря данных:**
+
+| Компонент | RPO | Обоснование |
+|-----------|-----|-------------|
+| PostgreSQL | ≤ 1 мин | Непрерывное WAL-архивирование (`archive_timeout=60s`) |
+| Object Storage | ~0 (durable) | Yandex Object Storage гарантирует durability при ACK на PUT |
+| Redis | N/A | Ephemeral кэш; DB fallback обеспечивает нулевую потерю данных |
+| RabbitMQ | N/A | Transactional Outbox гарантирует нулевую потерю событий |
+| **Итого** | **≤ 1 мин** | Определяется PostgreSQL WAL-архивированием |
+
+**RTO (Recovery Time Objective) — максимальное время восстановления:**
+
+| Фаза | Время | Описание |
+|------|-------|----------|
+| 1. Инфраструктура (параллельно) | 0–45 мин | PostgreSQL PITR (критический путь), Redis restart (5 мин), RabbitMQ restart (15 мин) |
+| 2. Object Storage | 0–10 мин | SaaS — проверка/пересоздание bucket при необходимости |
+| 3. Приложение | 45–60 мин | Обновить DSN, dm-migrate version check, запуск dm-service |
+| 4. Валидация | 60–75 мин | Healthcheck, spot-checks, end-to-end тест |
+| 5. Outbox drain | 75–90 мин | Публикация накопленных событий |
+| 6. Буфер | 90–120 мин | Устранение непредвиденных проблем |
+| **Итого** | **≤ 120 мин** | Критический путь — PostgreSQL PITR |
+
+**Определение «восстановлен»:** DM считается восстановленным, когда:
+1. `/healthz` → 200, `/readyz` → 200 (все core checks)
+2. `dm_outbox_pending_count` стремится к 0
+3. `dm_events_received_total` и `dm_events_processed_total{status="success"}` растут
+4. `max(created_at)` в `audit_records` в пределах RPO от момента инцидента
+5. Нет алертов `dm_integrity_check_failures_total`
+
+### 10.2. PostgreSQL: backup и PITR
+
+PostgreSQL — единственный компонент, потеря данных которого катастрофична и невосполнима. Все остальные компоненты либо ephemeral (Redis), либо восстанавливаемы из PostgreSQL (Object Storage — артефакты могут быть re-processed), либо защищены outbox-паттерном (RabbitMQ).
+
+#### Yandex Managed PostgreSQL (рекомендуется)
+
+**Конфигурация:**
+
+```bash
+# Включить PITR и установить retention
+yc managed-postgresql cluster update contractpro-dm-prod \
+  --backup-retain-period-days 14
+
+# Рекомендуемые параметры через консоль или terraform:
+# archive_timeout = 60       # WAL flush каждые 60 сек
+# backup window:  02:00 UTC  # ежедневный snapshot в окно минимальной нагрузки
+# wal_level = replica         # достаточно для PITR
+```
+
+**Расписание резервного копирования:**
+
+| Тип | Инструмент | Расписание | Хранение |
+|-----|-----------|-----------|---------|
+| Полный snapshot | Yandex Managed PG (автоматический) | Ежедневно, 02:00 UTC | 14 дней |
+| WAL-архивирование | Непрерывно (платформа) | `archive_timeout=60s` | 14 дней |
+| Логический дамп | `pg_dump` (cron на jump-host) | Еженедельно, воскресенье 03:00 UTC | 4 недели, S3 |
+| Экспорт схемы | `pg_dump --schema-only` | При каждом деплое | В git (migrations/) |
+| Restore test | `restore-test.sh` (CI/CD) | Ежемесячно, 1-е число | Результат → Prometheus |
+
+#### Логический дамп (дополнительная страховка)
+
+```bash
+#!/usr/bin/env bash
+# logical-dump.sh — запуск через cron еженедельно
+set -euo pipefail
+
+DATE=$(date +%Y%m%d_%H%M%S)
+DB_HOST="c-<cluster-id>.rw.mdb.yandexcloud.net"
+
+# Роль dm_backup_ro: CONNECT + SELECT, без DML
+pg_dump \
+  --host="${DB_HOST}" --port=6432 \
+  --username=dm_backup_ro --dbname=dm_prod \
+  --format=directory --compress=6 --jobs=4 \
+  --no-privileges --no-owner \
+  --file="/tmp/dm_dump_${DATE}"
+
+aws s3 sync "/tmp/dm_dump_${DATE}" \
+  "s3://contractpro-dm-backups/logical-dumps/${DATE}/" \
+  --endpoint-url=https://storage.yandexcloud.net --sse=AES256
+
+rm -rf "/tmp/dm_dump_${DATE}"
+```
+
+> **RLS и pg_dump:** RLS-политики из миграции 000003 имеют fallback `current_setting('app.organization_id', true) = ''` → все строки видны при пустом GUC. Для полного дампа используйте роль с `BYPASSRLS` или суперпользователя.
+
+> **Партиции audit_records:** `pg_dump` корректно дампит партиционированную таблицу: родительскую DDL + каждую партицию + индексы + триггеры. Партиция `audit_records_default` (миграция 000004) должна присутствовать после восстановления.
+
+### 10.3. Runbook восстановления PostgreSQL (PITR)
+
+**Сценарий:** требуется откатить данные к метке `TARGET_TIME` (например, после ошибочного массового удаления).
+
+#### Шаг 0. Оценка инцидента
+
+```bash
+# Определить границу повреждения
+psql "${DM_DB_DSN}" -c "
+  SELECT created_at, action, actor_id, details
+  FROM audit_records
+  WHERE created_at > now() - interval '2 hours'
+  ORDER BY created_at DESC LIMIT 100;"
+
+# TARGET_TIME = за 1 минуту до первой проблемной записи
+```
+
+#### Шаг 1. Создать кластер из PITR
+
+```bash
+BACKUP_ID=$(yc managed-postgresql backup list \
+  --cluster-id "<source-cluster-id>" \
+  --format json | jq -r 'sort_by(.created_at) | last | .id')
+
+yc managed-postgresql cluster restore \
+  --backup-id "${BACKUP_ID}" \
+  --time "2026-04-05T14:22:00Z" \
+  --name "dm-prod-pitr-$(date +%Y%m%d)" \
+  --environment production \
+  --network-id "<vpc-network-id>" \
+  --resource-preset s3-c2-m8 \
+  --disk-type network-ssd --disk-size 50 \
+  --host zone-id=ru-central1-a,subnet-id=<subnet-id>
+```
+
+> Время создания: 15–30 мин для БД до 10 ГБ. Yandex автоматически replay'ит WAL до указанного `--time`.
+
+```bash
+# Ожидать готовности кластера (15–30 мин)
+# Повторять до status = RUNNING
+yc managed-postgresql cluster get \
+  --name "dm-prod-pitr-$(date +%Y%m%d)" --format json \
+  | jq -r '.status'
+```
+
+#### Шаг 2. Проверить целостность
+
+```bash
+PITR_DSN="postgres://dm_prod:<pass>@<pitr-host>:6432/dm_prod?sslmode=require"
+
+# Schema version (ожидаемо: version=5, dirty=false)
+psql "${PITR_DSN}" -c "SELECT version, dirty FROM schema_migrations;"
+
+# Документы
+psql "${PITR_DSN}" -c "SELECT count(*) FROM documents WHERE deleted_at IS NULL;"
+
+# RLS-политики (ожидаемо: 5 строк)
+psql "${PITR_DSN}" -c "
+  SELECT tablename, policyname FROM pg_policies
+  WHERE tablename IN ('documents','document_versions','artifact_descriptors',
+    'version_diff_references','audit_records');"
+
+# Append-only триггеры (ожидаемо: no_update_delete_audit, no_truncate_audit)
+psql "${PITR_DSN}" -c "
+  SELECT tgname, tgenabled FROM pg_trigger
+  WHERE tgrelid = 'audit_records'::regclass;"
+
+# Партиции audit_records (ожидаемо: ≥1, включая default)
+psql "${PITR_DSN}" -c "
+  SELECT c.relname FROM pg_inherits i
+  JOIN pg_class c ON c.oid = i.inhrelid
+  WHERE i.inhparent = 'audit_records'::regclass ORDER BY c.relname;"
+```
+
+#### Шаг 3. Переключить приложение
+
+```bash
+# Остановить dm-service
+docker stop dm-service
+sleep 35  # drain in-flight (DM_SHUTDOWN_TIMEOUT)
+
+# Обновить DM_DB_DSN в .env.prod / Vault / K8s Secret
+# DM_DB_DSN=postgres://dm_prod:<pass>@<pitr-host>:6432/dm_prod?sslmode=require
+
+# Проверить schema version
+docker run --rm --env-file .env.prod \
+  contractpro/dm-service:${DM_IMAGE_TAG} \
+  /usr/local/bin/dm-migrate version
+
+# Запустить dm-service
+docker run -d --name dm-service --env-file .env.prod \
+  -p 8080:8080 -p 9090:9090 --restart always \
+  contractpro/dm-service:${DM_IMAGE_TAG}
+
+# Проверить readiness
+curl -sf http://localhost:8080/readyz | jq .
+```
+
+#### Шаг 4. Постинцидентные действия
+
+```bash
+# 1. Проверить outbox-события, потерянные в разрыве (от TARGET_TIME до переключения)
+#    Запросить из старого кластера:
+psql "<old-dsn>" -c "
+  SELECT event_id, topic, created_at FROM outbox_events
+  WHERE created_at > '2026-04-05T14:22:00Z' AND status = 'CONFIRMED'
+  ORDER BY created_at;"
+
+# 2. При необходимости — replay через DLQ API
+
+# 3. Переименовать старый кластер, удалить через 48 часов
+yc managed-postgresql cluster update <old-cluster-id> \
+  --name "dm-prod-OLD-pre-pitr-$(date +%Y%m%d)"
+```
+
+#### golang-migrate schema_migrations при восстановлении
+
+| Сценарий | Состояние schema_migrations | Действие |
+|----------|---------------------------|---------|
+| PITR (физический бэкап) | Восстанавливается как есть | `dm-service` проверит при старте; `dirty=true` → fail fast |
+| Логический дамп (pg_restore) | Из дампа | Если версия совпадает — `dm-migrate up` не нужен |
+| Пустой кластер | Отсутствует | `dm-migrate up` создаст схему |
+| `dirty=true` | Ручное исправление | `UPDATE schema_migrations SET dirty = false;` → повторить `dm-migrate up` |
+
+### 10.4. Object Storage: S3 versioning и восстановление
+
+#### Включение S3 versioning
+
+```bash
+# Включить versioning на production bucket
+yc storage bucket update \
+  --name contractpro-dm-artifacts-prod \
+  --versioning versioning-enabled
+
+# Проверить
+yc storage bucket get --name contractpro-dm-artifacts-prod | grep versioning
+```
+
+При включённом versioning:
+- `DELETE` не удаляет объект физически — вставляет delete marker
+- `PUT` создаёт новую версию; старая остаётся доступной по version ID
+- Объекты восстанавливаемы через удаление delete marker
+
+#### Lifecycle policy для версий
+
+```bash
+# Удалять non-current версии через 30 дней (баланс стоимости и защиты)
+aws s3api put-bucket-lifecycle-configuration \
+  --endpoint-url https://storage.yandexcloud.net \
+  --bucket contractpro-dm-artifacts-prod \
+  --lifecycle-configuration '{
+    "Rules": [
+      {
+        "ID": "expire-noncurrent-versions",
+        "Status": "Enabled",
+        "Filter": {"Prefix": ""},
+        "NoncurrentVersionExpiration": {"NoncurrentDays": 30}
+      },
+      {
+        "ID": "remove-expired-delete-markers",
+        "Status": "Enabled",
+        "Filter": {"Prefix": ""},
+        "Expiration": {"ExpiredObjectDeleteMarker": true}
+      }
+    ]
+  }'
+```
+
+#### Восстановление при случайном удалении объектов
+
+```bash
+# 1. Найти delete markers
+aws s3api list-object-versions \
+  --endpoint-url https://storage.yandexcloud.net \
+  --bucket contractpro-dm-artifacts-prod \
+  --prefix "<org_id>/<doc_id>/" \
+  --query "DeleteMarkers[?IsLatest==\`true\`].{Key:Key,VersionId:VersionId}"
+
+# 2. Удалить delete marker для восстановления объекта
+aws s3api delete-object \
+  --endpoint-url https://storage.yandexcloud.net \
+  --bucket contractpro-dm-artifacts-prod \
+  --key "<storage_key>" \
+  --version-id "<delete-marker-version-id>"
+
+# 3. Проверить content hash
+aws s3api get-object \
+  --endpoint-url https://storage.yandexcloud.net \
+  --bucket contractpro-dm-artifacts-prod \
+  --key "<storage_key>" /tmp/artifact.json
+sha256sum /tmp/artifact.json
+# Сравнить с: SELECT content_hash FROM artifact_descriptors WHERE storage_key = '<key>';
+```
+
+#### Защита от удаления bucket
+
+```bash
+# Bucket policy: запрет DeleteBucket для всех (снять может только IAM с s3:PutBucketPolicy)
+aws s3api put-bucket-policy \
+  --endpoint-url https://storage.yandexcloud.net \
+  --bucket contractpro-dm-artifacts-prod \
+  --policy '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:DeleteBucket",
+      "Resource": "arn:aws:s3:::contractpro-dm-artifacts-prod"
+    }]
+  }'
+```
+
+#### Cross-region replication
+
+Для v1 (≤1000 contracts/day, ~2 ГБ/день blob volume) достаточно встроенной geo-redundancy Yandex Object Storage (SLA 99.99%, репликация внутри `ru-central1`). Cross-region replication рекомендуется при:
+- Регуляторные требования к географическому размещению бэкапов
+- Нагрузка > 10 000 contracts/day
+- Требование RTO < 30 мин для blob storage
+
+#### Стоимость versioning
+
+| Компонент | Оценка (месяц) |
+|-----------|---------------|
+| Current objects | ~60 ГБ (1000 × 4 artifacts × 500 КБ × 30 дней) |
+| Non-current версии (30 дней) | ~6 ГБ (при 10% overwrite rate) |
+| Overhead versioning | ~10% дополнительных затрат на хранение |
+
+### 10.5. Redis: ephemeral кэш с DB fallback
+
+Redis хранит idempotency-ключи с TTL 24 ч. Данные **ephemeral by design** — потеря Redis не является потерей данных системы.
+
+#### RPO для Redis
+
+| Данные | TTL | Последствия потери |
+|--------|-----|-------------------|
+| Idempotency PROCESSING | 120 с | Возможна повторная обработка; DB unique constraint предотвращает дубликаты |
+| Idempotency COMPLETED | 24 ч | DB fallback: `artifact_descriptors` unique constraint |
+
+**Эффективный RPO Redis: N/A.** Вся долговечная информация в PostgreSQL.
+
+#### Механизм DB fallback
+
+```
+Нормальный путь (Redis доступен):
+  Событие → Redis GET → ключ COMPLETED → skip, ACK
+                       → ключ отсутствует → SETNX PROCESSING → обработка → SET COMPLETED
+
+Fallback (Redis недоступен):
+  Событие → Redis GET fails → WARN лог + dm_idempotency_fallback_total++
+          → DB: SELECT FROM artifact_descriptors WHERE version_id AND artifact_type
+          → строка есть → skip, ACK
+          → строки нет → обработка → DB unique constraint защищает от дублей
+```
+
+#### Восстановление после потери Redis
+
+1. **DM не требует ручных действий** — продолжает работу через DB fallback
+2. Восстановить Redis (managed: auto-recovery, self-hosted: restart)
+3. Проверить reconnection в логах dm-service
+4. Убедиться, что `dm_idempotency_fallback_total` перестал расти
+5. Кэш repopulate'ится естественно при обработке новых событий
+
+#### AOF persistence (production)
+
+```bash
+# redis.conf для production
+appendonly yes
+appendfsync everysec    # flush каждую секунду (баланс надёжности и производительности)
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+```
+
+AOF обеспечивает сохранение данных при перезапуске Redis. Для DM это **convenience** (быстрый warm-up), а не requirement — DB fallback гарантирует корректность.
+
+**v1:** Standalone Redis + AOF. Sentinel (3 nodes) — при необходимости минимизировать latency impact от Redis outages.
+
+### 10.6. RabbitMQ: защита через Transactional Outbox
+
+**Quorum queues** (`x-queue-type=quorum`) обеспечивают репликацию сообщений в 3-node кластере. Потеря 1 ноды — без downtime и потери сообщений.
+
+**Transactional Outbox** делает DM устойчивым к полной потере RabbitMQ:
+
+| Состояние RabbitMQ | Поведение DM | Потеря данных |
+|-------------------|-------------|---------------|
+| Healthy | Outbox Poller публикует PENDING → CONFIRMED каждые 200 мс | — |
+| Down | Poller retry, PENDING накапливаются в PostgreSQL | Нулевая |
+| Recovered | Poller drains backlog в FIFO order per aggregate_id | — |
+| Outage > 48 ч | Outbox cleanup пропускает PENDING (только CONFIRMED) | Нулевая, но таблица растёт |
+
+**Восстановление:** DM auto-reconnect (backoff 1s–30s). Topology re-declare при reconnect. Мониторинг: `dm_outbox_oldest_pending_age_seconds > 300` → warning, `> 1800` → critical.
+
+### 10.7. Валидация backup/restore
+
+#### Расписание проверок
+
+| Тест | Частота | Среда | Автоматизация |
+|------|---------|-------|--------------|
+| PostgreSQL PITR restore на новый кластер | Ежемесячно | Staging | CI/CD pipeline |
+| S3 object recovery (delete + undelete) | Ежеквартально | Staging bucket | Скрипт |
+| Redis loss simulation (stop → DB fallback) | Ежемесячно | Staging | Скрипт |
+| RabbitMQ loss simulation (stop → outbox) | Ежемесячно | Staging | Скрипт |
+| Полный DR drill (все компоненты) | Раз в полгода | DR environment | Ручной |
+
+#### Автоматический restore test (ежемесячно)
+
+```bash
+#!/usr/bin/env bash
+# restore-test.sh — запуск через CI/CD 1-го числа каждого месяца
+set -euo pipefail
+
+CLUSTER_ID="${YC_CLUSTER_ID}"
+TEST_CLUSTER="dm-restore-test-$(date +%Y%m)"
+START_TIME=$(date +%s)
+SUCCESS=0
+
+report_and_cleanup() {
+  DURATION=$(( $(date +%s) - START_TIME ))
+  # Всегда отправлять метрику (в т.ч. при failure)
+  cat <<METRICS | curl --data-binary @- "${PUSHGATEWAY_URL}/metrics/job/dm_backup_restore_test" 2>/dev/null || true
+dm_backup_restore_test_success ${SUCCESS}
+dm_backup_restore_test_duration_seconds ${DURATION}
+dm_backup_restore_test_timestamp_seconds $(date +%s)
+METRICS
+  yc managed-postgresql cluster delete --name "${TEST_CLUSTER}" --async 2>/dev/null || true
+}
+trap report_and_cleanup EXIT
+
+# 1. Восстановить из последнего бэкапа (PITR — 5 мин назад)
+BACKUP_ID=$(yc managed-postgresql backup list \
+  --cluster-id "${CLUSTER_ID}" --format json \
+  | jq -r 'sort_by(.created_at) | last | .id')
+
+PITR_TIME=$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+  || date -u -v-5M +%Y-%m-%dT%H:%M:%SZ)  # Linux || macOS
+
+yc managed-postgresql cluster restore \
+  --backup-id "${BACKUP_ID}" \
+  --time "${PITR_TIME}" \
+  --name "${TEST_CLUSTER}" \
+  --environment prestable \
+  --network-id "${YC_NETWORK_ID}" \
+  --host zone-id=ru-central1-a,subnet-id="${YC_SUBNET_ID}" \
+  --resource-preset s2.small --disk-size 50
+
+# 2. Ожидать готовности (до 40 мин)
+ELAPSED=0
+STATUS=""
+while [ "${ELAPSED}" -lt 2400 ]; do
+  STATUS=$(yc managed-postgresql cluster get --name "${TEST_CLUSTER}" \
+    --format json | jq -r '.status')
+  [ "${STATUS}" = "RUNNING" ] && break
+  sleep 30; ELAPSED=$((ELAPSED + 30))
+done
+[ "${STATUS}" = "RUNNING" ] || { echo "FAILED: cluster did not reach RUNNING in 2400s"; exit 1; }
+
+# 3. Получить hostname восстановленного кластера
+TEST_HOST=$(yc managed-postgresql host list \
+  --cluster-name "${TEST_CLUSTER}" --format json \
+  | jq -r '.[0].name')
+TEST_DSN="postgres://dm_prod:${DM_DB_PASSWORD}@${TEST_HOST}:6432/dm_prod?sslmode=require"
+
+# 4. Проверки целостности
+VERSION=$(psql "${TEST_DSN}" -t -c "SELECT version FROM schema_migrations;")
+[ "${VERSION// /}" = "5" ] || { echo "FAILED: schema version=${VERSION}"; exit 1; }
+
+RLS=$(psql "${TEST_DSN}" -t -c "SELECT count(*) FROM pg_policies WHERE tablename IN
+  ('documents','document_versions','artifact_descriptors',
+   'version_diff_references','audit_records');")
+[ "${RLS// /}" = "5" ] || { echo "FAILED: RLS count=${RLS}"; exit 1; }
+
+PARTS=$(psql "${TEST_DSN}" -t -c "SELECT count(*) FROM pg_inherits
+  WHERE inhparent = 'audit_records'::regclass;")
+[ "${PARTS// /}" -ge "1" ] || { echo "FAILED: partitions=${PARTS}"; exit 1; }
+
+psql "${TEST_DSN}" -c "SELECT 'documents' AS t, count(*) FROM documents
+  UNION ALL SELECT 'versions', count(*) FROM document_versions
+  UNION ALL SELECT 'audit', count(*) FROM audit_records;"
+
+SUCCESS=1
+echo "PASSED in $(( $(date +%s) - START_TIME ))s"
+```
+
+#### RPO validation
+
+1. Зафиксировать `max(created_at)` из `audit_records`
+2. PITR restore к метке `(max - 15 мин)`
+3. Проверить, что восстановленные данные покрывают период до `(max - 15 мин)`
+4. Если разрыв > 15 мин — проверить WAL-архивирование
+
+#### RTO validation
+
+1. Засечь время → полный runbook PITR (шаги 1–3 из раздела 10.3)
+2. Финиш при `/readyz` → 200 и первое успешное событие
+3. Цель: PostgreSQL PITR < 45 мин, полный RTO < 120 мин
+4. Запускать ежеквартально на staging
+
+### 10.8. Self-hosted альтернатива: WAL-G
+
+Для self-hosted PostgreSQL (Patroni-кластер на Yandex Compute Cloud):
+
+```bash
+# postgresql.conf
+archive_mode    = on
+archive_command = 'wal-g wal-push %p'
+archive_timeout = 60
+
+# WAL-G environment
+WALG_S3_PREFIX=s3://contractpro-dm-wal/production
+AWS_ENDPOINT=https://storage.yandexcloud.net
+AWS_REGION=ru-central1
+WALG_COMPRESSION_METHOD=lz4
+WALG_UPLOAD_CONCURRENCY=4
+```
+
+**Cron:**
+
+```bash
+# Полный бэкап — воскресенье 02:00
+0 2 * * 0  postgres  wal-g backup-push $PGDATA --full-backup
+
+# Инкрементальный — пн-сб 02:00
+0 2 * * 1-6  postgres  wal-g backup-push $PGDATA
+
+# Очистка (хранить 2 полных бэкапа ≈ 14 дней при еженедельном full)
+0 4 * * *  postgres  wal-g delete retain FULL 2 --confirm
+```
+
+**PITR с WAL-G:**
+
+```bash
+systemctl stop postgresql
+wal-g backup-fetch /var/lib/postgresql/16/main LATEST
+
+cat >> postgresql.conf <<EOF
+restore_command = 'wal-g wal-fetch %f %p'
+recovery_target_time = '2026-04-05 14:22:00+00'
+recovery_target_action = 'promote'
+EOF
+
+touch recovery.signal
+chown -R postgres:postgres /var/lib/postgresql/16/main
+systemctl start postgresql
+```
+
+**pgBackRest** — альтернатива для БД > 100 ГБ (параллельный backup/restore, diff backup, `verify` command).
+
+### 10.9. Мониторинг бэкапов
+
+**Алерты:**
+
+| Метрика | Порог | Severity |
+|---------|-------|----------|
+| Последний успешный бэкап | > 26 ч назад | Critical |
+| WAL archiving lag | > 5 мин | Critical (RPO risk) |
+| Backup size anomaly | Отклонение > 50% от 7-дневного среднего | Warning |
+| `dm_backup_restore_test_success` | = 0 | Critical |
+| `dm_outbox_oldest_pending_age_seconds` | > 300 | Warning |
+| `dm_idempotency_fallback_total` rate | > 0 в течение 5 мин | Warning (Redis down) |
+
+**SQL-мониторинг (для self-hosted, раздел 10.8):**
+
+> На Yandex Managed PostgreSQL WAL-архивирование управляется платформой. Для мониторинга lag используйте метрики Yandex Cloud Console / API, а не `pg_stat_archiver`.
+
+```sql
+-- WAL archiving status (self-hosted с WAL-G / pgBackRest)
+SELECT archived_count, last_archived_wal, last_archived_time,
+  EXTRACT(EPOCH FROM (now() - last_archived_time)) AS wal_lag_seconds,
+  failed_count
+FROM pg_stat_archiver;
+
+-- Database size (тренд ёмкости)
+SELECT pg_size_pretty(pg_database_size('dm_prod'));
+
+-- Audit partition sizes
+SELECT c.relname, pg_size_pretty(pg_total_relation_size(c.oid))
+FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+WHERE i.inhparent = 'audit_records'::regclass ORDER BY c.relname;
+```
+
+### 10.10. Сводная таблица
+
+| Показатель | Целевое значение | Как достигается | Мониторинг |
+|-----------|-----------------|----------------|-----------|
+| RPO | ≤ 15 мин (фактически ≤ 1 мин) | WAL-архивирование каждые 60 сек | Yandex Cloud / `pg_stat_archiver` (self-hosted) |
+| RTO | ≤ 2 часа | PITR + переключение DSN + dm-migrate check | Restore test ежемесячно |
+| Хранение бэкапа | 14 дней | Yandex Managed PG retain period | Алерт при пропуске > 26 ч |
+| S3 versioning | 30 дней non-current | Lifecycle policy | Yandex Cloud мониторинг |
+| Проверка восстановления | Ежемесячно | `restore-test.sh` → Pushgateway | `dm_backup_restore_test_success` |
+| Redis recovery | Автоматический (DB fallback) | DM architecture | `dm_idempotency_fallback_total` |
+| RabbitMQ recovery | Автоматический (Outbox) | DM architecture | `dm_outbox_pending_count` |
+
+---
+
+## 11. Справочная информация
+
+### 11.1. Порты
 
 | Сервис | Порт (host) | Порт (container) | Назначение | Dev | Prod |
 |--------|-------------|-------------------|-----------|-----|------|
@@ -721,7 +1309,7 @@ docker stats
 | MinIO | 9000 | 9000 | S3 API | + | - |
 | MinIO | 9001 | 9001 | Console UI | + | - |
 
-### 10.2. Make targets
+### 11.2. Make targets
 
 ```bash
 make build          # Сборка dm-service
@@ -733,7 +1321,7 @@ make compose-up     # docker compose up --build
 make compose-down   # docker compose down
 ```
 
-### 10.3. Полезные команды
+### 11.3. Полезные команды
 
 ```bash
 # Доступ к PostgreSQL CLI
@@ -761,7 +1349,7 @@ curl -X POST http://localhost:8081/api/v1/admin/dlq/replay \
   -d '{"category": "ingestion", "limit": 10}'
 ```
 
-### 10.4. Переменные окружения
+### 11.4. Переменные окружения
 
 Полный список: [`configuration.md`](./configuration.md)
 
@@ -784,13 +1372,14 @@ DM_RATELIMIT_WRITE_RPS=20
 
 ---
 
-## 11. Ссылки
+## 12. Ссылки
 
 - [`configuration.md`](./configuration.md) — полная справка переменных окружения
 - [`migration-strategy.md`](./migration-strategy.md) — стратегия миграций PostgreSQL
 - [`high-architecture.md`](./high-architecture.md) — архитектура Document Management
 - [`security.md`](./security.md) — безопасность, RLS, аудит
 - [`observability.md`](./observability.md) — логирование, метрики, трейсинг
+- Раздел 10 настоящего документа — Backup & Disaster Recovery (BRE-021/REV-033)
 - `docker-compose.yaml` — конфигурация для development
 - `Dockerfile` — Docker build конфигурация
 - `.env.example` — пример переменных окружения

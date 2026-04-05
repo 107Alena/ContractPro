@@ -1134,7 +1134,9 @@
         "Шаг 1: документация описывает backup и restore для каждого компонента"
       ],
       "dependencies": ["DM-TASK-035"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-05",
+      "summary": "Добавлен раздел 10 'Резервное копирование и восстановление (BRE-021/REV-033)' в deployment.md — полная стратегия RPO/RTO для DM. 10 подразделов: 10.1 RPO/RTO бюджет (RPO ≤ 1 мин WAL, RTO ≤ 120 мин с 5-фазной декомпозицией), 10.2 PostgreSQL backup (Yandex Managed PG: daily snapshot 02:00 UTC + continuous WAL archive_timeout=60s + 14-day retention + weekly pg_dump), 10.3 PITR Runbook (4 шага: оценка → restore cluster → проверка целостности schema/RLS/partitions/triggers → переключение DSN + постинцидентные действия + schema_migrations matrix), 10.4 Object Storage (S3 versioning + lifecycle 30d non-current + restore delete markers + bucket deletion protection policy + cross-region replication roadmap + cost estimate), 10.5 Redis (ephemeral N/A RPO + DB fallback flow diagram + AOF config + Sentinel vs standalone recommendation), 10.6 RabbitMQ (Transactional Outbox protection matrix), 10.7 Validation (monthly CI/CD restore-test.sh: backup → PITR → wait → host resolve → integrity checks schema/RLS/partitions → Prometheus metric push in trap; RPO/RTO validation procedures), 10.8 Self-hosted WAL-G (config + cron + PITR commands; pgBackRest mention для > 100 GB), 10.9 Мониторинг (6 alert rules + SQL queries для pg_stat_archiver/db_size/partition_sizes + Managed PG note), 10.10 Сводная таблица (7 показателей). Обновлена нумерация: old 10→11, old 11→12. Cross-reference из 7.1 → раздел 10. РЕВЬЮ: code-reviewer → 3B + 8W (B-1: dynamic host in restore-test.sh, B-2: --time flag для PITR test, B-3: timeout exit handling → все исправлены + W-8: metric push в trap). documentation-engineer → 8W (W-4: wait step в runbook, W-5: bucket policy comment, W-6: WAL-G FULL 2 retention, W-7: pg_stat_archiver managed PG note, W-8: metric reference → 5 ключевых исправлены). go test -race -count=1 ./... ALL PASS (30 пакетов). go vet OK. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-052",

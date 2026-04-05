@@ -2529,3 +2529,41 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 - DM-TASK-052 (CLAUDE.md files) — low, infrastructure
 
 ---
+
+## DM-TASK-051: BRE-021/REV-033: RPO/RTO стратегия для PostgreSQL и Object Storage (2026-04-05)
+
+**Статус:** done
+
+**Что сделано:**
+- Добавлен раздел 10 «Резервное копирование и восстановление (BRE-021/REV-033)» в `deployment.md` (~570 строк, 10 подразделов)
+- Обновлена нумерация документа: old 10→11, old 11→12; добавлен cross-reference из раздела 7.1
+
+**Подразделы:**
+- 10.1: RPO/RTO бюджет — RPO ≤ 1 мин (WAL), RTO ≤ 120 мин, 5-фазная декомпозиция
+- 10.2: PostgreSQL backup — Yandex Managed PG: daily snapshot + continuous WAL + weekly pg_dump
+- 10.3: PITR Runbook — 4 шага: оценка → restore cluster → проверка целостности → переключение DSN
+- 10.4: Object Storage — S3 versioning + lifecycle 30d + delete marker recovery + bucket protection
+- 10.5: Redis — ephemeral, DB fallback, AOF config
+- 10.6: RabbitMQ — Transactional Outbox protection matrix
+- 10.7: Validation — monthly restore-test.sh (CI/CD) + RPO/RTO validation
+- 10.8: Self-hosted WAL-G — config, cron, PITR commands
+- 10.9: Мониторинг — 6 alert rules + SQL queries + Managed PG note
+- 10.10: Сводная таблица — 7 показателей
+
+**Консультации:**
+- backend-reliability-engineer: RPO/RTO budget, S3 versioning, Redis strategy, combined DR plan
+- database-administrator: PostgreSQL PITR runbook, RLS при restore, partitions, WAL-G, schema_migrations
+
+**Ревью:**
+- code-reviewer → 3B + 8W: B-1 (dynamic host в restore-test.sh), B-2 (--time для PITR test), B-3 (timeout exit) → все исправлены
+- documentation-engineer → 8W: W-4 (wait step в runbook), W-5 (bucket policy comment), W-6 (WAL-G FULL 2), W-7/W-8 (pg_stat_archiver) → 5 исправлены
+
+**Тесты:**
+- `go test -count=1 -race ./...` — ALL PASS (30 пакетов)
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Следующие задачи:**
+- DM-TASK-052 (CLAUDE.md files) — low, infrastructure — единственная оставшаяся задача
+
+---

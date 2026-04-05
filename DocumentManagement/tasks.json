@@ -804,7 +804,9 @@
         "Шаг 1: инструкции из deployment.md воспроизводимы"
       ],
       "dependencies": ["DM-TASK-029"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-05",
+      "summary": "Создан DocumentManagement/architecture/deployment.md — полное руководство по развертыванию DM (11 разделов). Раздел 1: Quick start (prerequisites, .env setup, docker compose up, verification commands, deployment structure diagram). Раздел 1.6: Таблица сосуществования с DP (port offsets 8081/9091/5433/6380/5673). Раздел 2: Миграции БД (dm-migrate init-container, команды up/down/goto/version, dirty state recovery, concurrent safety). Раздел 3: Startup (16 фаз) и Shutdown (BRE-019, 8 фаз). Раздел 4: Production deployment (managed services, build/push, docker run, dev vs prod comparison table). Раздел 4.6: Health checks и ключевые Prometheus метрики (11 метрик). Раздел 5: Secrets management (classification, Vault/Lockbox, rotation). Раздел 6: Encryption at rest NFR-3.2 (PostgreSQL managed/dm-crypt, S3 SSE-S3/SSE-KMS, Redis dm-crypt) + In transit (TLS для PG/RabbitMQ/S3). Раздел 7: Failover NFR-2.4/NFR-2.5 (PostgreSQL HA managed/Patroni, Redis Sentinel/Cluster + fallback, RabbitMQ cluster + quorum queues, Object Storage circuit breaker). Раздел 8: Versioning и rolling updates. Раздел 9: Troubleshooting (6 подразделов: startup, migrations, PostgreSQL-specific, RabbitMQ, Object Storage, memory). Раздел 10: Reference (ports, make targets, useful commands, env vars). Раздел 11: Links (6 cross-references). Структура аналогична DP deployment.md, расширена секциями миграций, encryption, failover. РЕВЬЮ: code-reviewer → 0 blocking + 2 warnings (W-3 fixed: rollback command missing -p/--restart flags)."
     },
     {
       "id": "DM-TASK-036",

@@ -2458,3 +2458,43 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 - DM-TASK-052 (CLAUDE.md files) — low, infrastructure
 
 ---
+
+## DM-TASK-035: Документация deployment.md (2026-04-05)
+
+**Статус:** done
+
+**Что сделано:**
+- Создан `DocumentManagement/architecture/deployment.md` — полное руководство по развертыванию DM (11 разделов)
+- Раздел 1: Quick start — prerequisites, .env setup, docker compose up/down, verification commands
+- Раздел 1.5: Deployment structure diagram (all services, ports, dependencies)
+- Раздел 1.6: Таблица сосуществования с DP (port offsets 8081/9091/5433/6380/5673)
+- Раздел 2: Миграции БД — dm-migrate init-container, commands (up/down/goto/version), file list (5 versions), rollback, dirty state recovery, concurrent safety
+- Раздел 3: Startup (16 фаз) + Shutdown (BRE-019, 8 фаз) с таблицами
+- Раздел 4: Production deployment — managed services, build/push, docker run, dev vs prod comparison table
+- Раздел 4.6: Health checks + 11 ключевых Prometheus метрик
+- Раздел 5: Secrets management — classification, Vault/Lockbox, rotation recommendations
+- Раздел 6: Encryption at rest (NFR-3.2) — PostgreSQL (managed/dm-crypt), Object Storage (SSE-S3/SSE-KMS), Redis (dm-crypt) + In transit (TLS/amqps/HTTPS)
+- Раздел 7: Failover (NFR-2.4/NFR-2.5) — PostgreSQL HA (managed/Patroni), Redis Sentinel/Cluster + fallback, RabbitMQ cluster + quorum queues, Object Storage circuit breaker
+- Раздел 8: Versioning и rolling updates
+- Раздел 9: Troubleshooting — 6 подразделов (startup, migrations, PostgreSQL-specific, RabbitMQ, Object Storage, memory)
+- Раздел 10: Reference (ports, make targets, useful commands, env vars)
+- Раздел 11: Links (6 cross-references к architecture docs)
+
+**Консультации:**
+- documentation-engineer: outline review → 7 рекомендаций (startup section, port table, PG troubleshooting, backup, cross-refs)
+- code-reviewer: 0 blocking + 2 warnings → W-3 fixed (rollback command missing -p/--restart flags)
+
+**Проверки:**
+- Acceptance criteria: все 8 пунктов выполнены
+- Port numbers верифицированы против docker-compose.yaml
+- Commands верифицированы против Makefile, Dockerfile
+- `go test -count=1 -race ./...` — ALL PASS (30 пакетов, никаких изменений кода)
+- `go vet ./...` — OK
+- `make build/build-migrate/test/lint` — ALL OK
+
+**Следующие задачи:**
+- DM-TASK-034 (Configuration docs) — medium, infrastructure, разблокирована
+- DM-TASK-051 (RPO/RTO strategy) — low, infrastructure, разблокирована DM-TASK-035 ✅
+- DM-TASK-052 (CLAUDE.md files) — low, infrastructure
+
+---

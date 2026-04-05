@@ -1026,7 +1026,9 @@
         "Шаг 2: go vet ./..."
       ],
       "dependencies": ["DM-TASK-006"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-05",
+      "summary": "Реализована append-only защита audit_records на уровне базы данных (BRE-016). МИГРАЦИЯ 000005_audit_protection: 1) fn_audit_no_update_delete() — PL/pgSQL trigger function: UPDATE → always RAISE EXCEPTION (P0001); DELETE → RAISE EXCEPTION unless current_setting('app.retention_override', true) = 'true' (transaction-scoped bypass для retention cleanup). 2) no_update_delete_audit — BEFORE UPDATE OR DELETE row-level trigger на partitioned parent audit_records (PG 13+: наследуется всеми текущими и будущими партициями). 3) fn_audit_no_truncate() + no_truncate_audit — BEFORE TRUNCATE statement-level trigger (defense-in-depth). 4) dm_audit_writer role — NOLOGIN, GRANT INSERT + SELECT ON audit_records + audit_records_default. Без UPDATE/DELETE/TRUNCATE/TRIGGER. Идемпотентный DO $$ IF NOT EXISTS. DOWN: DROP TRIGGER/FUNCTION IF EXISTS, REVOKE ALL, роль сохраняется. GO: AuditRepository.DeleteByDocument() обновлён — SET LOCAL app.retention_override = 'true' перед DELETE (transaction-scoped, auto-reset on commit/rollback). RLS: criteria #2 (RLS policies) уже реализован в DM-TASK-030 (миграция 000003 — 5 таблиц). РЕВЬЮ: code-reviewer → 0 blocking + 5 warnings; W-2 исправлен (ActorID в List_AllFilters test), W-3 исправлен (GRANT на audit_records_default + комментарий для AuditPartitionManager). 8 новых тестов: 4 DeleteByDocument (SetsRetentionOverride порядок, SetLocalError, DeleteError, Success), 4 migration embed (FilesExist, TriggerBlocksUpdate, RoleIsNOLOGIN, DownDoesNotDropRole). Консультация: security-engineer + database-administrator → подтверждено: trigger propagation PG16, SET LOCAL scope safety, BEFORE correct. Все тесты PASS с -race -count=1 (28 пакетов). go vet OK. make build/test/lint — ALL OK."
     },
     {
       "id": "DM-TASK-047",

@@ -172,10 +172,21 @@ func scanAuditWithTotal(rows pgx.Rows) (*model.AuditRecord, int, error) {
 
 // DeleteByDocument removes all audit records for a document_id.
 // Cross-tenant system-level query for retention metadata cleanup. Idempotent.
+//
+// Must be called within a transaction. Sets the app.retention_override GUC
+// (transaction-scoped via SET LOCAL) to bypass the no_update_delete_audit
+// trigger that enforces append-only semantics on audit_records (BRE-016).
 func (r *AuditRepository) DeleteByDocument(ctx context.Context, documentID string) error {
 	conn := ConnFromCtx(ctx)
 
-	_, err := conn.Exec(ctx,
+	// Enable retention override to bypass the append-only trigger (BRE-016).
+	// SET LOCAL is transaction-scoped: automatically reset on commit/rollback.
+	_, err := conn.Exec(ctx, `SET LOCAL app.retention_override = 'true'`)
+	if err != nil {
+		return port.NewDatabaseError("set retention override for audit delete", err)
+	}
+
+	_, err = conn.Exec(ctx,
 		`DELETE FROM audit_records WHERE document_id = $1`,
 		documentID,
 	)

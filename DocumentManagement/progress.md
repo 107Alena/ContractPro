@@ -2272,3 +2272,45 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 - S3 lifecycle rules для archived documents — documentation only (no code)
 
 ---
+
+## DM-TASK-046: Audit append-only trigger + RLS enforcement (2026-04-05)
+
+**Статус:** done
+
+**Что сделано:**
+- Создана миграция `000005_audit_protection.up.sql`:
+  - `fn_audit_no_update_delete()` — PL/pgSQL trigger function: UPDATE → RAISE EXCEPTION; DELETE → RAISE EXCEPTION unless `current_setting('app.retention_override', true) = 'true'`
+  - `no_update_delete_audit` — BEFORE UPDATE OR DELETE row-level trigger на partitioned parent `audit_records` (PG 13+: наследуется всеми партициями)
+  - `fn_audit_no_truncate()` + `no_truncate_audit` — BEFORE TRUNCATE statement-level trigger (defense-in-depth)
+  - `dm_audit_writer` role — NOLOGIN, GRANT INSERT + SELECT ON audit_records + audit_records_default
+- Создана миграция `000005_audit_protection.down.sql`:
+  - DROP TRIGGER/FUNCTION IF EXISTS, REVOKE ALL, роль сохраняется (не DROP ROLE)
+- Обновлён `audit_repository.go`:
+  - `DeleteByDocument()` — SET LOCAL app.retention_override = 'true' перед DELETE (transaction-scoped, auto-reset on commit/rollback)
+- RLS (criteria #2) — уже реализован в DM-TASK-030 (миграция 000003 — 5 таблиц)
+
+**Консультации:**
+- security-engineer: подтвердил дизайн, рекомендовал TRUNCATE protection + не DROP ROLE в down
+- database-administrator: подтвердил trigger propagation PG16, BEFORE correct, SET LOCAL safe, GRANT propagation
+
+**Проверки:**
+- `go test -count=1 -race ./...` — 28 пакетов PASS
+- `go vet ./...` — OK
+- `make build/test/lint` — ALL OK
+
+**Тесты (8 новых):**
+- 4 DeleteByDocument: SetsRetentionOverride (порядок SET LOCAL → DELETE), SetLocalError, DeleteError, Success
+- 4 migration embed: FilesExist, TriggerBlocksUpdate, RoleIsNOLOGIN, DownDoesNotDropRole
+
+**Ревью:**
+- code-reviewer → 0 blocking + 5 warnings
+- W-2 исправлен (ActorID добавлен в List_AllFilters test)
+- W-3 исправлен (GRANT на audit_records_default + комментарий для AuditPartitionManager)
+
+**Следующие задачи:**
+- DM-TASK-033 (Presigned URL generation) — medium, functional
+- DM-TASK-034 (Configuration docs) — medium, infrastructure
+- DM-TASK-047 (Orphan candidates table) — medium, functional
+- DM-TASK-050 (Migration strategy) — medium, infrastructure
+
+---

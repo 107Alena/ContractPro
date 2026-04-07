@@ -1,0 +1,838 @@
+{
+  "agent_instructions": {
+    "before_start": [
+      "Прочитай этот файл и git log --oneline -20",
+      "Выбери ОДНУ задачу со статусом pending и наивысшим приоритетом",
+      "Проверь, что все dependencies этой задачи имеют статус done"
+    ],
+    "during_work": [
+      "Работай только над выбранной задачей",
+      "Делай коммиты после каждого логического изменения",
+      "Не трогай код, не связанный с текущей задачей"
+    ],
+    "before_finish": [
+      "Выполни ВСЕ test_steps из задачи",
+      "Меняй status на done ТОЛЬКО после успешного прохождения всех тестов",
+      "Напиши summary в progress.md",
+      "ЗАПРЕЩЕНО удалять или редактировать задачи — только менять status"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "ORCH-TASK-001",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Scaffolding проекта: Go-модуль, структура директорий, Makefile",
+      "acceptance_criteria": [
+        "Go-модуль инициализирован: go.mod с module contractpro/api-orchestrator, Go 1.26",
+        "Entrypoint: cmd/orch-api/main.go с заглушкой (пустой main + log.Println)",
+        "Структура internal/: config/, domain/model/, domain/port/, application/, ingress/, egress/, infra/",
+        "Makefile с командами: build, test, lint, docker-build",
+        "make build собирает бинарник без ошибок",
+        "make test (go test ./...) проходит без ошибок",
+        "make lint (go vet ./...) проходит без ошибок"
+      ],
+      "test_steps": [
+        "Шаг 1: make build — бинарник создаётся",
+        "Шаг 2: make test — 0 errors",
+        "Шаг 3: make lint — 0 errors"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-002",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Загрузка конфигурации из переменных окружения с префиксом ORCH_",
+      "acceptance_criteria": [
+        "Пакет internal/config с функцией Load() → (*Config, error)",
+        "Загрузка .env файла (godotenv), env имеют приоритет",
+        "8 обязательных переменных: ORCH_DM_BASE_URL, ORCH_BROKER_ADDRESS, ORCH_STORAGE_ENDPOINT, ORCH_STORAGE_BUCKET, ORCH_STORAGE_ACCESS_KEY, ORCH_STORAGE_SECRET_KEY, ORCH_REDIS_ADDRESS, ORCH_JWT_PUBLIC_KEY_PATH",
+        "Все optional-переменные с дефолтами (см. configuration.md)",
+        "При отсутствии обязательных переменных Load() возвращает ошибку со списком всех недостающих",
+        "Валидация: HTTP port ≠ metrics port, duration > 0, RPS > 0 при включённом rate limiting",
+        "Тесты покрывают: happy path, missing required, invalid values, defaults"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/config/... — все тесты проходят",
+        "Шаг 2: тест с полным набором env → Load() без ошибок",
+        "Шаг 3: тест без обязательных env → Load() возвращает ошибку с перечнем",
+        "Шаг 4: тест без optional → дефолты применены корректно"
+      ],
+      "dependencies": ["ORCH-TASK-001"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-003",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Structured logging (JSON, slog) с обязательными полями",
+      "acceptance_criteria": [
+        "Пакет internal/infra/observability/logger с инициализацией slog (Go stdlib)",
+        "Формат: JSON на stdout",
+        "Обязательные поля: timestamp, level, service=api-orchestrator, correlation_id, organization_id, component, message",
+        "Уровень логирования настраивается через ORCH_LOG_LEVEL",
+        "Хелпер для добавления correlation_id из context.Context",
+        "Sensitive data policy: никогда не логировать JWT, пароли, содержимое файлов"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/observability/... — все тесты проходят",
+        "Шаг 2: лог-запись содержит все обязательные поля в формате JSON"
+      ],
+      "dependencies": ["ORCH-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-004",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Redis-клиент: подключение, пул, базовые операции, health check",
+      "acceptance_criteria": [
+        "Пакет internal/infra/kvstore с Redis-клиентом",
+        "Конфигурация из ORCH_REDIS_* переменных (address, password, db, pool_size, timeout)",
+        "Операции: Get, Set (с TTL), Delete, Publish (Pub/Sub), Subscribe",
+        "Health check метод Ping() для readiness probe",
+        "Graceful Close()",
+        "Тесты с in-memory fake (для unit-тестов без реального Redis)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/kvstore/... — все тесты проходят",
+        "Шаг 2: Ping() на заведомо недоступный адрес → ошибка"
+      ],
+      "dependencies": ["ORCH-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-005",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "RabbitMQ broker client: подключение, publish с confirms, consume, reconnect",
+      "acceptance_criteria": [
+        "Пакет internal/infra/broker с клиентом RabbitMQ",
+        "Конфигурация из ORCH_BROKER_* переменных",
+        "Publish с publisher confirms и retry (3 попытки, exponential backoff)",
+        "Subscribe на топик с manual ACK/NACK",
+        "Auto-reconnect при обрыве соединения",
+        "Создание очередей по паттерну orch.sub.{topic_name}",
+        "Configurable prefetch count",
+        "Health check метод",
+        "Graceful Close()"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/broker/... — все тесты проходят",
+        "Шаг 2: publish → confirm → message в очереди (in-memory fake)"
+      ],
+      "dependencies": ["ORCH-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-006",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "S3 Object Storage client: streaming upload, delete, retry, circuit breaker",
+      "acceptance_criteria": [
+        "Пакет internal/infra/objectstorage с S3-клиентом",
+        "Конфигурация из ORCH_STORAGE_* переменных",
+        "PutObject со streaming (io.Reader, не буферизация в память)",
+        "DeleteObject для cleanup при ошибках",
+        "HeadObject для проверки существования",
+        "Retry: 3 попытки, exponential backoff (500ms, 1s, 2s)",
+        "Circuit breaker (gobreaker): 5 failures → OPEN, 30s → HALF-OPEN",
+        "Timeout: 30s upload, 15s HEAD/DELETE"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/objectstorage/... — все тесты проходят",
+        "Шаг 2: PutObject streaming → storage_key возвращён",
+        "Шаг 3: circuit breaker opens after 5 consecutive errors"
+      ],
+      "dependencies": ["ORCH-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-007",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Health check handler: /healthz (liveness) и /readyz (readiness)",
+      "acceptance_criteria": [
+        "Пакет internal/infra/health с HTTP-хендлерами",
+        "/healthz — всегда 200 OK",
+        "/readyz — 200 если Redis + RabbitMQ + DM доступны, иначе 503 с деталями",
+        "Readiness check выполняет ping Redis, ping RabbitMQ, HTTP HEAD к DM /healthz",
+        "Метод SetNotReady() для graceful shutdown",
+        "JSON-ответ с per-dependency статусами"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/health/... — все тесты проходят",
+        "Шаг 2: /healthz → 200",
+        "Шаг 3: /readyz с доступными зависимостями → 200",
+        "Шаг 4: /readyz с недоступной зависимостью → 503"
+      ],
+      "dependencies": ["ORCH-TASK-004", "ORCH-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-008",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "HTTP-сервер: chi router, middleware chain, server lifecycle, timeouts",
+      "acceptance_criteria": [
+        "Пакет internal/ingress/api с HTTP-сервером на chi",
+        "Настраиваемые таймауты: ReadTimeout, WriteTimeout, IdleTimeout",
+        "Middleware chain: CORS → Auth → RBAC → RateLimit → Handler (пока заглушки)",
+        "Отдельные роутеры для public (/auth/*, /healthz, /readyz, /metrics) и protected endpoints",
+        "Graceful shutdown через Shutdown(ctx)",
+        "Prometheus /metrics endpoint на отдельном порту",
+        "Сервер стартует и принимает запросы"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/api/... — все тесты проходят",
+        "Шаг 2: сервер стартует на ORCH_HTTP_PORT",
+        "Шаг 3: GET /healthz → 200"
+      ],
+      "dependencies": ["ORCH-TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-009",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Единый формат ошибок ErrorResponse + recovery middleware",
+      "acceptance_criteria": [
+        "Пакет internal/domain/model с типом ErrorResponse: error_code, message, details, correlation_id, suggestion",
+        "Каталог ошибок: AUTH_TOKEN_MISSING, AUTH_TOKEN_EXPIRED, FILE_TOO_LARGE, DOCUMENT_NOT_FOUND, VERSION_NOT_FOUND, RATE_LIMIT_EXCEEDED, DM_UNAVAILABLE, INTERNAL_ERROR и др. (20+ кодов)",
+        "Все сообщения (message) и подсказки (suggestion) на русском языке (NFR-5.2)",
+        "Recovery middleware: перехват panic → 500 INTERNAL_ERROR (без раскрытия stack trace)",
+        "Хелперы: WriteError(w, statusCode, errorCode) → автоматический JSON-ответ",
+        "Маппинг DM HTTP-ошибок (4xx/5xx) в коды оркестратора"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: WriteError → корректный JSON с error_code, message на русском, correlation_id",
+        "Шаг 3: panic в handler → recovery middleware → 500 INTERNAL_ERROR"
+      ],
+      "dependencies": ["ORCH-TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-010",
+      "category": "security",
+      "priority": "critical",
+      "description": "JWT Auth middleware: валидация подписи, извлечение claims, auth context",
+      "acceptance_criteria": [
+        "Пакет internal/ingress/middleware/auth",
+        "Загрузка RSA/ECDSA публичного ключа из ORCH_JWT_PUBLIC_KEY_PATH",
+        "Извлечение токена из заголовка Authorization: Bearer <token>",
+        "Валидация: подпись, exp, iat, nbf, обязательные claims (sub, org, role)",
+        "Извлечение claims → AuthContext{UserID, OrganizationID, Role} в context.Context",
+        "Поддержка JWT в query param ?token= (для SSE endpoint)",
+        "При невалидном/отсутствующем токене → 401 AUTH_TOKEN_MISSING/EXPIRED/INVALID",
+        "Исключения (без JWT): /auth/login, /auth/refresh, /healthz, /readyz, /metrics",
+        "Тесты: валидный токен, истёкший, неверная подпись, отсутствующий, SSE query param"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: валидный JWT → claims в context",
+        "Шаг 3: истёкший JWT → 401 AUTH_TOKEN_EXPIRED",
+        "Шаг 4: без JWT → 401 AUTH_TOKEN_MISSING",
+        "Шаг 5: JWT в ?token= → claims в context"
+      ],
+      "dependencies": ["ORCH-TASK-009"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-011",
+      "category": "security",
+      "priority": "critical",
+      "description": "RBAC middleware: проверка роли на каждый endpoint",
+      "acceptance_criteria": [
+        "Пакет internal/ingress/middleware/rbac",
+        "Конфигурация: маппинг endpoint → набор допустимых ролей",
+        "Роли: LAWYER, BUSINESS_USER, ORG_ADMIN",
+        "Матрица доступа согласно high-architecture.md раздел 6.4",
+        "При недостаточных правах → 403 PERMISSION_DENIED",
+        "Тесты: каждая роль проверяется для каждой группы endpoints"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: LAWYER → доступ к /results",
+        "Шаг 3: BUSINESS_USER → 403 на /admin/policies",
+        "Шаг 4: ORG_ADMIN → доступ к /admin/policies"
+      ],
+      "dependencies": ["ORCH-TASK-010"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-012",
+      "category": "security",
+      "priority": "high",
+      "description": "CORS middleware и Security headers",
+      "acceptance_criteria": [
+        "CORS middleware с конфигурацией из ORCH_CORS_ALLOWED_ORIGINS",
+        "По умолчанию same-origin only",
+        "Allowed methods: GET, POST, PUT, DELETE, OPTIONS",
+        "Allowed headers: Authorization, Content-Type, X-Correlation-ID",
+        "Security headers: X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Strict-Transport-Security, Cache-Control: no-store для sensitive endpoints",
+        "X-Request-ID: correlation_id в каждом ответе"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: OPTIONS → правильные CORS заголовки",
+        "Шаг 3: запрос с disallowed origin → без CORS заголовков"
+      ],
+      "dependencies": ["ORCH-TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-013",
+      "category": "security",
+      "priority": "high",
+      "description": "Rate limiter middleware: per-organization token bucket в Redis",
+      "acceptance_criteria": [
+        "Пакет internal/ingress/middleware/ratelimit",
+        "Token bucket per organization_id в Redis",
+        "Раздельные лимиты: read (ORCH_RATELIMIT_READ_RPS), write (ORCH_RATELIMIT_WRITE_RPS)",
+        "Отдельный лимит для upload (ORCH_UPLOAD_MAX_CONCURRENT per org)",
+        "При превышении → 429 RATE_LIMIT_EXCEEDED с Retry-After заголовком",
+        "Отключаемый через ORCH_RATELIMIT_ENABLED=false",
+        "Fallback при недоступности Redis: пропускать все запросы (degradation, не блокировка)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: запросы в пределах лимита → 200",
+        "Шаг 3: запросы сверх лимита → 429 с Retry-After",
+        "Шаг 4: Redis недоступен → запросы пропускаются"
+      ],
+      "dependencies": ["ORCH-TASK-004", "ORCH-TASK-010"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-014",
+      "category": "integration",
+      "priority": "critical",
+      "description": "DM Client: HTTP-клиент к DM REST API с retry и circuit breaker",
+      "acceptance_criteria": [
+        "Пакет internal/egress/dmclient",
+        "Интерфейс DMClient с методами: CreateDocument, GetDocument, ListDocuments, DeleteDocument, ArchiveDocument, CreateVersion, GetVersion, ListVersions, GetArtifact, ListArtifacts, GetDiff, ListAudit",
+        "Передача заголовков: X-Organization-ID, X-User-ID, X-Correlation-ID из context",
+        "Retry: 3 попытки для 5xx/timeout, exponential backoff (200ms, 400ms, 800ms)",
+        "Circuit breaker (gobreaker): 5 failures → OPEN, 30s → HALF-OPEN, 4xx не считаются failures",
+        "Timeout: 5s (read), 10s (write)",
+        "Маппинг DM-ошибок (4xx/5xx) в ErrorResponse оркестратора"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: CreateDocument → 201 с document_id",
+        "Шаг 3: DM 500 → retry 3 раза → DM_UNAVAILABLE",
+        "Шаг 4: circuit breaker → OPEN после 5 ошибок → fast fail"
+      ],
+      "dependencies": ["ORCH-TASK-009"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-015",
+      "category": "integration",
+      "priority": "high",
+      "description": "UOM Client: проксирование auth endpoints (login, refresh, logout, me)",
+      "acceptance_criteria": [
+        "Пакет internal/egress/uomclient",
+        "Методы: Login(email, password), Refresh(refreshToken), Logout(refreshToken), GetMe(accessToken)",
+        "Retry: 2 попытки (fast fail для UX)",
+        "Timeout: 5s",
+        "При недоступности UOM: login/refresh/logout → 503, JWT валидация продолжает работать локально"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: Login → access_token + refresh_token",
+        "Шаг 3: UOM недоступен → 503"
+      ],
+      "dependencies": ["ORCH-TASK-009"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-016",
+      "category": "integration",
+      "priority": "medium",
+      "description": "OPM Client: проксирование policy/checklist endpoints",
+      "acceptance_criteria": [
+        "Пакет internal/egress/opmclient",
+        "Методы: ListPolicies, UpdatePolicy, ListChecklists, UpdateChecklist",
+        "Передача X-Organization-ID, X-Correlation-ID",
+        "Timeout: 5s",
+        "Опциональная зависимость: при пустом ORCH_OPM_BASE_URL — OPM отключён, admin endpoints → 502",
+        "При недоступности OPM → 502, основные сценарии не затронуты"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: OPM_BASE_URL пустой → admin endpoints → 502",
+        "Шаг 3: OPM доступен → ListPolicies → данные"
+      ],
+      "dependencies": ["ORCH-TASK-009"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-017",
+      "category": "integration",
+      "priority": "critical",
+      "description": "Command Publisher: публикация ProcessDocumentRequested и CompareDocumentVersionsRequested в RabbitMQ",
+      "acceptance_criteria": [
+        "Пакет internal/egress/commandpub",
+        "Метод PublishProcessDocument(ctx, cmd ProcessDocumentRequested) error",
+        "Метод PublishCompareVersions(ctx, cmd CompareDocumentVersionsRequested) error",
+        "JSON-сериализация с EventMeta envelope (correlation_id, timestamp)",
+        "Publisher confirms для гарантии доставки",
+        "Retry: 3 попытки, exponential backoff (100ms, 200ms, 400ms)",
+        "Все поля из event-catalog.md (job_id, document_id, version_id, organization_id, source_file_key и т.д.)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: PublishProcessDocument → сообщение в dp.commands.process-document",
+        "Шаг 3: broker недоступен → retry 3 раза → ошибка"
+      ],
+      "dependencies": ["ORCH-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-018",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Contract Upload Coordinator: multipart upload → S3 → DM → DP → 202",
+      "acceptance_criteria": [
+        "Пакет internal/application/upload",
+        "HTTP-хендлер POST /api/v1/contracts/upload (multipart/form-data: file + title)",
+        "Валидация: размер ≤ 20 МБ (ORCH_UPLOAD_MAX_SIZE), MIME = application/pdf, magic bytes %PDF-",
+        "Filename sanitization (strip path traversal, control chars)",
+        "Streaming upload в S3 → storage_key",
+        "SHA-256 checksum файла",
+        "DM POST /documents → document_id",
+        "DM POST /documents/{id}/versions → version_id (origin_type=UPLOAD)",
+        "Generate job_id, correlation_id (UUID v4)",
+        "Publish ProcessDocumentRequested в DP",
+        "Redis: upload tracking {correlation_id → document_id, version_id, status}",
+        "Ответ 202 Accepted: {contract_id, version_id, job_id, status: QUEUED}",
+        "Cleanup при ошибке: удаление файла из S3 если DM или RabbitMQ отказали"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: upload PDF 5MB → 202 с contract_id, version_id, job_id",
+        "Шаг 3: upload файл > 20MB → 413 FILE_TOO_LARGE",
+        "Шаг 4: upload .docx → 415 UNSUPPORTED_FORMAT",
+        "Шаг 5: DM недоступен → 502, файл из S3 удалён"
+      ],
+      "dependencies": ["ORCH-TASK-006", "ORCH-TASK-014", "ORCH-TASK-017", "ORCH-TASK-011"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-019",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Contract CRUD handlers: list, get, archive, delete",
+      "acceptance_criteria": [
+        "GET /api/v1/contracts — пагинация (page, size), фильтр по status, search",
+        "GET /api/v1/contracts/{contract_id} — детали договора с текущей версией",
+        "POST /api/v1/contracts/{contract_id}/archive — архивация",
+        "DELETE /api/v1/contracts/{contract_id} — soft delete",
+        "Все запросы проксируются в DM с заголовками org_id, user_id, correlation_id",
+        "Маппинг DM 'document' → user-facing 'contract' (ASSUMPTION-ORCH-12)",
+        "processing_status маппится из artifact_status в user-friendly формат",
+        "RBAC: archive/delete — только LAWYER и ORG_ADMIN"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: GET /contracts → пагинированный список",
+        "Шаг 3: GET /contracts/{id} → детали с processing_status",
+        "Шаг 4: DELETE с ролью BUSINESS_USER → 403"
+      ],
+      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-011"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-020",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Version management handlers: list, get, status, upload new version",
+      "acceptance_criteria": [
+        "GET /api/v1/contracts/{id}/versions — список версий с пагинацией",
+        "GET /api/v1/contracts/{id}/versions/{vid} — детали версии с user-friendly processing_status",
+        "GET /api/v1/contracts/{id}/versions/{vid}/status — polling fallback для SSE",
+        "POST /api/v1/contracts/{id}/versions/upload — загрузка новой версии (origin_type=RE_UPLOAD)",
+        "Маппинг artifact_status → UserProcessingStatus (таблица из high-architecture.md 5.2)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: GET /versions → список",
+        "Шаг 3: GET /versions/{vid}/status → {status, message} на русском",
+        "Шаг 4: POST /versions/upload → 202"
+      ],
+      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-018"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-021",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Results Aggregator: агрегация артефактов из DM с фильтрацией по роли",
+      "acceptance_criteria": [
+        "GET /api/v1/contracts/{id}/versions/{vid}/results — агрегированные результаты",
+        "GET /api/v1/contracts/{id}/versions/{vid}/risks — RISK_ANALYSIS + RISK_PROFILE",
+        "GET /api/v1/contracts/{id}/versions/{vid}/summary — SUMMARY + AGGREGATE_SCORE",
+        "GET /api/v1/contracts/{id}/versions/{vid}/recommendations — RECOMMENDATIONS",
+        "Параллельные запросы к DM за разными типами артефактов (goroutines)",
+        "Фильтрация по роли: BUSINESS_USER видит только summary + aggregate_score",
+        "Если версия ещё обрабатывается → 200 с {status: PROCESSING, available_data: null}",
+        "Если артефакт не найден (404 от DM) → пропуск, не ошибка"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: GET /results (FULLY_READY) → все артефакты агрегированы",
+        "Шаг 3: GET /results (PENDING) → {status: PROCESSING}",
+        "Шаг 4: GET /results (BUSINESS_USER) → только summary + score"
+      ],
+      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-011"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-022",
+      "category": "functional",
+      "priority": "high",
+      "description": "Re-check Coordinator: повторная проверка с тем же файлом",
+      "acceptance_criteria": [
+        "POST /api/v1/contracts/{id}/versions/{vid}/recheck",
+        "Получение source_file_key из текущей версии (DM GET)",
+        "Создание новой версии в DM с origin_type=RE_CHECK, тем же source_file_key",
+        "Публикация ProcessDocumentRequested в DP",
+        "Ответ 202 с новым version_id, job_id",
+        "Проверка: текущая версия не в PENDING (иначе 409 VERSION_STILL_PROCESSING)",
+        "RBAC: только LAWYER, ORG_ADMIN"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: recheck FULLY_READY версии → 202 с новым version_id",
+        "Шаг 3: recheck PENDING версии → 409"
+      ],
+      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-017"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-023",
+      "category": "functional",
+      "priority": "high",
+      "description": "Comparison Coordinator: запуск сравнения версий + получение diff",
+      "acceptance_criteria": [
+        "POST /api/v1/contracts/{id}/compare — {base_version_id, target_version_id}",
+        "Валидация: обе версии существуют и принадлежат одному документу (DM GET)",
+        "Публикация CompareDocumentVersionsRequested в DP",
+        "Ответ 202 с job_id",
+        "GET /api/v1/contracts/{id}/versions/{base_vid}/diff/{target_vid} — результат из DM",
+        "RBAC: только LAWYER, ORG_ADMIN"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: POST /compare → 202 с job_id",
+        "Шаг 3: GET /diff → результат сравнения",
+        "Шаг 4: GET /diff (не существует) → 404"
+      ],
+      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-017"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-024",
+      "category": "functional",
+      "priority": "high",
+      "description": "Export Service: скачивание PDF/DOCX через presigned URL",
+      "acceptance_criteria": [
+        "GET /api/v1/contracts/{id}/versions/{vid}/export/{format} (pdf | docx)",
+        "Запрос артефакта EXPORT_PDF / EXPORT_DOCX из DM",
+        "DM возвращает 302 redirect → presigned S3 URL",
+        "Оркестратор проксирует 302 клиенту",
+        "Если отчёт не готов (DM 404) → 404 'Отчёт ещё формируется'",
+        "RBAC: LAWYER, ORG_ADMIN всегда; BUSINESS_USER по политике OPM"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: export/pdf (FULLY_READY) → 302 с Location",
+        "Шаг 3: export/pdf (PENDING) → 404"
+      ],
+      "dependencies": ["ORCH-TASK-014"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-025",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Feedback Service: приём и сохранение обратной связи",
+      "acceptance_criteria": [
+        "POST /api/v1/contracts/{id}/versions/{vid}/feedback — {is_useful, comment}",
+        "Валидация: version_id существует (DM GET)",
+        "comment: maxLength 2000",
+        "Сохранение в Redis с TTL 30 дней (ASSUMPTION-ORCH-08)",
+        "Ответ 201 Created с feedback_id"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: POST feedback → 201",
+        "Шаг 3: POST feedback для несуществующей версии → 404"
+      ],
+      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-004"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-026",
+      "category": "functional",
+      "priority": "medium",
+      "description": "Admin Proxy Service: проксирование политик и чек-листов в OPM",
+      "acceptance_criteria": [
+        "GET /api/v1/admin/policies — проксирование в OPM",
+        "PUT /api/v1/admin/policies/{policy_id} — проксирование в OPM",
+        "GET /api/v1/admin/checklists — проксирование в OPM",
+        "PUT /api/v1/admin/checklists/{checklist_id} — проксирование в OPM",
+        "RBAC: только ORG_ADMIN (все остальные → 403)",
+        "При недоступности OPM → 502"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: GET /admin/policies (ORG_ADMIN) → данные",
+        "Шаг 3: GET /admin/policies (LAWYER) → 403"
+      ],
+      "dependencies": ["ORCH-TASK-016", "ORCH-TASK-011"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-027",
+      "category": "integration",
+      "priority": "critical",
+      "description": "Event Consumer: подписка на 12 RabbitMQ-топиков, десериализация, маршрутизация",
+      "acceptance_criteria": [
+        "Пакет internal/ingress/consumer",
+        "Подписка на 12 топиков: 5 от DP, 2 от LIC/RE, 5 от DM (см. event-catalog.md)",
+        "Создание очередей orch.sub.{topic_name}",
+        "Десериализация JSON в Go-структуры событий",
+        "Маршрутизация к Processing Status Tracker",
+        "Manual ACK после успешной обработки",
+        "Невалидный JSON → WARN + ACK (не блокирует очередь)",
+        "Ошибка обработки: NACK + requeue (до 3 раз), затем ACK + ERROR log"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: StatusChangedEvent → десериализация + маршрутизация",
+        "Шаг 3: невалидный JSON → WARN + ACK, очередь не блокируется"
+      ],
+      "dependencies": ["ORCH-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-028",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Processing Status Tracker: маппинг статусов, обработка событий DP/LIC/RE/DM",
+      "acceptance_criteria": [
+        "Пакет internal/application/statustracker",
+        "Приём событий от Event Consumer",
+        "Маппинг 13 внутренних статусов → user-friendly (таблица из high-architecture.md 5.2)",
+        "Мгновенное обнаружение сбоев LIC/RE через status-changed(FAILED) (ASSUMPTION-ORCH-13)",
+        "Монотонный порядок статусов: только вперёд (PROCESSING → ANALYZING → READY, не обратно)",
+        "Терминальные статусы: READY, FAILED, ANALYSIS_FAILED, REPORTS_FAILED, PARTIALLY_FAILED, REJECTED",
+        "Публикация SSE-события через SSE Broadcaster (Redis Pub/Sub)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: StatusChanged(IN_PROGRESS) → SSE push PROCESSING",
+        "Шаг 3: LICStatusChanged(FAILED) → SSE push ANALYSIS_FAILED (мгновенно)",
+        "Шаг 4: попытка перехода назад (ANALYZING → PROCESSING) → игнорируется"
+      ],
+      "dependencies": ["ORCH-TASK-027"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-029",
+      "category": "functional",
+      "priority": "critical",
+      "description": "SSE Connection Manager: long-lived соединения, heartbeat, Redis Pub/Sub",
+      "acceptance_criteria": [
+        "Пакет internal/ingress/sse",
+        "GET /api/v1/events/stream — SSE endpoint",
+        "Аутентификация через ?token= (JWT в query param)",
+        "Регистрация соединения в Redis: sse:org:{org_id}:user:{user_id}",
+        "Подписка на Redis Pub/Sub channel sse:broadcast:{org_id}",
+        "Push событий в формате SSE: event: status_update\\ndata: JSON\\n\\n",
+        "Heartbeat :ping каждые ORCH_SSE_HEARTBEAT_INTERVAL (15s)",
+        "Cleanup при disconnect (unsubscribe, remove from Redis)",
+        "Max connection age: ORCH_SSE_MAX_CONNECTION_AGE (24h)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: подключение к /events/stream → SSE stream открыт",
+        "Шаг 3: событие в Redis Pub/Sub → push через SSE",
+        "Шаг 4: heartbeat каждые 15 секунд"
+      ],
+      "dependencies": ["ORCH-TASK-004", "ORCH-TASK-010"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-030",
+      "category": "functional",
+      "priority": "critical",
+      "description": "SSE Broadcaster: трансляция событий через Redis Pub/Sub для горизонтального масштабирования",
+      "acceptance_criteria": [
+        "Пакет internal/egress/ssebroadcast",
+        "Метод Broadcast(orgID, event SSEEvent) — публикация в Redis channel sse:broadcast:{org_id}",
+        "Интеграция с Processing Status Tracker: при получении события → broadcast",
+        "Интеграция с SSE Connection Manager: при получении Redis-сообщения → push в SSE",
+        "Подписка/отписка на Redis channels при появлении/уходе SSE-клиентов организации"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: Broadcast → сообщение в Redis channel",
+        "Шаг 3: Redis message → доставка в SSE Connection Manager"
+      ],
+      "dependencies": ["ORCH-TASK-029", "ORCH-TASK-028"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-031",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Auth proxy handlers: login, refresh, logout, me — проксирование в UOM",
+      "acceptance_criteria": [
+        "POST /api/v1/auth/login — проксирование в UOM, возврат JWT-пары",
+        "POST /api/v1/auth/refresh — проксирование в UOM, возврат нового access token",
+        "POST /api/v1/auth/logout — проксирование в UOM, 204",
+        "GET /api/v1/users/me — проксирование в UOM, профиль пользователя",
+        "Все auth endpoints без JWT (public)",
+        "/users/me с JWT"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: POST /auth/login → tokens",
+        "Шаг 3: UOM недоступен → 503"
+      ],
+      "dependencies": ["ORCH-TASK-015"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-032",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Prometheus metrics: HTTP, upload, DM client, S3, broker, SSE, rate limit",
+      "acceptance_criteria": [
+        "Пакет internal/infra/observability/metrics",
+        "HTTP: orch_http_requests_total, orch_http_request_duration_seconds",
+        "Upload: orch_upload_total, orch_upload_size_bytes, orch_upload_duration_seconds",
+        "DM: orch_dm_requests_total, orch_dm_request_duration_seconds, orch_dm_circuit_breaker_state",
+        "S3: orch_s3_operations_total, orch_s3_operation_duration_seconds",
+        "Broker: orch_broker_publish_total, orch_events_received_total",
+        "SSE: orch_sse_connections_active, orch_sse_events_pushed_total",
+        "Security: orch_rate_limit_hits_total, orch_auth_failures_total",
+        "GET /metrics → все метрики доступны"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: GET /metrics → Prometheus-формат, все метрики зарегистрированы"
+      ],
+      "dependencies": ["ORCH-TASK-003"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-033",
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "OpenTelemetry tracing: spans, propagation, context",
+      "acceptance_criteria": [
+        "Пакет internal/infra/observability/tracer",
+        "Инициализация OTLP/HTTP exporter (ORCH_TRACING_ENDPOINT)",
+        "Включение/выключение через ORCH_TRACING_ENABLED",
+        "Spans: orch.http.request (parent), orch.dm.request, orch.broker.publish, orch.upload.s3",
+        "Propagation: correlation_id → W3C traceparent для DM, correlation_id для DP events",
+        "Graceful flush при shutdown"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: ORCH_TRACING_ENABLED=false → tracing не инициализируется"
+      ],
+      "dependencies": ["ORCH-TASK-003"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-034",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Graceful shutdown: упорядоченное завершение всех компонентов",
+      "acceptance_criteria": [
+        "Обработка SIGTERM/SIGINT",
+        "Последовательность: readiness=false → stop HTTP → close SSE → stop RabbitMQ consumer → close Redis → flush observability",
+        "Таймаут: ORCH_SHUTDOWN_TIMEOUT (default 30s), при превышении → force exit",
+        "Логирование каждой фазы shutdown"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: SIGTERM → ordered shutdown → exit 0"
+      ],
+      "dependencies": ["ORCH-TASK-008", "ORCH-TASK-029", "ORCH-TASK-027"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-035",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Dockerfile (multi-stage) + Docker Compose для локальной разработки",
+      "acceptance_criteria": [
+        "Dockerfile: builder (golang:1.26-alpine) + runtime (alpine:3.20), non-root user",
+        "docker-compose.yaml: orch-api + rabbitmq + redis + minio",
+        "Health checks для всех сервисов в compose",
+        "Depends_on с condition: service_healthy",
+        "Volume mount для JWT public key",
+        "make docker-build собирает образ",
+        "docker compose up --build запускает все сервисы"
+      ],
+      "test_steps": [
+        "Шаг 1: make docker-build — образ собирается",
+        "Шаг 2: docker compose up --build — все сервисы стартуют",
+        "Шаг 3: curl http://localhost:8080/healthz → 200"
+      ],
+      "dependencies": ["ORCH-TASK-034"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-036",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "App wiring: сборка всех компонентов, DI, lifecycle (startup + shutdown)",
+      "acceptance_criteria": [
+        "Пакет internal/app с типом App и методами Start(), Shutdown()",
+        "Создание и связывание всех компонентов: config → infra clients → egress clients → application services → ingress handlers → router",
+        "Порядок запуска: config → Redis → RabbitMQ → S3 → DM Client → event consumer → HTTP server",
+        "cmd/orch-api/main.go: Load config → NewApp() → app.Start() → wait signal → app.Shutdown()",
+        "make build && ./orch-api запускается с .env файлом"
+      ],
+      "test_steps": [
+        "Шаг 1: go test — все тесты проходят",
+        "Шаг 2: make build — бинарник собирается",
+        "Шаг 3: запуск с mock-зависимостями → сервер стартует, /healthz → 200"
+      ],
+      "dependencies": ["ORCH-TASK-018", "ORCH-TASK-019", "ORCH-TASK-020", "ORCH-TASK-021", "ORCH-TASK-030", "ORCH-TASK-031"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-037",
+      "category": "integration",
+      "priority": "high",
+      "description": "Integration tests: end-to-end pipeline с in-memory fakes",
+      "acceptance_criteria": [
+        "Пакет internal/integration с end-to-end тестами",
+        "In-memory fakes для: DM (HTTP test server), RabbitMQ (channel mock), Redis (miniredis), S3 (in-memory)",
+        "Тест 1: Upload contract → ProcessDocumentRequested published → StatusChanged event → SSE push",
+        "Тест 2: Recheck → new version created → command published",
+        "Тест 3: Compare → CompareDocumentVersionsRequested published",
+        "Тест 4: LIC failure event → SSE push ANALYSIS_FAILED",
+        "Тест 5: DM version-reports-ready → SSE push READY → GET /results → aggregated data",
+        "Все тесты проходят с go test -race ./internal/integration/..."
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race -count=1 ./internal/integration/... — все тесты проходят",
+        "Шаг 2: тесты не зависят от внешних сервисов (полностью in-memory)"
+      ],
+      "dependencies": ["ORCH-TASK-036"],
+      "status": "pending"
+    }
+  ]
+}

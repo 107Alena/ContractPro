@@ -1156,6 +1156,30 @@
       "status": "done",
       "completed_at": "2026-04-05",
       "summary": "Созданы 8 CLAUDE.md файлов для Document Management (аналогично DP — 11 файлов, минус DP-специфичные пакеты engine/pdf/app). ФАЙЛЫ: 1) development/CLAUDE.md — root overview (module, build commands, config, code structure, architecture pattern, pipelines, external deps), 2) internal/domain/CLAUDE.md — model (11 source files: entities, state machines, events, topics, DLQ) + port (5 inbound + 18 outbound interfaces, 20 error codes), 3) internal/application/CLAUDE.md — 5 services (ingestion, query, lifecycle, version, diff) + tenant utility + 5 background jobs (watchdog, orphancleanup, 3 retention), 4) internal/infra/CLAUDE.md — postgres (client, transactor, context, migrator, 9 repositories, 5 migrations), broker (RabbitMQ + reconnect), objectstorage (S3 + keys), kvstore (Redis), observability (logger, 30+ metrics, tracer), health, concurrency (semaphore), circuitbreaker, 5) internal/ingress/CLAUDE.md — consumer (7 topics, idempotency integration, DLQ routing, backoff), idempotency (Redis guard + DB fallback, 7 key generators), api (13 endpoints, auth middleware, rate limiting, response helpers), 6) internal/egress/CLAUDE.md — confirmation (10 types), notification (5 types), outbox (writer + poller + metrics collector), dlq (dual-write sender), 7) internal/config/CLAUDE.md — Load() + 18 sub-configs, 8) internal/integration/CLAUDE.md — testinfra (14 in-memory fakes), 5 test files (47+ tests). Структура аналогична DP: per-layer CLAUDE.md, не per-package. Ревью: documentation-engineer → 5 issues (file count 14→11, error code count 16→20, SOURCE_FILE route clarification, ArtifactStatus non-linear note) → все исправлены. Все тесты PASS с -count=1 (30 пакетов). go vet OK. make build/test/lint — ALL OK."
+    },
+    {
+      "id": "DM-TASK-053",
+      "category": "architecture",
+      "priority": "medium",
+      "description": "Per-stage таймауты в Stale Version Watchdog (ASSUMPTION-ORCH-14). Текущий единый DM_STALE_VERSION_TIMEOUT=30m заменить на per-stage таймауты для более быстрого обнаружения застрявших версий. Watchdog выступает как safety net на случай тихого сбоя LIC/RE (crash без публикации status-changed события).",
+      "acceptance_criteria": [
+        "Stale Version Watchdog поддерживает отдельные таймауты для каждого перехода artifact_status",
+        "Новые переменные окружения: DM_STALE_TIMEOUT_PROCESSING=5m (PENDING → PROCESSING_ARTIFACTS_RECEIVED), DM_STALE_TIMEOUT_ANALYSIS=10m (PROCESSING_ARTIFACTS_RECEIVED → ANALYSIS_ARTIFACTS_RECEIVED), DM_STALE_TIMEOUT_REPORTS=5m (ANALYSIS_ARTIFACTS_RECEIVED → REPORTS_READY)",
+        "Старая переменная DM_STALE_VERSION_TIMEOUT сохраняется как fallback (используется, если per-stage не заданы)",
+        "SQL-запрос watchdog учитывает текущий artifact_status версии и применяет соответствующий таймаут",
+        "Метрика dm_stuck_versions_total получает дополнительный label stage (processing/analysis/reports)",
+        "Обновлена документация: configuration.md, state-machine.md",
+        "Тесты watchdog покрывают все 3 per-stage таймаута"
+      ],
+      "test_steps": [
+        "Шаг 1: версия в PENDING дольше 5 мин → watchdog переводит в PARTIALLY_AVAILABLE",
+        "Шаг 2: версия в PROCESSING_ARTIFACTS_RECEIVED дольше 10 мин → PARTIALLY_AVAILABLE",
+        "Шаг 3: версия в ANALYSIS_ARTIFACTS_RECEIVED дольше 5 мин → PARTIALLY_AVAILABLE",
+        "Шаг 4: при отсутствии per-stage переменных используется DM_STALE_VERSION_TIMEOUT (backward compatibility)",
+        "Шаг 5: метрика dm_stuck_versions_total корректно отражает stage"
+      ],
+      "dependencies": ["DM-TASK-035"],
+      "status": "pending"
     }
   ]
 }

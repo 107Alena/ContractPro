@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ContractPro** — AI-powered contract review platform for the Russian legal jurisdiction (ГК РФ). The system analyzes contracts to identify legal/financial risks, checks mandatory conditions, generates recommendations for improving wording, and provides summaries for non-legal users.
 
-The **Document Processing domain is fully implemented** — complete application code (domain model, engine layer, application services, infrastructure adapters, ingress/egress layers, app wiring) with 936 tests passing across 30 packages. Other domains remain in the architecture/requirements phase.
+The **Document Processing** and **Document Management** domains are **fully implemented**. The **API/Backend Orchestrator** has complete architecture documentation ready for implementation.
 
 ## Domain Architecture
 
@@ -17,9 +17,11 @@ The system is decomposed into 8 domains communicating via event-driven architect
 3. **Legal Knowledge Base** — stateful. Source of legal norms (ГК РФ) for training LIC neural networks.
 4. **Organization Policy Management** — stateful. Client-specific templates, policies, checklists, strictness settings.
 5. **Reporting Engine** — stateless. Transforms LIC outputs into user-facing reports (summary, detailed report, version comparison report, PDF/DOCX export).
-6. **Document Management (DM)** — stateful. Document versioning, metadata, artifact storage (OCR results, semantic trees, reports).
+6. **Document Management (DM)** — stateful. Document versioning, metadata, artifact storage (OCR results, semantic trees, reports). **Fully implemented** — code in `DocumentManagement/development/`, architecture in `DocumentManagement/architecture/`.
 7. **User & Organization Management** — stateful. Auth, users, roles, permissions, org bindings.
 8. **Payment Processing** — stateful. Service payment handling.
+
+**API/Backend Orchestrator** — coordinating layer (not a domain). Single entry point for frontend and external integrations. JWT auth, RBAC, file upload, SSE real-time status, aggregation of data from DM/DP/OPM/UOM. **Architecture designed** — 11 docs in `ApiBackendOrchestrator/architecture/`, 37 implementation tasks in `ApiBackendOrchestrator/tasks.json`.
 
 ## Tech Stack
 
@@ -157,6 +159,10 @@ For local dev, create a `.env` file in `DocumentProcessing/development/`. Alread
 - `DocumentProcessing/architecture/configuration.md` — full env var reference for DP service
 - `DocumentProcessing/architecture/deployment.md` — local and production deployment guide
 - Each package under `DocumentProcessing/development/internal/` has its own `CLAUDE.md`
+- `DocumentManagement/architecture/` — 12 architecture docs for DM (high-architecture, API spec, events, state machine, storage, security, etc.)
+- `ApiBackendOrchestrator/architecture/` — 11 architecture docs for Orchestrator (high-architecture, OpenAPI spec, events, sequences, security, etc.)
+- `ApiBackendOrchestrator/tasks.json` — 37 implementation tasks for Orchestrator
+- `ApiBackendOrchestrator/architecture/CLAUDE.md` — quick reference for Orchestrator architecture
 
 ## Language
 

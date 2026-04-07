@@ -1,0 +1,1438 @@
+openapi: 3.0.3
+info:
+  title: ContractPro API — Backend Orchestrator
+  description: |
+    REST API оркестратора ContractPro — единая точка входа для frontend-приложений и внешних интеграций.
+    Оркестратор координирует работу доменных сервисов (DM, DP, OPM, UOM) и предоставляет
+    агрегированные данные для пользователей.
+
+    ## Аутентификация
+    Все endpoints (кроме /auth/*) требуют JWT Bearer token в заголовке Authorization.
+    JWT содержит claims: user_id, organization_id, role.
+
+    ## Формат ошибок
+    Все ошибки возвращаются в едином формате ErrorResponse с кодом ошибки, сообщением на русском языке
+    и рекомендацией следующего шага для пользователя (NFR-5.2).
+
+    ## Real-time обновления
+    Статусы обработки доставляются через SSE endpoint GET /api/v1/events/stream.
+  version: 1.0.0
+  contact:
+    name: ContractPro Backend Team
+
+servers:
+  - url: /api/v1
+    description: Orchestrator API v1
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Auth
+    description: Аутентификация (проксирование в UOM)
+  - name: Contracts
+    description: Управление договорами
+  - name: Versions
+    description: Управление версиями договора
+  - name: Results
+    description: Результаты проверки
+  - name: Comparison
+    description: Сравнение версий
+  - name: Export
+    description: Экспорт отчётов
+  - name: Feedback
+    description: Обратная связь
+  - name: Admin
+    description: Административные настройки (только ORG_ADMIN)
+  - name: Events
+    description: Real-time события (SSE)
+  - name: System
+    description: Системные endpoints
+
+paths:
+  # ==================== Auth ====================
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Аутентификация пользователя
+      description: Проксирование в UOM. Возвращает JWT access token и refresh token.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Успешная аутентификация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokens'
+        '401':
+          description: Неверные учётные данные
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Обновление access token
+      operationId: refreshToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Новый access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokens'
+        '401':
+          description: Невалидный или отозванный refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Выход из системы
+      description: Отзывает refresh token в UOM.
+      operationId: logout
+      responses:
+        '204':
+          description: Выход выполнен
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ==================== Contracts ====================
+  /contracts/upload:
+    post:
+      tags: [Contracts]
+      summary: Загрузка нового договора
+      description: |
+        Загрузка PDF-файла договора. Оркестратор:
+        1. Валидирует файл (размер, формат).
+        2. Загружает в Object Storage.
+        3. Создаёт документ и версию в DM.
+        4. Публикует команду на обработку в DP.
+        Возвращает 202 Accepted — обработка асинхронная.
+      operationId: uploadContract
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, title]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: PDF-файл договора (макс. 20 МБ)
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+                  description: Название договора
+      responses:
+        '202':
+          description: Договор принят в обработку
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: Файл слишком большой
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '415':
+          description: Неподдерживаемый формат файла
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /contracts:
+    get:
+      tags: [Contracts]
+      summary: Список договоров организации
+      operationId: listContracts
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/DocumentStatus'
+          description: Фильтр по статусу документа
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 200
+          description: Поиск по названию (substring match)
+      responses:
+        '200':
+          description: Список договоров
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /contracts/{contract_id}:
+    get:
+      tags: [Contracts]
+      summary: Детали договора
+      description: Возвращает метаданные договора с текущей версией и user-friendly статусом.
+      operationId: getContract
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+      responses:
+        '200':
+          description: Детали договора
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractDetails'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Contracts]
+      summary: Удаление договора (soft delete)
+      operationId: deleteContract
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+      responses:
+        '200':
+          description: Договор удалён
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /contracts/{contract_id}/archive:
+    post:
+      tags: [Contracts]
+      summary: Архивация договора
+      operationId: archiveContract
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+      responses:
+        '200':
+          description: Договор архивирован
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # ==================== Versions ====================
+  /contracts/{contract_id}/versions:
+    get:
+      tags: [Versions]
+      summary: Список версий договора
+      operationId: listVersions
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: Список версий
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /contracts/{contract_id}/versions/upload:
+    post:
+      tags: [Versions]
+      summary: Загрузка новой версии существующего договора
+      description: |
+        Загрузка новой редакции (RE_UPLOAD). Создаёт новую версию и запускает обработку.
+      operationId: uploadNewVersion
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: PDF-файл новой версии
+      responses:
+        '202':
+          description: Новая версия принята в обработку
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: Файл слишком большой
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /contracts/{contract_id}/versions/{version_id}:
+    get:
+      tags: [Versions]
+      summary: Детали версии
+      operationId: getVersion
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      responses:
+        '200':
+          description: Детали версии с user-friendly статусом
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionDetails'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /contracts/{contract_id}/versions/{version_id}/status:
+    get:
+      tags: [Versions]
+      summary: Статус обработки версии (polling fallback)
+      description: Альтернатива SSE для получения текущего статуса обработки.
+      operationId: getVersionStatus
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      responses:
+        '200':
+          description: Текущий статус обработки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessingStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /contracts/{contract_id}/versions/{version_id}/recheck:
+    post:
+      tags: [Versions]
+      summary: Повторная проверка версии (UR-9)
+      description: |
+        Создаёт новую версию с origin_type=RE_CHECK (тот же файл, новый анализ).
+      operationId: recheckVersion
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      responses:
+        '202':
+          description: Повторная проверка запущена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Текущая версия ещё обрабатывается
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==================== Results ====================
+  /contracts/{contract_id}/versions/{version_id}/results:
+    get:
+      tags: [Results]
+      summary: Агрегированные результаты проверки
+      description: |
+        Возвращает все результаты анализа для версии: риски, рекомендации, резюме,
+        ключевые параметры, тип договора, сводная оценка. Фильтруется по роли пользователя.
+        R-2 (бизнес-пользователь) видит только summary и aggregate_score.
+      operationId: getResults
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      responses:
+        '200':
+          description: Результаты проверки (или статус обработки, если не готовы)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResults'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /contracts/{contract_id}/versions/{version_id}/risks:
+    get:
+      tags: [Results]
+      summary: Список рисков (UR-4, UR-5)
+      operationId: getRisks
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      responses:
+        '200':
+          description: Список рисков с пояснениями
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /contracts/{contract_id}/versions/{version_id}/summary:
+    get:
+      tags: [Results]
+      summary: Краткое резюме (UR-7)
+      operationId: getSummary
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      responses:
+        '200':
+          description: Краткое резюме для бизнес-пользователя
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractSummaryResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /contracts/{contract_id}/versions/{version_id}/recommendations:
+    get:
+      tags: [Results]
+      summary: Рекомендации формулировок (UR-6)
+      operationId: getRecommendations
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      responses:
+        '200':
+          description: Список рекомендаций
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ==================== Comparison ====================
+  /contracts/{contract_id}/compare:
+    post:
+      tags: [Comparison]
+      summary: Запуск сравнения версий (FR-5.3.1)
+      operationId: compareVersions
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompareRequest'
+      responses:
+        '202':
+          description: Сравнение запущено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompareResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /contracts/{contract_id}/versions/{base_version_id}/diff/{target_version_id}:
+    get:
+      tags: [Comparison]
+      summary: Результат сравнения версий
+      operationId: getDiff
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - name: base_version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: target_version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Результат сравнения
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionDiff'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Diff не найден (ещё не готов или не запускался)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==================== Export ====================
+  /contracts/{contract_id}/versions/{version_id}/export/{format}:
+    get:
+      tags: [Export]
+      summary: Экспорт отчёта (UR-10)
+      operationId: exportReport
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+        - name: format
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [pdf, docx]
+      responses:
+        '302':
+          description: Redirect на presigned URL для скачивания
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+              description: Presigned S3 URL (TTL 5 минут)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Отчёт ещё не готов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==================== Feedback ====================
+  /contracts/{contract_id}/versions/{version_id}/feedback:
+    post:
+      tags: [Feedback]
+      summary: Обратная связь по результатам (UR-11)
+      operationId: submitFeedback
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackRequest'
+      responses:
+        '201':
+          description: Обратная связь сохранена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ==================== Admin ====================
+  /admin/policies:
+    get:
+      tags: [Admin]
+      summary: Список политик организации (UR-12)
+      operationId: listPolicies
+      responses:
+        '200':
+          description: Политики организации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '502':
+          description: OPM недоступен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/policies/{policy_id}:
+    put:
+      tags: [Admin]
+      summary: Обновление политики
+      operationId: updatePolicy
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyUpdateRequest'
+      responses:
+        '200':
+          description: Политика обновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Policy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/checklists:
+    get:
+      tags: [Admin]
+      summary: Список чек-листов организации
+      operationId: listChecklists
+      responses:
+        '200':
+          description: Чек-листы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/checklists/{checklist_id}:
+    put:
+      tags: [Admin]
+      summary: Обновление чек-листа
+      operationId: updateChecklist
+      parameters:
+        - name: checklist_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistUpdateRequest'
+      responses:
+        '200':
+          description: Чек-лист обновлён
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Checklist'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ==================== Events (SSE) ====================
+  /events/stream:
+    get:
+      tags: [Events]
+      summary: SSE-поток статусных обновлений
+      description: |
+        Server-Sent Events endpoint для real-time получения статусов обработки.
+        Аутентификация через query parameter `token` (SSE EventSource API не поддерживает кастомные заголовки).
+        Heartbeat `:ping` каждые 15 секунд.
+        Автоматическое переподключение встроено в браузерный EventSource API.
+      operationId: eventStream
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: JWT access token
+        - name: document_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Фильтр по документу (опционально)
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  event: status_update
+                  data: {"document_id":"uuid","version_id":"uuid","status":"ANALYZING","message":"Юридический анализ","timestamp":"..."}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ==================== System ====================
+  /users/me:
+    get:
+      tags: [System]
+      summary: Профиль текущего пользователя
+      description: Проксирование в UOM.
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Профиль пользователя
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token от UOM. Claims: sub (user_id), org (organization_id), role.
+
+  parameters:
+    ContractIdParam:
+      name: contract_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: ID договора (маппится в document_id в DM)
+
+    VersionIdParam:
+      name: version_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    SizeParam:
+      name: size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  responses:
+    BadRequest:
+      description: Невалидный запрос
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Unauthorized:
+      description: Не авторизован (JWT отсутствует или невалиден)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Forbidden:
+      description: Недостаточно прав для данной операции
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: Ресурс не найден или не принадлежит организации
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Conflict:
+      description: Конфликт состояния (документ archived/deleted)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    TooManyRequests:
+      description: Превышен лимит запросов организации
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Секунды до следующей попытки
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    # ---- Auth ----
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    AuthTokens:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT access token (TTL 15 минут)
+        refresh_token:
+          type: string
+          description: Refresh token (TTL 30 дней)
+        expires_in:
+          type: integer
+          description: Время жизни access token в секундах
+
+    # ---- Contracts ----
+    DocumentStatus:
+      type: string
+      enum: [ACTIVE, ARCHIVED, DELETED]
+
+    UserProcessingStatus:
+      type: string
+      enum: [UPLOADED, QUEUED, PROCESSING, ANALYZING, GENERATING_REPORTS, READY, PARTIALLY_FAILED, FAILED, REJECTED]
+      description: |
+        User-friendly статус обработки:
+        - UPLOADED — договор загружен
+        - QUEUED — в очереди на обработку
+        - PROCESSING — извлечение текста и структуры
+        - ANALYZING — юридический анализ
+        - GENERATING_REPORTS — формирование отчётов
+        - READY — результаты готовы
+        - PARTIALLY_FAILED — частично доступно (есть ошибки)
+        - FAILED — ошибка обработки
+        - REJECTED — файл отклонён
+
+    UploadResponse:
+      type: object
+      properties:
+        contract_id:
+          type: string
+          format: uuid
+          description: ID договора (document_id в DM)
+        version_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        job_id:
+          type: string
+          format: uuid
+          description: ID задачи обработки (для tracking)
+        status:
+          $ref: '#/components/schemas/UserProcessingStatus'
+        message:
+          type: string
+          description: Статус на русском языке
+
+    ContractSummary:
+      type: object
+      properties:
+        contract_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          $ref: '#/components/schemas/DocumentStatus'
+        current_version_number:
+          type: integer
+          nullable: true
+        processing_status:
+          $ref: '#/components/schemas/UserProcessingStatus'
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ContractList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContractSummary'
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+
+    ContractDetails:
+      type: object
+      properties:
+        contract_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          $ref: '#/components/schemas/DocumentStatus'
+        current_version:
+          $ref: '#/components/schemas/VersionDetails'
+          nullable: true
+        created_by_user_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # ---- Versions ----
+    OriginType:
+      type: string
+      enum: [UPLOAD, RE_UPLOAD, RECOMMENDATION_APPLIED, MANUAL_EDIT, RE_CHECK]
+
+    VersionDetails:
+      type: object
+      properties:
+        version_id:
+          type: string
+          format: uuid
+        contract_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        origin_type:
+          $ref: '#/components/schemas/OriginType'
+        origin_description:
+          type: string
+          nullable: true
+        parent_version_id:
+          type: string
+          format: uuid
+          nullable: true
+        source_file_name:
+          type: string
+        source_file_size:
+          type: integer
+          format: int64
+        processing_status:
+          $ref: '#/components/schemas/UserProcessingStatus'
+        processing_status_message:
+          type: string
+          description: Статус на русском языке
+        created_at:
+          type: string
+          format: date-time
+
+    VersionList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/VersionDetails'
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+
+    ProcessingStatus:
+      type: object
+      properties:
+        version_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/UserProcessingStatus'
+        message:
+          type: string
+          description: Статус на русском языке
+        updated_at:
+          type: string
+          format: date-time
+
+    # ---- Results ----
+    AnalysisResults:
+      type: object
+      properties:
+        version_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/UserProcessingStatus'
+        contract_type:
+          $ref: '#/components/schemas/ClassificationResult'
+          nullable: true
+        key_parameters:
+          $ref: '#/components/schemas/KeyParameters'
+          nullable: true
+        risk_profile:
+          $ref: '#/components/schemas/RiskProfile'
+          nullable: true
+        risks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Risk'
+          nullable: true
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Recommendation'
+          nullable: true
+        summary:
+          type: string
+          nullable: true
+          description: Краткое резюме для бизнес-пользователя
+        aggregate_score:
+          $ref: '#/components/schemas/AggregateScore'
+          nullable: true
+
+    ClassificationResult:
+      type: object
+      properties:
+        contract_type:
+          type: string
+          description: Тип договора (услуги, поставка, подряд, аренда, NDA и др.)
+        confidence:
+          type: number
+          format: float
+          description: Уровень уверенности (0.0–1.0)
+
+    KeyParameters:
+      type: object
+      properties:
+        parties:
+          type: array
+          items:
+            type: string
+        subject:
+          type: string
+          nullable: true
+        price:
+          type: string
+          nullable: true
+        duration:
+          type: string
+          nullable: true
+        penalties:
+          type: string
+          nullable: true
+        jurisdiction:
+          type: string
+          nullable: true
+
+    RiskProfile:
+      type: object
+      properties:
+        overall_level:
+          type: string
+          enum: [high, medium, low]
+        high_count:
+          type: integer
+        medium_count:
+          type: integer
+        low_count:
+          type: integer
+
+    Risk:
+      type: object
+      properties:
+        id:
+          type: string
+        level:
+          type: string
+          enum: [high, medium, low]
+        description:
+          type: string
+          description: Описание риска
+        clause_ref:
+          type: string
+          description: Ссылка на пункт договора
+        legal_basis:
+          type: string
+          description: Ссылка на норму/политику
+
+    RiskList:
+      type: object
+      properties:
+        risks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Risk'
+        risk_profile:
+          $ref: '#/components/schemas/RiskProfile'
+
+    Recommendation:
+      type: object
+      properties:
+        risk_id:
+          type: string
+        original_text:
+          type: string
+        recommended_text:
+          type: string
+        explanation:
+          type: string
+
+    RecommendationList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Recommendation'
+
+    ContractSummaryResult:
+      type: object
+      properties:
+        summary:
+          type: string
+          description: Краткое резюме договора для бизнес-пользователя
+        aggregate_score:
+          $ref: '#/components/schemas/AggregateScore'
+        key_parameters:
+          $ref: '#/components/schemas/KeyParameters'
+
+    AggregateScore:
+      type: object
+      properties:
+        score:
+          type: number
+          format: float
+        label:
+          type: string
+          description: Текстовая метка (Низкий риск / Средний риск / Высокий риск)
+
+    # ---- Comparison ----
+    CompareRequest:
+      type: object
+      required: [base_version_id, target_version_id]
+      properties:
+        base_version_id:
+          type: string
+          format: uuid
+        target_version_id:
+          type: string
+          format: uuid
+
+    CompareResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: QUEUED
+
+    VersionDiff:
+      type: object
+      properties:
+        base_version_id:
+          type: string
+          format: uuid
+        target_version_id:
+          type: string
+          format: uuid
+        text_diff_count:
+          type: integer
+        structural_diff_count:
+          type: integer
+        text_diffs:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [added, removed, modified]
+              path:
+                type: string
+              old_text:
+                type: string
+                nullable: true
+              new_text:
+                type: string
+                nullable: true
+        structural_diffs:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [added, removed, modified, moved]
+              node_id:
+                type: string
+              old_value:
+                type: object
+                nullable: true
+              new_value:
+                type: object
+                nullable: true
+
+    # ---- Feedback ----
+    FeedbackRequest:
+      type: object
+      required: [is_useful]
+      properties:
+        is_useful:
+          type: boolean
+          description: Полезность результата проверки
+        comment:
+          type: string
+          maxLength: 2000
+          description: Комментарий пользователя (опционально)
+
+    FeedbackResponse:
+      type: object
+      properties:
+        feedback_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    # ---- Admin ----
+    Policy:
+      type: object
+      description: Политика проверки организации (структура определяется OPM)
+      properties:
+        policy_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        settings:
+          type: object
+          description: Настройки политики (определяются OPM)
+
+    PolicyList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Policy'
+
+    PolicyUpdateRequest:
+      type: object
+      properties:
+        settings:
+          type: object
+          description: Обновлённые настройки
+
+    Checklist:
+      type: object
+      properties:
+        checklist_id:
+          type: string
+          format: uuid
+        contract_type:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              enabled:
+                type: boolean
+              severity:
+                type: string
+                enum: [high, medium, low]
+
+    ChecklistList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Checklist'
+
+    ChecklistUpdateRequest:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              enabled:
+                type: boolean
+              severity:
+                type: string
+                enum: [high, medium, low]
+
+    # ---- User ----
+    UserProfile:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: string
+          enum: [LAWYER, BUSINESS_USER, ORG_ADMIN]
+        organization_id:
+          type: string
+          format: uuid
+        organization_name:
+          type: string
+
+    # ---- Error ----
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+          description: Машиночитаемый код ошибки (e.g. FILE_TOO_LARGE, AUTH_TOKEN_EXPIRED)
+        message:
+          type: string
+          description: Описание ошибки на русском языке (NFR-5.2)
+        details:
+          type: object
+          nullable: true
+          description: Дополнительные данные об ошибке
+        suggestion:
+          type: string
+          nullable: true
+          description: Рекомендация следующего шага для пользователя (NFR-5.2)
+        correlation_id:
+          type: string
+          format: uuid
+          description: ID корреляции для обращения в поддержку

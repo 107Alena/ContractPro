@@ -414,7 +414,9 @@
         "Шаг 3: broker недоступен → retry 3 раза → ошибка"
       ],
       "dependencies": ["ORCH-TASK-005"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-09",
+      "summary": "Пакет internal/egress/commandpub: CommandPublisher интерфейс (2 метода), Publisher struct с BrokerPublisher (consumer-side interface), topic routing, component logger. Методы: PublishProcessDocument (12 полей JSON: correlation_id, timestamp, job_id, document_id, version_id, organization_id, requested_by_user_id, source_file_key/name/size/checksum/mime_type → dp.commands.process-document), PublishCompareVersions (8 полей JSON: correlation_id, timestamp, job_id, document_id, organization_id, requested_by_user_id, base_version_id, target_version_id → dp.commands.compare-versions). EventMeta envelope: correlation_id из RequestContext, timestamp как time.Now().UTC().Format(RFC3339). Команды (ProcessDocumentCommand, CompareVersionsCommand) содержат только бизнес-поля. Broker retry/confirms делегированы infra/broker. WARN лог при ошибке publish (operation, topic, job_id, error). Broker errors обёрнуты fmt.Errorf с commandpub: prefix. 12 тестов: interface check, correct topic+JSON (process/compare), timestamp RFC3339 (process/compare), broker error propagation (process/compare), empty correlation_id (process/compare), all JSON fields exact match (process/compare), mock interface check. Code review: S-1 duplicate correlation_id fixed (→ job_id), S-2 broker error wrapping added. Нет новых зависимостей."
     },
     {
       "id": "ORCH-TASK-018",

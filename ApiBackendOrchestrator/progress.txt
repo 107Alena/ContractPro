@@ -406,3 +406,41 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - **302 body drain** — io.Copy(io.Discard) для переиспользования TCP connection (optimization из code review)
 - **setHeaders из original ctx** — не из per-attempt ctx, потому что auth/logger values установлены upstream middleware
 - **Без зависимости на domain port** — как objectstorage/broker/kvstore, собственные error types; callers используют DMError.StatusCode/Body + model.MapDMError
+
+## ORCH-TASK-017: Command Publisher (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (event-catalog.md, high-architecture.md, integration-contracts.md) — определить структуру команд, topics, envelope
+2. Использовать broker client (internal/infra/broker/) Publish API и dmclient как образец egress pattern
+3. Спроектировать CommandPublisher interface с BrokerPublisher (consumer-side) (backend-reliability-engineer subagent)
+4. Реализовать commands.go: ProcessDocumentCommand, CompareVersionsCommand (бизнес-поля), event envelopes (JSON с envelope)
+5. Реализовать publisher.go: BrokerPublisher interface, CommandPublisher interface, Publisher struct, NewPublisher, PublishProcessDocument, PublishCompareVersions
+6. Реализовать publisher_test.go: 12 тестов с mock broker
+7. Code review (code-reviewer subagent) → исправления: S-1 duplicate correlation_id (→ job_id), S-2 broker error wrapping
+
+### Что реализовано
+- **commands.go**: ProcessDocumentCommand struct (10 бизнес-полей), CompareVersionsCommand struct (6 бизнес-полей), processDocumentEvent (12 полей с envelope: correlation_id, timestamp), compareVersionsEvent (8 полей с envelope)
+- **publisher.go**: BrokerPublisher interface (consumer-side, Publish(ctx, topic, payload) error), CommandPublisher interface (PublishProcessDocument, PublishCompareVersions), Publisher struct (broker, topicProcess, topicCompare, log), NewPublisher с component logger, compile-time interface check. PublishProcessDocument: RequestContextFrom → correlation_id, time.Now().UTC().RFC3339 → timestamp, field copy → json.Marshal → broker.Publish. PublishCompareVersions: аналогичный паттерн. WARN лог при ошибке с operation/topic/job_id/error. Broker errors обёрнуты fmt.Errorf с commandpub: prefix.
+- **publisher_test.go**: 12 тестов: interface check (1), correct topic+JSON — process (1), timestamp RFC3339 — process (1), broker error propagated — process (1), empty correlation_id — process (1), correct topic+JSON — compare (1), timestamp RFC3339 — compare (1), broker error propagated — compare (1), empty correlation_id — compare (1), all JSON fields exact match — process (1), all JSON fields exact match — compare (1), mock interface check (1)
+
+### Ключевые решения
+- **BrokerPublisher consumer-side interface** — dependency inversion, Publisher не импортирует infra/broker
+- **Команды (Command) vs события (Event)** — Command содержит только бизнес-поля, Event = Command + envelope (correlation_id, timestamp)
+- **correlation_id из RequestContext** — автоматически из context, не передаётся явно
+- **Broker retry/confirms делегированы** — infra/broker уже обрабатывает retry (3 попытки) и publisher confirms
+- **Broker errors обёрнуты** — fmt.Errorf("commandpub: Method: publish: %w", err) для консистентности с marshal error path
+- **WARN лог с job_id** — вместо дублирующегося correlation_id (который уже в RequestContext auto-extracted)
+- **Нет circuit breaker** — broker client handles reconnection internally
+- **Нет валидации полей** — ответственность вызывающего кода (Upload Coordinator / Comparison Coordinator)
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-018 (critical): Contract Upload Coordinator — зависит от ORCH-TASK-006 ✓, ORCH-TASK-014 ✓, ORCH-TASK-017 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-019 (critical): Contract CRUD — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓

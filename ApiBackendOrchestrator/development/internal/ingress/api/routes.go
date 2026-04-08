@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 
+	"contractpro/api-orchestrator/internal/application/contracts"
+
 	"github.com/go-chi/chi/v5"
 )
 
@@ -20,7 +22,8 @@ import (
 //   - authMW: JWT authentication middleware (nil → no-op pass-through)
 //   - rbacMW: RBAC middleware (nil → no-op pass-through)
 //   - uploadH: contract upload handler (nil → 501 Not Implemented)
-func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc) {
+//   - contractH: contract CRUD handler (nil → 501 Not Implemented stubs)
+func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, contractH *contracts.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -42,10 +45,17 @@ func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler
 
 			// Contracts.
 			r.Post("/contracts/upload", uploadH)
-			r.Get("/contracts", notImplemented)
-			r.Get("/contracts/{contract_id}", notImplemented)
-			r.Delete("/contracts/{contract_id}", notImplemented)
-			r.Post("/contracts/{contract_id}/archive", notImplemented)
+			if contractH != nil {
+				r.Get("/contracts", contractH.HandleList())
+				r.Get("/contracts/{contract_id}", contractH.HandleGet())
+				r.Delete("/contracts/{contract_id}", contractH.HandleDelete())
+				r.Post("/contracts/{contract_id}/archive", contractH.HandleArchive())
+			} else {
+				r.Get("/contracts", notImplemented)
+				r.Get("/contracts/{contract_id}", notImplemented)
+				r.Delete("/contracts/{contract_id}", notImplemented)
+				r.Post("/contracts/{contract_id}/archive", notImplemented)
+			}
 
 			// Versions.
 			r.Get("/contracts/{contract_id}/versions", notImplemented)

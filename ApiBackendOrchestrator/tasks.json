@@ -472,7 +472,9 @@
         "Шаг 4: DELETE с ролью BUSINESS_USER → 403"
       ],
       "dependencies": ["ORCH-TASK-014", "ORCH-TASK-011"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-09",
+      "summary": "Пакет internal/application/contracts: Handler struct с DMClient consumer-side интерфейсом (4 метода), NewHandler с component logger. HandleList() — пагинация (page 1-∞, size 1-100), status filter (ACTIVE/ARCHIVED/DELETED), search validation (≤200 runes, not forwarded to DM yet). HandleGet() — UUID validation, DocumentWithCurrentVersion → ContractDetails с processing_status mapping (11 DM artifact_status → user-facing status). HandleArchive/HandleDelete() — UUID validation, DM proxy, ContractSummary response. Response DTOs: ContractSummary, ContractDetails, ContractVersion, ContractListResponse — document→contract field mapping, source_file_key/artifact_status not exposed. Processing status map: PENDING_UPLOAD→UPLOADED, PENDING_PROCESSING→QUEUED, etc. DM error handling: handleDMError shared method (ErrCircuitOpen→502, DMError.StatusCode→MapDMError, transport→502, unknown→500). Wiring: Deps.ContractHandler в server.go, registerRoutes с nil-guard fallback. 44 теста (+ 11 sub-tests): HandleList (15 — success, empty, custom page/size, status filter, invalid page/size/status, search too long/accepted, DM 5xx/circuit open, no auth), HandleGet (10 — with/without version, invalid/empty UUID, DM 404/5xx/400, all 11 processing status mappings, source_file_key not exposed, no auth), HandleArchive (7 — success, invalid UUID, DM 404/409 archived/409 deleted/5xx, no auth), HandleDelete (7 — success, invalid UUID, DM 404/409 deleted/409 archived/5xx, no auth), mapping (5 — all values/unknown/summary/details with+without version), handleDMError (2 — transport/unknown), interface check (1), format (2 — content-type, RFC3339 time). Code review: M-1 search doc comment, M-2 nil fields doc, N-3 writeJSON structured logger, N-6 DM 400 test added. Нет новых зависимостей."
     },
     {
       "id": "ORCH-TASK-020",

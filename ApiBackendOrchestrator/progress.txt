@@ -497,3 +497,50 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
 - ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-019: Contract CRUD handlers (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (api-specification.yaml, high-architecture.md, error-handling.md, integration-contracts.md) — определить endpoints, response formats, error mapping
+2. Изучить существующий код (dmclient interface+models, model errors, auth context, server+routes, logger) — определить интеграционные точки
+3. Спроектировать Handler с DMClient consumer-side интерфейсом (backend-reliability-engineer subagent)
+4. Реализовать response.go: ContractSummary, ContractDetails, ContractVersion, ContractListResponse, processingStatusMap, mapping functions
+5. Реализовать handler.go: Handler struct, NewHandler, HandleList/HandleGet/HandleArchive/HandleDelete, handleDMError, extractContractID, parseIntParam, writeJSON
+6. Реализовать handler_test.go: 44 теста с mock DM client
+7. Wiring: server.go (Deps.ContractHandler), routes.go (nil-guard + 4 route replacements)
+8. Code review (code-reviewer subagent) → исправления: M-1 search doc, M-2 nil fields doc, N-3 writeJSON structured logger, N-6 DM 400 test
+
+### Что реализовано
+- **response.go**: processingStatusMap (11 entries DM artifact_status → user-facing status), mapProcessingStatus (unknown → "UNKNOWN"), ContractSummary struct (contract_id, title, status, current_version_number *int, processing_status *string, created_at, updated_at), ContractVersion struct (omits source_file_key + artifact_status), ContractDetails struct (with *ContractVersion + *processing_status), ContractListResponse struct (items always [], never null), formatTime (UTC RFC3339), mapDocumentToContractSummary (document_id → contract_id, version fields nil), mapDocumentWithVersionToContractDetails (nil-safe current_version + processing_status), mapDocumentVersionToContractVersion (document_id → contract_id, omits internal fields)
+- **handler.go**: DMClient consumer-side interface (ListDocuments, GetDocument, DeleteDocument, ArchiveDocument), compile-time check var _ DMClient = (*dmclient.Client)(nil), Handler struct (dm, log), NewHandler с component logger. HandleList: auth check → parseIntParam (page ≥1, size 1-100) → status enum validation → search rune count ≤200 (validated but not forwarded, documented) → DM ListDocuments → map items → 200 JSON. HandleGet: auth check → UUID validation → WithDocumentID ctx enrichment → DM GetDocument → map to ContractDetails → 200 JSON. HandleArchive: auth check → UUID validation → DM ArchiveDocument → 200 ContractSummary. HandleDelete: аналогичный HandleArchive с DeleteDocument. handleDMError: ErrCircuitOpen → WARN + 502, DMError.StatusCode > 0 → MapDMError, DMError transport → ERROR + 502, unknown → ERROR + 500. extractContractID: chi.URLParam + uuid.Validate. parseIntParam: generic int query param parser with min/max. writeJSON: method on Handler с structured logger context.
+- **handler_test.go**: 44 теста (+ 22 sub-tests): HandleList (15: success, empty list items=[] not null, custom page/size DM forwarding, status filter forwarding, invalid page not-number/zero/negative, invalid size too-large/zero, invalid status, search too long, search accepted, DM 5xx→502, DM circuit open→502, no auth→401), HandleGet (10: with version processing_status=READY, without version null fields, invalid/empty UUID, DM 404→DOCUMENT_NOT_FOUND, DM 5xx→502, DM 400→500 INTERNAL_ERROR, all 11 processing status mappings as sub-tests, source_file_key/artifact_status not in response, no auth), HandleArchive (7: success status=ARCHIVED, invalid UUID, DM 404, DM 409 DOCUMENT_ARCHIVED, DM 409 DOCUMENT_DELETED, DM 5xx, no auth), HandleDelete (7: success status=DELETED, invalid UUID, DM 404, DM 409 DOCUMENT_DELETED, DM 409 DOCUMENT_ARCHIVED, DM 5xx, no auth), mapping (5: all status values 11 sub-tests, unknown→UNKNOWN, summary fields, details with version, details nil version), handleDMError (2: transport error→502, unknown error→500), interface check (1), format (2: Content-Type, RFC3339 time)
+
+### Security
+- **source_file_key** (S3 internal key) не экспонируется в ContractVersion
+- **artifact_status** (DM internal) не экспонируется — маппится в user-facing processing_status
+- **UUID validation** через google/uuid для contract_id path parameter
+- **Auth check** defense-in-depth — auth middleware уже проверяет, но handler дополнительно проверяет AuthContext presence
+- **Tenant isolation** через DM client X-Organization-ID header (из AuthContext)
+
+### Ключевые решения
+- **Импорт dmclient types** — в отличие от upload handler (который редефинирует типы), contracts handler использует dmclient types напрямую, потому что нужны почти все поля из 4 response моделей. Consumer-side interface — ключевая точка decoupling.
+- **search parameter** — валидируется но не forwarded в DM (DM ListDocumentsParams не имеет Search field). Задокументировано как planned API contract stability.
+- **List: CurrentVersionNumber/ProcessingStatus всегда nil** — DM ListDocuments возвращает Document без version info. N+1 запросы к DM неприемлемы для performance. GET endpoint даёт полные детали.
+- **Response time как string** — DTOs используют string для контроля wire format (RFC3339), mapping functions конвертируют time.Time → string.
+- **handleDMError shared method** — 3-way error classification (circuit open / HTTP status / transport) вынесен в shared helper, используется всеми 4 handlers.
+- **writeJSON как метод Handler** — использует structured logger с context (correlation_id, document_id) вместо bare slog
+- **Нет новых зависимостей** — chi, uuid уже в go.mod
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-020 (critical): Version management — зависит от ORCH-TASK-014 ✓, ORCH-TASK-018 ✓, ORCH-TASK-019 ✓ (implicit)
+- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓

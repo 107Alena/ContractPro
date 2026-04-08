@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"time"
 
+	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/config"
 	"contractpro/api-orchestrator/internal/infra/health"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
@@ -60,12 +61,13 @@ type Server struct {
 // pass-through is used (useful for tests that don't need auth/RBAC).
 // UploadHandler is optional: when nil, a 501 Not Implemented stub is used.
 type Deps struct {
-	Config         config.HTTPConfig
-	Health         *health.Handler
-	Logger         *logger.Logger
-	AuthMiddleware func(http.Handler) http.Handler
-	RBACMiddleware func(http.Handler) http.Handler
-	UploadHandler  http.HandlerFunc
+	Config          config.HTTPConfig
+	Health          *health.Handler
+	Logger          *logger.Logger
+	AuthMiddleware  func(http.Handler) http.Handler
+	RBACMiddleware  func(http.Handler) http.Handler
+	UploadHandler   http.HandlerFunc
+	ContractHandler *contracts.Handler
 }
 
 // NewServer constructs a Server with the chi router, middleware chain,
@@ -102,7 +104,7 @@ func NewServer(deps Deps) *Server {
 		uploadH = notImplemented
 	}
 
-	registerRoutes(r, authMW, rbacMW, uploadH)
+	registerRoutes(r, authMW, rbacMW, uploadH, deps.ContractHandler)
 
 	mainAddr := fmt.Sprintf(":%d", deps.Config.Port)
 	main := &http.Server{

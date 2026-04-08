@@ -256,7 +256,9 @@
         "Шаг 5: JWT в ?token= → claims в context"
       ],
       "dependencies": ["ORCH-TASK-009"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Пакет internal/ingress/middleware/auth: Middleware struct (publicKey, log), NewMiddleware(crypto.PublicKey, *Logger) с валидацией типа ключа и ECDSA P-256 curve check. Handler() возвращает chi-compatible middleware: извлечение Bearer токена (case-insensitive per RFC 6750), JWT валидация (RS256/ES256, 30s clock skew, exp required, iat check), Claims.Validate() (sub UUID, org UUID, role enum, jti UUID), AuthContext injection (UserID, OrganizationID, Role, TokenID), RequestContext injection (CorrelationID, OrganizationID, UserID). Correlation ID генерируется/сохраняется до error paths — все ответы (включая auth errors) содержат correlation_id. ValidateToken() экспортирован для SSE handler (ORCH-TASK-029). LoadPublicKey(path) поддерживает RSA PKIX, ECDSA PKIX, RSA PKCS1. Algorithm confusion attack prevention через type assertion в keyFunc. Wiring: Deps.AuthMiddleware в server.go, registerRoutes(r, authMW) в routes.go, noopMiddleware fallback. 54 теста: claims validation (12), key loading (10), context (8), middleware integration (24 — RS256/ES256 valid, missing/empty/non-Bearer header, expired/clock-skew, wrong key, algorithm mismatch, invalid claims, future iat, correlation ID generation/preservation/on-error, all roles, malformed, none algorithm, case-insensitive Bearer, ValidateToken). Зависимости: github.com/golang-jwt/jwt/v5, github.com/google/uuid."
     },
     {
       "id": "ORCH-TASK-011",

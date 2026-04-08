@@ -2,29 +2,24 @@ package api
 
 import "net/http"
 
-// Middleware stubs for the HTTP server.
+// Middleware stubs and wiring for the HTTP server.
 //
-// Each middleware is a no-op pass-through that will be replaced with a
-// real implementation in a subsequent task:
+// Middleware lifecycle:
 //
-//   - corsMiddleware      -> ORCH-TASK-009
-//   - authMiddleware      -> ORCH-TASK-010
-//   - rbacMiddleware      -> ORCH-TASK-011
-//   - rateLimitMiddleware -> ORCH-TASK-013
+//   - corsMiddleware      -> ORCH-TASK-009 (stub)
+//   - authMiddleware      -> ORCH-TASK-010 (implemented in internal/ingress/middleware/auth)
+//   - rbacMiddleware      -> ORCH-TASK-011 (stub)
+//   - rateLimitMiddleware -> ORCH-TASK-013 (stub)
+//
+// authMiddleware is wired at Server construction time via Deps.AuthMiddleware.
+// When nil (e.g., in tests that don't need auth), it falls back to a no-op
+// pass-through.
 
 // corsMiddleware is a stub for CORS handling.
 // Real implementation (ORCH-TASK-009) will read CORSConfig and set
 // Access-Control-Allow-Origin, Access-Control-Allow-Methods,
 // Access-Control-Allow-Headers, Access-Control-Max-Age headers.
 func corsMiddleware(next http.Handler) http.Handler {
-	return next
-}
-
-// authMiddleware is a stub for JWT authentication.
-// Real implementation (ORCH-TASK-010) will extract the Bearer token,
-// validate the JWT signature and claims, and inject AuthContext into
-// the request context.
-func authMiddleware(next http.Handler) http.Handler {
 	return next
 }
 
@@ -41,5 +36,11 @@ func rbacMiddleware(next http.Handler) http.Handler {
 // buckets with separate read/write RPS limits and return 429 Too Many
 // Requests with a Retry-After header when exceeded.
 func rateLimitMiddleware(next http.Handler) http.Handler {
+	return next
+}
+
+// noopMiddleware is a pass-through middleware used as a fallback when the
+// real auth middleware is not injected (e.g., in tests).
+func noopMiddleware(next http.Handler) http.Handler {
 	return next
 }

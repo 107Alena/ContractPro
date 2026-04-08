@@ -285,3 +285,52 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-010: JWT Auth middleware (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (security.md, high-architecture.md, api-specification.yaml) — определить JWT формат, claims, validation rules
+2. Использовать существующие middleware stubs и error_response.go как интеграционные точки
+3. Спроектировать Middleware с LoadPublicKey, Claims, AuthContext (backend-reliability-engineer subagent)
+4. Реализовать context.go: Role тип, AuthContext struct, WithAuthContext/AuthContextFrom
+5. Реализовать claims.go: Claims struct с jwt.ClaimsValidator (sub/org UUID, role enum, jti UUID)
+6. Реализовать key.go: LoadPublicKey (RSA PKIX, ECDSA PKIX, RSA PKCS1), signingMethodForKey с curve validation
+7. Реализовать middleware.go: Middleware struct, NewMiddleware, Handler() с extractBearerToken/validateToken/keyFunc
+8. Wiring: server.go Deps.AuthMiddleware, routes.go authMW parameter, middleware.go noopMiddleware fallback
+9. Реализовать тесты: context_test.go (8), claims_test.go (12), key_test.go (10), middleware_test.go (24)
+10. Code review (code-reviewer subagent) → исправления: M-1 case-insensitive Bearer, M-2 correlation ID на error paths, N-3 ECDSA curve validation, N-4 unexport ValidRoles, N-5 jti UUID validation, N-6 remove unused signingMethod field, N-8 none algorithm test
+
+### Что реализовано
+- **context.go**: Role тип (LAWYER, BUSINESS_USER, ORG_ADMIN), validRoles map (unexported), IsValidRole, AuthContext struct (UserID, OrganizationID, Role, TokenID), WithAuthContext/AuthContextFrom с отдельным context key
+- **claims.go**: Claims struct (jwt.RegisteredClaims + Org + Role), Validate() → jwt.ClaimsValidator: sub UUID, org UUID, role enum, jti UUID — каждая проверка с отдельным error message
+- **key.go**: LoadPublicKey(path) → crypto.PublicKey: PKIX first (RSA+ECDSA), PKCS1 fallback (legacy RSA), unsupported type rejection. signingMethodForKey: RSA→RS256, ECDSA P-256→ES256, P-384/P-521→error
+- **middleware.go**: Middleware struct (publicKey, log), NewMiddleware(publicKey, log) с key type validation при конструкции, Handler() → chi-compatible middleware: correlation ID early (до error paths), extractBearerToken (case-insensitive per RFC 6750), validateToken (ParseWithClaims + 30s leeway + IssuedAt + ExpirationRequired), keyFunc (algorithm confusion prevention via type assertion), isExpiredError → AUTH_TOKEN_EXPIRED vs AUTH_TOKEN_INVALID. ValidateToken() exported для SSE handler (ORCH-TASK-029)
+- **server.go**: Deps.AuthMiddleware func(http.Handler) http.Handler, nil → noopMiddleware fallback
+- **routes.go**: registerRoutes(r, authMW) — authMW parameter вместо hardcoded stub
+- **middleware.go**: noopMiddleware pass-through, removed old authMiddleware stub
+- **54 теста**: claims_test (12: valid, missing/invalid sub/org/role/jti, all roles, valid UUIDs, registered claims passthrough), key_test (10: RSA PKIX, ECDSA PKIX, PKCS1, not found, invalid PEM, empty, signing method RSA/ECDSA/unsupported/wrong curve), context_test (8: round-trip, empty, IsValidRole 6 cases), middleware_test (24: RS256 valid/AuthContext/RequestContext, ES256 valid/AuthContext, missing/empty/non-Bearer, expired/clock-skew, wrong key, algorithm mismatch, missing sub/org/role/jti, invalid sub/org UUID, future iat, correlation ID generation/preservation/in-context/on-error/preserve-on-error, all roles, malformed, ValidateToken valid/expired, auth failure stops chain, JSON content-type, none algorithm, lowercase/uppercase Bearer)
+
+### Ключевые решения
+- **Отдельный пакет** internal/ingress/middleware/auth — dependency inversion, RBAC и SSE handler импортируют AuthContext
+- **AuthContext отделён от RequestContext** — Role для RBAC без зависимости на logger пакет
+- **Algorithm confusion prevention** — signingMethodForKey определяет ожидаемый алгоритм при конструкции; keyFunc проверяет тип метода токена через type assertion
+- **ECDSA P-256 curve validation** — отклонение P-384/P-521 при конструкции с ясным error message
+- **Case-insensitive Bearer** — per RFC 6750 §1.1 и RFC 9110 §11.1, strings.EqualFold
+- **Correlation ID early** — генерируется/сохраняется до error paths, все ответы (включая auth errors) содержат correlation_id в JSON body и X-Correlation-Id header
+- **ValidRoles unexported** — защита от runtime mutation через map assignment
+- **jti validated as UUID** — consistency с sub и org validation
+- **ValidateToken() exported** — для SSE handler (ORCH-TASK-029) без HTTP middleware overhead
+- **noopMiddleware fallback** — tests без auth зависимости, nil Deps.AuthMiddleware → pass-through
+
+### Зависимости добавлены
+- github.com/golang-jwt/jwt/v5
+- github.com/google/uuid
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-011 (critical): RBAC middleware — зависит от ORCH-TASK-010 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-014 (critical): DM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓

@@ -18,7 +18,10 @@ import (
 //
 // All handlers are stubs returning 501 Not Implemented.
 // Real handlers will be registered in ORCH-TASK-018+.
-func registerRoutes(r chi.Router) {
+//
+// The authMW parameter is the JWT authentication middleware. When nil,
+// a no-op pass-through is used (for tests that don't need auth).
+func registerRoutes(r chi.Router, authMW func(http.Handler) http.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -29,8 +32,8 @@ func registerRoutes(r chi.Router) {
 
 		// --- Protected routes (auth + RBAC + rate limiting) ---
 		r.Group(func(r chi.Router) {
-			// Middleware stubs for protected routes.
-			r.Use(authMiddleware)
+			// Auth middleware: real JWT validation from ORCH-TASK-010.
+			r.Use(authMW)
 			r.Use(rbacMiddleware)
 			r.Use(rateLimitMiddleware)
 

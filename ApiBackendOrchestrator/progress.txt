@@ -174,3 +174,33 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-007: Health check handler (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, deployment.md, configuration.md) — определить health check требования
+2. Использовать DP health (DocumentProcessing/development/internal/infra/health/) как образец паттерна
+3. Спроектировать Handler с RedisPinger/BrokerPinger интерфейсами (backend-reliability-engineer subagent)
+4. Реализовать handler.go: интерфейсы, Handler struct, NewHandler, /healthz, /readyz с parallel checks
+5. Реализовать handler_test.go: 16 тестов
+6. Code review (code-reviewer subagent) → исправления: security (generic "unavailable"), body drain, URL normalization, GET-only, +4 теста
+
+### Что реализовано
+- **handler.go**: RedisPinger interface (Ping(ctx) error), BrokerPinger interface (Ping() error), Handler struct (notReady atomic.Bool, mux, redis, broker, dmURL, dmClient), NewHandler(redis, broker, dmBaseURL) с URL нормализацией, GET /healthz (всегда 200), GET /readyz (parallel checks → 200/503), SetNotReady() для graceful shutdown, checkRedis/checkBroker/checkDM, writeJSON helper
+- **handler_test.go**: 20 тестов: liveness (always 200, JSON content-type, ignores not-ready), readiness healthy (200 + all checks ok, JSON content-type), individual failures (redis down, broker down, DM non-200, DM connection refused), all down, SetNotReady (returns 503, skips checks), error status format (unavailable, no info leak), timeouts (slow Redis 5s → returns within 3s, slow DM 5s → returns within 3s), DM path (/healthz appended), URL normalization (trailing slash), HTTP method restriction (POST → 405 on both endpoints), concurrent safety (50 goroutines)
+
+### Ключевые решения
+- **Consumer-side интерфейсы** — RedisPinger/BrokerPinger определены в health пакете (dependency inversion), не импортируют kvstore/broker
+- **Parallel checks** — sync.WaitGroup + pre-allocated results slice (index 0=redis, 1=rabbitmq, 2=dm), избегает channel overhead
+- **readinessTimeout = 3s** — context.WithTimeout для всех checks; dmHTTPTimeout = 2s (HTTP client) меньше readinessTimeout
+- **Security** — ошибки не раскрываются в ответе (status: "unavailable" вместо raw error), предотвращение утечки инфраструктурных деталей
+- **GET-only** — Go 1.22+ method patterns ("GET /healthz", "GET /readyz"), 405 на другие методы
+- **URL normalization** — strings.TrimRight(dmBaseURL, "/") + "/healthz"
+- **Response body drain** — io.Copy(io.Discard, resp.Body) перед Close() для переиспользования TCP connection pool
+- **Только stdlib зависимости** — net/http, encoding/json, sync, sync/atomic, context, io, strings, time
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-008 (critical): HTTP-сервер — зависит от ORCH-TASK-007 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓

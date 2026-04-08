@@ -181,7 +181,9 @@
         "Шаг 4: /readyz с недоступной зависимостью → 503"
       ],
       "dependencies": ["ORCH-TASK-004", "ORCH-TASK-005"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Пакет internal/infra/health: Handler с RedisPinger/BrokerPinger consumer-side интерфейсами и DM HTTP probe. GET /healthz — всегда 200 OK (liveness). GET /readyz — параллельные проверки Redis (Ping(ctx)), RabbitMQ (Ping()), DM (HTTP GET /healthz) с 3s timeout. Возвращает 200 {status:ready, checks:{redis:ok, rabbitmq:ok, dm:ok}} или 503 {status:not_ready, checks:{...unavailable...}}. SetNotReady() — atomic.Bool для graceful shutdown, 503 без проверок. Безопасность: ошибки не раскрываются (status: unavailable). GET-only (405 на другие методы). URL нормализация (trailing slash). DM response body drain для переиспользования TCP. 20 тестов: liveness (3), readiness healthy (2), individual/all failures (4), SetNotReady (2), error format (1), timeout Redis/DM (2), DM path (1), trailing slash (1), method restriction (2), concurrent access (1). Только stdlib зависимости."
     },
     {
       "id": "ORCH-TASK-008",

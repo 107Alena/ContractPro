@@ -38,7 +38,9 @@
         "Шаг 3: make lint — 0 errors"
       ],
       "dependencies": [],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Scaffolding выполнен: go.mod (Go 1.26.1), cmd/orch-api/main.go (stub), Makefile (build/test/lint/docker-build), Dockerfile (multi-stage, non-root), .gitignore. Структура internal/: config, domain/model, domain/port, application, app, ingress, egress, infra, integration. Все make-цели проходят."
     },
     {
       "id": "ORCH-TASK-002",

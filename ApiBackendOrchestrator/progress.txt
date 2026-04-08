@@ -444,3 +444,56 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
 - ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-018: Contract Upload Coordinator (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, api-specification.yaml, event-catalog.md, security.md, sequence-diagrams.md) — определить upload flow, validation rules, error codes
+2. Изучить существующий код (objectstorage, dmclient, commandpub, auth, kvstore, model, routes) — определить все интерфейсы и типы
+3. Спроектировать Handler struct с consumer-side интерфейсами (backend-reliability-engineer subagent)
+4. Реализовать handler.go: Handler struct, Handle() http.HandlerFunc, uploadWithChecksum с checksumReadSeeker, sanitizeFilename, cleanupS3, saveTracking
+5. Реализовать handler_test.go: 28 тестов с mock implementations
+6. Wiring: server.go (Deps.UploadHandler), routes.go (uploadH parameter)
+7. Code review (code-reviewer subagent) → исправления: S-1 MaxBytesReader, M-2 orphan doc logging, M-3 title control chars, M-4 UTF-8-aware truncation
+8. Добавить 6 новых тестов для security fixes
+
+### Что реализовано
+- **handler.go**: Handler struct (storage ObjectStorage, dm DMClient, publisher CommandPublisher, kv KVStore, log *Logger, maxSize int64, uuidGen UUIDGenerator). Consumer-side интерфейсы (ObjectStorage: PutObject/DeleteObject, DMClient: CreateDocument/CreateVersion, CommandPublisher: PublishProcessDocument, KVStore: Set). Локальные DTO types для decoupled от egress packages. Handle() → http.HandlerFunc: auth context → correlation_id/job_id → MaxBytesReader body limit → multipart parsing → title validation (trim, ≤500 runes, control chars) → file validation (size ≤ maxSize, MIME = application/pdf, magic bytes %PDF-) → filename sanitization → streaming S3 upload с checksumReadSeeker → DM CreateDocument → DM CreateVersion → PublishProcessDocument → Redis tracking → 202 Accepted.
+- **checksumReadSeeker**: wraps io.ReadSeeker + hash.Hash, computes SHA-256 during Read, resets hash on Seek(0, SeekStart) for retry correctness.
+- **sanitizeFilename**: backslash normalization → filepath.Base → null/control char removal → path traversal removal → UTF-8-aware truncation to 255 bytes → fallback "upload.pdf".
+- **containsControlChars**: C0 (0x00-0x1F) + DEL (0x7F) detection для title validation.
+- **cleanupS3**: compensating S3 delete с error logging (idempotent).
+- **saveTracking**: Redis key "upload:{org}:{job}" с JSON payload и TTL 1h, non-critical (WARN on failure).
+- **server.go**: Deps.UploadHandler http.HandlerFunc, nil → notImplemented fallback.
+- **routes.go**: registerRoutes(r, authMW, rbacMW, uploadH), POST /contracts/upload → uploadH.
+- **handler_test.go**: 34 теста (+ 30 sub-tests): happy path (1), auth (1), title validation (7: empty, whitespace, too long, boundary 500, unicode 500/501, control chars/tab/null), file validation (5: missing, too large, unsupported MIME, invalid magic, too short for magic, empty), infrastructure failures+cleanup (5: S3 failure, DM CreateDoc+S3 cleanup, DM CreateVer+S3 cleanup+orphan log, broker no-cleanup, Redis non-critical), data integrity (4: checksum hex, S3 key format, Redis tracking key+payload, published command fields), non-multipart (1), sanitizeFilename (16 sub-tests: normal/path traversal fwd+bwd+embedded/null+control+DEL chars/empty+dot+dotdot fallback/long truncation/unicode/spaces/absolute+windows path/UTF-8 truncation), checksumReadSeeker (1), body size limit (1), containsControlChars (8 sub-tests).
+
+### Security fixes (из code review)
+- **S-1 MaxBytesReader**: `r.Body = http.MaxBytesReader(w, r.Body, maxSize+1MB)` перед ParseMultipartForm — защита от DoS через неограниченный multipart body
+- **M-2 Orphan document logging**: при ошибке CreateVersion логируется orphan_document_id на ERROR уровне для операционного sweep
+- **M-3 Title control chars**: containsControlChars() отклоняет title с C0/DEL символами — defense-in-depth против injection
+- **M-4 UTF-8-aware truncation**: DecodeLastRuneInString loop для корректного обрезания Cyrillic/CJK filenames без разрыва multi-byte sequences
+- **M-1 Retry contract documented**: checksumReadSeeker.Seek документирует контракт "MUST seek to offset 0 on retry"
+
+### Ключевые решения
+- **Consumer-side интерфейсы** — upload пакет определяет свои интерфейсы и DTO types, не импортирует egress packages (dependency inversion)
+- **UUIDGenerator seam** — func() string с defaultUUIDGenerator (uuid.New) и replaceable в тестах для deterministic IDs
+- **maxParseMemory = 10 MB** — Go spills multipart data to temp files beyond this, не ограничивает total body (MaxBytesReader делает это)
+- **Streaming SHA-256** — checksumReadSeeker wraps multipart.File, checksum computed during S3 upload (no re-read)
+- **Compensating cleanup strategy**: S3 delete на DM failure (idempotent), NO rollback на broker failure (version exists in DM с PENDING), WARN на Redis failure (non-critical tracking)
+- **Title validation: rune count** — utf8.RuneCountInString для корректной валидации Cyrillic (500 Cyrillic chars = 1000+ bytes)
+- **UploadResponse.Status = "UPLOADED"** — initial state до ProcessDocumentRequested command processing
+- **Нет новых зависимостей** — google/uuid уже в go.mod (auth middleware)
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-019 (critical): Contract CRUD — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-020 (critical): Version management — зависит от ORCH-TASK-014 ✓, ORCH-TASK-018 ✓
+- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓

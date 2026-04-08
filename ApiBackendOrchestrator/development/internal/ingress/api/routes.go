@@ -16,15 +16,11 @@ import (
 //  2. Protected routes: require authentication. The full middleware
 //     chain (Auth -> RBAC -> RateLimit) is applied via Group().
 //
-// All handlers are stubs returning 501 Not Implemented.
-// Real handlers will be registered in ORCH-TASK-018+.
-//
-// The authMW parameter is the JWT authentication middleware. When nil,
-// a no-op pass-through is used (for tests that don't need auth).
-//
-// The rbacMW parameter is the role-based access control middleware. When nil,
-// a no-op pass-through is used (for tests that don't need RBAC).
-func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler) {
+// Handler parameters:
+//   - authMW: JWT authentication middleware (nil → no-op pass-through)
+//   - rbacMW: RBAC middleware (nil → no-op pass-through)
+//   - uploadH: contract upload handler (nil → 501 Not Implemented)
+func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -45,7 +41,7 @@ func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler
 			r.Get("/users/me", notImplemented)
 
 			// Contracts.
-			r.Post("/contracts/upload", notImplemented)
+			r.Post("/contracts/upload", uploadH)
 			r.Get("/contracts", notImplemented)
 			r.Get("/contracts/{contract_id}", notImplemented)
 			r.Delete("/contracts/{contract_id}", notImplemented)

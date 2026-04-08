@@ -58,12 +58,14 @@ type Server struct {
 // Config, Health, and Logger are required.
 // AuthMiddleware and RBACMiddleware are optional: when nil, a no-op
 // pass-through is used (useful for tests that don't need auth/RBAC).
+// UploadHandler is optional: when nil, a 501 Not Implemented stub is used.
 type Deps struct {
 	Config         config.HTTPConfig
 	Health         *health.Handler
 	Logger         *logger.Logger
 	AuthMiddleware func(http.Handler) http.Handler
 	RBACMiddleware func(http.Handler) http.Handler
+	UploadHandler  http.HandlerFunc
 }
 
 // NewServer constructs a Server with the chi router, middleware chain,
@@ -94,7 +96,13 @@ func NewServer(deps Deps) *Server {
 	if rbacMW == nil {
 		rbacMW = noopMiddleware
 	}
-	registerRoutes(r, authMW, rbacMW)
+
+	uploadH := deps.UploadHandler
+	if uploadH == nil {
+		uploadH = notImplemented
+	}
+
+	registerRoutes(r, authMW, rbacMW, uploadH)
 
 	mainAddr := fmt.Sprintf(":%d", deps.Config.Port)
 	main := &http.Server{

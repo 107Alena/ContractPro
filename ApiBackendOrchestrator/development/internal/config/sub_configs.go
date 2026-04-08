@@ -140,7 +140,7 @@ type DMClientConfig struct {
 	BaseURL      string        // ORCH_DM_BASE_URL (required)
 	TimeoutRead  time.Duration // ORCH_DM_TIMEOUT_READ (default: 5s)
 	TimeoutWrite time.Duration // ORCH_DM_TIMEOUT_WRITE (default: 10s)
-	RetryMax     int           // ORCH_DM_RETRY_MAX (default: 3)
+	RetryMax     int           // ORCH_DM_RETRY_MAX (default: 3) — total attempts, not retry count
 	RetryBackoff time.Duration // ORCH_DM_RETRY_BACKOFF (default: 200ms)
 }
 

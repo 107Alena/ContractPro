@@ -363,13 +363,46 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - **Audit logging** — WARN на denial с полным контекстом, DEBUG на fail-open
 
 ### Следующие задачи готовые к реализации (deps выполнены)
-- ORCH-TASK-014 (critical): DM Client — зависит от ORCH-TASK-009 ✓
 - ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
-- ORCH-TASK-018 (critical): Contract Upload Coordinator — зависит от ORCH-TASK-006 ✓, ORCH-TASK-014 ✗, ORCH-TASK-017 ✗, ORCH-TASK-011 ✓
-- ORCH-TASK-019 (critical): Contract CRUD — зависит от ORCH-TASK-014 ✗, ORCH-TASK-011 ✓
+- ORCH-TASK-018 (critical): Contract Upload Coordinator — зависит от ORCH-TASK-006 ✓, ORCH-TASK-014 ✓, ORCH-TASK-017 ✗, ORCH-TASK-011 ✓
+- ORCH-TASK-019 (critical): Contract CRUD — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
 - ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
 - ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
 - ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✗
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✗
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓
+
+## ORCH-TASK-014: DM Client (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (api-specification.yaml DM, high-architecture.md, integration-contracts.md, error-handling.md) — определить все DM endpoints, headers, retry/CB config
+2. Использовать objectstorage client (internal/infra/objectstorage/) как образец retry + CB паттерна
+3. Спроектировать DMClient interface с 12 методами, Client struct, error types (backend-reliability-engineer subagent)
+4. Реализовать errors.go: ErrCircuitOpen, ErrDMUnavailable sentinels, DMError struct, mapHTTPError, mapTransportError, isRetryable, isCBFailure
+5. Реализовать models.go: 6 request/param types, 12 response types
+6. Реализовать client.go: DMClient interface, Client struct, NewClient, 12 API methods, doGET/doJSON/setHeaders/buildURL/executeWithRetry/executeWithCB/backoffDelay
+7. Реализовать client_test.go: 47 тестов с httptest.NewServer
+8. Code review (code-reviewer subagent) → исправления: M-1 io.LimitReader (10MB cap), M-2 retryMax doc clarification, S-1 dead code removed, S-3 url.PathEscape, S-4 empty context test, S-5 302 body optimization, S-6 DeadlineExceeded test, S-7 Error log on exhaustion
+
+### Что реализовано
+- **errors.go**: ErrCircuitOpen, ErrDMUnavailable sentinels, DMError struct (Operation, StatusCode, Body, Retryable, Cause) с Error/Unwrap, mapHTTPError (5xx → Retryable:true, 4xx → Retryable:false), mapTransportError (context.Canceled/DeadlineExceeded → pass through raw, net.Error → Retryable:true, unknown → Retryable:true), isRetryable (ErrCircuitOpen→false, DMError.Retryable, context.Canceled→false, DeadlineExceeded→true), isCBFailure (context.Canceled→false, DeadlineExceeded→true, DMError.Retryable, unknown→true)
+- **models.go**: CreateDocumentRequest, CreateVersionRequest, ListDocumentsParams, ListVersionsParams, ListArtifactsParams, ListAuditParams, Document, DocumentWithCurrentVersion, DocumentList, DocumentVersion, DocumentVersionWithArtifacts, VersionList, ArtifactDescriptor, ArtifactDescriptorList, ArtifactResponse (Content json.RawMessage | RedirectURL string), TextDiff, StructuralDiff, VersionDiff, AuditRecord, AuditRecordList
+- **client.go**: DMClient interface (12 methods), Client struct (httpClient, baseURL, cb, timeoutRead/Write, retryMax, retryBackoff, log), NewClient(DMClientConfig, CBConfig, Logger) с CheckRedirect disabled, newClient shared constructor, compile-time interface check. 12 API methods: CreateDocument (POST), ListDocuments (GET+query), GetDocument (GET), DeleteDocument (DELETE), ArchiveDocument (POST), CreateVersion (POST), ListVersions (GET+query), GetVersion (GET), ListArtifacts (GET+query), GetArtifact (GET, dual 200/302), GetDiff (GET), ListAuditRecords (GET+query). Helpers: doGET, doJSON (JSON encode/decode, io.LimitReader 10MB), setHeaders (from auth.AuthContext + logger.RequestContext using original ctx), buildURL, executeWithRetry (retryMax total attempts, exponential backoff + 25% jitter, per-attempt timeout, Error log on exhaustion), executeWithCB (gobreaker.Execute, ErrOpenState/TooManyRequests → ErrCircuitOpen), backoffDelay. URL path escaping via url.PathEscape on all path parameters.
+- **client_test.go**: 47 тестов: headers propagation (1), CreateDocument success/400 no retry (2), GetDocument success/404 no retry/409 no retry (3), retry 5xx then success/all retries exhausted (2), DeleteDocument success (1), ArchiveDocument success (1), CreateVersion success (1), ListVersions success (1), GetVersion success (1), ListArtifacts with filters (1), GetArtifact JSON 200/redirect 302/302 missing Location/404 no retry (4), GetDiff success (1), ListAuditRecords success (1), context cancelled before call/during backoff (2), CB opens after threshold/4xx doesn't trip/half-open recovery/ErrCircuitOpen not retried/trips during retry (5), backoff delay values (1), DMError formatting with status/with cause/unwrap (3), isRetryable (5), isCBFailure (4), mapHTTPError (3), mapTransportError canceled/net.Error/DeadlineExceeded/unknown (4), empty context no panic (1), query params (1), interface check (1)
+
+### Ключевые решения
+- **CheckRedirect disabled глобально** — GetArtifact получает 302 Location header без follow, для остальных endpoints DM не выдаёт redirects
+- **io.LimitReader 10MB** — защита от OOM при misbehaving DM service (security fix из code review)
+- **url.PathEscape** — defense in depth для path parameters (обычно UUID, но защита от injection)
+- **DeadlineExceeded pass through raw** — согласовано с objectstorage pattern (context errors не wrapping)
+- **retryMax = total attempts** — прагматичное решение с документированной семантикой (не retry count)
+- **Error log on retry exhaustion** — observability для дебага после исчерпания попыток (code review fix)
+- **302 body drain** — io.Copy(io.Discard) для переиспользования TCP connection (optimization из code review)
+- **setHeaders из original ctx** — не из per-attempt ctx, потому что auth/logger values установлены upstream middleware
+- **Без зависимости на domain port** — как objectstorage/broker/kvstore, собственные error types; callers используют DMError.StatusCode/Body + model.MapDMError

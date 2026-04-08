@@ -349,7 +349,9 @@
         "Шаг 4: circuit breaker → OPEN после 5 ошибок → fast fail"
       ],
       "dependencies": ["ORCH-TASK-009"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-09",
+      "summary": "Пакет internal/egress/dmclient: DMClient интерфейс (12 методов), Client struct с http.Client, gobreaker CB, retry logic. Методы: CreateDocument, ListDocuments, GetDocument, DeleteDocument, ArchiveDocument, CreateVersion, ListVersions, GetVersion, ListArtifacts, GetArtifact (200 JSON + 302 redirect), GetDiff, ListAuditRecords. Headers: X-Organization-ID, X-User-ID, X-Correlation-ID из auth.AuthContext и logger.RequestContext. Retry: retryMax (default 3) total attempts, exponential backoff 200ms×2^(n-1) + 25% jitter. Per-attempt timeout (read 5s, write 10s). CB: gobreaker/v2, FailureThreshold/Timeout/MaxRequests configurable, 4xx/context.Canceled не считаются failures. Error types: ErrCircuitOpen, ErrDMUnavailable sentinels, DMError struct (Operation, StatusCode, Body, Retryable, Cause). Response body limit 10MB (io.LimitReader). URL path escaping (url.PathEscape). Error log on retry exhaustion. CheckRedirect disabled для GetArtifact 302. setHeaders из original ctx (не per-attempt). 47 тестов: headers (1), CreateDocument success/400 (2), GetDocument success/404/409 (3), retry 5xx-then-success/exhausted (2), DeleteDocument (1), ArchiveDocument (1), CreateVersion (1), ListVersions (1), GetVersion (1), ListArtifacts (1), GetArtifact JSON/302/302-no-location/404 (4), GetDiff (1), ListAuditRecords (1), context cancel/during-backoff (2), CB open/4xx-no-trip/half-open/not-retried/trips-mid-retry (5), backoff (1), DMError formatting/unwrap (3), isRetryable (5), isCBFailure (4), mapHTTPError (3), mapTransportError (4), empty context (1), query params (1), interface check (1). Нет новых зависимостей (gobreaker, chi, jwt, uuid уже в go.mod)."
     },
     {
       "id": "ORCH-TASK-015",

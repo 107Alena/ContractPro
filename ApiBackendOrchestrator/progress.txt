@@ -135,3 +135,42 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 
 ### Зависимость добавлена
 - github.com/rabbitmq/amqp091-go v1.10.0
+
+## ORCH-TASK-006: S3 Object Storage client (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (configuration.md, high-architecture.md) — определить ORCH_STORAGE_* переменные, retry/CB/timeout требования
+2. Использовать DP objectstorage (DocumentProcessing/development/internal/infra/objectstorage/) как образец паттерна
+3. Спроектировать Client с S3API interface, retry + circuit breaker (backend-reliability-engineer subagent)
+4. Реализовать errors.go: ErrCircuitOpen, ErrObjectNotFound sentinels, StorageError struct, mapError, isRetryable, isCBFailure
+5. Реализовать client.go: S3API interface, Client struct, NewClient, PutObject/DeleteObject/HeadObject, executeWithRetry/executeWithCB/backoffDelay
+6. Реализовать client_test.go: 45 тестов
+7. Code review (code-reviewer subagent) → исправления: добавлены 3 теста (CB trips during retry, context cancelled during backoff, mapError code "404")
+
+### Что реализовано
+- **errors.go**: ErrCircuitOpen, ErrObjectNotFound sentinels, StorageError struct (Operation, Message, Retryable, Cause) с Error/Unwrap, nonRetryableS3Codes map, mapError (context passthrough, smithy.APIError classification с NotFound/NoSuchKey/404 → ErrObjectNotFound, net.Error → retryable, unknown → retryable), isRetryable (ErrCircuitOpen→false, ErrObjectNotFound→false, StorageError→Retryable, context.Canceled→false, DeadlineExceeded→true), isCBFailure (context.Canceled→false, ErrObjectNotFound→false, DeadlineExceeded→true, StorageError→Retryable, unknown→true)
+- **client.go**: S3API consumer-side interface (PutObject, DeleteObject, HeadObject), Client struct (s3, bucket, cb *gobreaker.CircuitBreaker[struct{}], uploadTimeout, opTimeout, maxRetries, log), NewClient(StorageConfig, CBConfig, Logger) с aws-sdk-go-v2 + UsePathStyle, newClientWithS3 для тестов, PutObject(ctx, key, io.ReadSeeker, contentType) с Seek(0) перед каждой попыткой, DeleteObject(ctx, key) идемпотентный, HeadObject(ctx, key) → nil | ErrObjectNotFound, executeWithRetry (retry loop: check parent ctx → backoff → per-attempt timeout → CB → fn, bail on ErrCircuitOpen/non-retryable), executeWithCB (gobreaker.Execute, map ErrOpenState/ErrTooManyRequests → ErrCircuitOpen), backoffDelay (500ms * 2^(n-1) + 25% jitter)
+- **client_test.go**: 45 тестов: PutObject (success, retry 5xx, retry timeout, retry network, no retry 403, all retries exhausted, context canceled, seek before retry, seek error), DeleteObject (success, retry, all retries, no retry 403, context canceled), HeadObject (success, NotFound, NoSuchKey, retry, no retry 403), CB (opens after threshold, 4xx doesn't trip, NotFound doesn't trip, half-open recovery, ErrCircuitOpen not retried, trips during retry, context cancelled during backoff), mapError (context canceled, deadline exceeded, NoSuchKey, NotFound, code "404", AccessDenied, InternalError, net.Error, unknown), isRetryable (6 cases), isCBFailure (5 cases), backoff delay, StorageError formatting/unwrap
+
+### Ключевые решения
+- **io.ReadSeeker вместо io.Reader** — позволяет Seek(0) перед каждой retry попыткой (multipart.File, *os.File, *bytes.Reader все реализуют ReadSeeker)
+- **Retry wraps CB, не наоборот** — каждая отдельная попытка проходит через CB; если CB OPEN, retry loop прерывается немедленно
+- **Per-attempt timeout** — каждая попытка получает свой context.WithTimeout (30s upload, 15s HEAD/DELETE); parent context deadline — общий бюджет
+- **gobreaker/v2 generic API** — CircuitBreaker[struct{}], IsSuccessful callback использует isCBFailure (inverted)
+- **4xx/NotFound не считаются CB failures** — только 5xx, timeout, connection errors инкрементируют consecutive failures
+- **context.DeadlineExceeded retryable** — per-attempt timeout retryable (parent ctx проверяется отдельно); isCBFailure тоже true для timeout
+- **Нет Close/Ping** — AWS SDK S3 client stateless, S3 не имеет lightweight ping
+- **Без зависимости на domain port** — как broker/kvstore, собственные error types
+
+### Зависимости добавлены
+- github.com/aws/aws-sdk-go-v2 v1.41.5
+- github.com/aws/aws-sdk-go-v2/service/s3 v1.99.0
+- github.com/aws/aws-sdk-go-v2/credentials v1.19.14
+- github.com/aws/smithy-go v1.24.3
+- github.com/sony/gobreaker/v2 v2.4.0
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-007 (critical): Health check handler — зависит от ORCH-TASK-004 ✓, ORCH-TASK-005 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓

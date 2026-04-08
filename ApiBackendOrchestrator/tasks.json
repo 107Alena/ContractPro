@@ -157,7 +157,9 @@
         "Шаг 3: circuit breaker opens after 5 consecutive errors"
       ],
       "dependencies": ["ORCH-TASK-002"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Пакет internal/infra/objectstorage: Client с S3API consumer-side interface (PutObject, DeleteObject, HeadObject), NewClient(StorageConfig, CircuitBreakerConfig, Logger). PutObject принимает io.ReadSeeker для streaming upload с retry (seek перед каждой повторной попыткой). Retry: 3 попытки (1+2), exponential backoff 500ms/1s + 25% jitter. Circuit breaker (gobreaker/v2): configurable threshold/timeout/maxRequests, 4xx и NotFound не считаются failures, ErrCircuitOpen прерывает retry немедленно. Per-attempt timeouts: 30s upload, 15s HEAD/DELETE. Error classification: ErrCircuitOpen, ErrObjectNotFound sentinels, StorageError struct с Retryable flag, mapError (context passthrough, smithy.APIError classification, net.Error), isRetryable, isCBFailure. 45 тестов: PutObject (success, retry 5xx, retry timeout, retry network, no retry 403, all retries exhausted, context canceled, seek before retry, seek error), DeleteObject (success, retry, all retries, no retry 403, context canceled), HeadObject (success, NotFound, NoSuchKey, retry, no retry 403), CB (opens after threshold, 4xx doesn't trip, NotFound doesn't trip, half-open recovery, ErrCircuitOpen not retried, trips during retry), mapError (8 cases), isRetryable (6 cases), isCBFailure (5 cases), backoff delay, StorageError formatting/unwrap, context cancelled during backoff. Зависимости: aws-sdk-go-v2 v1.41.5, aws-sdk-go-v2/service/s3 v1.99.0, aws-sdk-go-v2/credentials v1.19.14, smithy-go v1.24.3, gobreaker/v2 v2.4.0."
     },
     {
       "id": "ORCH-TASK-007",

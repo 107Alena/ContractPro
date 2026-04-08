@@ -242,3 +242,46 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-009: ErrorResponse + recovery middleware (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (error-handling.md, api-specification.yaml, observability.md) — определить формат ошибок, каталог кодов, DM маппинг
+2. Использовать DP domain errors (port/errors.go) и существующий server.go как образец паттерна
+3. Спроектировать ErrorResponse, ErrorCode, ErrorEntry, каталог, recovery middleware (backend-reliability-engineer subagent)
+4. Реализовать error_response.go: ErrorCode тип, 22 константы, errorCatalog, ErrorResponse struct, WriteError, WriteErrorWithMessage, LookupError, StatusCode
+5. Реализовать dm_errors.go: MapDMError с mapDMNotFound/mapDMConflict
+6. Реализовать recovery.go: RecoveryMiddleware с http.ErrAbortHandler re-panic
+7. Wiring: RecoveryMiddleware первым в chain (server.go)
+8. Реализовать тесты: error_response_test.go (21), dm_errors_test.go (23), recovery_test.go (11)
+9. Code review (code-reviewer subagent) → исправления: M-1 json.Encode error logging, M-2 http.ErrAbortHandler re-panic, N-10 notImplemented unified format, N-12 fragile count test
+
+### Что реализовано
+- **error_response.go**: ErrorCode тип (string), 22 константы (AUTH_TOKEN_MISSING, AUTH_TOKEN_EXPIRED, AUTH_TOKEN_INVALID, PERMISSION_DENIED, FILE_TOO_LARGE, UNSUPPORTED_FORMAT, INVALID_FILE, DOCUMENT_NOT_FOUND, VERSION_NOT_FOUND, ARTIFACT_NOT_FOUND, DIFF_NOT_FOUND, DOCUMENT_ARCHIVED, DOCUMENT_DELETED, VERSION_STILL_PROCESSING, RESULTS_NOT_READY, RATE_LIMIT_EXCEEDED, STORAGE_UNAVAILABLE, DM_UNAVAILABLE, OPM_UNAVAILABLE, BROKER_UNAVAILABLE, VALIDATION_ERROR, INTERNAL_ERROR), ErrorEntry struct (HTTPStatus, Message, Suggestion), errorCatalog map (22 записи с русскими сообщениями и подсказками), ErrorResponse struct (json tags: error_code, message, details omitempty, correlation_id, suggestion omitempty), WriteError(w, r, code, details) с auto-fill из каталога и RequestContext, WriteErrorWithMessage для кастомных сообщений, LookupError (unknown → INTERNAL_ERROR fallback), StatusCode хелпер, writeErrorJSON с slog.Error fallback при ошибке кодирования
+- **dm_errors.go**: MapDMError(statusCode, body, resourceHint) → ErrorCode маппинг: 5xx → DM_UNAVAILABLE, 404 → resourceHint-based (version/artifact/diff/document), 409 → body parsing (ARCHIVED/DELETED/PROCESSING/RESULTS_NOT_READY), default → INTERNAL_ERROR. Поддержка сокращённых DM кодов (ARCHIVED, DELETED, PROCESSING)
+- **recovery.go**: RecoveryMiddleware(logger) → chi middleware: http.ErrAbortHandler re-panic (для SSE), panic → ERROR log (value + stack + method + path) → 500 INTERNAL_ERROR через WriteError
+- **server.go**: RecoveryMiddleware wired первым (перед CORS), notImplemented обновлён на unified error_code формат
+- **error_response_test.go**: 21 тест: catalog completeness (all codes have entries), non-empty messages, valid HTTP statuses, HTTP status categories (22 subtests), LookupError known/unknown, StatusCode known/unknown, WriteError (HTTP status, Content-Type, X-Correlation-Id header, all required fields, details included/omitted, suggestion included/omitted, empty correlation, unknown code), WriteErrorWithMessage (overrides message, preserves suggestion/status), JSON field names, catalog counts match
+- **dm_errors_test.go**: 23 теста table-driven: 5xx (500/502/503, body ignored, hint ignored), 404 (default/document/version/artifact/diff), 409 (DOCUMENT_ARCHIVED/ARCHIVED/DOCUMENT_DELETED/DELETED/VERSION_STILL_PROCESSING/PROCESSING/RESULTS_NOT_READY/unknown/invalid json/empty body), other 4xx (400/418)
+- **recovery_test.go**: 11 тестов: no panic passthrough, string/error/int panics → 500, response body format (error_code/message/correlation_id/suggestion/no details), X-Correlation-Id header, Content-Type, http.ErrAbortHandler re-panic, with/without correlation ID
+
+### Ключевые решения
+- **ErrorCode как string тип** — type safety при передаче, но string в ErrorResponse struct для чистого JSON
+- **errorCatalog как package-level var map** — single source of truth, read-only после init, не экспортируется
+- **LookupError fallback** — unknown codes получают INTERNAL_ERROR entry, но сохраняют оригинальный error_code в ответе
+- **Details omitempty + Suggestion omitempty** — nil details и пустой suggestion не включаются в JSON
+- **writeErrorJSON helper** — DRY для WriteError/WriteErrorWithMessage, slog.Error при ошибке кодирования
+- **http.ErrAbortHandler re-panic** — позволяет net/http серверу корректно abort SSE и disconnected clients
+- **Cross-layer model→logger dependency** — прагматичный trade-off для auto-extraction correlation_id через RequestContextFrom
+- **MapDMError resourceHint** — лёгкий string параметр для disambiguate 404 (version/artifact/diff/document)
+- **DM conflict dual codes** — поддержка как полных (DOCUMENT_ARCHIVED) так и кратких (ARCHIVED) кодов от DM
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-010 (critical): JWT Auth middleware — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-014 (critical): DM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-016 (medium): OPM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓

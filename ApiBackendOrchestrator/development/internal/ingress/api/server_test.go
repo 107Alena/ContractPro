@@ -478,8 +478,8 @@ func TestNotImplemented_JSONFormat(t *testing.T) {
 	var body map[string]any
 	decodeJSON(t, rec, &body)
 
-	if body["error"] != "NOT_IMPLEMENTED" {
-		t.Fatalf("notImplemented error: want \"NOT_IMPLEMENTED\", got %v", body["error"])
+	if body["error_code"] != "NOT_IMPLEMENTED" {
+		t.Fatalf("notImplemented error_code: want \"NOT_IMPLEMENTED\", got %v", body["error_code"])
 	}
 	if body["message"] == nil || body["message"] == "" {
 		t.Fatal("notImplemented message should not be empty")
@@ -727,8 +727,8 @@ func assertJSONError(t *testing.T, rec *httptest.ResponseRecorder, wantError str
 	t.Helper()
 	var body map[string]any
 	decodeJSON(t, rec, &body)
-	if body["error"] != wantError {
-		t.Fatalf("JSON error: want %q, got %v", wantError, body["error"])
+	if body["error_code"] != wantError {
+		t.Fatalf("JSON error_code: want %q, got %v", wantError, body["error_code"])
 	}
 }
 

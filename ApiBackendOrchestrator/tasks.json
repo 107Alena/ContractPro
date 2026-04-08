@@ -228,7 +228,9 @@
         "Шаг 3: panic в handler → recovery middleware → 500 INTERNAL_ERROR"
       ],
       "dependencies": ["ORCH-TASK-008"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Пакет internal/domain/model: ErrorCode тип (22 константы), ErrorEntry struct (HTTPStatus, Message, Suggestion), errorCatalog (22 записи с русскими сообщениями), ErrorResponse struct (error_code, message, details, correlation_id, suggestion), WriteError(w, r, code, details) с auto-fill из каталога и RequestContext, WriteErrorWithMessage для кастомных сообщений, LookupError (unknown → INTERNAL_ERROR fallback), StatusCode хелпер. MapDMError(statusCode, body, resourceHint) → маппинг DM 404/409/5xx в коды оркестратора (resourceHint: version/artifact/diff/document). RecoveryMiddleware(logger) с http.ErrAbortHandler re-panic, structured logging (panic value + stack trace), 500 INTERNAL_ERROR без утечки деталей. Wired в server.go первым в chain (перед CORS). json.Encode ошибки логируются через slog.Error. notImplemented stub обновлён на unified error_code формат. 55 новых тестов: error_response (21), dm_errors (23), recovery (11)."
     },
     {
       "id": "ORCH-TASK-010",

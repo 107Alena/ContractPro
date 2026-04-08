@@ -69,7 +69,10 @@ func NewServer(deps Deps) *Server {
 
 	r := chi.NewRouter()
 
-	// Apply global middleware (stubs for now).
+	// Apply global middleware.
+	// Recovery must be first to catch panics from all downstream middleware
+	// and handlers.
+	r.Use(RecoveryMiddleware(log))
 	r.Use(corsMiddleware)
 
 	// System endpoints: mount the health handler's ServeMux at the root
@@ -231,12 +234,13 @@ func handleMetricsStub(w http.ResponseWriter, _ *http.Request) {
 
 // notImplemented returns a 501 Not Implemented JSON response.
 // Used as a placeholder for all route handlers until their real
-// implementations are added in subsequent tasks.
+// implementations are added in subsequent tasks. Uses the unified
+// ErrorResponse field names for consistency.
 func notImplemented(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotImplemented)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error":   "NOT_IMPLEMENTED",
-		"message": "This endpoint is not yet implemented.",
+		"error_code": "NOT_IMPLEMENTED",
+		"message":    "Данный endpoint ещё не реализован.",
 	})
 }

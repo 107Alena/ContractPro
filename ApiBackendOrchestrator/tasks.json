@@ -132,7 +132,9 @@
         "Шаг 2: publish → confirm → message в очереди (in-memory fake)"
       ],
       "dependencies": ["ORCH-TASK-002"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Пакет internal/infra/broker: Client с AMQPAPI/AMQPChannelAPI интерфейсами, NewClient(address, useTLS, prefetch, log) с Ping на старте и auto-reconnect loop. Publish с publisher confirms (Confirm mode + NotifyPublish) и retry (3 попытки, exponential backoff 100ms/200ms). Subscribe с manual ACK/NACK, QoS prefetch, queue prefix orch.sub.{topic}. Auto-reconnect с exponential backoff (1s-30s) + 25% jitter, re-subscribe. Ping() health check, graceful Close() с idempotency. BrokerError тип с retryable classification. Sentinel errors: ErrClientClosed, ErrNotConnected, ErrPublishConfirmFailed, ErrPublishNacked, ErrPublishMaxRetriesExhausted. pubMu сериализует publish+confirm цикл для предотвращения confirm misattribution. 35 тестов: publish (success, confirm nack, confirm channel closed, retry transient, no retry non-retryable, max retries exhausted, context cancelled/deadline, not connected, after close, concurrent safety), subscribe (success, queue declare error, qos error, not connected, handler ack, handler nack, manual ack, queue prefix), ping (connected, disconnected, nil conn), close (graceful, idempotent, cancels context), error mapping (AMQP retryable/non-retryable, context passthrough, unknown), isRetryable, backoff delay, reconnect (confirm mode, re-subscribe, stops on done, dial fail retries), broker error formatting. Зависимость: github.com/rabbitmq/amqp091-go v1.10.0."
     },
     {
       "id": "ORCH-TASK-006",

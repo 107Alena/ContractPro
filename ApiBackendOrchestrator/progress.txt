@@ -98,7 +98,40 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - github.com/redis/go-redis/v9 v9.18.0
 
 ### Следующие задачи готовые к реализации (deps выполнены)
-- ORCH-TASK-005 (critical): RabbitMQ broker client — зависит от ORCH-TASK-002 ✓
 - ORCH-TASK-006 (critical): S3 Object Storage client — зависит от ORCH-TASK-002 ✓
-- ORCH-TASK-007 (critical): Health check handler — зависит от ORCH-TASK-004 ✓, ORCH-TASK-005 ✗
+- ORCH-TASK-007 (critical): Health check handler — зависит от ORCH-TASK-004 ✓, ORCH-TASK-005 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-005: RabbitMQ broker client (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, configuration.md, event-catalog.md) — определить topics и требования
+2. Использовать DP broker (DocumentProcessing/development/internal/infra/broker/) как образец паттерна
+3. Спроектировать Client с AMQPAPI/AMQPChannelAPI интерфейсами (backend-reliability-engineer subagent)
+4. Реализовать errors.go: BrokerError, sentinel errors, mapError, isRetryable
+5. Реализовать client.go: интерфейсы, wrappers, Client struct, NewClient, Publish с confirms+retry, Subscribe с QoS+manual ACK/NACK, Ping, Close
+6. Реализовать reconnect.go: reconnectLoop, reconnectWithBackoff, backoffDelay
+7. Реализовать client_test.go: 35 тестов с mock
+8. Code review (code-reviewer subagent) → исправления: pubMu для confirm serialization, RLock снят до I/O, subscribe registration race, ack/nack logging, reconnect logging, duplicate error message
+
+### Что реализовано
+- **errors.go**: ErrClientClosed, ErrNotConnected, ErrPublishConfirmFailed, ErrPublishNacked, ErrPublishMaxRetriesExhausted sentinels, BrokerError struct (Operation, Message, Retryable, Cause), mapError (context passthrough, AMQP code classification, unknown→retryable), isRetryable, errNotConnected/errClientClosed helpers
+- **client.go**: AMQPAPI interface (Channel, Close, NotifyClose, IsClosed), AMQPChannelAPI interface (+Confirm, NotifyPublish, Qos vs DP), amqpConnWrapper/amqpChanWrapper adapters, Client struct (address, prefetch, conn, pubCh, pubNotify, mu RWMutex, pubMu Mutex, subs, done, wg, dialFn, cancelFn/Ctx, log), NewClient(address, useTLS, prefetch, log) с dial+confirm mode+reconnect loop, Publish(ctx, topic, payload) с retry 3x backoff, publishOnce с pubMu serialization, Subscribe(topic, handler) с registration-first pattern, subscribe(topic, queue, handler) с Qos+QueueDeclare+Consume, consumeLoop с Ack/Nack logging, Ping() health check, Close() с idempotency
+- **reconnect.go**: reconnectLoop (NotifyClose+IsClosed detection), reconnectWithBackoff (dial+channel+confirm+swap+re-subscribe с logging), backoffDelay (1s-30s exponential + 25% jitter)
+- **client_test.go**: 35 тестов: publish (10: success/confirm nack/confirm closed/retry transient/no retry 404/max retries/ctx cancel/not connected/after close/ctx deadline), subscribe (7: success+prefix+qos+queue error+qos error+not connected+manual ack), handler ACK/NACK (2), ping (3), close (3), error mapping (4), isRetryable (2), backoff delay (3), reconnect (4), queue prefix table (1), broker error (3), concurrent safety (1)
+
+### Ключевые решения
+- **Без зависимости на domain/port** — собственный BrokerError тип и sentinel errors (как kvstore)
+- **pubMu Mutex** — сериализует publish+confirm цикл для предотвращения confirm misattribution при конкурентных Publish
+- **RLock снимается до I/O** — PublishWithContext выполняется без блокировки reconnect/Close
+- **Subscribe registration-first** — подписка записывается в subs до запуска consumer, с rollback при ошибке
+- **Queue prefix orch.sub.** — предотвращает коллизию с DP очередями
+- **Configurable prefetch** — Qos(prefetch, 0, false) на каждом consumer channel
+- **TLS support** — amqp.DialTLS с MinVersion TLS 1.2
+- **Ack/Nack logging** — ошибки Ack/Nack логируются на WARN уровне
+- **Reconnect logging** — Channel/Confirm/re-subscribe ошибки логируются
+
+### Зависимость добавлена
+- github.com/rabbitmq/amqp091-go v1.10.0

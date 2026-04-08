@@ -67,3 +67,38 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - os.Stdout (не os.Stderr как в DP) — по спецификации observability.md
 - Shared constructor newLogger(level, w) для тестируемости без дублирования логики
 - Только stdlib зависимости (log/slog, context, io, os, strings)
+
+## ORCH-TASK-004: Redis-клиент (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (configuration.md, high-architecture.md) — определить Redis operations
+2. Использовать DP kvstore (DocumentProcessing/development/internal/infra/kvstore/) как образец паттерна
+3. Спроектировать Client с RedisAPI interface (backend-reliability-engineer subagent)
+4. Реализовать errors.go: ErrKeyNotFound, ErrClientClosed sentinels, mapError(), errClientClosed()
+5. Реализовать subscription.go: Subscription type с goroutine lifecycle (sync.Once, blocking Close)
+6. Реализовать client.go: RedisAPI interface, Client struct, NewClient, Get/Set/Delete/Publish/Subscribe/Ping/Close
+7. Реализовать client_test.go: 41 тест с mock + in-memory fake
+8. Code review (code-reviewer subagent) → исправления: ErrClientClosed sentinel, Subscription.closeErr хранение, doc улучшения
+
+### Что ре��лизовано
+- **errors.go**: ErrKeyNotFound, ErrClientClosed sentinels, mapError (context passthrough, redis.Nil → ErrKeyNotFound, fmt.Errorf wrapping), errClientClosed (wraps ErrClientClosed)
+- **subscription.go**: Subscription struct (pubsub, cancel, done, once, closeErr), blocking Close с sync.Once, caller MUST close documented
+- **client.go**: RedisAPI interface (Get, Set, Del, Publish, Subscribe, Ping, Close), Client struct (rdb, mu, done), NewClient(cfg) с Ping validation, newClientWithRedis для тестов, Get/Set/Delete/Publish/Subscribe/Ping/Close с isClosed guard
+- **client_test.go**: 41 тест: error mapping (4), Get (7), Set (6), Delete (6), Publish (5), Subscribe (1), Subscription lifecycle (4), Ping (3), Close (3), in-memory integration (1), concurrent access (1)
+
+### Ключевые решения
+- Без зависимости на domain/port — infra не импортирует domain layer, ошибки через fmt.Errorf с %w
+- ErrClientClosed sentinel — позволяет callers использовать errors.Is
+- Subscription.closeErr хранится для replay на повторных Close() вызовах
+- Subscribe создает goroutine с context cancellation — exits when Subscription.Close() or ctx cancelled
+- Delete идемпотентен — не возвращает ошибку для несуществующих ключей
+- Publish игнорирует subscriber count — Pub/Sub is fire-and-forget
+
+### Зависимость добавлена
+- github.com/redis/go-redis/v9 v9.18.0
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-005 (critical): RabbitMQ broker client — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-006 (critical): S3 Object Storage client — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-007 (critical): Health check handler — зависит от ORCH-TASK-004 ✓, ORCH-TASK-005 ✗
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓

@@ -107,7 +107,9 @@
         "Шаг 2: Ping() на заведомо недоступный адрес → ошибка"
       ],
       "dependencies": ["ORCH-TASK-002"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Пакет internal/infra/kvstore: Client с RedisAPI (consumer-side interface), NewClient(cfg) с Ping на старте, Get/Set/Delete/Publish/Subscribe/Ping/Close. Subscription тип с goroutine lifecycle (sync.Once, blocking Close, context cancellation). Error mapping: context passthrough, ErrKeyNotFound sentinel, ErrClientClosed sentinel, fmt.Errorf wrapping (без зависимости на domain port). 41 тест: mock + in-memory fake, error paths, context forwarding, concurrent access, subscription delivery/close/idempotent. Зависимость: github.com/redis/go-redis/v9 v9.18.0."
     },
     {
       "id": "ORCH-TASK-005",

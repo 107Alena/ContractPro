@@ -85,7 +85,9 @@
         "Шаг 2: лог-запись содержит все обязательные поля в формате JSON"
       ],
       "dependencies": ["ORCH-TASK-002"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Пакет internal/infra/observability/logger: Logger (slog JSON на stdout, service=api-orchestrator baked in), RequestContext (CorrelationID, OrganizationID, UserID, DocumentID, VersionID, JobID) с auto-extraction из context.Context, ErrorAttr(err) helper (null для nil), With() для component-scoped child loggers, parseLevel (debug/info/warn/error). 28 тестов: context round-trip, mandatory fields, empty field omission, level filtering, With+context combo, ErrorAttr nil/non-nil/in-output, JSON validity, extra args passthrough."
     },
     {
       "id": "ORCH-TASK-004",

@@ -36,7 +36,34 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - github.com/joho/godotenv v1.5.1
 
 ### Следующие задачи готовые к реализации (deps выполнены)
-- ORCH-TASK-003 (critical): Structured logging — зависит от ORCH-TASK-002 ✓
 - ORCH-TASK-004 (critical): Redis client — зависит от ORCH-TASK-002 ✓
 - ORCH-TASK-005 (critical): RabbitMQ broker client — зависит от ORCH-TASK-002 ✓
 - ORCH-TASK-006 (critical): S3 Object Storage client — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-003: Structured logging (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture/observability.md — определить обязательные поля и sensitive data policy
+2. Использовать DP observability (DocumentProcessing/development/internal/infra/observability/) как образец паттерна
+3. Спроектировать Logger и RequestContext (backend-reliability-engineer subagent)
+4. Реализовать context.go: RequestContext, WithRequestContext, RequestContextFrom, WithDocumentID/VersionID/JobID
+5. Реализовать logger.go: Logger, NewLogger, Info/Warn/Error/Debug, With, Slog, ErrorAttr, withRequestAttrs, parseLevel
+6. Реализовать logger_test.go: 28 тестов
+7. Code review (code-reviewer subagent) → исправления: shared constructor, ErrorAttr(nil)→null, pre-alloc prefix
+
+### Что реализовано
+- **context.go**: RequestContext struct (CorrelationID, OrganizationID, UserID, DocumentID, VersionID, JobID), WithRequestContext/RequestContextFrom, WithDocumentID/WithVersionID/WithJobID хелперы
+- **logger.go**: Logger struct обёрнутый над slog, NewLogger(level) с JSON на stdout, service="api-orchestrator" baked in, Info/Warn/Error/Debug с auto-extraction RequestContext из ctx, With() для component-scoped child loggers, Slog() escape hatch, ErrorAttr(err) helper (nil→JSON null), parseLevel (debug/info/warn/error), withRequestAttrs с pre-allocated prefix
+- **logger_test.go**: 28 тестов покрывающие: context round-trip (6), mandatory fields (4), level filtering (5), parseLevel table (1), With/component (3), ErrorAttr (4), Slog (1), extra args (1), JSON validity (1), NewLogger (2), нет дополнительных зависимостей
+
+### Ключевые решения
+- Пакет: `internal/infra/observability/logger` (отдельный sub-package для чистой зависимости)
+- RequestContext вместо JobContext (request-centric vs job-centric в DP)
+- `service` baked in через handler.WithAttrs (zero per-call overhead)
+- `component` через With() при создании компонента (не в RequestContext)
+- ErrorAttr(nil) → slog.Any("error", nil) → JSON null (соответствие architecture spec)
+- os.Stdout (не os.Stderr как в DP) — по спецификации observability.md
+- Shared constructor newLogger(level, w) для тестируемости без дублирования логики
+- Только stdlib зависимости (log/slog, context, io, os, strings)

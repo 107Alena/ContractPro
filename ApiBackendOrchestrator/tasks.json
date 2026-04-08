@@ -63,7 +63,9 @@
         "Шаг 4: тест без optional → дефолты применены корректно"
       ],
       "dependencies": ["ORCH-TASK-001"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Пакет internal/config: Config struct с 14 sub-configs, Load() с godotenv, Validate() с агрегированными ошибками. 50+ переменных ORCH_* покрыты. Валидация: 8 required fields, port collision, prefetch >= 1, positive durations, upload size > 0, rate limit conditional, JWT file exists, log level enum, CB/Redis pool >= 1. 24 теста: happy path, missing required (single + multiple), defaults (36 полей + 14 топиков), overrides, validation edge cases, env helper fallbacks."
     },
     {
       "id": "ORCH-TASK-003",

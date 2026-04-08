@@ -1,0 +1,42 @@
+# API/Backend Orchestrator — Progress Log
+
+## ORCH-TASK-001: Scaffolding проекта (DONE, 2026-04-08)
+Go-модуль, структура директорий, Makefile, Dockerfile.
+Детали в git commit 349808b.
+
+## ORCH-TASK-002: Загрузка конфигурации (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture/configuration.md — определить все переменные
+2. Использовать DP config (DocumentProcessing/development/internal/config/) как образец паттерна
+3. Спроектировать Config struct с 14 sub-configs (backend-reliability-engineer subagent)
+4. Реализовать config.go: Config, Load(), Validate(), env helpers (envString, envInt, envInt64, envDuration, envBool, envStringSlice)
+5. Реализовать sub_configs.go: 14 sub-config structs с load-функциями
+6. Реализовать config_test.go: 24 теста
+7. Code review (code-reviewer subagent) → исправления: LogLevel enum validation, CB/Redis pool >= 1 checks, deterministic test env
+
+### Что реализовано
+- **config.go**: Config struct (корневая конфигурация), Load() с godotenv, Validate() с агрегированными ошибками, 6 env helpers
+- **sub_configs.go**: HTTPConfig, BrokerConfig (14 топиков), StorageConfig, RedisConfig, UploadConfig (AllowedTypes как []string), DMClientConfig, OPMClientConfig, UOMClientConfig, JWTConfig, SSEConfig, RateLimitConfig, CircuitBreakerConfig, CORSConfig (AllowedOrigins как []string), ObservabilityConfig
+- **config_test.go**: 24 теста покрывающие все acceptance criteria
+
+### Валидации
+- 8 обязательных полей (ошибка со списком всех недостающих)
+- Port collision (HTTP != Metrics)
+- Broker.Prefetch >= 1
+- Все duration > 0
+- Upload.MaxSize > 0
+- RateLimit: conditional (RPS > 0 только при Enabled=true)
+- JWT: файл существует (os.Stat)
+- LogLevel: enum (debug, info, warn, error)
+- CircuitBreaker.FailureThreshold >= 1, MaxRequests >= 1
+- Redis.PoolSize >= 1
+
+### Зависимость добавлена
+- github.com/joho/godotenv v1.5.1
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-003 (critical): Structured logging — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-004 (critical): Redis client — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-005 (critical): RabbitMQ broker client — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-006 (critical): S3 Object Storage client — зависит от ORCH-TASK-002 ✓

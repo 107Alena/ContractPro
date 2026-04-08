@@ -21,7 +21,10 @@ import (
 //
 // The authMW parameter is the JWT authentication middleware. When nil,
 // a no-op pass-through is used (for tests that don't need auth).
-func registerRoutes(r chi.Router, authMW func(http.Handler) http.Handler) {
+//
+// The rbacMW parameter is the role-based access control middleware. When nil,
+// a no-op pass-through is used (for tests that don't need RBAC).
+func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -34,7 +37,8 @@ func registerRoutes(r chi.Router, authMW func(http.Handler) http.Handler) {
 		r.Group(func(r chi.Router) {
 			// Auth middleware: real JWT validation from ORCH-TASK-010.
 			r.Use(authMW)
-			r.Use(rbacMiddleware)
+			// RBAC middleware: role-based access control from ORCH-TASK-011.
+			r.Use(rbacMW)
 			r.Use(rateLimitMiddleware)
 
 			// User profile.

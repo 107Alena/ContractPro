@@ -280,7 +280,9 @@
         "Шаг 4: ORG_ADMIN → доступ к /admin/policies"
       ],
       "dependencies": ["ORCH-TASK-010"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-09",
+      "summary": "Пакет internal/ingress/middleware/rbac: Middleware struct (policy map[string]roleSet, matcher *chi.Mux, log), NewMiddleware(log) строит access policy (23 правила) и companion chi.Mux для pattern matching. Handler() → chi-compatible middleware: extractBearerToken → AuthContextFrom → matcher.Match → policy lookup → role check. Fail-open для неизвестных routes (с DEBUG логом). Missing AuthContext → 500 INTERNAL_ERROR. Role not permitted → 403 PERMISSION_DENIED (WARN лог с user_id, role, method, path, route_pattern). 3 roleSet: allRoles (LAWYER+BUSINESS_USER+ORG_ADMIN), lawyerAndAdmin (LAWYER+ORG_ADMIN), adminOnly (ORG_ADMIN). Companion chi.Mux обходит ограничение chi sub-router RoutePattern(). Export endpoint: allRoles at RBAC, BUSINESS_USER проверяется handler через OPM policy. Wiring: Deps.RBACMiddleware в server.go, registerRoutes(r, authMW, rbacMW), removed rbacMiddleware stub. 44 теста (131 с sub-tests): constructor (3), missing AuthContext (1), fail-open unknown route (1), permission denied (13 BUSINESS_USER + LAWYER на restricted), allowed access (14 all roles), error response format (2), roleSet (2), policy completeness (1), full access matrix (69 sub-tests covering 23 endpoints × 3 roles), handler call verification (2), unknown/empty role denied (2). Зависимости: нет новых (chi, auth, model уже есть)."
     },
     {
       "id": "ORCH-TASK-012",

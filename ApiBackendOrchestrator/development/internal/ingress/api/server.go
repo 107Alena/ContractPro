@@ -56,13 +56,14 @@ type Server struct {
 // Deps holds the dependencies required to construct a Server.
 //
 // Config, Health, and Logger are required.
-// AuthMiddleware is optional: when nil, a no-op pass-through is used
-// (useful for tests that don't need authentication).
+// AuthMiddleware and RBACMiddleware are optional: when nil, a no-op
+// pass-through is used (useful for tests that don't need auth/RBAC).
 type Deps struct {
 	Config         config.HTTPConfig
 	Health         *health.Handler
 	Logger         *logger.Logger
 	AuthMiddleware func(http.Handler) http.Handler
+	RBACMiddleware func(http.Handler) http.Handler
 }
 
 // NewServer constructs a Server with the chi router, middleware chain,
@@ -89,7 +90,11 @@ func NewServer(deps Deps) *Server {
 	if authMW == nil {
 		authMW = noopMiddleware
 	}
-	registerRoutes(r, authMW)
+	rbacMW := deps.RBACMiddleware
+	if rbacMW == nil {
+		rbacMW = noopMiddleware
+	}
+	registerRoutes(r, authMW, rbacMW)
 
 	mainAddr := fmt.Sprintf(":%d", deps.Config.Port)
 	main := &http.Server{

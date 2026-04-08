@@ -334,3 +334,42 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-011: RBAC middleware (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (security.md, high-architecture.md, api-specification.yaml) — определить матрицу доступа, роли, endpoint-role mapping
+2. Использовать существующий auth middleware (AuthContext, Role) как источник роли
+3. Спроектировать Middleware с companion chi.Mux для pattern matching (backend-reliability-engineer subagent)
+4. Реализовать rbac.go: Middleware struct, NewMiddleware(log), Handler(), access policy map, roleSet, 23 правила
+5. Реализовать rbac_test.go: 44 теста (131 с sub-tests)
+6. Wiring: server.go (Deps.RBACMiddleware), routes.go (rbacMW parameter), middleware.go (stub removed)
+7. Code review (code-reviewer subagent) → исправления: M-1 export comment (OPM policy), S-1 DEBUG log fail-open, S-2 unknown/empty role tests, S-3 matrix test completeness, N-1 unexport policyKeys
+
+### Что реализовано
+- **rbac.go**: Middleware struct (policy map[string]roleSet, matcher *chi.Mux, log), NewMiddleware(log) строит 23 access rules + companion chi.Mux, Handler() → chi middleware: AuthContextFrom → matcher.Match → policy lookup → roleSet.contains, fail-open для неизвестных routes (с DEBUG логом), missing AuthContext → 500 INTERNAL_ERROR, role not permitted → 403 PERMISSION_DENIED (WARN лог: user_id, role, method, path, route_pattern)
+- **rbac_test.go**: 44 теста (131 sub-tests): constructor (3), missing AuthContext (1), fail-open (1), permission denied (13), allowed access (14), error format (2), roleSet (2), policy completeness (1), full access matrix (69 sub-tests), handler call verification (2), unknown/empty role (2)
+- **server.go**: Deps.RBACMiddleware func(http.Handler) http.Handler, nil → noopMiddleware fallback
+- **routes.go**: registerRoutes(r, authMW, rbacMW) — rbacMW injected
+- **middleware.go**: rbacMiddleware stub removed, comments updated
+
+### Ключевые решения
+- **Companion chi.Mux** — обходит ограничение chi sub-router RoutePattern() (не полностью разрешён в middleware на Router.Route)
+- **roleSet map[Role]struct{}** — O(1) lookup, 3 pre-built sets: allRoles, lawyerAndAdmin, adminOnly
+- **Fail-open** — неизвестные routes пропускаются (forward compatibility), authentication всё ещё защищает
+- **Export allRoles at RBAC** — BUSINESS_USER restriction делегирована handler уровню (OPM policy check)
+- **AuthContext absence → 500** — programming error (auth middleware не настроен), не 403 (не раскрываем существование route)
+- **Thread safety** — policy и matcher immutable после конструкции
+- **Audit logging** — WARN на denial с полным контекстом, DEBUG на fail-open
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-014 (critical): DM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-018 (critical): Contract Upload Coordinator — зависит от ORCH-TASK-006 ✓, ORCH-TASK-014 ✗, ORCH-TASK-017 ✗, ORCH-TASK-011 ✓
+- ORCH-TASK-019 (critical): Contract CRUD — зависит от ORCH-TASK-014 ✗, ORCH-TASK-011 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓

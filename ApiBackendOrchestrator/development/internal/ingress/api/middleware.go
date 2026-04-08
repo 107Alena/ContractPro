@@ -8,26 +8,19 @@ import "net/http"
 //
 //   - corsMiddleware      -> ORCH-TASK-009 (stub)
 //   - authMiddleware      -> ORCH-TASK-010 (implemented in internal/ingress/middleware/auth)
-//   - rbacMiddleware      -> ORCH-TASK-011 (stub)
+//   - rbacMiddleware      -> ORCH-TASK-011 (implemented in internal/ingress/middleware/rbac)
 //   - rateLimitMiddleware -> ORCH-TASK-013 (stub)
 //
 // authMiddleware is wired at Server construction time via Deps.AuthMiddleware.
-// When nil (e.g., in tests that don't need auth), it falls back to a no-op
-// pass-through.
+// rbacMiddleware is wired at Server construction time via Deps.RBACMiddleware.
+// When nil (e.g., in tests that don't need auth/RBAC), they fall back to a
+// no-op pass-through.
 
 // corsMiddleware is a stub for CORS handling.
 // Real implementation (ORCH-TASK-009) will read CORSConfig and set
 // Access-Control-Allow-Origin, Access-Control-Allow-Methods,
 // Access-Control-Allow-Headers, Access-Control-Max-Age headers.
 func corsMiddleware(next http.Handler) http.Handler {
-	return next
-}
-
-// rbacMiddleware is a stub for role-based access control.
-// Real implementation (ORCH-TASK-011) will check the user's role
-// against the endpoint's required permissions and return 403 Forbidden
-// if insufficient.
-func rbacMiddleware(next http.Handler) http.Handler {
 	return next
 }
 

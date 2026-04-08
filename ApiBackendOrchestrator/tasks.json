@@ -205,7 +205,9 @@
         "Шаг 3: GET /healthz → 200"
       ],
       "dependencies": ["ORCH-TASK-007"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-08",
+      "summary": "Пакет internal/ingress/api: Server struct (main + metrics http.Server), Deps injection (Config, Health, Logger). Chi router с route groups: public (/auth/login, /auth/refresh, /auth/logout), protected (auth→RBAC→rateLimit middleware chain: contracts CRUD, versions, results, comparison, export, feedback, admin, users/me), SSE (/events/stream вне auth group). Health handler mount через Mount(\"/\") для корректной передачи путей /healthz и /readyz. Metrics server на отдельном порту (9090) со stub /metrics endpoint. 4 middleware stubs (CORS, Auth, RBAC, RateLimit — pass-through). Все route handlers возвращают 501 Not Implemented. SSE stub с проверкой Flusher до WriteHeader. Таймауты: ReadTimeout=RequestTimeout, WriteTimeout=RequestTimeout+5s, IdleTimeout=2*RequestTimeout. StartWithListeners для тестов с ephemeral ports. Graceful Shutdown обоих серверов параллельно. 42 теста: constructor (5), health integration (2), public auth (3), protected contracts (5), versions (5), results (4), comparison (2), export (1), feedback (1), admin (4), user (1), SSE (1), routing (2), response format (2), lifecycle (2), concurrent access (1), route registration (1), middleware chain (1), accessor (1). Зависимость: github.com/go-chi/chi/v5 v5.2.5."
     },
     {
       "id": "ORCH-TASK-009",

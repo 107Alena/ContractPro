@@ -204,3 +204,41 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-008: HTTP-сервер (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, configuration.md, api-specification.yaml) — определить routes, middleware, timeouts
+2. Использовать DP health handler и chi router pattern как образец
+3. Спроектировать Server struct с Deps injection (backend-reliability-engineer subagent)
+4. Реализовать server.go: Server struct, NewServer, Start, StartWithListeners, Shutdown, MainAddr, MetricsAddr, handleMetricsStub, notImplemented
+5. Реализовать routes.go: registerRoutes с public/protected/SSE groups, sseStub
+6. Реализовать middleware.go: 4 middleware stubs (CORS, Auth, RBAC, RateLimit)
+7. Реализовать server_test.go: 42 теста
+8. Code review (code-reviewer subagent) → исправления: SSE Flusher check до WriteHeader, health Mount("/") вместо двух Mount, удалены unused Set*Listener
+
+### Что реализовано
+- **server.go**: Server struct (main *http.Server, metrics *http.Server, router chi.Router, log *logger.Logger, cfg HTTPConfig), Deps struct (Config, Health, Logger), NewServer(deps) с chi router + middleware + routes + dual server configuration, Start() с metrics goroutine, StartWithListeners(mainLn, metricsLn) для тестов, Shutdown(ctx) параллельный для обоих серверов, Router()/MainAddr()/MetricsAddr() accessors, handleMetricsStub (placeholder Prometheus), notImplemented (501 JSON)
+- **routes.go**: registerRoutes с тремя route groups: public auth (login/refresh/logout без auth), protected (auth→RBAC→rateLimit: contracts CRUD, versions, results, comparison, export, feedback, admin, users/me), SSE (events/stream вне auth group). sseStub с корректным порядком: Flusher check → headers → WriteHeader → body → flush
+- **middleware.go**: corsMiddleware, authMiddleware, rbacMiddleware, rateLimitMiddleware — все pass-through stubs с doc comments указывающими на future task IDs
+- **server_test.go**: 42 теста: constructor (5: fields, MainAddr, MetricsAddr, main timeouts, metrics timeouts), health integration (2: /healthz 200, /readyz 200), public auth (3: login/refresh/logout 501), protected contracts (5: upload/list/get/delete/archive 501), versions (5: list/upload/get/status/recheck 501), results (4: results/risks/summary/recommendations 501), comparison (2: compare/diff 501), export (1: 501), feedback (1: 501), admin (4: policies list/update, checklists list/update 501), user (1: me 501), SSE (1: event-stream content-type + connected comment), routing (2: unknown 404, wrong method 405), response format (2: notImplemented JSON, metrics text/plain), lifecycle (2: start+shutdown integration, live server contract), concurrent access (1: 50 goroutines), route registration (1: 29 routes not 404), middleware chain (1: stubs pass through), accessor (1: Router() non-nil)
+
+### Ключевые решения
+- **Chi router** — совместимо с DM service pattern
+- **Dual server** — main API (port 8080) + metrics (port 9090) на отдельных http.Server; Prometheus scraping не затронут auth/rate limiting
+- **Health mount через Mount("/")** — сохраняет полные пути /healthz и /readyz (chi Mount на sub-path стрипает prefix, что ломает health handler's exact pattern registration)
+- **SSE вне auth group** — EventSource API не поддерживает custom headers, auth через ?token= query param внутри handler
+- **WriteTimeout = RequestTimeout + 5s** — headroom для response writing, handler's context timeout первичный
+- **IdleTimeout = 2 * RequestTimeout** — для keep-alive connections
+- **Metrics server fixed timeouts** — 5s read/write, 30s idle (не зависят от config)
+- **Flusher check до WriteHeader** — корректный порядок в SSE stub, шаблон для ORCH-TASK-029
+
+### Зависимость добавлена
+- github.com/go-chi/chi/v5 v5.2.5
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-009 (critical): ErrorResponse + recovery middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓

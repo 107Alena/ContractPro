@@ -652,7 +652,9 @@
         "Шаг 3: невалидный JSON → WARN + ACK, очередь не блокируется"
       ],
       "dependencies": ["ORCH-TASK-005"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-09",
+      "summary": "Пакет internal/ingress/consumer: Consumer struct с BrokerSubscriber, EventHandler, RetryTracker consumer-side интерфейсами. 12 event structs в events.go (5 DP: StatusChanged/ProcessingCompleted/ProcessingFailed/ComparisonCompleted/ComparisonFailed, 2 LIC/RE: StatusChanged с *bool IsRetryable, 5 DM: VersionArtifactsReady/VersionAnalysisReady/VersionReportsReady/VersionPartiallyAvailable/VersionCreated). EventType constants (12). topicBinding struct с topic+eventType+newEvent factory (single source of truth). Start() idempotent (sync.Once), subscribes to all 12 topics. makeHandler closure: JSON unmarshal → enrichContext (RequestContext из envelope) → buildRetryKey → EventHandler.HandleEvent → retry tracking. Poison pill: invalid JSON → WARN + ACK. Retry: maxAttempts=3, NACK+requeue до порога, затем ACK + ERROR log. inMemoryRetryTracker (sync.Mutex map). rawPreview UTF-8-safe truncation (200 bytes). 39 тестов: Start (4: 12 topics, idempotent, broker error, empty topic), deserialization+routing (12: all event types), invalid JSON (2: garbage+empty), retry (2: NACK→ACK cycle, success resets), context enrichment (2: DP all fields, DM no job_id), rawPreview (2: short, truncated), buildRetryKey (3: status, completion, DM), constructor panics (3), interface checks (4), optional fields (4: omitted, *bool nil, unknown fields, tracker). Code review: M1 maxRetries→maxAttempts (naming), M2 topic stored in topicBinding (eliminated topicForBinding), S1 UTF-8-safe rawPreview, S4 cfg param removed from Start, N5 compile-time interface check. Нет новых зависимостей."
     },
     {
       "id": "ORCH-TASK-028",

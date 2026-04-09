@@ -607,6 +607,46 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - **Presigned URL not logged** — убрано из log для предотвращения утечки credentials (S-2 fix)
 - **Нет новых зависимостей** — chi, uuid, dmclient уже в go.mod
 
+## ORCH-TASK-027: Event Consumer (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (event-catalog.md, high-architecture.md, integration-contracts.md) — определить 12 event topics, JSON payloads, handling rules
+2. Изучить существующий код (broker client Subscribe API, BrokerConfig 14 topics, Logger RequestContext)
+3. Спроектировать Consumer с BrokerSubscriber/EventHandler/RetryTracker interfaces (backend-reliability-engineer subagent)
+4. Реализовать events.go: 12 event structs с JSON tags, EventType constants, Warning sub-type
+5. Реализовать consumer.go: Consumer struct, NewConsumer, Start(), makeHandler, enrichContext, buildRetryKey, rawPreview, inMemoryRetryTracker
+6. Реализовать consumer_test.go: 39 тестов
+7. Code review (code-reviewer subagent) → исправления: M1 maxRetries→maxAttempts, M2 topic в topicBinding, S1 UTF-8 rawPreview, S4 cfg removed from Start, N5 compile-time check
+
+### Что реализовано
+- **events.go**: EventType тип (12 констант: 5 DP, 2 LIC/RE, 5 DM), Warning struct (code, message, severity), 12 event structs: DPStatusChangedEvent (9 полей), DPProcessingCompletedEvent (7 + warnings[]), DPProcessingFailedEvent (10 полей), DPComparisonCompletedEvent (7 полей), DPComparisonFailedEvent (10 полей), LICStatusChangedEvent (10, IsRetryable *bool), REStatusChangedEvent (аналог LIC), DMVersionArtifactsReadyEvent (6 + artifact_types[]), DMVersionAnalysisReadyEvent (аналог), DMVersionReportsReadyEvent (аналог), DMVersionPartiallyAvailableEvent (7 полей), DMVersionCreatedEvent (9 полей)
+- **consumer.go**: BrokerSubscriber consumer-side interface (Subscribe), EventHandler interface (HandleEvent с any-typed event + EventType discriminator), RetryTracker interface (Increment, Remove), inMemoryRetryTracker (sync.Mutex map, compile-time check). topicBinding struct (topic + eventType + newEvent factory). Consumer struct (broker, handler, retries, log, bindings, startOnce). NewConsumer(broker, handler, log, cfg) с panic на nil deps. Start() idempotent (sync.Once): iterate bindings → validate topic → makeHandler → broker.Subscribe. makeHandler closure: json.Unmarshal → enrichContext → buildRetryKey → handler.HandleEvent → retry tracking (maxAttempts=3). enrichContext: 12-case type switch → RequestContext injection. buildRetryKey: job_id+status для status events, job_id для completion, doc_id+ver_id для DM. rawPreview: UTF-8-safe truncation (200 bytes)
+- **consumer_test.go**: 39 тестов: Start (4: 12 topics, idempotent, broker error, empty topic), deserialization+routing (12: all event types), invalid JSON (2: garbage+empty body), retry (2: NACK→ACK cycle, success resets), context enrichment (2: DP all fields, DM no job_id), rawPreview (2: short, truncated), buildRetryKey (3: status, completion, DM), constructor panics (3), interface checks (4), optional fields (4: omitted, *bool nil, unknown fields, tracker)
+
+### Security fixes (из code review)
+- **M1**: maxRetries → maxAttempts — устранена семантическая неоднозначность (retries vs attempts)
+- **M2**: topic хранится в topicBinding — устранена dual-maintenance hazard (topicForBinding удалён)
+- **S1**: rawPreview UTF-8-safe — utf8.Valid проверка перед обрезкой, предотвращает invalid UTF-8 в логах
+- **S4**: cfg параметр убран из Start() — предотвращает несогласованность конфигов
+- **N5**: var _ RetryTracker = (*inMemoryRetryTracker)(nil) — compile-time check
+
+### Ключевые решения
+- **EventHandler.HandleEvent(ctx, eventType, event any)** — single method с type discriminator вместо 12 отдельных методов
+- **Poison pill protection** — invalid JSON → WARN + ACK, не блокирует очередь
+- **In-memory retry tracking** — допустимо для single-instance service; retry counter теряется при restart (bounded risk)
+- **Context enrichment** — event envelope fields → RequestContext → auto-extracted в каждом log entry
+- **buildRetryKey includes status** — для status events (dp/lic/re) ключ включает status, предотвращает collision между разными статусами одного job
+- **Нет новых зависимостей** — только stdlib (encoding/json, unicode/utf8, sync, context, fmt, strings)
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-028 (critical): Processing Status Tracker — зависит от ORCH-TASK-027 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
 ### Следующие задачи готовые к реализации (deps выполнены)
 - ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓

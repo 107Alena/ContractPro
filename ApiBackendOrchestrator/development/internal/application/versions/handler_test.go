@@ -1518,6 +1518,514 @@ func TestHandleDMError_UnknownError(t *testing.T) {
 }
 
 // =========================================================================
+// HandleRecheck tests
+// =========================================================================
+
+func TestHandleRecheck_Success(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return stubVersionWithArtifacts("FULLY_READY"), nil
+		},
+		createVerFn: func(_ context.Context, _ string, _ dmclient.CreateVersionRequest) (*dmclient.DocumentVersion, error) {
+			return &dmclient.DocumentVersion{
+				VersionID:     "ver-new-001",
+				VersionNumber: 2,
+			}, nil
+		},
+	}
+	pub := &mockPublisher{}
+	kv := &mockKVStore{}
+	h := newTestHandlerFull(dm, &mockStorage{}, pub, kv)
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	result := parseJSON(t, rr)
+	if result["contract_id"] != testContractID {
+		t.Errorf("contract_id = %v, want %s", result["contract_id"], testContractID)
+	}
+	if result["version_id"] != "ver-new-001" {
+		t.Errorf("version_id = %v, want ver-new-001", result["version_id"])
+	}
+	if result["status"] != "UPLOADED" {
+		t.Errorf("status = %v, want UPLOADED", result["status"])
+	}
+	if result["job_id"] == nil || result["job_id"] == "" {
+		t.Error("job_id should not be empty")
+	}
+	if result["message"] == nil || result["message"] == "" {
+		t.Error("message should not be empty")
+	}
+
+	// Verify X-Correlation-Id header is set.
+	if rr.Header().Get("X-Correlation-Id") == "" {
+		t.Error("X-Correlation-Id header should be set")
+	}
+}
+
+func TestHandleRecheck_NoAuth(t *testing.T) {
+	h := newTestHandler(&mockDMClient{})
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestHandleRecheck_InvalidContractID(t *testing.T) {
+	h := newTestHandler(&mockDMClient{})
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/not-uuid/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": "not-uuid", "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleRecheck_InvalidVersionID(t *testing.T) {
+	h := newTestHandler(&mockDMClient{})
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/not-uuid/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": "not-uuid"})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleRecheck_VersionNotFound(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return nil, dmHTTPError("GetVersion", 404, `{"error":"not found"}`)
+		},
+	}
+	h := newTestHandler(dm)
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleRecheck_VersionStillProcessing(t *testing.T) {
+	processingStatuses := []string{
+		"PENDING_UPLOAD",
+		"PENDING_PROCESSING",
+		"PROCESSING_IN_PROGRESS",
+		"ARTIFACTS_READY",
+		"ANALYSIS_IN_PROGRESS",
+		"ANALYSIS_READY",
+		"REPORTS_IN_PROGRESS",
+	}
+
+	for _, status := range processingStatuses {
+		t.Run(status, func(t *testing.T) {
+			dm := &mockDMClient{
+				getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+					return stubVersionWithArtifacts(status), nil
+				},
+			}
+			h := newTestHandler(dm)
+
+			rr := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+			r = withAuthContext(r)
+			r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+			h.HandleRecheck().ServeHTTP(rr, r)
+
+			if rr.Code != http.StatusConflict {
+				t.Fatalf("expected 409 for status %s, got %d: %s", status, rr.Code, rr.Body.String())
+			}
+
+			result := parseJSON(t, rr)
+			if result["error_code"] != "VERSION_STILL_PROCESSING" {
+				t.Errorf("error_code = %v, want VERSION_STILL_PROCESSING", result["error_code"])
+			}
+		})
+	}
+}
+
+func TestHandleRecheck_TerminalStatuses_Allowed(t *testing.T) {
+	terminalStatuses := []string{
+		"FULLY_READY",
+		"PARTIALLY_AVAILABLE",
+		"PROCESSING_FAILED",
+		"REJECTED",
+	}
+
+	for _, status := range terminalStatuses {
+		t.Run(status, func(t *testing.T) {
+			dm := &mockDMClient{
+				getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+					return stubVersionWithArtifacts(status), nil
+				},
+			}
+			h := newTestHandlerFull(dm, &mockStorage{}, &mockPublisher{}, &mockKVStore{})
+
+			rr := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+			r = withAuthContext(r)
+			r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+			h.HandleRecheck().ServeHTTP(rr, r)
+
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("expected 202 for terminal status %s, got %d: %s", status, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleRecheck_CreateVersionRequest(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return stubVersionWithArtifacts("FULLY_READY"), nil
+		},
+	}
+	pub := &mockPublisher{}
+	h := newTestHandlerFull(dm, &mockStorage{}, pub, &mockKVStore{})
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify DM CreateVersion was called with correct request.
+	if len(dm.createCalls) != 1 {
+		t.Fatalf("expected 1 CreateVersion call, got %d", len(dm.createCalls))
+	}
+	call := dm.createCalls[0]
+	if call.DocumentID != testContractID {
+		t.Errorf("CreateVersion documentID = %s, want %s", call.DocumentID, testContractID)
+	}
+	if call.Req.OriginType != "RE_CHECK" {
+		t.Errorf("OriginType = %s, want RE_CHECK", call.Req.OriginType)
+	}
+	if call.Req.ParentVersionID != testVersionID {
+		t.Errorf("ParentVersionID = %s, want %s", call.Req.ParentVersionID, testVersionID)
+	}
+	if call.Req.SourceFileKey != "uploads/org-001/key.pdf" {
+		t.Errorf("SourceFileKey = %s, want uploads/org-001/key.pdf", call.Req.SourceFileKey)
+	}
+	if call.Req.SourceFileName != "contract.pdf" {
+		t.Errorf("SourceFileName = %s, want contract.pdf", call.Req.SourceFileName)
+	}
+	if call.Req.SourceFileSize != 1024000 {
+		t.Errorf("SourceFileSize = %d, want 1024000", call.Req.SourceFileSize)
+	}
+	if call.Req.SourceFileChecksum != "abc123" {
+		t.Errorf("SourceFileChecksum = %s, want abc123", call.Req.SourceFileChecksum)
+	}
+
+	// Verify ProcessDocumentRequested was published with correct fields.
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	cmd := pub.calls[0]
+	if cmd.DocumentID != testContractID {
+		t.Errorf("cmd.DocumentID = %s, want %s", cmd.DocumentID, testContractID)
+	}
+	if cmd.OrganizationID != "org-001" {
+		t.Errorf("cmd.OrganizationID = %s, want org-001", cmd.OrganizationID)
+	}
+	if cmd.RequestedByUserID != "user-001" {
+		t.Errorf("cmd.RequestedByUserID = %s, want user-001", cmd.RequestedByUserID)
+	}
+	if cmd.SourceFileKey != "uploads/org-001/key.pdf" {
+		t.Errorf("cmd.SourceFileKey = %s, want uploads/org-001/key.pdf", cmd.SourceFileKey)
+	}
+	if cmd.SourceFileMIMEType != "application/pdf" {
+		t.Errorf("cmd.SourceFileMIMEType = %s, want application/pdf", cmd.SourceFileMIMEType)
+	}
+}
+
+func TestHandleRecheck_DM5xx(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return nil, dmHTTPError("GetVersion", 500, `{"error":"internal"}`)
+		},
+	}
+	h := newTestHandler(dm)
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleRecheck_DMCircuitOpen(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return nil, dmclient.ErrCircuitOpen
+		},
+	}
+	h := newTestHandler(dm)
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleRecheck_CreateVersionFailure(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return stubVersionWithArtifacts("FULLY_READY"), nil
+		},
+		createVerFn: func(_ context.Context, _ string, _ dmclient.CreateVersionRequest) (*dmclient.DocumentVersion, error) {
+			return nil, dmHTTPError("CreateVersion", 500, `{"error":"internal"}`)
+		},
+	}
+	h := newTestHandlerFull(dm, &mockStorage{}, &mockPublisher{}, &mockKVStore{})
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleRecheck_BrokerFailure(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return stubVersionWithArtifacts("FULLY_READY"), nil
+		},
+	}
+	pub := &mockPublisher{
+		publishFn: func(_ context.Context, _ commandpub.ProcessDocumentCommand) error {
+			return errors.New("broker connection lost")
+		},
+	}
+	h := newTestHandlerFull(dm, &mockStorage{}, pub, &mockKVStore{})
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	result := parseJSON(t, rr)
+	if result["error_code"] != "BROKER_UNAVAILABLE" {
+		t.Errorf("error_code = %v, want BROKER_UNAVAILABLE", result["error_code"])
+	}
+
+	// Version was already created — no rollback possible.
+	if len(dm.createCalls) != 1 {
+		t.Errorf("expected version to have been created before broker failure, got %d calls", len(dm.createCalls))
+	}
+}
+
+func TestHandleRecheck_RedisNonCritical(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return stubVersionWithArtifacts("FULLY_READY"), nil
+		},
+	}
+	kv := &mockKVStore{
+		setFn: func(_ context.Context, _ string, _ string, _ time.Duration) error {
+			return errors.New("redis down")
+		},
+	}
+	h := newTestHandlerFull(dm, &mockStorage{}, &mockPublisher{}, kv)
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	// Should still return 202 — Redis failure is non-critical.
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 (Redis failure is non-critical), got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleRecheck_RedisTracking(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return stubVersionWithArtifacts("FULLY_READY"), nil
+		},
+		createVerFn: func(_ context.Context, _ string, _ dmclient.CreateVersionRequest) (*dmclient.DocumentVersion, error) {
+			return &dmclient.DocumentVersion{
+				VersionID:     "ver-new-001",
+				VersionNumber: 2,
+			}, nil
+		},
+	}
+	kv := &mockKVStore{}
+	h := newTestHandlerFull(dm, &mockStorage{}, &mockPublisher{}, kv)
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+
+	// Verify Redis tracking was saved.
+	if len(kv.calls) != 1 {
+		t.Fatalf("expected 1 Redis Set call, got %d", len(kv.calls))
+	}
+	if !strings.HasPrefix(kv.calls[0].Key, "upload:org-001:") {
+		t.Errorf("Redis key = %s, want prefix upload:org-001:", kv.calls[0].Key)
+	}
+	if kv.calls[0].TTL != uploadTrackingTTL {
+		t.Errorf("Redis TTL = %v, want %v", kv.calls[0].TTL, uploadTrackingTTL)
+	}
+}
+
+func TestHandleRecheck_EmptySourceFileKey(t *testing.T) {
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			v := stubVersionWithArtifacts("FULLY_READY")
+			v.SourceFileKey = ""
+			return v, nil
+		},
+	}
+	h := newTestHandlerFull(dm, &mockStorage{}, &mockPublisher{}, &mockKVStore{})
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for empty source_file_key, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	result := parseJSON(t, rr)
+	if result["error_code"] != "INTERNAL_ERROR" {
+		t.Errorf("error_code = %v, want INTERNAL_ERROR", result["error_code"])
+	}
+}
+
+func TestHandleRecheck_NoS3Upload(t *testing.T) {
+	// Recheck should not touch S3 — it reuses the parent version's source file.
+	storage := &mockStorage{}
+	dm := &mockDMClient{
+		getVerFn: func(_ context.Context, _, _ string) (*dmclient.DocumentVersionWithArtifacts, error) {
+			return stubVersionWithArtifacts("FULLY_READY"), nil
+		},
+	}
+	h := newTestHandlerFull(dm, storage, &mockPublisher{}, &mockKVStore{})
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/versions/"+testVersionID+"/recheck", nil)
+	r = withAuthContext(r)
+	r = withChiParams(r, map[string]string{"contract_id": testContractID, "version_id": testVersionID})
+
+	h.HandleRecheck().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+
+	if len(storage.putCalls) != 0 {
+		t.Errorf("S3 PutObject should not be called for recheck, got %d calls", len(storage.putCalls))
+	}
+	if len(storage.deleteCalls) != 0 {
+		t.Errorf("S3 DeleteObject should not be called for recheck, got %d calls", len(storage.deleteCalls))
+	}
+}
+
+// =========================================================================
+// isStillProcessing tests
+// =========================================================================
+
+func TestIsStillProcessing(t *testing.T) {
+	tests := []struct {
+		status string
+		want   bool
+	}{
+		{"PENDING_UPLOAD", true},
+		{"PENDING_PROCESSING", true},
+		{"PROCESSING_IN_PROGRESS", true},
+		{"ARTIFACTS_READY", true},
+		{"ANALYSIS_IN_PROGRESS", true},
+		{"ANALYSIS_READY", true},
+		{"REPORTS_IN_PROGRESS", true},
+		{"FULLY_READY", false},
+		{"PARTIALLY_AVAILABLE", false},
+		{"PROCESSING_FAILED", false},
+		{"REJECTED", false},
+		{"UNKNOWN_STATUS", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			got := isStillProcessing(tt.status)
+			if got != tt.want {
+				t.Errorf("isStillProcessing(%q) = %v, want %v", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+// =========================================================================
 // Interface compliance
 // =========================================================================
 

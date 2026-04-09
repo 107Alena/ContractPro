@@ -67,13 +67,14 @@ func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler
 				r.Post("/contracts/{contract_id}/versions/upload", versionH.HandleUpload())
 				r.Get("/contracts/{contract_id}/versions/{version_id}", versionH.HandleGet())
 				r.Get("/contracts/{contract_id}/versions/{version_id}/status", versionH.HandleStatus())
+				r.Post("/contracts/{contract_id}/versions/{version_id}/recheck", versionH.HandleRecheck())
 			} else {
 				r.Get("/contracts/{contract_id}/versions", notImplemented)
 				r.Post("/contracts/{contract_id}/versions/upload", notImplemented)
 				r.Get("/contracts/{contract_id}/versions/{version_id}", notImplemented)
 				r.Get("/contracts/{contract_id}/versions/{version_id}/status", notImplemented)
+				r.Post("/contracts/{contract_id}/versions/{version_id}/recheck", notImplemented)
 			}
-			r.Post("/contracts/{contract_id}/versions/{version_id}/recheck", notImplemented)
 
 			// Results.
 			if resultsH != nil {

@@ -762,7 +762,41 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 
 ### Следующие задачи готовые к реализации (deps выполнены)
 - ORCH-TASK-034 (high): Graceful shutdown — зависит от ORCH-TASK-008 ✓, ORCH-TASK-029 ✓, ORCH-TASK-027 ✓
-- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-022: Re-check Coordinator (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить существующий код: versions handler (HandleUpload — ближайший паттерн), DM client, command publisher, routes, error handling
+2. Спроектировать HandleRecheck: решение — добавить метод в versions.Handler (общие зависимости: DMClient, CommandPublisher, KVStore)
+3. Реализовать HandleRecheck() в handler.go
+4. Добавить isStillProcessing() — whitelist подход для terminal statuses
+5. Обновить routes.go — подключить recheck в versionH nil-guard block
+6. Написать тесты (16 функций + 23 subtests)
+7. Code review (code-reviewer subagent) → исправления: M-1 empty SourceFileKey guard, N-1 broker failure comment
+
+### Что реализовано
+- **handler.go**: HandleRecheck() метод — POST /api/v1/contracts/{id}/versions/{vid}/recheck. Flow: auth → extract IDs → generate correlationID/jobID → enrich context → DM GetVersion (source file metadata + artifact_status) → isStillProcessing guard → empty SourceFileKey guard → DM CreateVersion (origin_type=RE_CHECK, reuse source file, parent_version_id=vid) → PublishProcessDocument → Redis tracking → 202 Accepted
+- **handler.go**: isStillProcessing(artifactStatus) — whitelist: FULLY_READY, PARTIALLY_AVAILABLE, PROCESSING_FAILED, REJECTED → false; all others → true (conservative, blocks 7 intermediate statuses)
+- **routes.go**: recheck route moved inside versionH nil-guard block, fallback to notImplemented when versionH is nil
+- **handler_test.go**: 16 тестов (+ 23 sub-tests): success, no auth (401), invalid contract_id/version_id (400), version not found (404), 7 processing statuses blocked (409), 4 terminal statuses allowed (202), CreateVersion request fields + command fields, DM 5xx (502), DM circuit open (502), CreateVersion failure (502), broker failure + no rollback (502), Redis non-critical (202), Redis tracking (key/TTL), empty SourceFileKey (500), no S3 operations, isStillProcessing 12 cases
+
+### Ключевые решения
+- **В versions.Handler, не отдельный пакет** — те же зависимости (DMClient, CommandPublisher, KVStore), тот же паттерн error handling и response format
+- **Whitelist terminal statuses** — безопаснее чем blacklist: неизвестные статусы трактуются как "still processing"
+- **Нет S3 upload** — reuse parent version's source_file_key/name/size/checksum
+- **Нет GetDocument** — DM CreateVersion сам отклонит archived/deleted документы; избегаем лишний network round-trip
+- **Empty SourceFileKey guard** — защита от corrupt parent version (edge case: upload failed mid-way)
+- **Broker failure = no rollback** — version уже создана в DM; CRITICAL лог для ops
+- **SourceFileMIMEType = application/pdf** — v1 поддерживает только PDF
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-034 (high): Graceful shutdown — зависит от ORCH-TASK-008 ✓, ORCH-TASK-029 ✓, ORCH-TASK-027 ✓
 - ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
 - ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
 - ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓

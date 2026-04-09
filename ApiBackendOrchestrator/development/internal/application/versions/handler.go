@@ -1,14 +1,17 @@
 // Package versions implements the version management handlers for the
 // GET /api/v1/contracts/{contract_id}/versions,
 // GET /api/v1/contracts/{contract_id}/versions/{version_id},
-// GET /api/v1/contracts/{contract_id}/versions/{version_id}/status, and
-// POST /api/v1/contracts/{contract_id}/versions/upload endpoints.
+// GET /api/v1/contracts/{contract_id}/versions/{version_id}/status,
+// POST /api/v1/contracts/{contract_id}/versions/upload, and
+// POST /api/v1/contracts/{contract_id}/versions/{version_id}/recheck endpoints.
 //
 // List, get, and status handlers proxy to the Document Management (DM) service,
 // mapping artifact_status to user-friendly processing_status. The upload handler
 // accepts multipart/form-data, validates the PDF, uploads to S3, creates a
 // version in DM with origin_type=RE_UPLOAD, and publishes a
-// ProcessDocumentRequested command to DP.
+// ProcessDocumentRequested command to DP. The recheck handler creates a new
+// version in DM with origin_type=RE_CHECK using the same source file and
+// publishes a ProcessDocumentRequested command.
 package versions
 
 import (
@@ -499,6 +502,166 @@ func (h *Handler) HandleUpload() http.HandlerFunc {
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			h.log.Error(ctx, "failed to encode upload response", logger.ErrorAttr(err))
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleRecheck — POST /api/v1/contracts/{contract_id}/versions/{version_id}/recheck
+// ---------------------------------------------------------------------------
+
+// HandleRecheck returns a handler for re-checking a contract version using the
+// same source file. The flow:
+//  1. Validate contract_id, version_id, extract auth context
+//  2. DM GetVersion → get source file metadata + check processing status
+//  3. Check version is not still processing (non-terminal artifact_status)
+//  4. DM CreateVersion (origin_type=RE_CHECK, same source file)
+//  5. Publish ProcessDocumentRequested
+//  6. Redis tracking (non-critical)
+//  7. Return 202 Accepted
+func (h *Handler) HandleRecheck() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		// Step 1: Auth + contract_id + version_id validation.
+		ac, ok := auth.AuthContextFrom(ctx)
+		if !ok {
+			model.WriteError(w, r, model.ErrAuthTokenMissing, nil)
+			return
+		}
+
+		contractID, ok := h.extractContractID(w, r)
+		if !ok {
+			return
+		}
+		versionID, ok := h.extractVersionID(w, r)
+		if !ok {
+			return
+		}
+
+		correlationID := h.uuidGen()
+		jobID := h.uuidGen()
+
+		ctx = logger.WithRequestContext(ctx, logger.RequestContext{
+			CorrelationID:  correlationID,
+			OrganizationID: ac.OrganizationID,
+			UserID:         ac.UserID,
+			JobID:          jobID,
+		})
+		ctx = logger.WithDocumentID(ctx, contractID)
+		ctx = logger.WithVersionID(ctx, versionID)
+		r = r.WithContext(ctx)
+
+		h.log.Info(ctx, "recheck started")
+
+		// Step 2: Fetch the version from DM to get source file metadata.
+		ver, err := h.dm.GetVersion(ctx, contractID, versionID)
+		if err != nil {
+			h.handleDMError(ctx, w, r, err, "GetVersion", "version")
+			return
+		}
+
+		// Step 3: Reject if version is still being processed.
+		if isStillProcessing(ver.ArtifactStatus) {
+			model.WriteError(w, r, model.ErrVersionStillProcessing, nil)
+			return
+		}
+
+		// Guard: source file metadata must be present. This can be missing if
+		// the parent version was partially created (e.g., upload failed mid-way).
+		if ver.SourceFileKey == "" {
+			h.log.Error(ctx, "parent version has empty source_file_key",
+				"parent_version_id", versionID,
+			)
+			model.WriteError(w, r, model.ErrInternalError, nil)
+			return
+		}
+
+		// Step 4: Create a new version in DM with origin_type=RE_CHECK,
+		// reusing the same source file from the parent version.
+		createReq := dmclient.CreateVersionRequest{
+			SourceFileKey:      ver.SourceFileKey,
+			SourceFileName:     ver.SourceFileName,
+			SourceFileSize:     ver.SourceFileSize,
+			SourceFileChecksum: ver.SourceFileChecksum,
+			OriginType:         "RE_CHECK",
+			ParentVersionID:    versionID,
+		}
+
+		newVer, err := h.dm.CreateVersion(ctx, contractID, createReq)
+		if err != nil {
+			h.log.Error(ctx, "DM CreateVersion failed for recheck", logger.ErrorAttr(err))
+			h.handleDMError(ctx, w, r, err, "CreateVersion", "version")
+			return
+		}
+
+		ctx = logger.WithVersionID(ctx, newVer.VersionID)
+		r = r.WithContext(ctx)
+
+		h.log.Info(ctx, "recheck version created in DM",
+			"new_version_id", newVer.VersionID,
+			"new_version_number", newVer.VersionNumber,
+			"parent_version_id", versionID,
+		)
+
+		// Step 5: Publish ProcessDocumentRequested command.
+		// CRITICAL: if this fails, a version exists in DM but the processing
+		// command was not delivered. Do NOT roll back — manual intervention
+		// can re-publish the command.
+		cmd := commandpub.ProcessDocumentCommand{
+			JobID:              jobID,
+			DocumentID:         contractID,
+			VersionID:          newVer.VersionID,
+			OrganizationID:     ac.OrganizationID,
+			RequestedByUserID:  ac.UserID,
+			SourceFileKey:      ver.SourceFileKey,
+			SourceFileName:     ver.SourceFileName,
+			SourceFileSize:     ver.SourceFileSize,
+			SourceFileChecksum: ver.SourceFileChecksum,
+			SourceFileMIMEType: contentTypePDF,
+		}
+		if err := h.publisher.PublishProcessDocument(ctx, cmd); err != nil {
+			h.log.Error(ctx, "CRITICAL: failed to publish ProcessDocumentRequested for recheck",
+				logger.ErrorAttr(err),
+				"document_id", contractID,
+				"new_version_id", newVer.VersionID,
+				"job_id", jobID,
+			)
+			model.WriteError(w, r, model.ErrBrokerUnavailable, nil)
+			return
+		}
+
+		h.log.Info(ctx, "ProcessDocumentRequested command published for recheck")
+
+		// Step 6: Save tracking in Redis (non-critical).
+		h.saveTracking(ctx, ac.OrganizationID, jobID, contractID, newVer.VersionID, newVer.VersionNumber, ac.UserID)
+
+		// Step 7: Return 202 Accepted.
+		resp := VersionUploadResponse{
+			ContractID:    contractID,
+			VersionID:     newVer.VersionID,
+			VersionNumber: newVer.VersionNumber,
+			JobID:         jobID,
+			Status:        "UPLOADED",
+			Message:       "Повторная проверка запущена.",
+		}
+
+		w.Header().Set("X-Correlation-Id", correlationID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			h.log.Error(ctx, "failed to encode recheck response", logger.ErrorAttr(err))
+		}
+	}
+}
+
+// isStillProcessing returns true if the artifact_status indicates the version
+// is still being processed and cannot be rechecked.
+func isStillProcessing(artifactStatus string) bool {
+	switch artifactStatus {
+	case "FULLY_READY", "PARTIALLY_AVAILABLE", "PROCESSING_FAILED", "REJECTED":
+		return false
+	default:
+		return true
 	}
 }
 

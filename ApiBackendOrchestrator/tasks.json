@@ -545,7 +545,9 @@
         "Шаг 3: recheck PENDING версии → 409"
       ],
       "dependencies": ["ORCH-TASK-014", "ORCH-TASK-017"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-10",
+      "summary": "Метод HandleRecheck() добавлен в пакет internal/application/versions (versions.Handler). POST /api/v1/contracts/{id}/versions/{vid}/recheck: auth validation → extract contract_id/version_id (UUID) → generate correlationID/jobID → DM GetVersion (source file metadata + artifact_status) → isStillProcessing guard (whitelist: FULLY_READY/PARTIALLY_AVAILABLE/PROCESSING_FAILED/REJECTED — all others blocked) → empty SourceFileKey guard (500 INTERNAL_ERROR) → DM CreateVersion (origin_type=RE_CHECK, same source_file_key/name/size/checksum, parent_version_id=vid) → PublishProcessDocument (commandpub, MIME=application/pdf) → Redis tracking (non-critical, TTL 1h) → 202 Accepted {contract_id, version_id, version_number, job_id, status:UPLOADED, message}. Broker failure: CRITICAL log, no rollback (version exists in DM). Error handling: handleDMError shared method (ErrCircuitOpen→502, DMError→MapDMError, transport→502). Wiring: routes.go updated, recheck inside versionH nil-guard block. 16 тестов (+ 23 sub-tests): success (1), no auth (1), invalid contract_id/version_id (2), version not found (1), version still processing ×7 subtests (1), terminal statuses allowed ×4 subtests (1), CreateVersion request fields + published command fields (1), DM 5xx (1), DM circuit open (1), CreateVersion failure (1), broker failure + orphan assertion (1), Redis non-critical (1), Redis tracking key/TTL (1), empty SourceFileKey guard (1), no S3 operations (1), isStillProcessing 12 subtests (1). Code review: M-1 empty SourceFileKey guard added, N-1 broker failure comment added. Нет новых зависимостей."
     },
     {
       "id": "ORCH-TASK-023",

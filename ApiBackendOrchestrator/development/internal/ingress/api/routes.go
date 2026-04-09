@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"contractpro/api-orchestrator/internal/application/contracts"
+	"contractpro/api-orchestrator/internal/application/results"
 	"contractpro/api-orchestrator/internal/application/versions"
 
 	"github.com/go-chi/chi/v5"
@@ -25,7 +26,7 @@ import (
 //   - uploadH: contract upload handler (nil → 501 Not Implemented)
 //   - contractH: contract CRUD handler (nil → 501 Not Implemented stubs)
 //   - versionH: version management handler (nil → 501 Not Implemented stubs)
-func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, contractH *contracts.Handler, versionH *versions.Handler) {
+func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -74,10 +75,17 @@ func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler
 			r.Post("/contracts/{contract_id}/versions/{version_id}/recheck", notImplemented)
 
 			// Results.
-			r.Get("/contracts/{contract_id}/versions/{version_id}/results", notImplemented)
-			r.Get("/contracts/{contract_id}/versions/{version_id}/risks", notImplemented)
-			r.Get("/contracts/{contract_id}/versions/{version_id}/summary", notImplemented)
-			r.Get("/contracts/{contract_id}/versions/{version_id}/recommendations", notImplemented)
+			if resultsH != nil {
+				r.Get("/contracts/{contract_id}/versions/{version_id}/results", resultsH.HandleResults())
+				r.Get("/contracts/{contract_id}/versions/{version_id}/risks", resultsH.HandleRisks())
+				r.Get("/contracts/{contract_id}/versions/{version_id}/summary", resultsH.HandleSummary())
+				r.Get("/contracts/{contract_id}/versions/{version_id}/recommendations", resultsH.HandleRecommendations())
+			} else {
+				r.Get("/contracts/{contract_id}/versions/{version_id}/results", notImplemented)
+				r.Get("/contracts/{contract_id}/versions/{version_id}/risks", notImplemented)
+				r.Get("/contracts/{contract_id}/versions/{version_id}/summary", notImplemented)
+				r.Get("/contracts/{contract_id}/versions/{version_id}/recommendations", notImplemented)
+			}
 
 			// Comparison.
 			r.Post("/contracts/{contract_id}/compare", notImplemented)

@@ -573,8 +573,48 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - Nil CurrentVersion: create without parent_version_id
 
 ### Следующие задачи готовые к реализации (deps выполнены)
-- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
 - ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
 - ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
 - ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
 - ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+
+## ORCH-TASK-021: Results Aggregator (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (api-specification.yaml, high-architecture.md, integration-contracts.md, error-handling.md) — определить endpoints, artifact types, role-based access, status handling
+2. Изучить существующий код (dmclient models/client, contracts handler/response, versions handler/response, routes, server, auth context)
+3. Спроектировать Handler с DMClient consumer-side интерфейсом (backend-reliability-engineer subagent)
+4. Реализовать response.go: processingStatusMap, processingStatusMessages, dataAvailableStatuses, artifact type constants, 4 response DTOs
+5. Реализовать handler.go: DMClient interface, Handler, HandleResults/HandleRisks/HandleSummary/HandleRecommendations, fetchArtifactsParallel/Sequential/Single, isDMNotFound, handleDMError, writeJSON, extractContractID/VersionID
+6. Wiring: server.go (Deps.ResultsHandler), routes.go (resultsH parameter, nil-guard)
+7. Реализовать handler_test.go: 28 тестов (+ 30 sub-tests)
+8. Code review (code-reviewer subagent) → исправления: S-2 presigned URL removed from logs, S-4 context cancellation test, N-2 redirect test, N-3 status message test, N-4 mapping comment
+
+### Что реализовано
+- **response.go**: processingStatusMap (11 entries), processingStatusMessages (10 entries), dataAvailableStatuses (2: FULLY_READY, PARTIALLY_AVAILABLE), 7 artifact type constants, 4 artifact type lists, 4 response DTOs (AnalysisResultsResponse, RiskListResponse, SummaryResponse, RecommendationsResponse) с json.RawMessage для zero-copy pass-through, mapProcessingStatus, mapProcessingStatusMessage, isDataAvailable
+- **handler.go**: DMClient consumer-side interface (GetVersion, GetArtifact), compile-time check var _ DMClient = (*dmclient.Client)(nil), Handler struct (dm, log), NewHandler с component logger. HandleResults (LAWYER/ORG_ADMIN only, 7 artifacts parallel), HandleRisks (LAWYER/ORG_ADMIN only, 2 sequential), HandleSummary (all roles, 3 sequential), HandleRecommendations (LAWYER/ORG_ADMIN only, 1 sequential). fetchArtifactsParallel (sync.WaitGroup+Mutex, concurrent goroutines), fetchArtifactsSequential, fetchSingleArtifact (404→null, transport→null, redirect→null), isDMNotFound, handleDMError (circuit open→502, DMError→MapDMError, transport→502, unknown→500), writeJSON, extractContractID/VersionID (UUID validation)
+- **server.go**: Deps.ResultsHandler *results.Handler
+- **routes.go**: registerRoutes с resultsH parameter, nil-guard (4 routes)
+- **handler_test.go**: 28 тестов (+ 30 sub-tests): HandleResults (12: BUSINESS_USER 403, no auth 401, invalid contract_id/version_id 400, processing 200+nulls, fully_ready 7 artifacts, partially_available, artifact 404 null, transport error null, circuit open 502, DM 404, OrgAdmin allowed, redirect null, context cancelled), HandleRisks (3: 403, 2 artifacts, nulls), HandleSummary (3: all roles ×3, 3 artifacts, nulls), HandleRecommendations (3: 403, 1 artifact, failed nulls), mapProcessingStatus (12 subtests), mapProcessingStatusMessage (3), isDataAvailable (18), isDMNotFound (3), all non-data statuses (9 subtests)
+
+### Ключевые решения
+- **json.RawMessage pass-through** — артефакты не десериализуются, передаются как есть из DM (zero-copy)
+- **Parallel vs sequential** — goroutines только для /results (7 artifacts), sequential для остальных (1-3 artifacts) — избегает overhead
+- **sync.Mutex для map** — даже при distinct keys, concurrent map writes unsafe в Go
+- **Defense-in-depth RBAC** — handler проверяет BUSINESS_USER независимо от RBAC middleware
+- **Graceful degradation** — per-artifact ошибки не ломают весь запрос, только ставят null
+- **Status gate** — артефакты не запрашиваются для non-terminal статусов, возвращается 200 с mapped status
+- **Presigned URL not logged** — убрано из log для предотвращения утечки credentials (S-2 fix)
+- **Нет новых зависимостей** — chi, uuid, dmclient уже в go.mod
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓

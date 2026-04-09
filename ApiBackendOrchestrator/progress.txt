@@ -688,8 +688,6 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - **now func() seam** — deterministic timestamps in tests
 
 ### Следующие задачи готовые к реализации (deps выполнены)
-- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
-- ORCH-TASK-030 (critical): SSE Broadcaster — зависит от ORCH-TASK-028 ✓, ORCH-TASK-029 (pending)
 - ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
 - ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
 - ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
@@ -698,3 +696,37 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
 - ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
 - ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓
+
+## ORCH-TASK-029: SSE Connection Manager (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, sse-protocol.md, security.md, configuration.md) — определить SSE endpoint, auth, channels
+2. Использовать существующий SSE stub (routes.go), auth middleware (ValidateToken), kvstore (Subscribe/Publish) как интеграционные точки
+3. Спроектировать Handler с TokenValidator/KVStore/Subscription interfaces (backend-reliability-engineer subagent)
+4. Реализовать handler.go: Handler struct, Handle() http.HandlerFunc, eventLoop, SSE wire format helpers, connection lifecycle
+5. Реализовать adapter.go: KVStoreAdapter bridging *kvstore.Client → sse.KVStore interface
+6. Реализовать handler_test.go: 35 тестов
+7. Wiring: SSEHandler в Deps struct (server.go), registerRoutes с nil-guard fallback (routes.go)
+8. Code review (code-reviewer subagent) → исправления: M-01 WriteTimeout disable, M-02 multiline data, M-03 event_type sanitization
+
+### Что реализовано
+- **handler.go**: Handler struct (validator TokenValidator, kv KVStore, cfg SSEConfig, log *Logger, uuidGen, now seams), NewHandler с component logger, Handle() → http.HandlerFunc: JWT query param extraction → ValidateToken → Flusher check → ResponseController.SetWriteDeadline(time.Time{}) → SSE headers → connID → registerConnection → Redis Subscribe с buffered events channel (cap 64) → writeComment("connected") → eventLoop. eventLoop: select (events→extractEventType+writeSSEEvent, heartbeat→writeHeartbeat+refreshConnection, maxAge→connection_expired, ctx.Done()). writeSSEEvent с multiline data support (strings.Split). sanitizeEventType (strip \n/\r). 520 строк.
+- **adapter.go**: KVStoreAdapter wrapping *kvstore.Client → sse.KVStore interface (Subscribe returns Subscription interface). 45 строк.
+- **handler_test.go**: 35 тестов + 14 sub-tests: auth (3), flusher (1), headers (1), connected comment (1), connection register/unregister (2), event delivery (4), heartbeat (2), max age (1), disconnect (1), write error (1), backpressure (1), subscribe failure (1), Redis failures (2), channel (1), subscription close (1), extractEventType (10), sanitizeEventType (6), multiline data (1), isExpiredError (4), key/channel (2), constructor (1), interface checks (3).
+
+### Ключевые решения
+- **Consumer-side Subscription interface** — only Close() error, satisfied by *kvstore.Subscription
+- **KVStoreAdapter** — thin adapter для bridging concrete → interface return type
+- **http.ResponseController.SetWriteDeadline(time.Time{})** — disable WriteTimeout для SSE (M-01 fix)
+- **Multiline data support** — strings.Split на \n, data: prefix per line (M-02 fix)
+- **sanitizeEventType** — strip \n/\r для предотвращения SSE injection (M-03 fix)
+- **Non-blocking event channel** — cap 64 + select default drop (slow client safe)
+- **Detached context в unregisterConnection** — 2s background для cleanup
+- **connection_expired event** — reconnect hint перед закрытием
+- **sseStub preserved** — nil-guard fallback в routes.go
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-030 (critical): SSE Broadcaster — зависит от ORCH-TASK-029 ✓, ORCH-TASK-028 ✓
+- ORCH-TASK-034 (high): Graceful shutdown — зависит от ORCH-TASK-008 ✓, ORCH-TASK-029 ✓, ORCH-TASK-027 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓

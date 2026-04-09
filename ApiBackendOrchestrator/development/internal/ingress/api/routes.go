@@ -6,6 +6,7 @@ import (
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/results"
 	"contractpro/api-orchestrator/internal/application/versions"
+	"contractpro/api-orchestrator/internal/ingress/sse"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -26,7 +27,7 @@ import (
 //   - uploadH: contract upload handler (nil → 501 Not Implemented)
 //   - contractH: contract CRUD handler (nil → 501 Not Implemented stubs)
 //   - versionH: version management handler (nil → 501 Not Implemented stubs)
-func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler) {
+func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, sseH *sse.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -107,9 +108,13 @@ func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler
 		// --- SSE endpoint ---
 		// SSE uses query-param authentication (EventSource API does not
 		// support custom headers), so it sits outside the standard auth
-		// middleware group. Auth will be handled inside the SSE handler
-		// itself (ORCH-TASK-029).
-		r.Get("/events/stream", sseStub)
+		// middleware group. Auth is handled inside the SSE handler itself
+		// via the "token" query parameter.
+		if sseH != nil {
+			r.Get("/events/stream", sseH.Handle())
+		} else {
+			r.Get("/events/stream", sseStub)
+		}
 	})
 }
 

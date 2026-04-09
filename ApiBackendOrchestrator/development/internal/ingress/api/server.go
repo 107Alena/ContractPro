@@ -39,6 +39,7 @@ import (
 	"contractpro/api-orchestrator/internal/config"
 	"contractpro/api-orchestrator/internal/infra/health"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
+	"contractpro/api-orchestrator/internal/ingress/sse"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -72,6 +73,7 @@ type Deps struct {
 	ContractHandler *contracts.Handler
 	VersionHandler  *versions.Handler
 	ResultsHandler  *results.Handler
+	SSEHandler      *sse.Handler
 }
 
 // NewServer constructs a Server with the chi router, middleware chain,
@@ -108,7 +110,7 @@ func NewServer(deps Deps) *Server {
 		uploadH = notImplemented
 	}
 
-	registerRoutes(r, authMW, rbacMW, uploadH, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler)
+	registerRoutes(r, authMW, rbacMW, uploadH, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.SSEHandler)
 
 	mainAddr := fmt.Sprintf(":%d", deps.Config.Port)
 	main := &http.Server{

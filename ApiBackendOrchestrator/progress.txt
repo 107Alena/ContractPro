@@ -648,8 +648,48 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
 
 ### Следующие задачи готовые к реализации (deps выполнены)
-- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-028 (critical): Processing Status Tracker — зависит от ORCH-TASK-027 ✓
 - ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓
+
+## ORCH-TASK-028: Processing Status Tracker (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md 5.2, event-catalog.md, sequence-diagrams.md) — определить маппинг статусов, monotonic ordering, SSE формат
+2. Использовать consumer events.go, consumer.go (EventHandler interface), kvstore.Client как интеграционные точки
+3. Спроектировать Tracker с KVStore consumer-side interface (backend-reliability-engineer subagent)
+4. Реализовать status.go: UserStatus (11 констант), statusOrder, terminalStatuses, statusMessages, SSEEvent, statusRecord, KVStore interface, ordering functions
+5. Реализовать tracker.go: Tracker struct, HandleEvent (12-way dispatch), tryTransition (Redis GET-check-SET), broadcast (Redis Pub/Sub), 12 per-event handlers
+6. Реализовать tracker_test.go: 63 теста
+7. Code review (code-reviewer subagent) → исправления: S-1.1 orgID guard, S-1.2 DMVersionCreated orgID, S-2.1 TOCTOU documented, S-6.1 missing orgID tests, N-3.2 corrupt log, N-5.3 YAGNI jobID
+
+### Что реализовано
+- **status.go**: UserStatus type (11 констант), statusOrder map (6 happy-path: UPLOADED→QUEUED→PROCESSING→ANALYZING→GENERATING_REPORTS→READY), terminalStatuses set (6: READY, FAILED, ANALYSIS_FAILED, REPORTS_FAILED, PARTIALLY_FAILED, REJECTED), statusMessages map (11 записей с русскими сообщениями NFR-5.2), SSEEvent struct (event_type, document_id, version_id, job_id, status, message, timestamp, is_retryable, error_code, error_message, base_version_id, target_version_id), statusRecord struct (status, updated_at), KVStore consumer-side interface (Get/Set/Publish), statusKey/sseChannel helpers, isTerminal/isForwardTransition/canTransition ordering logic, derefBool helper
+- **tracker.go**: Tracker struct (kv KVStore, log *Logger, now func()), NewTracker с component logger, HandleEvent (12-way dispatch: 5 DP + 2 LIC/RE + 5 DM), tryTransition (Redis GET-check-SET, orgID/docID/verID validation, ErrKeyNotFound sentinel, corrupt recovery, 24h TTL, TOCTOU documented), broadcast (Redis Pub/Sub sse:broadcast:{org}, error swallowed), handleDPStatusChanged (IN_PROGRESS→PROCESSING, REJECTED→REJECTED, TIMED_OUT→FAILED), handleDPProcessingCompleted (informational), handleDPProcessingFailed (→FAILED), handleDPComparisonCompleted/Failed (→comparison_update SSE), handleLICStatusChanged (IN_PROGRESS→ANALYZING, FAILED→ANALYSIS_FAILED immediate), handleREStatusChanged (IN_PROGRESS→GENERATING_REPORTS, FAILED→REPORTS_FAILED), handleDMVersionArtifactsReady (→ANALYZING), handleDMVersionAnalysisReady (→GENERATING_REPORTS), handleDMVersionReportsReady (→READY), handleDMVersionPartiallyAvailable (→PARTIALLY_FAILED), handleDMVersionCreated (RE_CHECK→version_created SSE), handleDMStatusEvent shared helper, buildStatusUpdateEvent
+- **tracker_test.go**: 63 теста: status ordering (9: isTerminal 11+5 values, isForwardTransition happy/backward/same/failure, canTransition forward/backward/terminal/failure-override), tryTransition (10: first write, forward, backward skip, terminal skip, failure override, Redis get/set error, key pattern, TTL, corrupt), broadcast (3: success, publish error, event JSON), dispatch (2: unknown type, wrong concrete type), DP handlers (9: IN_PROGRESS, REJECTED, TIMED_OUT, COMPLETED ignored, missing orgID, processing-completed no transition, processing-failed transitions, processing-failed error fields, processing-failed missing orgID), LIC handlers (5: IN_PROGRESS, COMPLETED ignored, FAILED, IsRetryable nil, unknown status, missing orgID), RE handlers (3+1: IN_PROGRESS, FAILED, COMPLETED ignored, missing orgID), DM handlers (8: artifacts-ready, analysis-ready, reports-ready, partially-available, version-created upload, version-created RE_CHECK, missing orgID ×3), comparison (3+1: completed, failed, completed missing orgID, failed missing orgID), scenarios (4: full happy path, out-of-order, failure mid-pipeline, duplicate), Redis NACK (1), warnings (1), timestamp (1), messages (1), interface (1), derefBool (1), key/channel (2)
+
+### Ключевые решения
+- **KVStore consumer-side interface** — 3 метода (Get/Set/Publish), не импортирует infra/kvstore
+- **Monotonic ordering** — statusOrder map для happy-path, terminalStatuses для failure. canTransition: forward-only + failure-override
+- **TOCTOU accepted** — GET-check-SET не атомарный, но events для одной версии обрабатываются последовательно одним consumer. Документировано для будущего масштабирования
+- **Error contract** — Redis Get/Set fail → return error → NACK. Publish fail → log ERROR, return nil → ACK (status persisted, SSE best-effort)
+- **Comparison events** — separate SSE event_type "comparison_update" (не status_update), no Redis status transition
+- **DM VersionCreated** — RE_CHECK → "version_created" SSE, UPLOAD → no broadcast
+- **DP ProcessingCompleted** — informational only, no status transition (await DM artifacts-ready)
+- **Immediate failure detection** — LIC/RE FAILED → immediate SSE push без ожидания DM Watchdog (ASSUMPTION-ORCH-13)
+- **Corrupt record recovery** — invalid JSON in Redis → overwrite (WARN log)
+- **now func() seam** — deterministic timestamps in tests
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-030 (critical): SSE Broadcaster — зависит от ORCH-TASK-028 ✓, ORCH-TASK-029 (pending)
 - ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
 - ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
 - ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓

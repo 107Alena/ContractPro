@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"contractpro/api-orchestrator/internal/egress/ssebroadcast"
 	"contractpro/api-orchestrator/internal/infra/kvstore"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/consumer"
@@ -26,17 +27,19 @@ var _ consumer.EventHandler = (*Tracker)(nil)
 // deployment changes to parallel consumers per version, tryTransition must
 // be upgraded to a Redis Lua script or WATCH/MULTI/EXEC.
 type Tracker struct {
-	kv  KVStore
-	log *logger.Logger
-	now func() time.Time
+	kv          KVStore
+	broadcaster ssebroadcast.Broadcaster
+	log         *logger.Logger
+	now         func() time.Time
 }
 
 // NewTracker creates a Tracker with the given dependencies.
-func NewTracker(kv KVStore, log *logger.Logger) *Tracker {
+func NewTracker(kv KVStore, bc ssebroadcast.Broadcaster, log *logger.Logger) *Tracker {
 	return &Tracker{
-		kv:  kv,
-		log: log.With("component", "status-tracker"),
-		now: time.Now,
+		kv:          kv,
+		broadcaster: bc,
+		log:         log.With("component", "status-tracker"),
+		now:         time.Now,
 	}
 }
 
@@ -180,7 +183,7 @@ func (t *Tracker) handleDPStatusChanged(ctx context.Context, e *consumer.DPStatu
 	}
 
 	var newStatus UserStatus
-	var sseEvent SSEEvent
+	var sseEvent ssebroadcast.Event
 
 	switch e.Status {
 	case "IN_PROGRESS":
@@ -220,7 +223,7 @@ func (t *Tracker) handleDPStatusChanged(ctx context.Context, e *consumer.DPStatu
 		}
 	}
 
-	t.broadcast(ctx, e.OrganizationID, sseEvent)
+	_ = t.broadcaster.Broadcast(ctx, e.OrganizationID, sseEvent)
 	return nil
 }
 
@@ -258,7 +261,7 @@ func (t *Tracker) handleDPProcessingFailed(ctx context.Context, e *consumer.DPPr
 	sseEvent.ErrorMessage = e.ErrorMessage
 	sseEvent.IsRetryable = e.IsRetryable
 
-	t.broadcast(ctx, e.OrganizationID, sseEvent)
+	_ = t.broadcaster.Broadcast(ctx, e.OrganizationID, sseEvent)
 	return nil
 }
 
@@ -272,7 +275,7 @@ func (t *Tracker) handleDPComparisonCompleted(ctx context.Context, e *consumer.D
 		return nil
 	}
 
-	sseEvent := SSEEvent{
+	sseEvent := ssebroadcast.Event{
 		EventType:       "comparison_update",
 		DocumentID:      e.DocumentID,
 		JobID:           e.JobID,
@@ -283,7 +286,7 @@ func (t *Tracker) handleDPComparisonCompleted(ctx context.Context, e *consumer.D
 		TargetVersionID: e.TargetVersionID,
 	}
 
-	t.broadcast(ctx, e.OrganizationID, sseEvent)
+	_ = t.broadcaster.Broadcast(ctx, e.OrganizationID, sseEvent)
 	return nil
 }
 
@@ -295,7 +298,7 @@ func (t *Tracker) handleDPComparisonFailed(ctx context.Context, e *consumer.DPCo
 		return nil
 	}
 
-	sseEvent := SSEEvent{
+	sseEvent := ssebroadcast.Event{
 		EventType:       "comparison_update",
 		DocumentID:      e.DocumentID,
 		JobID:           e.JobID,
@@ -309,7 +312,7 @@ func (t *Tracker) handleDPComparisonFailed(ctx context.Context, e *consumer.DPCo
 		TargetVersionID: e.TargetVersionID,
 	}
 
-	t.broadcast(ctx, e.OrganizationID, sseEvent)
+	_ = t.broadcaster.Broadcast(ctx, e.OrganizationID, sseEvent)
 	return nil
 }
 
@@ -354,7 +357,7 @@ func (t *Tracker) handleLICStatusChanged(ctx context.Context, e *consumer.LICSta
 		sseEvent.IsRetryable = derefBool(e.IsRetryable)
 	}
 
-	t.broadcast(ctx, e.OrganizationID, sseEvent)
+	_ = t.broadcaster.Broadcast(ctx, e.OrganizationID, sseEvent)
 	return nil
 }
 
@@ -397,7 +400,7 @@ func (t *Tracker) handleREStatusChanged(ctx context.Context, e *consumer.REStatu
 		sseEvent.IsRetryable = derefBool(e.IsRetryable)
 	}
 
-	t.broadcast(ctx, e.OrganizationID, sseEvent)
+	_ = t.broadcaster.Broadcast(ctx, e.OrganizationID, sseEvent)
 	return nil
 }
 
@@ -436,7 +439,7 @@ func (t *Tracker) handleDMVersionPartiallyAvailable(ctx context.Context, e *cons
 	sseEvent.ErrorCode = e.FailedStage
 	sseEvent.ErrorMessage = e.ErrorMessage
 
-	t.broadcast(ctx, e.OrganizationID, sseEvent)
+	_ = t.broadcaster.Broadcast(ctx, e.OrganizationID, sseEvent)
 	return nil
 }
 
@@ -450,7 +453,7 @@ func (t *Tracker) handleDMVersionCreated(ctx context.Context, e *consumer.DMVers
 	}
 
 	if e.OriginType == "RE_CHECK" {
-		sseEvent := SSEEvent{
+		sseEvent := ssebroadcast.Event{
 			EventType:  "version_created",
 			DocumentID: e.DocumentID,
 			VersionID:  e.VersionID,
@@ -458,7 +461,7 @@ func (t *Tracker) handleDMVersionCreated(ctx context.Context, e *consumer.DMVers
 			Message:    "Создана новая версия для повторной проверки",
 			Timestamp:  t.now().UTC().Format(time.RFC3339),
 		}
-		t.broadcast(ctx, e.OrganizationID, sseEvent)
+		_ = t.broadcaster.Broadcast(ctx, e.OrganizationID, sseEvent)
 	} else {
 		t.log.Debug(ctx, "dm version-created, no broadcast needed",
 			"origin_type", e.OriginType)
@@ -484,18 +487,18 @@ func (t *Tracker) handleDMStatusEvent(
 	}
 
 	sseEvent := t.buildStatusUpdateEvent(docID, verID, "", newStatus)
-	t.broadcast(ctx, orgID, sseEvent)
+	_ = t.broadcaster.Broadcast(ctx, orgID, sseEvent)
 	return nil
 }
 
-// buildStatusUpdateEvent creates an SSEEvent with event_type "status_update"
+// buildStatusUpdateEvent creates an ssebroadcast.Event with event_type "status_update"
 // and the Russian status message.
-func (t *Tracker) buildStatusUpdateEvent(docID, verID, jobID string, status UserStatus) SSEEvent {
+func (t *Tracker) buildStatusUpdateEvent(docID, verID, jobID string, status UserStatus) ssebroadcast.Event {
 	msg := statusMessages[status]
 	if msg == "" {
 		msg = string(status)
 	}
-	return SSEEvent{
+	return ssebroadcast.Event{
 		EventType:  "status_update",
 		DocumentID: docID,
 		VersionID:  verID,
@@ -583,29 +586,3 @@ func (t *Tracker) tryTransition(
 	return true, nil
 }
 
-// broadcast publishes an SSEEvent to the Redis Pub/Sub channel for the given
-// organization. On failure, logs ERROR and returns (status was already persisted;
-// SSE clients will catch up via polling fallback).
-func (t *Tracker) broadcast(ctx context.Context, orgID string, event SSEEvent) {
-	data, err := json.Marshal(event)
-	if err != nil {
-		t.log.Error(ctx, "failed to marshal SSE event",
-			logger.ErrorAttr(err),
-			"status", event.Status)
-		return
-	}
-
-	channel := sseChannel(orgID)
-	if err := t.kv.Publish(ctx, channel, string(data)); err != nil {
-		t.log.Error(ctx, "failed to broadcast SSE event",
-			logger.ErrorAttr(err),
-			"channel", channel,
-			"status", event.Status)
-		return
-	}
-
-	t.log.Debug(ctx, "broadcast SSE event",
-		"channel", channel,
-		"status", event.Status,
-		"event_type", event.EventType)
-}

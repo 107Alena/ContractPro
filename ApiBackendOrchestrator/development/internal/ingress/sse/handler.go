@@ -8,7 +8,7 @@
 //
 // Each connection subscribes to a Redis Pub/Sub channel scoped to the user's
 // organization (sse:broadcast:{org_id}). The statustracker package publishes
-// SSEEvent payloads to these channels when processing statuses change.
+// ssebroadcast.Event payloads to these channels when processing statuses change.
 //
 // Connections are registered in Redis for observability and have a configurable
 // maximum lifetime (default 24h). Heartbeats are sent at a configurable
@@ -30,6 +30,7 @@ import (
 
 	"contractpro/api-orchestrator/internal/config"
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/egress/ssebroadcast"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
 )
@@ -95,9 +96,6 @@ const (
 	// backpressure from a slow client blocking the Redis subscription
 	// goroutine.
 	eventBufferSize = 64
-
-	// sseChannelPrefix matches the channel prefix used by the statustracker.
-	sseChannelPrefix = "sse:broadcast"
 
 	// connKeyPrefix is the Redis key prefix for connection registration.
 	connKeyPrefix = "sse:conn"
@@ -241,7 +239,7 @@ func (h *Handler) Handle() http.HandlerFunc {
 		// -----------------------------------------------------------
 		// Step 6: Subscribe to Redis Pub/Sub channel
 		// -----------------------------------------------------------
-		channel := sseChannel(orgID)
+		channel := ssebroadcast.Channel(orgID)
 		events := make(chan string, eventBufferSize)
 
 		sub, err := h.kv.Subscribe(connCtx, channel, func(msg string) {
@@ -482,12 +480,6 @@ func (h *Handler) unregisterConnection(
 // ---------------------------------------------------------------------------
 // Key/channel builders
 // ---------------------------------------------------------------------------
-
-// sseChannel builds the Redis Pub/Sub channel name for an organization.
-// Must match the channel used by the statustracker's broadcast method.
-func sseChannel(orgID string) string {
-	return sseChannelPrefix + ":" + orgID
-}
 
 // connKey builds the Redis key for a connection registration record.
 func connKey(orgID, userID, connID string) string {

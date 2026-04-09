@@ -726,7 +726,9 @@
         "Шаг 3: Redis message → доставка в SSE Connection Manager"
       ],
       "dependencies": ["ORCH-TASK-029", "ORCH-TASK-028"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-09",
+      "summary": "Пакет internal/egress/ssebroadcast: Event struct (canonical SSE event payload, moved from statustracker.SSEEvent), Broadcaster interface (Broadcast(ctx, orgID, event) error), Publisher consumer-side interface (Publish(ctx, channel, message) error), Channel(orgID) exported function (single source of truth for sse:broadcast:{org_id} channel naming), NewBroadcaster(pub, log) constructor с component logger. broadcaster.Broadcast: empty orgID guard → skip, JSON marshal → Publish to Channel(orgID), error returned to caller (callers decide policy). Refactored statustracker: SSEEvent → ssebroadcast.Event, Publish removed from KVStore interface (only Get/Set remain), broadcaster dependency added to Tracker via NewTracker(kv, bc, log), private broadcast() method removed → _ = t.broadcaster.Broadcast() (error intentionally ignored — status already persisted, SSE is best-effort). Refactored SSE handler: ssebroadcast.Channel(orgID) replaces duplicated sseChannelPrefix constant and sseChannel() function, doc comment updated. 11 тестов: interface compliance (2), success (1), publish error (1), all event fields (1), omitempty (1), per-org channel (1), context cancelled (1), empty orgID guard (1), Channel() function (3 subtests), concurrent safety (1). Code review: M-1 stale doc comment fixed, N-1 empty orgID guard added. Нет новых зависимостей."
     },
     {
       "id": "ORCH-TASK-031",

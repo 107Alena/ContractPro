@@ -64,23 +64,6 @@ var statusMessages = map[UserStatus]string{
 	StatusRejected:          "Файл отклонён (формат/размер)",
 }
 
-// SSEEvent is the JSON payload published to Redis Pub/Sub and delivered to
-// SSE clients.
-type SSEEvent struct {
-	EventType       string `json:"event_type"`
-	DocumentID      string `json:"document_id"`
-	VersionID       string `json:"version_id,omitempty"`
-	JobID           string `json:"job_id,omitempty"`
-	Status          string `json:"status"`
-	Message         string `json:"message"`
-	Timestamp       string `json:"timestamp"`
-	IsRetryable     bool   `json:"is_retryable"`
-	ErrorCode       string `json:"error_code,omitempty"`
-	ErrorMessage    string `json:"error_message,omitempty"`
-	BaseVersionID   string `json:"base_version_id,omitempty"`
-	TargetVersionID string `json:"target_version_id,omitempty"`
-}
-
 // statusRecord is the JSON value stored in Redis for each version's current
 // processing status.
 type statusRecord struct {
@@ -88,30 +71,22 @@ type statusRecord struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-// KVStore provides key-value and pub/sub operations for status persistence
-// and SSE broadcasting.
+// KVStore provides key-value operations for status persistence.
 //
 // Satisfied by: *kvstore.Client
 type KVStore interface {
 	Get(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key string, value string, ttl time.Duration) error
-	Publish(ctx context.Context, channel string, message string) error
 }
 
 const (
-	statusKeyPrefix  = "status"
-	sseChannelPrefix = "sse:broadcast"
-	statusTTL        = 24 * time.Hour
+	statusKeyPrefix = "status"
+	statusTTL       = 24 * time.Hour
 )
 
 // statusKey builds the Redis key for a version's processing status.
 func statusKey(orgID, docID, verID string) string {
 	return statusKeyPrefix + ":" + orgID + ":" + docID + ":" + verID
-}
-
-// sseChannel builds the Redis Pub/Sub channel for an organization's SSE broadcasts.
-func sseChannel(orgID string) string {
-	return sseChannelPrefix + ":" + orgID
 }
 
 // isTerminal returns true if the status cannot be overwritten.

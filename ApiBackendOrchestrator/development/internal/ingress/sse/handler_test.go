@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"contractpro/api-orchestrator/internal/config"
+	"contractpro/api-orchestrator/internal/egress/ssebroadcast"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
 
@@ -1159,10 +1160,10 @@ func TestIsExpiredError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSSEChannel(t *testing.T) {
-	result := sseChannel("org-123")
+	result := ssebroadcast.Channel("org-123")
 	expected := "sse:broadcast:org-123"
 	if result != expected {
-		t.Errorf("sseChannel(\"org-123\") = %q, want %q", result, expected)
+		t.Errorf("ssebroadcast.Channel(\"org-123\") = %q, want %q", result, expected)
 	}
 }
 

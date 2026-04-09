@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"contractpro/api-orchestrator/internal/egress/ssebroadcast"
 	"contractpro/api-orchestrator/internal/infra/kvstore"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/consumer"
@@ -15,19 +16,12 @@ import (
 
 // --- Mock KVStore ---
 
-type publishedMessage struct {
-	channel string
-	message string
-}
-
 type mockKVStore struct {
-	mu        sync.Mutex
-	store     map[string]string
-	published []publishedMessage
-	getErr    error
-	setErr    error
-	pubErr    error
-	setTTL    time.Duration // captures the last Set TTL
+	mu     sync.Mutex
+	store  map[string]string
+	getErr error
+	setErr error
+	setTTL time.Duration // captures the last Set TTL
 }
 
 func newMockKVStore() *mockKVStore {
@@ -58,16 +52,6 @@ func (m *mockKVStore) Set(_ context.Context, key string, value string, ttl time.
 	return nil
 }
 
-func (m *mockKVStore) Publish(_ context.Context, channel string, message string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.pubErr != nil {
-		return m.pubErr
-	}
-	m.published = append(m.published, publishedMessage{channel: channel, message: message})
-	return nil
-}
-
 func (m *mockKVStore) getStored(key string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -81,11 +65,38 @@ func (m *mockKVStore) setStored(key, value string) {
 	m.store[key] = value
 }
 
-func (m *mockKVStore) publishedMessages() []publishedMessage {
+// --- Mock Broadcaster ---
+
+type broadcastedEvent struct {
+	orgID string
+	event ssebroadcast.Event
+}
+
+type mockBroadcaster struct {
+	mu     sync.Mutex
+	events []broadcastedEvent
+	err    error
+}
+
+func newMockBroadcaster() *mockBroadcaster {
+	return &mockBroadcaster{}
+}
+
+func (m *mockBroadcaster) Broadcast(_ context.Context, orgID string, event ssebroadcast.Event) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cp := make([]publishedMessage, len(m.published))
-	copy(cp, m.published)
+	if m.err != nil {
+		return m.err
+	}
+	m.events = append(m.events, broadcastedEvent{orgID: orgID, event: event})
+	return nil
+}
+
+func (m *mockBroadcaster) broadcastedEvents() []broadcastedEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]broadcastedEvent, len(m.events))
+	copy(cp, m.events)
 	return cp
 }
 
@@ -95,8 +106,8 @@ var fixedTime = time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
 
 func fixedNow() time.Time { return fixedTime }
 
-func newTestTracker(kv *mockKVStore) *Tracker {
-	t := NewTracker(kv, logger.NewLogger("error"))
+func newTestTracker(kv *mockKVStore, bc *mockBroadcaster) *Tracker {
+	t := NewTracker(kv, bc, logger.NewLogger("error"))
 	t.now = fixedNow
 	return t
 }
@@ -109,18 +120,14 @@ func mustMarshalRecord(status string) string {
 
 func boolPtr(b bool) *bool { return &b }
 
-// parseSSEEvent parses the first published message into an SSEEvent.
-func parseSSEEvent(t *testing.T, kv *mockKVStore) SSEEvent {
+// parseBroadcastedEvent returns the first broadcasted event.
+func parseBroadcastedEvent(t *testing.T, bc *mockBroadcaster) ssebroadcast.Event {
 	t.Helper()
-	msgs := kv.publishedMessages()
-	if len(msgs) == 0 {
-		t.Fatal("expected at least one published message, got 0")
+	events := bc.broadcastedEvents()
+	if len(events) == 0 {
+		t.Fatal("expected at least one broadcasted event, got 0")
 	}
-	var event SSEEvent
-	if err := json.Unmarshal([]byte(msgs[0].message), &event); err != nil {
-		t.Fatalf("failed to parse SSE event JSON: %v", err)
-	}
-	return event
+	return events[0].event
 }
 
 // --- Status ordering tests ---
@@ -219,7 +226,8 @@ func TestCanTransition_FailureOverridesNonTerminal(t *testing.T) {
 
 func TestTryTransition_FirstWrite(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	ok, err := tr.tryTransition(context.Background(), "org1", "doc1", "ver1", StatusProcessing)
 	if err != nil {
@@ -243,7 +251,8 @@ func TestTryTransition_FirstWrite(t *testing.T) {
 func TestTryTransition_ForwardTransition(t *testing.T) {
 	kv := newMockKVStore()
 	kv.setStored("status:org1:doc1:ver1", mustMarshalRecord("PROCESSING"))
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	ok, err := tr.tryTransition(context.Background(), "org1", "doc1", "ver1", StatusAnalyzing)
 	if err != nil {
@@ -264,7 +273,8 @@ func TestTryTransition_ForwardTransition(t *testing.T) {
 func TestTryTransition_BackwardSkipped(t *testing.T) {
 	kv := newMockKVStore()
 	kv.setStored("status:org1:doc1:ver1", mustMarshalRecord("ANALYZING"))
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	ok, err := tr.tryTransition(context.Background(), "org1", "doc1", "ver1", StatusProcessing)
 	if err != nil {
@@ -286,7 +296,8 @@ func TestTryTransition_BackwardSkipped(t *testing.T) {
 func TestTryTransition_TerminalSkipped(t *testing.T) {
 	kv := newMockKVStore()
 	kv.setStored("status:org1:doc1:ver1", mustMarshalRecord("FAILED"))
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	ok, err := tr.tryTransition(context.Background(), "org1", "doc1", "ver1", StatusAnalyzing)
 	if err != nil {
@@ -300,7 +311,8 @@ func TestTryTransition_TerminalSkipped(t *testing.T) {
 func TestTryTransition_FailureOverridesProgress(t *testing.T) {
 	kv := newMockKVStore()
 	kv.setStored("status:org1:doc1:ver1", mustMarshalRecord("ANALYZING"))
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	ok, err := tr.tryTransition(context.Background(), "org1", "doc1", "ver1", StatusAnalysisFailed)
 	if err != nil {
@@ -321,7 +333,8 @@ func TestTryTransition_FailureOverridesProgress(t *testing.T) {
 func TestTryTransition_RedisGetError(t *testing.T) {
 	kv := newMockKVStore()
 	kv.getErr = errors.New("redis: connection refused")
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	ok, err := tr.tryTransition(context.Background(), "org1", "doc1", "ver1", StatusProcessing)
 	if err == nil {
@@ -335,7 +348,8 @@ func TestTryTransition_RedisGetError(t *testing.T) {
 func TestTryTransition_RedisSetError(t *testing.T) {
 	kv := newMockKVStore()
 	kv.setErr = errors.New("redis: connection refused")
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	ok, err := tr.tryTransition(context.Background(), "org1", "doc1", "ver1", StatusProcessing)
 	if err == nil {
@@ -348,7 +362,8 @@ func TestTryTransition_RedisSetError(t *testing.T) {
 
 func TestTryTransition_KeyPattern(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	tr.tryTransition(context.Background(), "org-abc", "doc-123", "ver-456", StatusProcessing)
 
@@ -360,7 +375,8 @@ func TestTryTransition_KeyPattern(t *testing.T) {
 
 func TestTryTransition_TTL(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	tr.tryTransition(context.Background(), "org1", "doc1", "ver1", StatusProcessing)
 
@@ -372,7 +388,8 @@ func TestTryTransition_TTL(t *testing.T) {
 func TestTryTransition_CorruptRecord(t *testing.T) {
 	kv := newMockKVStore()
 	kv.setStored("status:org1:doc1:ver1", "not-json")
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	ok, err := tr.tryTransition(context.Background(), "org1", "doc1", "ver1", StatusProcessing)
 	if err != nil {
@@ -383,78 +400,93 @@ func TestTryTransition_CorruptRecord(t *testing.T) {
 	}
 }
 
-// --- broadcast tests ---
+// --- broadcaster integration tests ---
 
-func TestBroadcast_Success(t *testing.T) {
+func TestBroadcaster_CalledOnTransition(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
-	event := SSEEvent{
-		EventType:  "status_update",
-		DocumentID: "doc1",
-		VersionID:  "ver1",
-		Status:     "PROCESSING",
-		Message:    "test",
-		Timestamp:  fixedTime.Format(time.RFC3339),
+	err := tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
+		&consumer.DPStatusChangedEvent{
+			OrganizationID: "org1",
+			DocumentID:     "doc1",
+			VersionID:      "ver1",
+			Status:         "IN_PROGRESS",
+		})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	tr.broadcast(context.Background(), "org1", event)
-
-	msgs := kv.publishedMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 published message, got %d", len(msgs))
+	evts := bc.broadcastedEvents()
+	if len(evts) != 1 {
+		t.Fatalf("expected 1 broadcasted event, got %d", len(evts))
 	}
-	if msgs[0].channel != "sse:broadcast:org1" {
-		t.Errorf("expected channel sse:broadcast:org1, got %s", msgs[0].channel)
+	if evts[0].orgID != "org1" {
+		t.Errorf("expected orgID org1, got %s", evts[0].orgID)
+	}
+	if evts[0].event.Status != "PROCESSING" {
+		t.Errorf("expected PROCESSING, got %s", evts[0].event.Status)
 	}
 }
 
-func TestBroadcast_PublishError(t *testing.T) {
+func TestBroadcaster_ErrorIgnored(t *testing.T) {
 	kv := newMockKVStore()
-	kv.pubErr = errors.New("redis: connection refused")
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	bc.err = errors.New("redis: connection refused")
+	tr := newTestTracker(kv, bc)
 
-	event := SSEEvent{Status: "PROCESSING"}
+	// Broadcaster error should not propagate — status is already persisted.
+	err := tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
+		&consumer.DPStatusChangedEvent{
+			OrganizationID: "org1",
+			DocumentID:     "doc1",
+			VersionID:      "ver1",
+			Status:         "IN_PROGRESS",
+		})
+	if err != nil {
+		t.Fatalf("expected nil error when broadcaster fails, got %v", err)
+	}
 
-	// Should not panic.
-	tr.broadcast(context.Background(), "org1", event)
-
-	msgs := kv.publishedMessages()
-	if len(msgs) != 0 {
-		t.Errorf("expected 0 published messages on error, got %d", len(msgs))
+	// Status should still be persisted in Redis.
+	raw, found := kv.getStored("status:org1:doc1:ver1")
+	if !found {
+		t.Fatal("expected status to be persisted despite broadcast failure")
+	}
+	var rec statusRecord
+	json.Unmarshal([]byte(raw), &rec)
+	if rec.Status != "PROCESSING" {
+		t.Errorf("expected PROCESSING, got %s", rec.Status)
 	}
 }
 
-func TestBroadcast_EventJSON(t *testing.T) {
+func TestBroadcaster_EventFields(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
-	event := SSEEvent{
-		EventType:    "status_update",
-		DocumentID:   "doc1",
-		VersionID:    "ver1",
-		JobID:        "job1",
-		Status:       "FAILED",
-		Message:      "Ошибка обработки",
-		Timestamp:    fixedTime.Format(time.RFC3339),
-		IsRetryable:  true,
-		ErrorCode:    "TIMED_OUT",
-		ErrorMessage: "Превышено время",
+	tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
+		&consumer.DPStatusChangedEvent{
+			OrganizationID: "org1",
+			DocumentID:     "doc1",
+			VersionID:      "ver1",
+			JobID:          "job1",
+			Status:         "TIMED_OUT",
+			Message:        "Превышено время",
+		})
+
+	evts := bc.broadcastedEvents()
+	if len(evts) == 0 {
+		t.Fatal("expected at least one broadcasted event")
 	}
-
-	tr.broadcast(context.Background(), "org1", event)
-
-	msgs := kv.publishedMessages()
-	var parsed SSEEvent
-	json.Unmarshal([]byte(msgs[0].message), &parsed)
-
-	if parsed.EventType != "status_update" {
-		t.Errorf("expected event_type status_update, got %s", parsed.EventType)
+	event := evts[0].event
+	if event.EventType != "status_update" {
+		t.Errorf("expected event_type status_update, got %s", event.EventType)
 	}
-	if parsed.ErrorCode != "TIMED_OUT" {
-		t.Errorf("expected error_code TIMED_OUT, got %s", parsed.ErrorCode)
+	if event.ErrorCode != "TIMED_OUT" {
+		t.Errorf("expected error_code TIMED_OUT, got %s", event.ErrorCode)
 	}
-	if !parsed.IsRetryable {
+	if !event.IsRetryable {
 		t.Error("expected is_retryable true")
 	}
 }
@@ -463,7 +495,8 @@ func TestBroadcast_EventJSON(t *testing.T) {
 
 func TestHandleEvent_UnrecognizedEventType(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), "unknown.event.type", nil)
 	if err != nil {
@@ -473,7 +506,8 @@ func TestHandleEvent_UnrecognizedEventType(t *testing.T) {
 
 func TestHandleEvent_WrongConcreteType(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	// Pass DPProcessingFailedEvent for DPStatusChanged event type.
 	err := tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
@@ -487,7 +521,8 @@ func TestHandleEvent_WrongConcreteType(t *testing.T) {
 
 func TestDPStatusChanged_InProgress(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
 		&consumer.DPStatusChangedEvent{
@@ -501,7 +536,7 @@ func TestDPStatusChanged_InProgress(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "PROCESSING" {
 		t.Errorf("expected PROCESSING, got %s", event.Status)
 	}
@@ -512,7 +547,8 @@ func TestDPStatusChanged_InProgress(t *testing.T) {
 
 func TestDPStatusChanged_Rejected(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
 		&consumer.DPStatusChangedEvent{
@@ -526,7 +562,7 @@ func TestDPStatusChanged_Rejected(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "REJECTED" {
 		t.Errorf("expected REJECTED, got %s", event.Status)
 	}
@@ -540,7 +576,8 @@ func TestDPStatusChanged_Rejected(t *testing.T) {
 
 func TestDPStatusChanged_TimedOut(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
 		&consumer.DPStatusChangedEvent{
@@ -553,7 +590,7 @@ func TestDPStatusChanged_TimedOut(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "FAILED" {
 		t.Errorf("expected FAILED, got %s", event.Status)
 	}
@@ -567,7 +604,8 @@ func TestDPStatusChanged_TimedOut(t *testing.T) {
 
 func TestDPStatusChanged_CompletedIgnored(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
 		&consumer.DPStatusChangedEvent{
@@ -580,7 +618,7 @@ func TestDPStatusChanged_CompletedIgnored(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for COMPLETED, got %d", len(msgs))
 	}
@@ -588,7 +626,8 @@ func TestDPStatusChanged_CompletedIgnored(t *testing.T) {
 
 func TestDPStatusChanged_MissingOrgID(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
 		&consumer.DPStatusChangedEvent{
@@ -600,7 +639,7 @@ func TestDPStatusChanged_MissingOrgID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for missing org_id, got %d", len(msgs))
 	}
@@ -608,7 +647,8 @@ func TestDPStatusChanged_MissingOrgID(t *testing.T) {
 
 func TestDPProcessingCompleted_NoTransition(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPProcessingCompleted,
 		&consumer.DPProcessingCompletedEvent{
@@ -621,7 +661,7 @@ func TestDPProcessingCompleted_NoTransition(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for processing-completed, got %d", len(msgs))
 	}
@@ -629,7 +669,8 @@ func TestDPProcessingCompleted_NoTransition(t *testing.T) {
 
 func TestDPProcessingFailed_TransitionsToFailed(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPProcessingFailed,
 		&consumer.DPProcessingFailedEvent{
@@ -645,7 +686,7 @@ func TestDPProcessingFailed_TransitionsToFailed(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "FAILED" {
 		t.Errorf("expected FAILED, got %s", event.Status)
 	}
@@ -662,7 +703,8 @@ func TestDPProcessingFailed_TransitionsToFailed(t *testing.T) {
 
 func TestDPProcessingFailed_MissingOrgID(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPProcessingFailed,
 		&consumer.DPProcessingFailedEvent{
@@ -674,7 +716,7 @@ func TestDPProcessingFailed_MissingOrgID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for missing org_id, got %d", len(msgs))
 	}
@@ -684,7 +726,8 @@ func TestDPProcessingFailed_MissingOrgID(t *testing.T) {
 
 func TestLICStatusChanged_InProgress(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventLICStatusChanged,
 		&consumer.LICStatusChangedEvent{
@@ -698,7 +741,7 @@ func TestLICStatusChanged_InProgress(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "ANALYZING" {
 		t.Errorf("expected ANALYZING, got %s", event.Status)
 	}
@@ -706,7 +749,8 @@ func TestLICStatusChanged_InProgress(t *testing.T) {
 
 func TestLICStatusChanged_CompletedIgnored(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventLICStatusChanged,
 		&consumer.LICStatusChangedEvent{
@@ -719,7 +763,7 @@ func TestLICStatusChanged_CompletedIgnored(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for LIC COMPLETED, got %d", len(msgs))
 	}
@@ -727,7 +771,8 @@ func TestLICStatusChanged_CompletedIgnored(t *testing.T) {
 
 func TestLICStatusChanged_Failed(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventLICStatusChanged,
 		&consumer.LICStatusChangedEvent{
@@ -744,7 +789,7 @@ func TestLICStatusChanged_Failed(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "ANALYSIS_FAILED" {
 		t.Errorf("expected ANALYSIS_FAILED, got %s", event.Status)
 	}
@@ -758,7 +803,8 @@ func TestLICStatusChanged_Failed(t *testing.T) {
 
 func TestLICStatusChanged_FailedIsRetryableNil(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventLICStatusChanged,
 		&consumer.LICStatusChangedEvent{
@@ -772,7 +818,7 @@ func TestLICStatusChanged_FailedIsRetryableNil(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.IsRetryable {
 		t.Error("expected is_retryable false when nil")
 	}
@@ -780,7 +826,8 @@ func TestLICStatusChanged_FailedIsRetryableNil(t *testing.T) {
 
 func TestLICStatusChanged_UnknownStatus(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventLICStatusChanged,
 		&consumer.LICStatusChangedEvent{
@@ -793,7 +840,7 @@ func TestLICStatusChanged_UnknownStatus(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for unknown LIC status, got %d", len(msgs))
 	}
@@ -803,7 +850,8 @@ func TestLICStatusChanged_UnknownStatus(t *testing.T) {
 
 func TestREStatusChanged_InProgress(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventREStatusChanged,
 		&consumer.REStatusChangedEvent{
@@ -817,7 +865,7 @@ func TestREStatusChanged_InProgress(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "GENERATING_REPORTS" {
 		t.Errorf("expected GENERATING_REPORTS, got %s", event.Status)
 	}
@@ -825,7 +873,8 @@ func TestREStatusChanged_InProgress(t *testing.T) {
 
 func TestREStatusChanged_Failed(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventREStatusChanged,
 		&consumer.REStatusChangedEvent{
@@ -842,7 +891,7 @@ func TestREStatusChanged_Failed(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "REPORTS_FAILED" {
 		t.Errorf("expected REPORTS_FAILED, got %s", event.Status)
 	}
@@ -856,7 +905,8 @@ func TestREStatusChanged_Failed(t *testing.T) {
 
 func TestREStatusChanged_CompletedIgnored(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventREStatusChanged,
 		&consumer.REStatusChangedEvent{
@@ -869,7 +919,7 @@ func TestREStatusChanged_CompletedIgnored(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for RE COMPLETED, got %d", len(msgs))
 	}
@@ -879,7 +929,8 @@ func TestREStatusChanged_CompletedIgnored(t *testing.T) {
 
 func TestDMVersionArtifactsReady(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDMVersionArtifactsReady,
 		&consumer.DMVersionArtifactsReadyEvent{
@@ -892,7 +943,7 @@ func TestDMVersionArtifactsReady(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "ANALYZING" {
 		t.Errorf("expected ANALYZING, got %s", event.Status)
 	}
@@ -901,7 +952,8 @@ func TestDMVersionArtifactsReady(t *testing.T) {
 func TestDMVersionAnalysisReady(t *testing.T) {
 	kv := newMockKVStore()
 	kv.setStored("status:org1:doc1:ver1", mustMarshalRecord("ANALYZING"))
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDMVersionAnalysisReady,
 		&consumer.DMVersionAnalysisReadyEvent{
@@ -913,7 +965,7 @@ func TestDMVersionAnalysisReady(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "GENERATING_REPORTS" {
 		t.Errorf("expected GENERATING_REPORTS, got %s", event.Status)
 	}
@@ -922,7 +974,8 @@ func TestDMVersionAnalysisReady(t *testing.T) {
 func TestDMVersionReportsReady(t *testing.T) {
 	kv := newMockKVStore()
 	kv.setStored("status:org1:doc1:ver1", mustMarshalRecord("GENERATING_REPORTS"))
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDMVersionReportsReady,
 		&consumer.DMVersionReportsReadyEvent{
@@ -934,7 +987,7 @@ func TestDMVersionReportsReady(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "READY" {
 		t.Errorf("expected READY, got %s", event.Status)
 	}
@@ -945,7 +998,8 @@ func TestDMVersionReportsReady(t *testing.T) {
 
 func TestDMVersionPartiallyAvailable(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDMVersionPartiallyAvail,
 		&consumer.DMVersionPartiallyAvailableEvent{
@@ -959,7 +1013,7 @@ func TestDMVersionPartiallyAvailable(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Status != "PARTIALLY_FAILED" {
 		t.Errorf("expected PARTIALLY_FAILED, got %s", event.Status)
 	}
@@ -973,7 +1027,8 @@ func TestDMVersionPartiallyAvailable(t *testing.T) {
 
 func TestDMVersionCreated_NoStatusTransition(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDMVersionCreated,
 		&consumer.DMVersionCreatedEvent{
@@ -987,7 +1042,7 @@ func TestDMVersionCreated_NoStatusTransition(t *testing.T) {
 	}
 
 	// No status_update broadcast for UPLOAD origin.
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for UPLOAD origin, got %d", len(msgs))
 	}
@@ -1001,7 +1056,8 @@ func TestDMVersionCreated_NoStatusTransition(t *testing.T) {
 
 func TestDMVersionCreated_ReCheck_BroadcastsVersionCreated(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDMVersionCreated,
 		&consumer.DMVersionCreatedEvent{
@@ -1014,7 +1070,7 @@ func TestDMVersionCreated_ReCheck_BroadcastsVersionCreated(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.EventType != "version_created" {
 		t.Errorf("expected version_created event type, got %s", event.EventType)
 	}
@@ -1027,7 +1083,8 @@ func TestDMVersionCreated_ReCheck_BroadcastsVersionCreated(t *testing.T) {
 
 func TestDPComparisonCompleted(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPComparisonCompleted,
 		&consumer.DPComparisonCompletedEvent{
@@ -1041,7 +1098,7 @@ func TestDPComparisonCompleted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.EventType != "comparison_update" {
 		t.Errorf("expected comparison_update, got %s", event.EventType)
 	}
@@ -1061,7 +1118,8 @@ func TestDPComparisonCompleted(t *testing.T) {
 
 func TestDPComparisonFailed(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPComparisonFailed,
 		&consumer.DPComparisonFailedEvent{
@@ -1078,7 +1136,7 @@ func TestDPComparisonFailed(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.EventType != "comparison_update" {
 		t.Errorf("expected comparison_update, got %s", event.EventType)
 	}
@@ -1092,7 +1150,8 @@ func TestDPComparisonFailed(t *testing.T) {
 
 func TestDPComparisonCompleted_MissingOrgID(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPComparisonCompleted,
 		&consumer.DPComparisonCompletedEvent{
@@ -1104,7 +1163,7 @@ func TestDPComparisonCompleted_MissingOrgID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for missing org_id, got %d", len(msgs))
 	}
@@ -1112,7 +1171,8 @@ func TestDPComparisonCompleted_MissingOrgID(t *testing.T) {
 
 func TestDPComparisonFailed_MissingOrgID(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPComparisonFailed,
 		&consumer.DPComparisonFailedEvent{
@@ -1122,7 +1182,7 @@ func TestDPComparisonFailed_MissingOrgID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for missing org_id, got %d", len(msgs))
 	}
@@ -1132,7 +1192,8 @@ func TestDPComparisonFailed_MissingOrgID(t *testing.T) {
 
 func TestLICStatusChanged_MissingOrgID(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventLICStatusChanged,
 		&consumer.LICStatusChangedEvent{
@@ -1144,7 +1205,7 @@ func TestLICStatusChanged_MissingOrgID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for missing org_id, got %d", len(msgs))
 	}
@@ -1152,7 +1213,8 @@ func TestLICStatusChanged_MissingOrgID(t *testing.T) {
 
 func TestREStatusChanged_MissingOrgID(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventREStatusChanged,
 		&consumer.REStatusChangedEvent{
@@ -1164,7 +1226,7 @@ func TestREStatusChanged_MissingOrgID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for missing org_id, got %d", len(msgs))
 	}
@@ -1172,7 +1234,8 @@ func TestREStatusChanged_MissingOrgID(t *testing.T) {
 
 func TestDMVersionArtifactsReady_MissingOrgID(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDMVersionArtifactsReady,
 		&consumer.DMVersionArtifactsReadyEvent{
@@ -1183,7 +1246,7 @@ func TestDMVersionArtifactsReady_MissingOrgID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for missing org_id, got %d", len(msgs))
 	}
@@ -1191,7 +1254,8 @@ func TestDMVersionArtifactsReady_MissingOrgID(t *testing.T) {
 
 func TestDMVersionPartiallyAvailable_MissingOrgID(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDMVersionPartiallyAvail,
 		&consumer.DMVersionPartiallyAvailableEvent{
@@ -1202,7 +1266,7 @@ func TestDMVersionPartiallyAvailable_MissingOrgID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for missing org_id, got %d", len(msgs))
 	}
@@ -1210,7 +1274,8 @@ func TestDMVersionPartiallyAvailable_MissingOrgID(t *testing.T) {
 
 func TestDMVersionCreated_MissingOrgID(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDMVersionCreated,
 		&consumer.DMVersionCreatedEvent{
@@ -1222,7 +1287,7 @@ func TestDMVersionCreated_MissingOrgID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for missing org_id with RE_CHECK, got %d", len(msgs))
 	}
@@ -1233,7 +1298,8 @@ func TestDMVersionCreated_MissingOrgID(t *testing.T) {
 func TestHandleEvent_RedisError_CausesNACK(t *testing.T) {
 	kv := newMockKVStore()
 	kv.getErr = errors.New("redis: connection refused")
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
 		&consumer.DPStatusChangedEvent{
@@ -1251,7 +1317,8 @@ func TestHandleEvent_RedisError_CausesNACK(t *testing.T) {
 
 func TestDPProcessingCompleted_WithWarnings(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	err := tr.HandleEvent(context.Background(), consumer.EventDPProcessingCompleted,
 		&consumer.DPProcessingCompletedEvent{
@@ -1268,7 +1335,7 @@ func TestDPProcessingCompleted_WithWarnings(t *testing.T) {
 	}
 
 	// Still no broadcast — informational only.
-	msgs := kv.publishedMessages()
+	msgs := bc.broadcastedEvents()
 	if len(msgs) != 0 {
 		t.Errorf("expected no broadcast for processing-completed, got %d", len(msgs))
 	}
@@ -1278,7 +1345,8 @@ func TestDPProcessingCompleted_WithWarnings(t *testing.T) {
 
 func TestFullHappyPath(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 	ctx := context.Background()
 
 	events := []struct {
@@ -1313,29 +1381,28 @@ func TestFullHappyPath(t *testing.T) {
 			t.Fatalf("event %d: unexpected error: %v", i, err)
 		}
 		if tc.expected != "" {
-			msgs := kv.publishedMessages()
-			if broadcastIdx >= len(msgs) {
-				t.Fatalf("event %d: expected broadcast for %s, but no new message", i, tc.expected)
+			evts := bc.broadcastedEvents()
+			if broadcastIdx >= len(evts) {
+				t.Fatalf("event %d: expected broadcast for %s, but no new event", i, tc.expected)
 			}
-			var ev SSEEvent
-			json.Unmarshal([]byte(msgs[broadcastIdx].message), &ev)
-			if ev.Status != tc.expected {
-				t.Errorf("event %d: expected %s, got %s", i, tc.expected, ev.Status)
+			if evts[broadcastIdx].event.Status != tc.expected {
+				t.Errorf("event %d: expected %s, got %s", i, tc.expected, evts[broadcastIdx].event.Status)
 			}
 			broadcastIdx++
 		}
 	}
 
 	// Total broadcasts: 4 (PROCESSING, ANALYZING, GENERATING_REPORTS, READY).
-	msgs := kv.publishedMessages()
-	if len(msgs) != 4 {
-		t.Errorf("expected 4 total broadcasts, got %d", len(msgs))
+	evts := bc.broadcastedEvents()
+	if len(evts) != 4 {
+		t.Errorf("expected 4 total broadcasts, got %d", len(evts))
 	}
 }
 
 func TestOutOfOrderEvents(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 	ctx := context.Background()
 
 	// DM artifacts-ready arrives BEFORE DP IN_PROGRESS.
@@ -1358,21 +1425,20 @@ func TestOutOfOrderEvents(t *testing.T) {
 	}
 
 	// Only 1 broadcast (ANALYZING), not 2.
-	msgs := kv.publishedMessages()
-	if len(msgs) != 1 {
-		t.Errorf("expected 1 broadcast, got %d", len(msgs))
+	evts := bc.broadcastedEvents()
+	if len(evts) != 1 {
+		t.Errorf("expected 1 broadcast, got %d", len(evts))
 	}
 
-	var ev SSEEvent
-	json.Unmarshal([]byte(msgs[0].message), &ev)
-	if ev.Status != "ANALYZING" {
-		t.Errorf("expected ANALYZING, got %s", ev.Status)
+	if evts[0].event.Status != "ANALYZING" {
+		t.Errorf("expected ANALYZING, got %s", evts[0].event.Status)
 	}
 }
 
 func TestFailureMidPipeline(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 	ctx := context.Background()
 
 	// PROCESSING state.
@@ -1400,15 +1466,13 @@ func TestFailureMidPipeline(t *testing.T) {
 		})
 
 	// Only 2 broadcasts: PROCESSING and ANALYSIS_FAILED.
-	msgs := kv.publishedMessages()
-	if len(msgs) != 2 {
-		t.Errorf("expected 2 broadcasts, got %d", len(msgs))
+	evts := bc.broadcastedEvents()
+	if len(evts) != 2 {
+		t.Errorf("expected 2 broadcasts, got %d", len(evts))
 	}
 
-	var last SSEEvent
-	json.Unmarshal([]byte(msgs[1].message), &last)
-	if last.Status != "ANALYSIS_FAILED" {
-		t.Errorf("expected ANALYSIS_FAILED, got %s", last.Status)
+	if evts[1].event.Status != "ANALYSIS_FAILED" {
+		t.Errorf("expected ANALYSIS_FAILED, got %s", evts[1].event.Status)
 	}
 
 	// Verify Redis has terminal status.
@@ -1422,7 +1486,8 @@ func TestFailureMidPipeline(t *testing.T) {
 
 func TestDuplicateEvent(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 	ctx := context.Background()
 
 	e := &consumer.DPStatusChangedEvent{
@@ -1434,9 +1499,9 @@ func TestDuplicateEvent(t *testing.T) {
 	tr.HandleEvent(ctx, consumer.EventDPStatusChanged, e) // duplicate
 
 	// Only 1 broadcast.
-	msgs := kv.publishedMessages()
-	if len(msgs) != 1 {
-		t.Errorf("expected 1 broadcast (duplicate skipped), got %d", len(msgs))
+	evts := bc.broadcastedEvents()
+	if len(evts) != 1 {
+		t.Errorf("expected 1 broadcast (duplicate skipped), got %d", len(evts))
 	}
 }
 
@@ -1444,7 +1509,8 @@ func TestDuplicateEvent(t *testing.T) {
 
 func TestTimestampFromNowFunc(t *testing.T) {
 	kv := newMockKVStore()
-	tr := newTestTracker(kv)
+	bc := newMockBroadcaster()
+	tr := newTestTracker(kv, bc)
 
 	tr.HandleEvent(context.Background(), consumer.EventDPStatusChanged,
 		&consumer.DPStatusChangedEvent{
@@ -1462,7 +1528,7 @@ func TestTimestampFromNowFunc(t *testing.T) {
 	}
 
 	// Check SSE event timestamp.
-	event := parseSSEEvent(t, kv)
+	event := parseBroadcastedEvent(t, bc)
 	if event.Timestamp != expected {
 		t.Errorf("expected SSE timestamp %s, got %s", expected, event.Timestamp)
 	}
@@ -1517,8 +1583,8 @@ func TestStatusKey(t *testing.T) {
 	}
 }
 
-func TestSSEChannel(t *testing.T) {
-	ch := sseChannel("org-1")
+func TestSSEBroadcastChannel(t *testing.T) {
+	ch := ssebroadcast.Channel("org-1")
 	if ch != "sse:broadcast:org-1" {
 		t.Errorf("unexpected channel: %s", ch)
 	}

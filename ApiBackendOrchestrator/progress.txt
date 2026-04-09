@@ -730,3 +730,42 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-034 (high): Graceful shutdown — зависит от ORCH-TASK-008 ✓, ORCH-TASK-029 ✓, ORCH-TASK-027 ✓
 - ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
 - ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+
+## ORCH-TASK-030: SSE Broadcaster (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs — определить SSE broadcasting mechanism, Redis Pub/Sub channels
+2. Прочитать существующий код: SSE handler (handler.go, adapter.go), status tracker (tracker.go, status.go)
+3. Спроектировать SSE Broadcaster (backend-reliability-engineer subagent)
+4. Реализовать ssebroadcast/broadcaster.go: Event (moved from SSEEvent), Broadcaster interface, Publisher interface, Channel(), NewBroadcaster
+5. Рефакторинг statustracker: KVStore без Publish, broadcaster dependency, ssebroadcast.Event
+6. Рефакторинг SSE handler: ssebroadcast.Channel() вместо дублированного sseChannelPrefix
+7. Реализовать broadcaster_test.go: 11 тестов
+8. Code review (code-reviewer subagent) → исправления: M-1 stale doc comment, N-1 empty orgID guard
+
+### Что реализовано
+- **ssebroadcast/broadcaster.go**: Event struct (canonical SSE event payload), Broadcaster interface, Publisher consumer-side interface, Channel(orgID) exported function, NewBroadcaster с component logger, empty orgID guard
+- **statustracker/status.go**: SSEEvent removed (→ ssebroadcast.Event), Publish removed from KVStore (only Get/Set), sseChannelPrefix/sseChannel() removed
+- **statustracker/tracker.go**: Tracker.broadcaster field, NewTracker(kv, bc, log), SSEEvent → ssebroadcast.Event, broadcast() → _ = t.broadcaster.Broadcast()
+- **statustracker/tracker_test.go**: mockBroadcaster replaces mockKVStore.Publish, parseBroadcastedEvent, all 63 tests updated
+- **sse/handler.go**: ssebroadcast.Channel(orgID), sseChannelPrefix/sseChannel() removed, doc comment updated
+- **sse/handler_test.go**: ssebroadcast.Channel() in TestSSEChannel
+- **broadcaster_test.go**: 11 тестов: interface compliance (2), success, publish error, all event fields, omitempty, per-org channel, context cancelled, empty orgID guard, Channel() function (3 subtests), concurrent safety
+
+### Ключевые решения
+- Event живёт в egress/ssebroadcast (аналог commandpub) — canonical type для SSE events
+- Channel(orgID) — single source of truth, устраняет дублирование между statustracker и SSE handler
+- Broadcaster возвращает ошибки (не глотает) — callers decide policy
+- Status tracker: _ = t.broadcaster.Broadcast() — error intentionally ignored (status persisted, SSE best-effort)
+- KVStore interface сужен до Get/Set — Publish больше не нужен
+- Нет новых зависимостей
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-034 (high): Graceful shutdown — зависит от ORCH-TASK-008 ✓, ORCH-TASK-029 ✓, ORCH-TASK-027 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓

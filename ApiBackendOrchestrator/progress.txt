@@ -544,3 +544,37 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
 - ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
 - ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓
+
+## ORCH-TASK-020: Version management handlers (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (api-specification.yaml, high-architecture.md, integration-contracts.md, event-catalog.md)
+2. Изучить существующий код (contracts, upload, dmclient, commandpub, routes, server)
+3. Спроектировать Handler с 4 consumer-side интерфейсами (backend-reliability-engineer subagent)
+4. Реализовать response.go: processingStatusMap, processingStatusMessages, DTOs, mapVersionToResponse
+5. Реализовать handler.go: interfaces, Handler, HandleList/HandleGet/HandleStatus/HandleUpload, helpers
+6. Wiring: server.go (Deps.VersionHandler), routes.go (versionH parameter, nil-guard)
+7. Реализовать handler_test.go: 47 тестов (+ 14 sub-tests)
+8. Code review (code-reviewer subagent) → исправления: M-5 concurrent processing guard
+
+### Что реализовано
+- **response.go**: processingStatusMap (11 entries), processingStatusMessages (12 + Russian), DTOs, mapVersionToResponse
+- **handler.go**: DMClient (4 methods), ObjectStorage, CommandPublisher (commandpub types), KVStore interfaces. HandleList (pagination), HandleGet (version details), HandleStatus (polling, server time), HandleUpload (multipart→validate→DM check→S3→DM create→publish→tracking→202). M-5: concurrent processing guard
+- **server.go + routes.go**: VersionHandler wiring with nil-guard
+- **handler_test.go**: 47 тестов covering all endpoints, error paths, status mapping, upload edge cases
+
+### Ключевые решения
+- CommandPublisher uses commandpub types directly (no adapter needed)
+- Single VersionResponse DTO for list+get (matches OpenAPI)
+- updated_at = server time.Now() for status polling (DM has no updated_at)
+- Concurrent processing guard: PENDING_UPLOAD/PENDING_PROCESSING/PROCESSING_IN_PROGRESS → 409
+- Body parsing before DM call (DoS protection)
+- Fast-fail on ARCHIVED/DELETED before S3 upload
+- Nil CurrentVersion: create without parent_version_id
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓

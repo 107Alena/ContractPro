@@ -7,3 +7,6 @@
 # Test coverage
 coverage.out
 coverage.html
+
+# JWT keys are generated locally (see keys/.gitignore)
+keys/*.pem

@@ -11,6 +11,10 @@ import (
 	"contractpro/api-orchestrator/internal/config"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+// It is available in /healthz responses and structured log output.
+var version = "dev"
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {

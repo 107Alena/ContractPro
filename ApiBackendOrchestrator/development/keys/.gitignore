@@ -1,0 +1,2 @@
+# JWT keys are generated locally and must not be committed.
+*.pem

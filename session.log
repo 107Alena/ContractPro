@@ -1,0 +1,23 @@
+ORCH-TASK-035: Dockerfile (multi-stage) + Docker Compose для локальной разработки
+[00:00] Анализ задач: выбираю наиболее приоритетную pending задачу с выполненными deps
+[00:01] Pending задачи (high): ORCH-TASK-035 (Dockerfile+Compose), ORCH-TASK-037 (Integration tests)
+[00:02] Pending задачи (medium): ORCH-TASK-016 (OPM Client), ORCH-TASK-025 (Feedback), ORCH-TASK-033 (Tracing)
+[00:03] Выбрана ORCH-TASK-035 (high, infrastructure) — Dockerfile multi-stage + Docker Compose с RabbitMQ/Redis/MinIO
+[00:04] Deps проверены: ORCH-TASK-034 ✓ (Graceful shutdown)
+[00:05] Изучены: Dockerfile (существующий multi-stage), Makefile, config (sub_configs.go), app.go, deployment.md
+[00:06] Проектирование: backend-reliability-engineer subagent — дизайн Dockerfile + docker-compose.yaml
+[00:07] Реализация: Dockerfile обновлён (ARG VERSION, -X main.version, healthcheck /healthz)
+[00:08] Реализация: docker-compose.yaml — 5 сервисов (rabbitmq, redis, minio, minio-init, orch-api)
+[00:09] Реализация: .dockerignore, .env.example, keys/.gitignore, scripts/generate-dev-jwt.sh
+[00:10] Реализация: Makefile — 7 новых целей (compose-up/down/clean/logs/ps/restart, generate-jwt)
+[00:11] Реализация: main.go — var version = "dev" для -X main.version ldflags
+[00:12] Code review: проверяю все файлы
+[00:13] Проверка: go vet ./... — OK (0 errors)
+[00:14] Проверка: go build ./cmd/orch-api/ — OK
+[00:15] Проверка: go test -count=1 ./... — OK (27 пакетов, 0 failures)
+[00:16] Проверка: make build — OK, make test — OK, make lint — OK
+[00:17] Fix: compose-clean добавлен в .PHONY, бинарник удалён
+[00:18] Обновляю tasks.json и progress.txt
+[00:19] tasks.json: ORCH-TASK-035 → status=done, completed_at=2026-04-11, summary добавлен
+[00:20] progress.txt: добавлена запись ORCH-TASK-035 с планом, реализацией, решениями
+[00:21] Git commit

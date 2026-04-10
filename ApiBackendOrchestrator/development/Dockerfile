@@ -8,14 +8,15 @@ RUN apk add --no-cache git ca-certificates tzdata
 WORKDIR /build
 
 # Cache dependency download as a separate layer.
-COPY go.mod go.sum* ./
+COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
 # Copy source and build a fully static binary.
 COPY . .
 
+ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X main.version=${VERSION}" \
     -trimpath \
     -o /orch-api \
     ./cmd/orch-api/
@@ -39,6 +40,6 @@ EXPOSE 9090
 USER orchapi:orchapi
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/readyz || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/healthz || exit 1
 
 ENTRYPOINT ["/usr/local/bin/orch-api"]

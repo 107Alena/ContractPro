@@ -850,7 +850,9 @@
         "Шаг 3: curl http://localhost:8080/healthz → 200"
       ],
       "dependencies": ["ORCH-TASK-034"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-11",
+      "summary": "Dockerfile обновлён: ARG VERSION=dev с -X main.version=${VERSION} в ldflags (встраивание версии), go.sum без glob, HEALTHCHECK /healthz (liveness, не readyz — корректная семантика для Docker). docker-compose.yaml: 5 сервисов — rabbitmq:3-management-alpine (cp-orch-rabbitmq, AMQP 5672 + Management 15672, guest/guest), redis:7-alpine (cp-orch-redis, 6379), minio/minio:latest (cp-orch-minio, S3 9000 + Console 9001, minioadmin/minioadmin), minio-init (minio/mc, auto-create bucket contractpro-uploads с --ignore-existing), orch-api (build from context, ports 8080+9090). Health checks: rabbitmq (diagnostics ping), redis (redis-cli ping), minio (mc ready local), orch-api (wget /healthz). depends_on: orch-api → rabbitmq/redis/minio (service_healthy) + minio-init (service_completed_successfully). Volumes: rabbitmq-data, redis-data, minio-data (named). keys/ mounted read-only (/keys). Environment overrides: ORCH_BROKER_ADDRESS, ORCH_REDIS_ADDRESS, ORCH_STORAGE_*, ORCH_JWT_PUBLIC_KEY_PATH, ORCH_LOG_LEVEL=debug, ORCH_RATELIMIT_ENABLED=false, ORCH_CORS_ALLOWED_ORIGINS (localhost:3000/5173). stop_grace_period: 35s (> 30s shutdown timeout). .dockerignore: исключает *_test.go, docs, keys, .env*, Docker meta, IDE. .env.example: все переменные с комментариями, COMPOSE OVERRIDE метки. scripts/generate-dev-jwt.sh: RSA-2048 генерация (idempotent, chmod 600/644). keys/.gitignore: *.pem. .gitignore: keys/*.pem. Makefile: 7 новых целей (generate-jwt, compose-up/down/clean/logs/ps/restart), docker-build с --build-arg VERSION. cmd/orch-api/main.go: var version = \"dev\" (linker target). Container names: cp-orch-* prefix (isolation от DP compose). Все тесты (27 пакетов) проходят, go vet clean, make build/test/lint OK."
     },
     {
       "id": "ORCH-TASK-036",

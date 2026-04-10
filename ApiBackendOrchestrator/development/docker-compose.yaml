@@ -1,0 +1,153 @@
+# =============================================================================
+# ContractPro Orchestrator — Development Environment
+# =============================================================================
+# Usage:
+#   docker compose up --build        — build and start all services
+#   docker compose up -d --build     — start in background
+#   docker compose logs -f orch-api  — follow orchestrator logs
+#   docker compose down              — stop and remove containers
+#   docker compose down -v           — stop and remove containers + volumes
+#
+# Prerequisites:
+#   1. Copy .env.example to .env and adjust if needed:
+#        cp .env.example .env
+#   2. Generate a dev JWT key pair (run once):
+#        bash scripts/generate-dev-jwt.sh
+#
+# Ports:
+#   8080  — orch-api REST API + SSE + health probes
+#   9090  — orch-api Prometheus metrics
+#   5672  — RabbitMQ AMQP
+#   15672 — RabbitMQ Management UI (guest/guest)
+#   6379  — Redis
+#   9000  — MinIO S3 API
+#   9001  — MinIO Console (minioadmin/minioadmin)
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure: RabbitMQ
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: cp-orch-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure: Redis
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: cp-orch-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure: MinIO (S3-compatible object storage)
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: cp-orch-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Init: Create MinIO bucket on first start
+  # ---------------------------------------------------------------------------
+  minio-init:
+    image: minio/mc:latest
+    container_name: cp-orch-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/contractpro-uploads &&
+      echo 'Bucket contractpro-uploads is ready.'
+      "
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Application: orch-api
+  # ---------------------------------------------------------------------------
+  orch-api:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    container_name: cp-orch-api
+    env_file:
+      - .env
+    environment:
+      # Override service addresses for compose network.
+      ORCH_BROKER_ADDRESS: amqp://guest:guest@rabbitmq:5672/
+      ORCH_REDIS_ADDRESS: redis:6379
+      ORCH_STORAGE_ENDPOINT: http://minio:9000
+      ORCH_STORAGE_BUCKET: contractpro-uploads
+      ORCH_STORAGE_ACCESS_KEY: minioadmin
+      ORCH_STORAGE_SECRET_KEY: minioadmin
+      ORCH_JWT_PUBLIC_KEY_PATH: /keys/jwt-public.pem
+      ORCH_LOG_LEVEL: debug
+      ORCH_RATELIMIT_ENABLED: "false"
+      ORCH_CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ./keys:/keys:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    stop_grace_period: 35s
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  rabbitmq-data:
+  redis-data:
+  minio-data:

@@ -1,0 +1,43 @@
+# Compiled binary
+orch-api
+
+# Version control
+.git
+.gitignore
+.gitkeep
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files (may contain secrets)
+.env
+.env.*
+
+# Docker files (no recursive builds)
+Dockerfile
+docker-compose*.yaml
+docker-compose*.yml
+.dockerignore
+
+# Test files and fixtures
+**/*_test.go
+testdata/
+coverage.out
+coverage.html
+
+# Documentation
+*.md
+
+# Development keys (mounted as volume, not baked into image)
+keys/
+
+# Scripts
+scripts/

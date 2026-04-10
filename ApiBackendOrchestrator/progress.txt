@@ -1191,3 +1191,83 @@ Integration: Middleware + Handler combined
 - ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
 - ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
 - ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
+
+## ORCH-TASK-035: Dockerfile + Docker Compose (DONE, 2026-04-11)
+
+### План реализации
+1. Изучить architecture/deployment.md — определить структуру Dockerfile и docker-compose
+2. Изучить текущий Dockerfile (ORCH-TASK-001) — определить необходимые обновления
+3. Спроектировать полный набор Docker-файлов (backend-reliability-engineer subagent)
+4. Обновить Dockerfile: ARG VERSION, -X main.version ldflags, HEALTHCHECK /healthz
+5. Создать docker-compose.yaml: 5 сервисов с health checks и depends_on
+6. Создать .dockerignore, .env.example, generate-dev-jwt.sh, keys/.gitignore
+7. Обновить Makefile: 7 новых целей для Docker Compose workflow
+8. Обновить main.go: var version = "dev" для ldflags injection
+9. Code review (code-reviewer subagent) → fix: compose-clean в .PHONY
+
+### Что реализовано
+
+**Dockerfile (обновлён)**:
+- ARG VERSION=dev → -X main.version=${VERSION} в ldflags (встраивание версии в бинарник)
+- go.sum (без glob *) — проект зрелый, go.sum всегда есть
+- HEALTHCHECK /healthz (не /readyz) — Docker HEALTHCHECK это liveness probe, readyz проверяет downstream deps (Redis, RabbitMQ, DM) которые могут быть ещё не готовы при старте
+
+**docker-compose.yaml (создан)**:
+- 5 сервисов: rabbitmq, redis, minio, minio-init, orch-api
+- rabbitmq:3-management-alpine — AMQP :5672, Management UI :15672, healthcheck rabbitmq-diagnostics ping
+- redis:7-alpine — :6379, healthcheck redis-cli ping
+- minio/minio:latest — S3 API :9000, Console :9001, healthcheck mc ready local
+- minio-init (minio/mc) — auto-create bucket contractpro-uploads (idempotent --ignore-existing), restart: no
+- orch-api — build from context, depends_on всех service_healthy + minio-init service_completed_successfully
+- Named volumes: rabbitmq-data, redis-data, minio-data
+- keys/ → /keys:ro (JWT public key mount)
+- Environment overrides: broker/redis/s3 addresses, JWT path, debug log, ratelimit off, CORS localhost
+- stop_grace_period: 35s (> ORCH_SHUTDOWN_TIMEOUT 30s)
+- Container names: cp-orch-* prefix (isolation от DP Docker Compose)
+
+**.dockerignore (создан)**:
+- Исключает: *_test.go, testdata/, *.md, keys/, scripts/, .env*, Docker meta, .git, IDE files, бинарник
+
+**.env.example (создан)**:
+- Все переменные с комментариями и defaults
+- [COMPOSE OVERRIDE] метки для переменных, переопределяемых в docker-compose
+- Рекомендации для non-Docker запуска (localhost вместо container names)
+
+**scripts/generate-dev-jwt.sh (создан)**:
+- RSA-2048 генерация приватного + публичного ключей
+- Idempotent (не перезаписывает существующие)
+- chmod 600 для private, 644 для public
+
+**keys/.gitignore (создан)**: *.pem — предотвращение коммита ключей
+**.gitignore (обновлён)**: keys/*.pem — дополнительная защита
+
+**Makefile (обновлён)**:
+- docker-build: добавлен --build-arg VERSION=$(IMAGE_TAG)
+- generate-jwt: запуск generate-dev-jwt.sh
+- .env (file target): копирование .env.example если .env отсутствует
+- compose-up: build + start all (prerequisites: .env + generate-jwt)
+- compose-down: stop, preserve volumes
+- compose-clean: stop + remove volumes
+- compose-logs: follow orch-api logs
+- compose-ps: container status
+- compose-restart: rebuild only orch-api (infrastructure stays)
+
+**cmd/orch-api/main.go (обновлён)**:
+- var version = "dev" — linker target для -X main.version
+
+### Ключевые решения
+- /healthz вместо /readyz в Docker HEALTHCHECK — liveness, не readiness (DM вне compose → readyz будет fail → бесконечный restart loop)
+- minio-init как отдельный сервис — MinIO не создаёт bucket автоматически
+- stop_grace_period: 35s — запас над 30s shutdown timeout
+- ORCH_RATELIMIT_ENABLED=false в dev — упрощение отладки
+- ORCH_CORS_ALLOWED_ORIGINS=localhost:3000,5173 — React/Vite dev servers
+- cp-orch-* container names — без конфликтов с DP compose cp-* containers
+
+### Нет новых зависимостей
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-037 (high): Integration tests — dep: 036 ✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
+- ORCH-TASK-026 (medium): Admin Proxy — deps: 016❌ 011✓ (blocked by OPM Client)

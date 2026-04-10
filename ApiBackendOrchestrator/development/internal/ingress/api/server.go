@@ -65,6 +65,8 @@ type Server struct {
 // AuthMiddleware, RBACMiddleware, and RateLimitMiddleware are optional:
 // when nil, a no-op pass-through is used (useful for tests).
 // UploadHandler is optional: when nil, a 501 Not Implemented stub is used.
+// MetricsHandler is optional: when nil, a placeholder stub is used.
+// HTTPMetricsMiddleware is optional: when nil, no HTTP metrics are recorded.
 type Deps struct {
 	Config          config.HTTPConfig
 	CORSConfig      config.CORSConfig
@@ -73,6 +75,8 @@ type Deps struct {
 	AuthMiddleware      func(http.Handler) http.Handler
 	RBACMiddleware      func(http.Handler) http.Handler
 	RateLimitMiddleware func(http.Handler) http.Handler
+	MetricsHandler        http.Handler
+	HTTPMetricsMiddleware func(http.Handler) http.Handler
 	AuthHandler     *authproxy.Handler
 	UploadHandler   http.HandlerFunc
 	ContractHandler    *contracts.Handler
@@ -91,10 +95,16 @@ func NewServer(deps Deps) *Server {
 	r := chi.NewRouter()
 
 	// Apply global middleware.
-	// Recovery must be first to catch panics from all downstream middleware
+	// HTTPMetricsMiddleware is first so that it captures the full request
+	// lifecycle (including panics caught by recovery). The route pattern
+	// is resolved after ServeHTTP returns, so it sees the final pattern.
+	// Recovery must be next to catch panics from all downstream middleware
 	// and handlers. CORS must come before auth because preflight OPTIONS
 	// requests carry no JWT. SecurityHeaders generates the correlation ID
 	// used by all downstream middleware and error responses.
+	if deps.HTTPMetricsMiddleware != nil {
+		r.Use(deps.HTTPMetricsMiddleware)
+	}
 	r.Use(RecoveryMiddleware(log))
 	r.Use(CORSMiddleware(deps.CORSConfig, log))
 	r.Use(SecurityHeadersMiddleware())
@@ -135,7 +145,11 @@ func NewServer(deps Deps) *Server {
 	}
 
 	metricsRouter := chi.NewRouter()
-	metricsRouter.Get("/metrics", handleMetricsStub)
+	if deps.MetricsHandler != nil {
+		metricsRouter.Handle("/metrics", deps.MetricsHandler)
+	} else {
+		metricsRouter.Get("/metrics", handleMetricsStub)
+	}
 
 	metricsAddr := fmt.Sprintf(":%d", deps.Config.MetricsPort)
 	metricsSrv := &http.Server{
@@ -266,8 +280,9 @@ func (s *Server) StartWithListeners(mainLn, metricsLn net.Listener) error {
 
 // --- stub handlers ---
 
-// handleMetricsStub is a placeholder for the Prometheus metrics endpoint.
-// Real implementation will be added in ORCH-TASK-032.
+// handleMetricsStub is a fallback for the Prometheus metrics endpoint when
+// Deps.MetricsHandler is nil (e.g., in tests). In production, NewApp always
+// wires the real metrics handler from the metrics package (ORCH-TASK-032).
 func handleMetricsStub(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

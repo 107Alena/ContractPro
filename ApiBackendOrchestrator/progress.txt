@@ -1100,3 +1100,57 @@ Helpers: UOM 500, ensureCorrelationID (preserves/generates), decodeBody empty, i
 - 4 App shutdown тестов: SSEHandlerCalled, ObservabilityError, NilSSEHandler, NilObservability
 - Updated OrderedTeardown (4-step verify: sse→broker→redis→observability)
 - go test -race PASS
+
+## ORCH-TASK-032: Prometheus metrics (DONE, 2026-04-10)
+
+### План реализации
+1. Прочитать architecture/observability.md — 20 метрик в 8 категориях
+2. Изучить server.go (metrics stub на :9090), app.go (ObservabilityShutdown interface)
+3. Спроектировать Metrics struct, HTTPMiddleware, Handler, Shutdown (backend-reliability-engineer subagent)
+4. Реализовать metrics.go: 20 collectors, dedicated registry, Go/Process collectors
+5. Реализовать responseWriter: WriteHeader idempotent, Write override, Flush delegation, Unwrap
+6. Реализовать HTTPMiddleware с chi route pattern extraction + safeFallback
+7. Реализовать metrics_test.go: 49 тестов + 13 sub-tests
+8. Интегрировать: server.go (Deps.MetricsHandler + HTTPMetricsMiddleware), app.go (wiring + ObservabilityShutdown)
+9. Code review (code-reviewer subagent) → S-1, M-1, M-2 исправления
+10. go test -race -count=1 ✓, go test ./... ✓, go vet ✓, make build/test/lint ✓
+
+### Что реализовано
+- **metrics.go**: Metrics struct с 20 Prometheus collectors (HTTP 3, Upload 3, DM 3, S3 2, Broker 3, SSE 2, Security 2, Redis 2). Dedicated prometheus.Registry (не global) + GoCollector + ProcessCollector. NewMetrics(), Handler() (promhttp.HandlerFor с OpenMetrics), Registry(), Shutdown() (no-op, satisfies ObservabilityShutdown). responseWriter: WriteHeader idempotent (не делегирует повторные вызовы), Write() override (tracks implicit 200), Flush() delegation (для SSE), Unwrap() (для http.ResponseController). HTTPMiddleware(): chi route pattern extraction через RouteContext, safeFallback с allowlist (/healthz, /readyz, /metrics) + '__unmatched__' sentinel для unknown paths (cardinality protection). routePattern() + safeFallback().
+- **server.go**: Deps.MetricsHandler http.Handler, Deps.HTTPMetricsMiddleware func(http.Handler) http.Handler. Middleware chain: HTTPMetrics → Recovery → CORS → SecurityHeaders. Conditional: nil → fallback stub/no-op. handleMetricsStub comment updated.
+- **app.go**: Step 1b: appMetrics := metrics.NewMetrics(). MetricsHandler + HTTPMetricsMiddleware в api.Deps. observability = appMetrics. Comments updated.
+
+### Code review исправления
+- S-1: routePattern → safeFallback с allowlist (/healthz, /readyz, /metrics), unknown → '__unmatched__' (предотвращение cardinality explosion через 404 routes)
+- M-1: WriteHeader не делегирует повторные вызовы (предотвращение "superfluous WriteHeader" warnings)
+- M-2: Write() override для корректного wroteHeader tracking (Write → implicit 200, subsequent WriteHeader ignored)
+
+### Тесты (49 тестов + 13 sub-tests)
+Constructor: AllCollectorsRegistered, GoCollectorsPresent, IsolatedRegistry
+Handler: PrometheusFormat, ContentType, ContainsAllCategories, NoGlobalMetricsLeak, ScrapableByPrometheus
+Shutdown: ReturnsNil, Interface
+HTTP: RequestsTotal, RequestDuration (histogram+buckets), RequestSize
+Upload: Total, Size, Duration
+DM: RequestsTotal, CircuitBreakerState ×3 states
+S3: OperationsTotal, OperationDuration
+Broker: PublishTotal, PublishDuration, EventsReceivedTotal
+SSE: ConnectionsActive, EventsPushedTotal
+Security: RateLimitHitsTotal, AuthFailuresTotal ×3 reasons
+Redis: OperationsTotal ×5 types, OperationDuration
+Middleware: RecordsTotalAndDuration, RoutePatternPreventsCardinality ×3 UUIDs, RecordsRequestSize, SkipsRequestSizeWhenUnknown, CapturesStatusCode ×5, DefaultStatusCode200, FallbackSafePath, UnmatchedCardinality, DeepNestedRoute, NotFoundRoute → __unmatched__, FlushDelegation, LargeBody 10MB
+ResponseWriter: Flush, FlushNoFlusher, Unwrap, WriteHeaderOnce, WriteThenWriteHeader
+RoutePattern: ChiContext, NoChiContextSafePath, NoChiContextUnsafePath
+SafeFallback: 6 sub-tests
+Concurrent: 10 goroutines × 100 ops
+Integration: Middleware + Handler combined
+
+### Зависимость добавлена
+- github.com/prometheus/client_golang v1.23.2
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-037 (high): Integration tests — dep: 036 ✓
+- ORCH-TASK-024 (high): Export Service — dep: 014 ✓
+- ORCH-TASK-035 (high): Dockerfile + Docker Compose — dep: 034 ✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓

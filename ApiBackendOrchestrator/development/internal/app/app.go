@@ -32,6 +32,7 @@ import (
 	"contractpro/api-orchestrator/internal/infra/kvstore"
 	"contractpro/api-orchestrator/internal/infra/objectstorage"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
+	"contractpro/api-orchestrator/internal/infra/observability/metrics"
 	"contractpro/api-orchestrator/internal/ingress/api"
 	"contractpro/api-orchestrator/internal/ingress/consumer"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -41,9 +42,8 @@ import (
 )
 
 // ObservabilityShutdown flushes pending traces, metrics, and log buffers
-// during graceful shutdown. Implementations will be added in ORCH-TASK-032
-// (Prometheus) and ORCH-TASK-033 (OpenTelemetry). When nil, the flush phase
-// is a no-op.
+// during graceful shutdown. Prometheus metrics (ORCH-TASK-032) are wired;
+// OpenTelemetry tracing (ORCH-TASK-033) will extend this interface.
 type ObservabilityShutdown interface {
 	Shutdown(ctx context.Context) error
 }
@@ -67,7 +67,8 @@ type App struct {
 	sseHandler *sse.Handler
 
 	// Observability shutdown (flush traces/metrics/logs).
-	// Nil until ORCH-TASK-032/033 wire in a concrete implementation.
+	// Prometheus metrics (ORCH-TASK-032) are wired; OpenTelemetry tracing
+	// (ORCH-TASK-033) will be added when implemented.
 	observability ObservabilityShutdown
 }
 
@@ -78,6 +79,9 @@ func NewApp(cfg *config.Config) (*App, error) {
 	// 1. Logger — no external dependency.
 	log := logger.NewLogger(cfg.Observability.LogLevel)
 	log.Info(context.Background(), "initializing application")
+
+	// 1b. Prometheus metrics — no external dependency, always enabled.
+	appMetrics := metrics.NewMetrics()
 
 	// 2. Redis client — connects and pings on construction.
 	kvClient, err := kvstore.NewClient(cfg.Redis)
@@ -181,32 +185,35 @@ func NewApp(cfg *config.Config) (*App, error) {
 
 	// 14. HTTP server — assembles all handlers and middleware.
 	server := api.NewServer(api.Deps{
-		Config:            cfg.HTTP,
-		CORSConfig:        cfg.CORS,
-		Health:            healthHandler,
-		Logger:            log,
-		AuthMiddleware:      authMW.Handler(),
-		RBACMiddleware:      rbacMW.Handler(),
-		RateLimitMiddleware: rateLimitMW,
-		AuthHandler:       authProxyHandler,
-		UploadHandler:     uploadHandler.Handle(),
-		ContractHandler:   contractHandler,
-		VersionHandler:    versionHandler,
-		ResultsHandler:    resultsHandler,
-		ComparisonHandler: comparisonHandler,
-		SSEHandler:        sseHandler,
+		Config:                cfg.HTTP,
+		CORSConfig:            cfg.CORS,
+		Health:                healthHandler,
+		Logger:                log,
+		AuthMiddleware:        authMW.Handler(),
+		RBACMiddleware:        rbacMW.Handler(),
+		RateLimitMiddleware:   rateLimitMW,
+		MetricsHandler:        appMetrics.Handler(),
+		HTTPMetricsMiddleware: appMetrics.HTTPMiddleware(),
+		AuthHandler:           authProxyHandler,
+		UploadHandler:         uploadHandler.Handle(),
+		ContractHandler:       contractHandler,
+		VersionHandler:        versionHandler,
+		ResultsHandler:        resultsHandler,
+		ComparisonHandler:     comparisonHandler,
+		SSEHandler:            sseHandler,
 	})
 
 	log.Info(context.Background(), "application initialized successfully")
 
 	return &App{
-		log:          log,
-		health:       healthHandler,
-		kvClient:     kvClient,
-		brokerClient: brokerClient,
-		server:       server,
-		consumer:     eventConsumer,
-		sseHandler:   sseHandler,
+		log:           log,
+		health:        healthHandler,
+		kvClient:      kvClient,
+		brokerClient:  brokerClient,
+		server:        server,
+		consumer:      eventConsumer,
+		sseHandler:    sseHandler,
+		observability: appMetrics,
 	}, nil
 }
 
@@ -286,7 +293,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Phase 6: Flush observability (no-op until ORCH-TASK-032/033).
+	// Phase 6: Flush observability (Prometheus no-op, OpenTelemetry TBD).
 	a.log.Info(ctx, "shutdown phase 6/7: flushing observability")
 	if a.observability != nil {
 		if err := a.observability.Shutdown(ctx); err != nil {

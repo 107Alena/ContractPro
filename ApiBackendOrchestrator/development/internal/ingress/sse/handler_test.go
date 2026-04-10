@@ -1205,11 +1205,210 @@ func TestNewHandler(t *testing.T) {
 	if h.now == nil {
 		t.Error("now is nil")
 	}
+	if h.conns == nil {
+		t.Error("conns map is nil")
+	}
+	if h.done == nil {
+		t.Error("done channel is nil")
+	}
 
 	// UUID generator should produce valid UUIDs.
 	id := h.uuidGen()
 	if len(id) != 36 { // UUID v4 format: 8-4-4-4-12
 		t.Errorf("generated ID length = %d, want 36", len(id))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Shutdown tests
+// ---------------------------------------------------------------------------
+
+// TestShutdown_ClosesActiveConnections verifies that Shutdown sends a close
+// event to all active SSE connections and cancels their contexts.
+func TestShutdown_ClosesActiveConnections(t *testing.T) {
+	kv := &mockKVStore{
+		subscribeFunc: func(_ context.Context, _ string, _ func(msg string)) (Subscription, error) {
+			return newMockSubscription(), nil
+		},
+	}
+
+	var connIdx atomic.Int32
+	connIDs := []string{"conn-1", "conn-2"}
+	h := testHandler(validValidator(), kv)
+	h.uuidGen = func() string {
+		idx := connIdx.Add(1) - 1
+		return connIDs[int(idx)%len(connIDs)]
+	}
+	handler := h.Handle()
+
+	// Start two SSE connections.
+	rr1 := newRecordedResponse()
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	req1 := httptest.NewRequest(http.MethodGet, "/events/stream?token=valid", nil).WithContext(ctx1)
+
+	rr2 := newRecordedResponse()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	req2 := httptest.NewRequest(http.MethodGet, "/events/stream?token=valid", nil).WithContext(ctx2)
+
+	done1 := make(chan struct{})
+	done2 := make(chan struct{})
+	go func() { handler.ServeHTTP(rr1, req1); close(done1) }()
+	go func() { handler.ServeHTTP(rr2, req2); close(done2) }()
+
+	waitForContent(t, rr1, ": connected", 2*time.Second)
+	waitForContent(t, rr2, ": connected", 2*time.Second)
+
+	// Verify both connections are tracked.
+	h.mu.Lock()
+	activeConns := len(h.conns)
+	h.mu.Unlock()
+	if activeConns != 2 {
+		t.Errorf("active connections = %d, want 2", activeConns)
+	}
+
+	// Shutdown should close both connections.
+	h.Shutdown()
+
+	select {
+	case <-done1:
+	case <-time.After(2 * time.Second):
+		t.Fatal("connection 1 did not close after Shutdown")
+	}
+	select {
+	case <-done2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("connection 2 did not close after Shutdown")
+	}
+
+	// Verify close event was sent to both.
+	body1 := rr1.body()
+	body2 := rr2.body()
+	if !strings.Contains(body1, `event: close`) {
+		t.Errorf("connection 1 missing close event; got: %q", body1[max(0, len(body1)-200):])
+	}
+	if !strings.Contains(body2, `event: close`) {
+		t.Errorf("connection 2 missing close event; got: %q", body2[max(0, len(body2)-200):])
+	}
+	if !strings.Contains(body1, `server_shutdown`) {
+		t.Errorf("connection 1 close event missing reason")
+	}
+}
+
+// TestShutdown_Idempotent verifies that calling Shutdown multiple times is safe.
+func TestShutdown_Idempotent(t *testing.T) {
+	h := testHandler(validValidator(), &mockKVStore{})
+
+	// Should not panic.
+	h.Shutdown()
+	h.Shutdown()
+	h.Shutdown()
+}
+
+// TestShutdown_RejectsNewConnections verifies that after Shutdown, new SSE
+// connections are rejected immediately with a close event.
+func TestShutdown_RejectsNewConnections(t *testing.T) {
+	kv := &mockKVStore{
+		subscribeFunc: func(_ context.Context, _ string, handler func(msg string)) (Subscription, error) {
+			return newMockSubscription(), nil
+		},
+	}
+
+	h := testHandler(validValidator(), kv)
+	handler := h.Handle()
+
+	// Shutdown before any connections.
+	h.Shutdown()
+
+	// New connection should be rejected.
+	rr := newRecordedResponse()
+	req := httptest.NewRequest(http.MethodGet, "/events/stream?token=valid", nil)
+
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(rr, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return for rejected connection")
+	}
+
+	body := rr.body()
+	if !strings.Contains(body, `event: close`) {
+		t.Errorf("expected close event; got: %q", body)
+	}
+	if !strings.Contains(body, `server_shutdown`) {
+		t.Errorf("expected server_shutdown reason; got: %q", body)
+	}
+}
+
+// TestShutdown_ConnectionsRemovedFromTrackingOnExit verifies that connections
+// remove themselves from the conns map when their handler returns.
+func TestShutdown_ConnectionsRemovedFromTrackingOnExit(t *testing.T) {
+	kv := &mockKVStore{
+		subscribeFunc: func(_ context.Context, _ string, handler func(msg string)) (Subscription, error) {
+			return newMockSubscription(), nil
+		},
+	}
+
+	h := testHandler(validValidator(), kv)
+	handler := h.Handle()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	rr := newRecordedResponse()
+	req := httptest.NewRequest(http.MethodGet, "/events/stream?token=valid", nil).WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(rr, req)
+		close(done)
+	}()
+
+	waitForContent(t, rr, ": connected", 2*time.Second)
+
+	// Verify the connection is tracked.
+	h.mu.Lock()
+	tracked := len(h.conns)
+	h.mu.Unlock()
+	if tracked != 1 {
+		t.Fatalf("tracked connections = %d, want 1", tracked)
+	}
+
+	// Cancel the context to end the connection normally.
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return")
+	}
+
+	// Verify the connection was removed from tracking.
+	h.mu.Lock()
+	tracked = len(h.conns)
+	h.mu.Unlock()
+	if tracked != 0 {
+		t.Errorf("tracked connections after exit = %d, want 0", tracked)
+	}
+}
+
+// TestShutdown_NoConnectionsIsNoop verifies that Shutdown with no active
+// connections completes without error.
+func TestShutdown_NoConnectionsIsNoop(t *testing.T) {
+	h := testHandler(validValidator(), &mockKVStore{})
+
+	// Should not panic or block.
+	h.Shutdown()
+
+	// Verify done channel is closed.
+	select {
+	case <-h.done:
+	default:
+		t.Error("done channel not closed after Shutdown")
 	}
 }
 

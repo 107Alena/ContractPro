@@ -1062,8 +1062,41 @@ Helpers: UOM 500, ensureCorrelationID (preserves/generates), decodeBody empty, i
 
 ### Следующие приоритетные задачи
 - ORCH-TASK-037 (high): Integration tests — dep: 036 ✓
-- ORCH-TASK-034 (high): Graceful shutdown — deps: 008✓ 029✓ 027✓
 - ORCH-TASK-024 (high): Export Service — dep: 014✓
 - ORCH-TASK-032 (high): Prometheus metrics — dep: 003✓
+- ORCH-TASK-035 (high): Dockerfile + Docker Compose — dep: 034✓
 - ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
 - ORCH-TASK-016 (medium): OPM Client — dep: 009✓
+
+## ORCH-TASK-034: Graceful shutdown (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить текущий код App.Shutdown(), main.go, server.go, SSE handler, consumer
+2. Прочитать deployment.md §5 — архитектура 9-фазного shutdown
+3. Спроектировать 7-фазный shutdown (backend-reliability-engineer subagent)
+4. Реализовать SSE Handler connection tracking + Shutdown()
+5. Реализовать улучшенный App.Shutdown() с 7 фазами
+6. Обновить main.go с timeout-based force exit
+7. Code review (code-reviewer subagent) → исправления M-1, M-2, M-3
+
+### Что реализовано
+- **SSE Handler (handler.go)**: connection tracking (sync.Mutex + map[string]connEntry + done channel), Shutdown() method (idempotent via sync.Once-like done channel, signals event loops via per-connection closeCh — race-free), Done() method для тестов, отклонение новых подключений после shutdown
+- **App.Shutdown() (app.go)**: 7 фаз — 1) SetNotReady, 2) SSE close, 3) HTTP drain, 4) Broker close, 5) Redis close, 6) Observability flush, 7) Done. ObservabilityShutdown interface (nil=no-op). Nil guards для всех компонентов. errors.Join для агрегации ошибок
+- **main.go**: timeout-based force exit (DeadlineExceeded → os.Exit(1)), double-signal force exit сохранён
+
+### Ключевые решения
+- SSE close ПЕРЕД HTTP drain (M-1): http.Server.Shutdown() блокирует на long-lived SSE connections; отмена SSE контекстов сначала позволяет handlers вернуться
+- closeCh pattern (M-2): Shutdown() сигнализирует event loop через канал вместо прямой записи в ResponseWriter — устраняет data race
+- Event loop отправляет `event: close, data: {"reason":"server_shutdown"}` перед выходом
+- ObservabilityShutdown interface — заглушка для будущих ORCH-TASK-032/033
+
+### Code review исправления
+- M-1: SSE Shutdown перед HTTP drain (critical для доставки close event)
+- M-2: closeCh pattern вместо direct ResponseWriter write (race-free, -race PASS)
+- M-3: nil guards для brokerClient и kvClient в Shutdown
+
+### Тесты
+- 5 SSE shutdown тестов: ClosesActiveConnections, Idempotent, RejectsNewConnections, ConnectionsRemovedFromTrackingOnExit, NoConnectionsIsNoop
+- 4 App shutdown тестов: SSEHandlerCalled, ObservabilityError, NilSSEHandler, NilObservability
+- Updated OrderedTeardown (4-step verify: sse→broker→redis→observability)
+- go test -race PASS

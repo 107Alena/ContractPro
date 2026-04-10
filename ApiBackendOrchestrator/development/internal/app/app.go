@@ -3,7 +3,8 @@
 //
 // NewApp constructs all dependencies in the correct order and returns an
 // App ready to start. Start runs the event consumer and HTTP server.
-// Shutdown performs an ordered teardown: readiness=false → HTTP → broker → Redis.
+// Shutdown performs an ordered 7-phase teardown:
+// not-ready → SSE close → HTTP drain → broker → Redis → observability flush → done.
 package app
 
 import (
@@ -39,6 +40,14 @@ import (
 	"contractpro/api-orchestrator/internal/ingress/sse"
 )
 
+// ObservabilityShutdown flushes pending traces, metrics, and log buffers
+// during graceful shutdown. Implementations will be added in ORCH-TASK-032
+// (Prometheus) and ORCH-TASK-033 (OpenTelemetry). When nil, the flush phase
+// is a no-op.
+type ObservabilityShutdown interface {
+	Shutdown(ctx context.Context) error
+}
+
 // App holds all wired components and manages the application lifecycle.
 type App struct {
 	log    *logger.Logger
@@ -53,6 +62,13 @@ type App struct {
 
 	// Event consumer (subscribes to RabbitMQ topics).
 	consumer *consumer.Consumer
+
+	// SSE handler (tracks active connections for graceful close).
+	sseHandler *sse.Handler
+
+	// Observability shutdown (flush traces/metrics/logs).
+	// Nil until ORCH-TASK-032/033 wire in a concrete implementation.
+	observability ObservabilityShutdown
 }
 
 // NewApp constructs all application components in dependency order and
@@ -190,6 +206,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 		brokerClient: brokerClient,
 		server:       server,
 		consumer:     eventConsumer,
+		sseHandler:   sseHandler,
 	}, nil
 }
 
@@ -211,40 +228,73 @@ func (a *App) Start() error {
 
 // Shutdown performs an ordered teardown of all application components.
 // The provided context controls the maximum time to wait for in-flight
-// requests and connections to drain.
+// requests and connections to drain. Each phase is executed sequentially;
+// errors are collected but do not abort subsequent phases.
 //
-// Shutdown order:
-//  1. Health: SetNotReady (readiness probe returns 503 immediately)
-//  2. HTTP server: graceful shutdown (drain in-flight requests)
-//  3. Broker: Close (stops event consumer, disconnects RabbitMQ)
-//  4. Redis: Close (disconnects Redis connection pool)
+// Shutdown phases (see deployment.md §5):
+//  1. Mark not ready — readiness probe returns 503 immediately
+//  2. Close SSE — send close event, cancel connection contexts
+//  3. Drain HTTP — stop listener, wait for in-flight requests
+//  4. Close broker — stop consumer subscriptions, disconnect AMQP
+//  5. Close Redis — disconnect connection pool
+//  6. Flush observability — flush traces, metrics, logs (no-op until wired)
+//  7. Done
+//
+// SSE close (phase 2) MUST happen before HTTP drain (phase 3) because
+// http.Server.Shutdown waits for all active connections to become idle.
+// SSE connections are long-lived and never idle — cancelling their contexts
+// first lets the HTTP handlers return, which unblocks server.Shutdown.
 func (a *App) Shutdown(ctx context.Context) error {
-	a.log.Info(ctx, "shutdown initiated")
+	a.log.Info(ctx, "shutdown phase 1/7: marking not ready")
+	a.health.SetNotReady()
 
 	var errs []error
 
-	// 1. Signal not ready so load balancers stop sending traffic.
-	a.health.SetNotReady()
-	a.log.Info(ctx, "readiness probe disabled")
+	// Phase 2: Close SSE connections. Send a close event so clients know to
+	// reconnect to another instance, then cancel their contexts. This MUST
+	// happen before HTTP drain so SSE handlers can return.
+	a.log.Info(ctx, "shutdown phase 2/7: closing SSE connections")
+	if a.sseHandler != nil {
+		a.sseHandler.Shutdown()
+	}
 
-	// 2. Drain in-flight HTTP requests.
+	// Phase 3: Drain in-flight HTTP requests. Go's http.Server.Shutdown
+	// stops the listener and waits for active requests to complete. SSE
+	// connections have already been cancelled in phase 2, so this completes
+	// promptly.
+	a.log.Info(ctx, "shutdown phase 3/7: draining HTTP requests")
 	if err := a.server.Shutdown(ctx); err != nil {
 		a.log.Error(ctx, "HTTP server shutdown error", logger.ErrorAttr(err))
 		errs = append(errs, fmt.Errorf("http server: %w", err))
 	}
 
-	// 3. Close broker (stops consumer subscriptions, disconnects AMQP).
-	if err := a.brokerClient.Close(); err != nil {
-		a.log.Error(ctx, "broker shutdown error", logger.ErrorAttr(err))
-		errs = append(errs, fmt.Errorf("broker: %w", err))
+	// Phase 4: Close broker (stops consumer subscriptions, disconnects AMQP).
+	a.log.Info(ctx, "shutdown phase 4/7: closing broker")
+	if a.brokerClient != nil {
+		if err := a.brokerClient.Close(); err != nil {
+			a.log.Error(ctx, "broker shutdown error", logger.ErrorAttr(err))
+			errs = append(errs, fmt.Errorf("broker: %w", err))
+		}
 	}
 
-	// 4. Close Redis connection pool.
-	if err := a.kvClient.Close(); err != nil {
-		a.log.Error(ctx, "redis shutdown error", logger.ErrorAttr(err))
-		errs = append(errs, fmt.Errorf("redis: %w", err))
+	// Phase 5: Close Redis connection pool.
+	a.log.Info(ctx, "shutdown phase 5/7: closing Redis")
+	if a.kvClient != nil {
+		if err := a.kvClient.Close(); err != nil {
+			a.log.Error(ctx, "redis shutdown error", logger.ErrorAttr(err))
+			errs = append(errs, fmt.Errorf("redis: %w", err))
+		}
 	}
 
-	a.log.Info(ctx, "shutdown complete")
+	// Phase 6: Flush observability (no-op until ORCH-TASK-032/033).
+	a.log.Info(ctx, "shutdown phase 6/7: flushing observability")
+	if a.observability != nil {
+		if err := a.observability.Shutdown(ctx); err != nil {
+			a.log.Error(ctx, "observability shutdown error", logger.ErrorAttr(err))
+			errs = append(errs, fmt.Errorf("observability: %w", err))
+		}
+	}
+
+	a.log.Info(ctx, "shutdown phase 7/7: complete")
 	return errors.Join(errs...)
 }

@@ -822,7 +822,9 @@
         "Шаг 2: SIGTERM → ordered shutdown → exit 0"
       ],
       "dependencies": ["ORCH-TASK-008", "ORCH-TASK-029", "ORCH-TASK-027"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-10",
+      "summary": "Graceful shutdown реализован как 7-фазный упорядоченный процесс. SSE Handler: добавлен connection tracking (sync.Mutex + map[string]connEntry + done channel), Shutdown() метод (idempotent, signals event loops via per-connection closeCh — race-free), Done() метод, отклонение новых подключений после shutdown. App.Shutdown(): Phase 1 — SetNotReady (readiness 503), Phase 2 — SSE close (send event:close с reason:server_shutdown через closeCh, до HTTP drain чтобы SSE handlers вернулись), Phase 3 — HTTP drain (server.Shutdown ждёт in-flight requests), Phase 4 — Broker close (stops consumers), Phase 5 — Redis close (connection pool), Phase 6 — Observability flush (ObservabilityShutdown interface, nil=no-op до ORCH-TASK-032/033), Phase 7 — Done. Nil guards для broker/redis/sse/observability. Errors collected via errors.Join. main.go: timeout-based force exit (ctx.Err()==DeadlineExceeded → os.Exit(1)), double-signal force exit сохранён. Code review (code-reviewer): M-1 phase ordering fix (SSE before HTTP — http.Server.Shutdown блокирует на long-lived SSE если не отменить сначала), M-2 race condition fix (closeCh pattern вместо прямой записи в ResponseWriter из Shutdown), M-3 nil guards added. go test -race PASS. 5 SSE shutdown тестов: ClosesActiveConnections (2 conns, close event verified), Idempotent (3x safe), RejectsNewConnections, ConnectionsRemovedFromTrackingOnExit, NoConnectionsIsNoop. 4 App shutdown тестов: SSEHandlerCalled, ObservabilityError, NilSSEHandler, NilObservability. Updated existing OrderedTeardown test (4-step verify: sse→broker→redis→observability). Нет новых зависимостей."
     },
     {
       "id": "ORCH-TASK-035",

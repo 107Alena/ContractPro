@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -105,8 +106,17 @@ const (
 // Handler
 // ---------------------------------------------------------------------------
 
-// Handler manages SSE connections. It is stateless and safe for concurrent
-// use by multiple goroutines.
+// connEntry tracks an active SSE connection for graceful shutdown.
+// The closeCh channel is used to signal the event loop to write the close
+// event and exit. This avoids concurrent writes to the ResponseWriter
+// (which is not goroutine-safe) between Shutdown() and the event loop.
+type connEntry struct {
+	closeCh chan struct{}
+}
+
+// Handler manages SSE connections. It is safe for concurrent use by multiple
+// goroutines. Connections are tracked internally so that Shutdown can
+// gracefully close all active SSE streams.
 type Handler struct {
 	validator TokenValidator
 	kv        KVStore
@@ -114,6 +124,11 @@ type Handler struct {
 	log       *logger.Logger
 	uuidGen   UUIDGenerator
 	now       func() time.Time
+
+	// Connection tracking for graceful shutdown.
+	mu    sync.Mutex
+	conns map[string]connEntry // connID -> entry
+	done  chan struct{}        // closed on Shutdown to reject new connections
 }
 
 // NewHandler creates an SSE Handler with the given dependencies.
@@ -136,6 +151,8 @@ func NewHandler(
 		log:       log.With("component", "sse-handler"),
 		uuidGen:   defaultUUIDGenerator,
 		now:       time.Now,
+		conns:     make(map[string]connEntry),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -223,6 +240,28 @@ func (h *Handler) Handle() http.HandlerFunc {
 		connCtx, connCancel := context.WithCancel(ctx)
 		defer connCancel()
 
+		// Track the connection for graceful shutdown.
+		// If Shutdown has already been called, reject immediately.
+		closeCh := make(chan struct{})
+		h.mu.Lock()
+		select {
+		case <-h.done:
+			h.mu.Unlock()
+			connCancel()
+			writeSSEEvent(w, flusher, "close", `{"reason":"server_shutdown"}`)
+			return
+		default:
+		}
+		h.conns[connID] = connEntry{closeCh: closeCh}
+		h.mu.Unlock()
+
+		// Remove from tracking when the connection closes.
+		defer func() {
+			h.mu.Lock()
+			delete(h.conns, connID)
+			h.mu.Unlock()
+		}()
+
 		connLog := h.log.With(
 			"conn_id", connID,
 			"org_id", orgID,
@@ -278,9 +317,46 @@ func (h *Handler) Handle() http.HandlerFunc {
 		// -----------------------------------------------------------
 		// Step 8: Enter event loop
 		// -----------------------------------------------------------
-		h.eventLoop(connCtx, connLog, w, flusher, events, orgID, userID, connID)
+		h.eventLoop(connCtx, connLog, w, flusher, events, closeCh, orgID, userID, connID)
 
 		connLog.Info(connCtx, "SSE connection closed")
+	}
+}
+
+// Done returns a channel that is closed when Shutdown has been called.
+// Useful for tests and health probes to check if the handler is shutting down.
+func (h *Handler) Done() <-chan struct{} {
+	return h.done
+}
+
+// Shutdown gracefully closes all active SSE connections. It signals each
+// connection's event loop to write a close event and exit via a per-connection
+// channel. This avoids concurrent ResponseWriter access between Shutdown()
+// and the event loop goroutine.
+//
+// After Shutdown is called, new connections are rejected immediately.
+// Shutdown is safe to call multiple times; only the first call has effect.
+func (h *Handler) Shutdown() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	select {
+	case <-h.done:
+		// Already shut down.
+		return
+	default:
+		close(h.done)
+	}
+
+	h.log.Info(context.Background(), "closing SSE connections",
+		"active_connections", len(h.conns),
+	)
+
+	for connID, entry := range h.conns {
+		close(entry.closeCh)
+		h.log.Debug(context.Background(), "SSE connection signalled to close",
+			"conn_id", connID,
+		)
 	}
 }
 
@@ -289,14 +365,15 @@ func (h *Handler) Handle() http.HandlerFunc {
 // ---------------------------------------------------------------------------
 
 // eventLoop runs the main SSE event loop. It blocks until the client
-// disconnects, the maximum connection age is reached, or a write error
-// occurs (broken pipe).
+// disconnects, the maximum connection age is reached, a write error
+// occurs (broken pipe), or a graceful shutdown is initiated via closeCh.
 func (h *Handler) eventLoop(
 	ctx context.Context,
 	log *logger.Logger,
 	w http.ResponseWriter,
 	flusher http.Flusher,
 	events <-chan string,
+	closeCh <-chan struct{},
 	orgID, userID, connID string,
 ) {
 	heartbeatTicker := time.NewTicker(h.cfg.HeartbeatInterval)
@@ -339,6 +416,14 @@ func (h *Handler) eventLoop(
 			// Send a reconnect hint so the client knows to reconnect.
 			_ = writeSSEEvent(w, flusher, "connection_expired",
 				`{"message":"Превышено максимальное время соединения. Переподключитесь."}`)
+			return
+
+		case <-closeCh:
+			// Graceful shutdown — send close event and exit. The write
+			// happens here (in the event loop goroutine) instead of in
+			// Shutdown() to avoid concurrent ResponseWriter access.
+			log.Info(ctx, "server shutdown, closing SSE connection")
+			_ = writeSSEEvent(w, flusher, "close", `{"reason":"server_shutdown"}`)
 			return
 
 		case <-ctx.Done():

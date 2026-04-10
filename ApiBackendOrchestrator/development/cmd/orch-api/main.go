@@ -27,13 +27,17 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		sig := <-sigCh
-		log.Printf("received signal %s, shutting down gracefully", sig)
+		log.Printf("received signal %s, shutting down gracefully (timeout %s)", sig, cfg.HTTP.ShutdownTimeout)
 
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
 		defer cancel()
 
 		if err := application.Shutdown(ctx); err != nil {
 			log.Printf("shutdown error: %v", err)
+			if ctx.Err() == context.DeadlineExceeded {
+				log.Printf("shutdown timed out after %s, forcing exit", cfg.HTTP.ShutdownTimeout)
+				os.Exit(1)
+			}
 		}
 
 		// Second signal forces immediate exit.

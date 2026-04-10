@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"time"
 
+	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/results"
 	"contractpro/api-orchestrator/internal/application/versions"
@@ -70,10 +71,11 @@ type Deps struct {
 	AuthMiddleware  func(http.Handler) http.Handler
 	RBACMiddleware  func(http.Handler) http.Handler
 	UploadHandler   http.HandlerFunc
-	ContractHandler *contracts.Handler
-	VersionHandler  *versions.Handler
-	ResultsHandler  *results.Handler
-	SSEHandler      *sse.Handler
+	ContractHandler    *contracts.Handler
+	VersionHandler     *versions.Handler
+	ResultsHandler     *results.Handler
+	ComparisonHandler  *comparison.Handler
+	SSEHandler         *sse.Handler
 }
 
 // NewServer constructs a Server with the chi router, middleware chain,
@@ -110,7 +112,7 @@ func NewServer(deps Deps) *Server {
 		uploadH = notImplemented
 	}
 
-	registerRoutes(r, authMW, rbacMW, uploadH, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.SSEHandler)
+	registerRoutes(r, authMW, rbacMW, uploadH, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.ComparisonHandler, deps.SSEHandler)
 
 	mainAddr := fmt.Sprintf(":%d", deps.Config.Port)
 	main := &http.Server{

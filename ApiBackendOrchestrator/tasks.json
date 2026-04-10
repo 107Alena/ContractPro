@@ -569,7 +569,9 @@
         "Шаг 4: GET /diff (не существует) → 404"
       ],
       "dependencies": ["ORCH-TASK-014", "ORCH-TASK-017"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-10",
+      "summary": "Пакет internal/application/comparison: Handler struct с DMClient (GetVersion, GetDiff) и CommandPublisher (PublishCompareVersions) consumer-side интерфейсами. HandleCompare() — POST /contracts/{id}/compare: auth validation → extract contract_id (UUID) → parse JSON body (base_version_id, target_version_id) → validate() (non-empty, valid UUID, not equal) → generate correlationID/jobID → DM GetVersion(base) → isStillProcessing guard (whitelist: FULLY_READY/PARTIALLY_AVAILABLE/PROCESSING_FAILED/REJECTED) → DM GetVersion(target) → same guard → PublishCompareVersions → 202 Accepted {contract_id, job_id, base_version_id, target_version_id, status:COMPARISON_QUEUED, message}. HandleGetDiff() — GET /contracts/{id}/versions/{base_vid}/diff/{target_vid}: auth validation → extract 3 UUID params → DM GetDiff → 200 pass-through VersionDiff. Sequential version validation (deterministic errors). DM error handling: handleDMError shared (ErrCircuitOpen→502, DMError→MapDMError, transport→502, unknown→500). Broker failure: CRITICAL log, 502 BROKER_UNAVAILABLE. Wiring: Deps.ComparisonHandler в server.go, registerRoutes с nil-guard fallback. 28 тестов (+ 23 sub-tests): HandleCompare (17 — success, no auth, invalid contract_id, malformed JSON, empty base/target, invalid UUID base, same IDs, base 404, target 404, base processing ×7 subtests, target processing, terminal allowed ×4 subtests, DM 5xx, DM circuit open, broker failure, published command fields, content-type), HandleGetDiff (10 — success, no auth, invalid contract_id/base_vid/target_vid, 404, DM 5xx, circuit open, transport error, content-type), isStillProcessing (12 subtests), validate (6 subtests), handleDMError (2), interface compliance (1). Нет новых зависимостей."
     },
     {
       "id": "ORCH-TASK-024",

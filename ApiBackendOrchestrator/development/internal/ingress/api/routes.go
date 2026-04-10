@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/results"
 	"contractpro/api-orchestrator/internal/application/versions"
@@ -27,7 +28,7 @@ import (
 //   - uploadH: contract upload handler (nil → 501 Not Implemented)
 //   - contractH: contract CRUD handler (nil → 501 Not Implemented stubs)
 //   - versionH: version management handler (nil → 501 Not Implemented stubs)
-func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, sseH *sse.Handler) {
+func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, sseH *sse.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -90,8 +91,13 @@ func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler
 			}
 
 			// Comparison.
-			r.Post("/contracts/{contract_id}/compare", notImplemented)
-			r.Get("/contracts/{contract_id}/versions/{base_version_id}/diff/{target_version_id}", notImplemented)
+			if comparisonH != nil {
+				r.Post("/contracts/{contract_id}/compare", comparisonH.HandleCompare())
+				r.Get("/contracts/{contract_id}/versions/{base_version_id}/diff/{target_version_id}", comparisonH.HandleGetDiff())
+			} else {
+				r.Post("/contracts/{contract_id}/compare", notImplemented)
+				r.Get("/contracts/{contract_id}/versions/{base_version_id}/diff/{target_version_id}", notImplemented)
+			}
 
 			// Export.
 			r.Get("/contracts/{contract_id}/versions/{version_id}/export/{format}", notImplemented)

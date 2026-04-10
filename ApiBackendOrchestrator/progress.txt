@@ -796,10 +796,51 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 - **SourceFileMIMEType = application/pdf** — v1 поддерживает только PDF
 
 ### Следующие задачи готовые к реализации (deps выполнены)
-- ORCH-TASK-034 (high): Graceful shutdown — зависит от ORCH-TASK-008 ✓, ORCH-TASK-029 ✓, ORCH-TASK-027 ✓
-- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
-- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
-- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
-- ORCH-TASK-013 (high): Rate limiter — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
-- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
-- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-034 (high): Graceful shutdown
+- ORCH-TASK-023 (high): Comparison Coordinator
+- ORCH-TASK-024 (high): Export Service
+- ORCH-TASK-012 (high): CORS middleware
+- ORCH-TASK-013 (high): Rate limiter
+- ORCH-TASK-015 (high): UOM Client
+- ORCH-TASK-032 (high): Prometheus metrics
+
+## ORCH-TASK-023: Comparison Coordinator (DONE, 2026-04-10)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, event-catalog.md, api-specification.yaml) — определить compare/diff endpoints, команду CompareDocumentVersionsRequested, формат diff
+2. Использовать versions/handler.go (HandleRecheck) как образец паттерна (isStillProcessing, handleDMError, UUID generation)
+3. Спроектировать Handler с DMClient (GetVersion, GetDiff) и CommandPublisher (PublishCompareVersions) интерфейсами (golang-pro subagent)
+4. Реализовать handler.go: Handler struct, NewHandler, HandleCompare (6 шагов), HandleGetDiff (4 шага), isStillProcessing, handleDMError, writeJSON, extractContractID, extractURLParam
+5. Реализовать handler_test.go: 28 тестов с mockDM и mockCmdPub
+6. Wiring: server.go Deps.ComparisonHandler, routes.go comparisonH parameter с nil-guard
+7. Code review (code-reviewer subagent) — реализация соответствует паттернам проекта
+
+### Что реализовано
+- **handler.go**: Handler struct (dm DMClient, cmdPub CommandPublisher, log, uuidGen), NewHandler с component logger
+  - **HandleCompare()**: POST /contracts/{id}/compare — auth extraction → contract_id UUID → parse JSON body → validate (base/target UUID, non-empty, not equal) → generate correlationID/jobID → DM GetVersion(base) → isStillProcessing guard → DM GetVersion(target) → same guard → PublishCompareVersions → 202 Accepted {contract_id, job_id, base_version_id, target_version_id, status:COMPARISON_QUEUED, message}
+  - **HandleGetDiff()**: GET /contracts/{id}/versions/{base_vid}/diff/{target_vid} — auth extraction → 3 UUID params → DM GetDiff → 200 pass-through VersionDiff
+  - **isStillProcessing()**: whitelist FULLY_READY/PARTIALLY_AVAILABLE/PROCESSING_FAILED/REJECTED
+  - **handleDMError()**: ErrCircuitOpen→502, DMError.StatusCode→MapDMError, transport→502, unknown→500
+  - **CompareRequest.validate()**: non-empty, valid UUID, base != target
+  - **CompareAcceptedResponse**: contract_id, job_id, base_version_id, target_version_id, status, message
+- **handler_test.go**: 28 тестов (+ 23 sub-tests): HandleCompare (17), HandleGetDiff (10), isStillProcessing (12), validate (6), handleDMError (2), interface (1)
+- **server.go**: Deps.ComparisonHandler *comparison.Handler
+- **routes.go**: comparisonH parameter, nil-guard block с HandleCompare/HandleGetDiff
+
+### Ключевые решения
+- **Отдельный пакет** — чистые зависимости: DM (GetVersion+GetDiff) и CommandPublisher (CompareVersions)
+- **Sequential version validation** — deterministic errors, consistent with recheck pattern
+- **No explicit contract ownership check** — DM API path validates implicitly
+- **Pass-through VersionDiff** — no mapping DTO, DM response = API contract
+- **isStillProcessing whitelist** — consistent with versions.isStillProcessing
+- **Broker failure = 502 BROKER_UNAVAILABLE** — per error catalog
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-034 (high): Graceful shutdown
+- ORCH-TASK-024 (high): Export Service
+- ORCH-TASK-015 (high): UOM Client (critical path → ORCH-TASK-031 → ORCH-TASK-036)
+- ORCH-TASK-012 (high): CORS middleware
+- ORCH-TASK-013 (high): Rate limiter
+- ORCH-TASK-032 (high): Prometheus metrics
+- ORCH-TASK-025 (medium): Feedback Service
+- ORCH-TASK-016 (medium): OPM Client

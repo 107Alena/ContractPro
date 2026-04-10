@@ -1,0 +1,18 @@
+ORCH-TASK-016: OPM Client — проксирование policy/checklist endpoints
+[00:00] Анализ задач: 3 pending (medium): ORCH-TASK-016 (OPM Client), ORCH-TASK-025 (Feedback), ORCH-TASK-033 (Tracing)
+[00:01] Выбрана ORCH-TASK-016 — все deps выполнены (ORCH-TASK-009 ✓), разблокирует ORCH-TASK-026 (Admin Proxy)
+[00:02] Изучаю существующий код: dmclient, uomclient, error_response, routes, app.go
+[00:03] Explore subagents: UOMClient (client.go, errors.go, models.go), DMClient, error catalog, routes, wiring
+[00:04] Explore subagent: architecture docs — OPM endpoints, admin proxy, integration contracts
+[00:05] backend-reliability-engineer subagent: дизайн OPM Client
+[00:06] Дизайн: UOMClient паттерн, DisabledClient, json.RawMessage pass-through, 2 new error codes
+[00:07] Реализация: errors.go, client.go, opm_errors.go, error_response.go changes
+[00:08] Реализация: client_test.go (35 тестов), opm_errors_test.go (12 тестов)
+[00:09] Fix: allErrorCodes list updated in error_response_test.go (2 new codes)
+[00:10] go test opmclient + model — OK
+[00:11] Code review (code-reviewer subagent) — Approved, 6 N-category findings
+[00:12] Fix: N-01 path escaping assertion, N-05 429 test case, N-06 exact boundary check
+[00:13] go test -race -count=1 ./... — OK (29 пакетов, 0 failures)
+[00:14] go vet ./... — OK, make build — OK, make test — OK, make lint — OK
+[00:15] Обновляю tasks.json, progress.txt
+[00:16] Git commit

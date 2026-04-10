@@ -33,10 +33,12 @@ const (
 
 // Resource not found errors (404).
 const (
-	ErrDocumentNotFound ErrorCode = "DOCUMENT_NOT_FOUND"
-	ErrVersionNotFound  ErrorCode = "VERSION_NOT_FOUND"
-	ErrArtifactNotFound ErrorCode = "ARTIFACT_NOT_FOUND"
-	ErrDiffNotFound     ErrorCode = "DIFF_NOT_FOUND"
+	ErrDocumentNotFound  ErrorCode = "DOCUMENT_NOT_FOUND"
+	ErrVersionNotFound   ErrorCode = "VERSION_NOT_FOUND"
+	ErrArtifactNotFound  ErrorCode = "ARTIFACT_NOT_FOUND"
+	ErrDiffNotFound      ErrorCode = "DIFF_NOT_FOUND"
+	ErrPolicyNotFound    ErrorCode = "POLICY_NOT_FOUND"
+	ErrChecklistNotFound ErrorCode = "CHECKLIST_NOT_FOUND"
 )
 
 // Conflict / state errors (409).
@@ -144,6 +146,16 @@ var errorCatalog = map[ErrorCode]ErrorEntry{
 		HTTPStatus: http.StatusNotFound,
 		Message:    "Результат сравнения не найден.",
 		Suggestion: "Запустите сравнение версий или дождитесь его завершения.",
+	},
+	ErrPolicyNotFound: {
+		HTTPStatus: http.StatusNotFound,
+		Message:    "Политика не найдена.",
+		Suggestion: "Проверьте идентификатор политики и попробуйте снова.",
+	},
+	ErrChecklistNotFound: {
+		HTTPStatus: http.StatusNotFound,
+		Message:    "Чек-лист не найден.",
+		Suggestion: "Проверьте идентификатор чек-листа и попробуйте снова.",
 	},
 	ErrDocumentArchived: {
 		HTTPStatus: http.StatusConflict,

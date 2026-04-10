@@ -15,7 +15,7 @@ var allErrorCodes = []ErrorCode{
 	ErrAuthTokenMissing, ErrAuthTokenExpired, ErrAuthTokenInvalid,
 	ErrPermissionDenied,
 	ErrFileTooLarge, ErrUnsupportedFormat, ErrInvalidFile,
-	ErrDocumentNotFound, ErrVersionNotFound, ErrArtifactNotFound, ErrDiffNotFound,
+	ErrDocumentNotFound, ErrVersionNotFound, ErrArtifactNotFound, ErrDiffNotFound, ErrPolicyNotFound, ErrChecklistNotFound,
 	ErrDocumentArchived, ErrDocumentDeleted, ErrVersionStillProcessing, ErrResultsNotReady,
 	ErrRateLimitExceeded,
 	ErrStorageUnavailable, ErrDMUnavailable, ErrOPMUnavailable, ErrBrokerUnavailable, ErrAuthServiceUnavailable,

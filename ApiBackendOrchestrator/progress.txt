@@ -1269,7 +1269,7 @@ Integration: Middleware + Handler combined
 - ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
 - ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
 - ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
-- ORCH-TASK-026 (medium): Admin Proxy — deps: 016❌ 011✓ (blocked by OPM Client)
+- ORCH-TASK-026 (medium): Admin Proxy — deps: 016❌ 011✓ (blocked by OPM Client → UNBLOCKED after ORCH-TASK-016)
 
 ## ORCH-TASK-037: Integration tests (DONE, 2026-04-11)
 
@@ -1320,3 +1320,30 @@ Integration: Middleware + Handler combined
 - ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
 - ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
 - ORCH-TASK-026 (medium): Admin Proxy — deps: 016❌ 011✓ (blocked by OPM Client)
+
+## ORCH-TASK-016: OPM Client (DONE, 2026-04-11)
+
+### План реализации
+1. Прочитать architecture docs — определить OPM endpoints и контракт
+2. Использовать UOMClient как образец паттерна (2 attempts, fixed backoff, no CB)
+3. Спроектировать OPMClient + DisabledClient + MapOPMError (backend-reliability-engineer)
+4. Реализовать errors.go, client.go, opm_errors.go, error_response.go changes
+5. Реализовать client_test.go + opm_errors_test.go
+6. Code review (code-reviewer) → N-01/N-05/N-06 fixes
+
+### Что реализовано
+- **opmclient/errors.go**: OPMError, ErrOPMDisabled, mapHTTPError/mapTransportError/isRetryable
+- **opmclient/client.go**: OPMClient interface (4 метода, json.RawMessage), Client, DisabledClient, NewOPMClient, retry/headers/buildURL
+- **model/opm_errors.go**: MapOPMError (5xx→OPM_UNAVAILABLE, 404→POLICY/CHECKLIST_NOT_FOUND, 400→VALIDATION, 4xx→INTERNAL)
+- **model/error_response.go**: +ErrPolicyNotFound, +ErrChecklistNotFound (2 new codes + catalog)
+- **47 тестов** (35 client + 12 model)
+
+### Ключевые решения
+- json.RawMessage pass-through (ASSUMPTION-ORCH-04: OPM не спроектирован)
+- DisabledClient pattern (не nil checks)
+- UOMClient pattern (опциональная зависимость)
+
+### Следующие задачи готовые к реализации
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-026 (medium): Admin Proxy — deps: 016✓ 011✓ (UNBLOCKED)
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003✓

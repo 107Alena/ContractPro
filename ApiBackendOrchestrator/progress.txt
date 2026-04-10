@@ -1266,7 +1266,56 @@ Integration: Middleware + Handler combined
 ### Нет новых зависимостей
 
 ### Следующие задачи готовые к реализации (deps выполнены)
-- ORCH-TASK-037 (high): Integration tests — dep: 036 ✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
+- ORCH-TASK-026 (medium): Admin Proxy — deps: 016❌ 011✓ (blocked by OPM Client)
+
+## ORCH-TASK-037: Integration tests (DONE, 2026-04-11)
+
+### План реализации
+1. Изучить существующий код: app.go DI wiring, все consumer-side интерфейсы, event types, handlers
+2. Спроектировать архитектуру тестов (backend-reliability-engineer subagent): testEnv wiring, in-memory fakes, SSE client
+3. Реализовать in-memory fakes: fakeBroker, fakeObjectStorage, fakeKVStore (с Pub/Sub), fakeDMServer, testJWTSigner
+4. Реализовать testenv.go: 18-step DI wiring зеркалирующий production app.go
+5. Реализовать SSE test client с single reader goroutine
+6. Реализовать 5 end-to-end тестов
+7. Проверить go test -race, go vet, make build/test/lint
+
+### Что реализовано
+- **fakes.go** (730 строк): 5 in-memory fakes
+  - `fakeBroker`: BrokerSubscriber + BrokerPublisher, InjectEvent для синхронной инъекции событий, PublishedMessages для ассертов
+  - `fakeObjectStorage`: PutObject/DeleteObject с map[string][]byte, HasObject хелпер
+  - `fakeKVStore`: единый KV + Pub/Sub — удовлетворяет 4 consumer-side интерфейса (statustracker.KVStore, ssebroadcast.Publisher, sse.KVStore, upload.KVStore)
+  - `fakeDMServer`: httptest.Server с chi router — 9 маршрутов (CRUD documents/versions, get artifacts/diffs), SeedDocument/SeedVersion/SeedArtifact/SeedDiff
+  - `testJWTSigner`: ECDSA P-256 key pair, SignToken(userID, orgID, role) → signed ES256 JWT
+
+- **testenv.go** (360 строк): testEnv struct
+  - 18-step DI wiring зеркалирующий app.go: все fakes → real broadcaster → real tracker → real consumer → real auth/RBAC → real DM client (pointed at fake) → real handlers → api.Server → httptest.Server
+  - Adapters: testUploadDMAdapter, testUploadCmdPubAdapter (аналоги production adapters.go)
+  - Helpers: DoRequest (authenticated), UploadContract (multipart PDF), InjectEvent, SeedStatus
+
+- **sseclient.go** (170 строк): SSE test client
+  - Single background reader goroutine парсящий SSE wire format
+  - connectSSE → WaitForConnected → NextEvent с timeout
+
+- **integration_test.go** (610 строк): 5 end-to-end тестов
+  - TestUploadToSSEPipeline: upload PDF → 202 → command published → S3 object → inject DP IN_PROGRESS → SSE PROCESSING → Redis verified
+  - TestRecheckPipeline: seed doc+ver → POST recheck → 202 → new version → command published
+  - TestComparePipeline: seed doc + 2 vers → POST compare → 202 → CompareDocumentVersionsRequested published
+  - TestLICFailureToSSE: seed ANALYZING → SSE connect → inject LIC FAILED → SSE ANALYSIS_FAILED + error details → Redis verified
+  - TestReportsReadyToResults: seed GENERATING_REPORTS + artifacts → inject DM reports-ready → SSE READY → GET /results → 200 with data
+
+### Ключевые решения
+- Fakes на уровне consumer-side интерфейсов (не Redis protocol level) — нет новых зависимостей
+- fakeKVStore объединяет KV + Pub/Sub в одной структуре — SSE handler получает события через тот же механизм что и в production
+- fakeBroker.InjectEvent вызывает handler синхронно — тесты детерминированы (единственный async gap — Pub/Sub delivery в fakeKVStore, ~<1ms)
+- SSE client с single reader goroutine — избегает race condition при чередовании WaitForConnected и NextEvent
+- Real auth.Middleware с testJWTSigner — тесты покрывают полный JWT auth flow включая SSE ?token= query param
+
+### Нет новых зависимостей
+
+### Следующие задачи готовые к реализации (deps выполнены)
 - ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
 - ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
 - ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓

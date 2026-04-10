@@ -139,6 +139,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 	// 14. HTTP server — assembles all handlers and middleware.
 	server := api.NewServer(api.Deps{
 		Config:            cfg.HTTP,
+		CORSConfig:        cfg.CORS,
 		Health:            healthHandler,
 		Logger:            log,
 		AuthMiddleware:    authMW.Handler(),

@@ -67,6 +67,7 @@ type Server struct {
 // UploadHandler is optional: when nil, a 501 Not Implemented stub is used.
 type Deps struct {
 	Config          config.HTTPConfig
+	CORSConfig      config.CORSConfig
 	Health          *health.Handler
 	Logger          *logger.Logger
 	AuthMiddleware  func(http.Handler) http.Handler
@@ -90,9 +91,12 @@ func NewServer(deps Deps) *Server {
 
 	// Apply global middleware.
 	// Recovery must be first to catch panics from all downstream middleware
-	// and handlers.
+	// and handlers. CORS must come before auth because preflight OPTIONS
+	// requests carry no JWT. SecurityHeaders generates the correlation ID
+	// used by all downstream middleware and error responses.
 	r.Use(RecoveryMiddleware(log))
-	r.Use(corsMiddleware)
+	r.Use(CORSMiddleware(deps.CORSConfig, log))
+	r.Use(SecurityHeadersMiddleware())
 
 	// System endpoints: mount the health handler's ServeMux at the root
 	// so that /healthz and /readyz paths are preserved as-is. Mounting at

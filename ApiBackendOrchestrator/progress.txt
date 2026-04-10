@@ -983,7 +983,51 @@ Helpers: UOM 500, ensureCorrelationID (preserves/generates), decodeBody empty, i
 - **ORCH-TASK-037 (high): Integration tests** — зависит от ORCH-TASK-036 ✓
 - ORCH-TASK-034 (high): Graceful shutdown — deps: 008✓ 029✓ 027✓
 - ORCH-TASK-024 (high): Export Service — dep: 014✓
-- ORCH-TASK-012 (high): CORS middleware — dep: 008✓
+- ORCH-TASK-013 (high): Rate limiter — deps: 004✓ 010✓
+- ORCH-TASK-032 (high): Prometheus metrics — dep: 003✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003✓
+
+## ORCH-TASK-012: CORS middleware и Security headers (DONE, 2026-04-10)
+
+### План реализации
+1. Прочитать architecture/security.md §5 (CORS) и §9 (Security headers) — требования
+2. Изучить существующий middleware.go (stub corsMiddleware), server.go (Deps), auth middleware (X-Correlation-Id pattern)
+3. Спроектировать CORSMiddleware и SecurityHeadersMiddleware (backend-reliability-engineer subagent)
+4. Реализовать middleware.go: CORSMiddleware (factory), SecurityHeadersMiddleware, isValidCorrelationID
+5. Обновить server.go: Deps.CORSConfig, wiring Recovery→CORS→SecurityHeaders
+6. Обновить app.go: передать cfg.CORS в api.Deps
+7. Реализовать middleware_test.go: 35 тестов + 23 sub-tests
+8. Code review (code-reviewer subagent) → исправления: S-1 CID validation, M-1 casing, N-1 PATCH, N-3 test name
+
+### Что реализовано
+- **middleware.go**: CORSMiddleware (factory func, config.CORSConfig + Logger), SecurityHeadersMiddleware (global), isValidCorrelationID (max 128 bytes, printable ASCII 0x20-0x7E)
+- **server.go**: Deps.CORSConfig added, wiring Recovery→CORS→SecurityHeaders
+- **app.go**: cfg.CORS passed to api.Deps.CORSConfig
+- **middleware_test.go**: 35 тестов + 23 sub-tests
+
+### Ключевые решения
+- CORS: O(1) origin lookup (map), wildcard '*' silently ignored (incompatible with credentials), preflight 204 No Content
+- CORS: disallowed origin passes through without CORS headers (browser enforces), Vary: Origin always set
+- SecurityHeaders: generates UUID v4 if no client X-Correlation-Id, validates client CID (length + printable ASCII)
+- SecurityHeaders: sets both X-Request-ID and X-Correlation-Id on response (redundant for coverage)
+- SecurityHeaders: propagates CID on request header for downstream middleware (auth middleware reads it)
+- SecurityHeaders: injects RequestContext into ctx (correlation_id available for public endpoints too)
+- Cache-Control: no-store globally, handlers can override (health, SSE)
+- PATCH added to Allow-Methods (future-proofing)
+- No new dependencies (uuid, config, logger already in go.mod)
+
+### Code review fixes
+- S-1: isValidCorrelationID added — max 128 bytes, printable ASCII only, invalid → generate UUID
+- M-1: X-Correlation-Id casing standardized across Allow-Headers, Expose-Headers, and constant
+- N-1: PATCH added to Allow-Methods
+- N-3: Test name TestCORS_Preflight_SecurityHeaders_NotInChain → TestCORS_Preflight_ShortCircuitsBeforeDownstream
+
+### Следующие задачи готовые к реализации
+- **ORCH-TASK-037 (high): Integration tests** — dep: 036 ✓
+- ORCH-TASK-034 (high): Graceful shutdown — deps: 008✓ 029✓ 027✓
+- ORCH-TASK-024 (high): Export Service — dep: 014✓
 - ORCH-TASK-013 (high): Rate limiter — deps: 004✓ 010✓
 - ORCH-TASK-032 (high): Prometheus metrics — dep: 003✓
 - ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓

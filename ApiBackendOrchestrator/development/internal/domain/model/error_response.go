@@ -54,10 +54,18 @@ const (
 
 // Downstream service unavailability (502).
 const (
-	ErrStorageUnavailable ErrorCode = "STORAGE_UNAVAILABLE"
-	ErrDMUnavailable      ErrorCode = "DM_UNAVAILABLE"
-	ErrOPMUnavailable     ErrorCode = "OPM_UNAVAILABLE"
-	ErrBrokerUnavailable  ErrorCode = "BROKER_UNAVAILABLE"
+	ErrStorageUnavailable     ErrorCode = "STORAGE_UNAVAILABLE"
+	ErrDMUnavailable          ErrorCode = "DM_UNAVAILABLE"
+	ErrOPMUnavailable         ErrorCode = "OPM_UNAVAILABLE"
+	ErrBrokerUnavailable      ErrorCode = "BROKER_UNAVAILABLE"
+	ErrAuthServiceUnavailable ErrorCode = "AUTH_SERVICE_UNAVAILABLE"
+)
+
+// UOM authentication errors (401).
+const (
+	ErrInvalidCredentials ErrorCode = "INVALID_CREDENTIALS"
+	ErrTokenRevoked       ErrorCode = "TOKEN_REVOKED"
+	ErrRefreshTokenExpired ErrorCode = "REFRESH_TOKEN_EXPIRED"
 )
 
 // Validation (400).
@@ -180,6 +188,26 @@ var errorCatalog = map[ErrorCode]ErrorEntry{
 		HTTPStatus: http.StatusBadGateway,
 		Message:    "Сервис временно недоступен. Команда не была отправлена.",
 		Suggestion: "Повторите операцию через несколько минут.",
+	},
+	ErrAuthServiceUnavailable: {
+		HTTPStatus: http.StatusBadGateway,
+		Message:    "Сервис авторизации временно недоступен.",
+		Suggestion: "Попробуйте повторить операцию через несколько минут.",
+	},
+	ErrInvalidCredentials: {
+		HTTPStatus: http.StatusUnauthorized,
+		Message:    "Неверный email или пароль.",
+		Suggestion: "Проверьте введённые данные и попробуйте снова.",
+	},
+	ErrTokenRevoked: {
+		HTTPStatus: http.StatusUnauthorized,
+		Message:    "Токен обновления был отозван.",
+		Suggestion: "Войдите в систему повторно.",
+	},
+	ErrRefreshTokenExpired: {
+		HTTPStatus: http.StatusUnauthorized,
+		Message:    "Срок действия токена обновления истёк.",
+		Suggestion: "Войдите в систему повторно.",
 	},
 	ErrValidationError: {
 		HTTPStatus: http.StatusBadRequest,

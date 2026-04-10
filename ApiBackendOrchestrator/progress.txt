@@ -838,9 +838,45 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 ### Следующие задачи готовые к реализации (deps выполнены)
 - ORCH-TASK-034 (high): Graceful shutdown
 - ORCH-TASK-024 (high): Export Service
-- ORCH-TASK-015 (high): UOM Client (critical path → ORCH-TASK-031 → ORCH-TASK-036)
+- ORCH-TASK-031 (high): Auth proxy handlers (unblocked by ORCH-TASK-015)
+- ORCH-TASK-034 (high): Graceful shutdown
 - ORCH-TASK-012 (high): CORS middleware
 - ORCH-TASK-013 (high): Rate limiter
 - ORCH-TASK-032 (high): Prometheus metrics
 - ORCH-TASK-025 (medium): Feedback Service
 - ORCH-TASK-016 (medium): OPM Client
+
+## ORCH-TASK-015: UOM Client (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить паттерн dmclient (retry, CB, errors, headers)
+2. Изучить UOM architecture (integration-contracts.md, error-handling.md, security.md)
+3. Спроектировать: пакет uomclient, 4 метода, retry 2 попытки, fixed 200ms backoff, NO CB
+4. Реализовать models.go (6 типов: LoginRequest/Response, RefreshRequest/Response, LogoutRequest, UserProfile)
+5. Реализовать errors.go (UOMError + mapHTTPError + mapTransportError + isRetryable)
+6. Реализовать client.go (Login, Refresh, Logout, GetMe с retry)
+7. Добавить UOM error codes в error catalog (4 новых кода с русскими сообщениями)
+8. Создать uom_errors.go с MapUOMError (5xx→502, 401→credential, 4xx→validation)
+9. Написать тесты: 36 client + 17 error mapping = 53 теста
+10. Code review → fix S-5 (unused sentinel), S-9/S-10 (missing edge case tests)
+
+### Ключевые решения
+- NO circuit breaker: auth queries редки, fast fail приоритетен
+- Fixed backoff 200ms: для auth UX exponential не нужен
+- 2 total attempts: fast fail, user experience
+- X-User-ID header вместо JWT forwarding: service-to-service pattern
+- UOM optional: пустой BaseURL отключает auth proxy, JWT продолжает работать локально
+- 1MB response body limit (auth responses малы, vs 10MB у dmclient)
+
+### Файлы
+- internal/egress/uomclient/client.go — основной клиент
+- internal/egress/uomclient/errors.go — типы ошибок
+- internal/egress/uomclient/models.go — request/response DTO
+- internal/egress/uomclient/client_test.go — 36 тестов
+- internal/domain/model/error_response.go — 4 новых error code + catalog entries
+- internal/domain/model/uom_errors.go — MapUOMError
+- internal/domain/model/uom_errors_test.go — 17 тестов
+- internal/domain/model/error_response_test.go — обновлены allErrorCodes + HTTPStatusCategories
+
+### Следующие приоритетные задачи (updated)
+ORCH-TASK-031 (Auth proxy handlers) теперь разблокирована → ORCH-TASK-036 (App wiring, critical)

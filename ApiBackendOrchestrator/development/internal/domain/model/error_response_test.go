@@ -18,7 +18,8 @@ var allErrorCodes = []ErrorCode{
 	ErrDocumentNotFound, ErrVersionNotFound, ErrArtifactNotFound, ErrDiffNotFound,
 	ErrDocumentArchived, ErrDocumentDeleted, ErrVersionStillProcessing, ErrResultsNotReady,
 	ErrRateLimitExceeded,
-	ErrStorageUnavailable, ErrDMUnavailable, ErrOPMUnavailable, ErrBrokerUnavailable,
+	ErrStorageUnavailable, ErrDMUnavailable, ErrOPMUnavailable, ErrBrokerUnavailable, ErrAuthServiceUnavailable,
+	ErrInvalidCredentials, ErrTokenRevoked, ErrRefreshTokenExpired,
 	ErrValidationError,
 	ErrInternalError,
 }
@@ -75,6 +76,10 @@ func TestErrorCatalog_HTTPStatusCategories(t *testing.T) {
 		{ErrDMUnavailable, 502},
 		{ErrOPMUnavailable, 502},
 		{ErrBrokerUnavailable, 502},
+		{ErrAuthServiceUnavailable, 502},
+		{ErrInvalidCredentials, 401},
+		{ErrTokenRevoked, 401},
+		{ErrRefreshTokenExpired, 401},
 		{ErrValidationError, 400},
 		{ErrInternalError, 500},
 	}

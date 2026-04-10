@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"contractpro/api-orchestrator/internal/application/authproxy"
 	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/results"
@@ -28,13 +29,19 @@ import (
 //   - uploadH: contract upload handler (nil → 501 Not Implemented)
 //   - contractH: contract CRUD handler (nil → 501 Not Implemented stubs)
 //   - versionH: version management handler (nil → 501 Not Implemented stubs)
-func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, sseH *sse.Handler) {
+func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, authH *authproxy.Handler, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, sseH *sse.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
-			r.Post("/auth/login", notImplemented)
-			r.Post("/auth/refresh", notImplemented)
-			r.Post("/auth/logout", notImplemented)
+			if authH != nil {
+				r.Post("/auth/login", authH.HandleLogin())
+				r.Post("/auth/refresh", authH.HandleRefresh())
+				r.Post("/auth/logout", authH.HandleLogout())
+			} else {
+				r.Post("/auth/login", notImplemented)
+				r.Post("/auth/refresh", notImplemented)
+				r.Post("/auth/logout", notImplemented)
+			}
 		})
 
 		// --- Protected routes (auth + RBAC + rate limiting) ---
@@ -46,7 +53,11 @@ func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler
 			r.Use(rateLimitMiddleware)
 
 			// User profile.
-			r.Get("/users/me", notImplemented)
+			if authH != nil {
+				r.Get("/users/me", authH.HandleGetMe())
+			} else {
+				r.Get("/users/me", notImplemented)
+			}
 
 			// Contracts.
 			r.Post("/contracts/upload", uploadH)

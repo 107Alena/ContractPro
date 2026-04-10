@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"time"
 
+	"contractpro/api-orchestrator/internal/application/authproxy"
 	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/results"
@@ -70,6 +71,7 @@ type Deps struct {
 	Logger          *logger.Logger
 	AuthMiddleware  func(http.Handler) http.Handler
 	RBACMiddleware  func(http.Handler) http.Handler
+	AuthHandler     *authproxy.Handler
 	UploadHandler   http.HandlerFunc
 	ContractHandler    *contracts.Handler
 	VersionHandler     *versions.Handler
@@ -112,7 +114,7 @@ func NewServer(deps Deps) *Server {
 		uploadH = notImplemented
 	}
 
-	registerRoutes(r, authMW, rbacMW, uploadH, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.ComparisonHandler, deps.SSEHandler)
+	registerRoutes(r, authMW, rbacMW, uploadH, deps.AuthHandler, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.ComparisonHandler, deps.SSEHandler)
 
 	mainAddr := fmt.Sprintf(":%d", deps.Config.Port)
 	main := &http.Server{

@@ -880,3 +880,53 @@ Go-модуль, структура директорий, Makefile, Dockerfile.
 
 ### Следующие приоритетные задачи (updated)
 ORCH-TASK-031 (Auth proxy handlers) теперь разблокирована → ORCH-TASK-036 (App wiring, critical)
+
+## ORCH-TASK-031: Auth proxy handlers (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить UOM client API (models, interface, error types) и auth architecture
+2. Изучить паттерн contracts handler (consumer-side interface, DI, handleDMError, writeJSON)
+3. Спроектировать: пакет authproxy, 4 метода, UOMClient interface (backend-reliability-engineer subagent)
+4. Реализовать handler.go: HandleLogin, HandleRefresh, HandleLogout, HandleGetMe
+5. Wiring: server.go (Deps.AuthHandler), routes.go (registerRoutes + authH nil-guard)
+6. Написать тесты: 41 тестов + 3 subtests
+7. Code review (code-reviewer subagent) → M-1 doc comment, M-2/N-1/N-2 tests added
+
+### Что реализовано
+- **handler.go**: Handler struct (uom UOMClient, log *logger.Logger), NewHandler с component logger
+  - **HandleLogin()**: POST /auth/login — ensureCorrelationID → decodeBody (MaxBytesReader 4KB, DisallowUnknownFields) → validate email (TrimSpace, non-empty) + password (TrimSpace, non-empty) → uom.Login → 200 {access_token, refresh_token, token_type, expires_in, user}
+  - **HandleRefresh()**: POST /auth/refresh — ensureCorrelationID → decodeBody → validate refresh_token (TrimSpace, non-empty) → uom.Refresh → 200 {access_token, refresh_token, token_type, expires_in}
+  - **HandleLogout()**: POST /auth/logout — ensureCorrelationID → decodeBody → validate refresh_token → uom.Logout → 204 No Content
+  - **HandleGetMe()**: GET /users/me — AuthContext required (401 AUTH_TOKEN_MISSING) → uom.GetMe → 200 UserProfile
+  - **ensureCorrelationID()**: generates UUID v4 for public endpoints that bypass auth middleware
+  - **decodeBody()**: MaxBytesReader 4KB, DisallowUnknownFields, JSON decode
+  - **handleUOMError()**: context.Canceled/DeadlineExceeded→502, UOMError.StatusCode>0→MapUOMError, transport→502, unknown→500
+- **server.go**: Deps.AuthHandler *authproxy.Handler
+- **routes.go**: authH parameter, nil-guard for public (login/refresh/logout) and protected (/users/me)
+
+### Тесты (41 тестов + 3 subtests)
+HandleLogin: success, empty email, whitespace email, empty password, invalid JSON, invalid credentials, UOM down 503, transport error, context canceled, deadline exceeded, unknown error, email trimmed, correlation_id generated, body too large, unknown fields, UOM 400, empty JSON object, deadline wrapped in UOMError
+HandleRefresh: success, empty token, whitespace token, token expired, token revoked, UOM down, invalid JSON, context canceled
+HandleLogout: success 204, empty token, UOM down, invalid JSON, context canceled
+HandleGetMe: success, no auth 401, UOM down, UOM 404, all 3 roles (sub-tests)
+Helpers: UOM 500, ensureCorrelationID (preserves/generates), decodeBody empty, interface compliance, constructor
+
+### Ключевые решения
+- Отдельный пакет authproxy (не в auth middleware) — separation of concerns
+- ensureCorrelationID для public endpoints (auth middleware не вызывается)
+- HandleGetMe intentionally skips ensureCorrelationID (auth middleware sets it)
+- MaxBytesReader 4KB — auth payloads малы, защита от abuse
+- DisallowUnknownFields — предотвращение field injection
+- Password/tokens NEVER logged (sensitive data policy)
+- 204 No Content для logout (no JSON body)
+- Нет новых зависимостей
+
+### Следующие задачи готовые к реализации
+- **ORCH-TASK-036 (critical): App wiring** — ВСЕ зависимости теперь выполнены (018✓ 019✓ 020✓ 021✓ 030✓ 031✓)
+- ORCH-TASK-034 (high): Graceful shutdown
+- ORCH-TASK-024 (high): Export Service
+- ORCH-TASK-012 (high): CORS middleware
+- ORCH-TASK-013 (high): Rate limiter
+- ORCH-TASK-032 (high): Prometheus metrics
+- ORCH-TASK-025 (medium): Feedback Service
+- ORCH-TASK-016 (medium): OPM Client

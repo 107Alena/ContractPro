@@ -860,7 +860,9 @@
         "Шаг 3: запуск с mock-зависимостями → сервер стартует, /healthz → 200"
       ],
       "dependencies": ["ORCH-TASK-018", "ORCH-TASK-019", "ORCH-TASK-020", "ORCH-TASK-021", "ORCH-TASK-030", "ORCH-TASK-031"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-10",
+      "summary": "Пакет internal/app: App struct (log, health, kvClient, brokerClient, server, consumer). NewApp(cfg) — 14-step DI wiring в dependency order: Logger → Redis (connect+ping) → RabbitMQ (connect+ping) → S3 (lazy) → Health handler → JWT LoadPublicKey + auth.NewMiddleware → RBAC middleware → DM client + UOM client + Command publisher → SSE broadcaster (before tracker) → Status tracker → Event consumer → Upload/Contract/Version/Results/Comparison/AuthProxy handlers → SSE handler (authMW as TokenValidator) → HTTP Server (api.Deps). Partial init cleanup: Redis/broker closed on later step failure. Start(): consumer.Start() → server.Start() (blocking). Shutdown(ctx): SetNotReady → HTTP Shutdown → broker.Close → redis.Close, errors aggregated via errors.Join. cmd/orch-api/main.go: config.Load → NewApp → signal listener (SIGTERM/SIGINT) with double-signal forced exit → Start (blocking). adapters.go: 3 thin adapters bridging type mismatches: brokerSubscriberAdapter (named broker.MessageHandler vs unnamed func), uploadDMAdapter (upload-local DTOs vs dmclient types, field-by-field mapping), uploadCmdPubAdapter (upload.ProcessDocumentCommand vs commandpub.ProcessDocumentCommand). Compile-time interface checks (var _ interface = impl). 10 тестов: adapter interface shapes (1), DM adapter CreateDocument success/error (2), DM adapter CreateVersion success/error/all-fields (3), CmdPub adapter all-fields/error (2), Shutdown ordered teardown (1), SetNotReady before HTTP shutdown (1). waitForServer helper replaces flaky time.Sleep. Code review: M-1 errors.Join in Shutdown, M-2/3 main.go graceful exit + Shutdown err logged, M-4 double-signal forced exit, N-8 compile-time checks in adapters.go, N-9 test helper extracted, N-13 net.Listen errors handled. Нет новых зависимостей."
     },
     {
       "id": "ORCH-TASK-037",

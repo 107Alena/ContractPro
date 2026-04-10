@@ -930,3 +930,62 @@ Helpers: UOM 500, ensureCorrelationID (preserves/generates), decodeBody empty, i
 - ORCH-TASK-032 (high): Prometheus metrics
 - ORCH-TASK-025 (medium): Feedback Service
 - ORCH-TASK-016 (medium): OPM Client
+
+## ORCH-TASK-036: App wiring (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить все компоненты, их конструкторы и зависимости (20 NewXxx функций)
+2. Спроектировать App struct и DI порядок (backend-reliability-engineer subagent)
+3. Реализовать app.go: NewApp (14-step DI wiring), Start, Shutdown
+4. Создать adapters.go: 3 thin адаптера для type mismatches
+5. Обновить main.go: config → NewApp → signal → Start/Shutdown
+6. Реализовать тесты: adapters_test.go + app_test.go (10 тестов)
+7. Code review (code-reviewer subagent) → исправления: M-1..M-4, N-8, N-9, N-13
+
+### Что реализовано
+- **app.go**: App struct (log, health, kvClient, brokerClient, server, consumer), NewApp с 14-step DI wiring в dependency order, partial init cleanup (Redis/broker closed on failure), Start (consumer → server), Shutdown (SetNotReady → HTTP → broker → Redis, errors.Join)
+- **adapters.go**: brokerSubscriberAdapter (named vs unnamed func type), uploadDMAdapter (upload-local DTOs → dmclient types), uploadCmdPubAdapter (upload vs commandpub ProcessDocumentCommand), compile-time interface checks
+- **main.go**: config.Load → NewApp → signal listener (SIGTERM/SIGINT) → Start, double-signal forced exit, Shutdown error logged
+- **adapters_test.go**: 8 тестов с httptest servers для DM adapter и mock broker для cmdpub adapter
+- **app_test.go**: 2 теста — ordered teardown (broker→redis) и SetNotReady before HTTP shutdown
+
+### DI порядок в NewApp (14 шагов)
+1. Logger (no deps)
+2. Redis kvstore.NewClient (connect+ping)
+3. RabbitMQ broker.NewClient (connect+ping)
+4. S3 objectstorage.NewClient (lazy)
+5. Health handler
+6. JWT LoadPublicKey + auth.NewMiddleware
+7. RBAC middleware
+8. DM client + UOM client + Command publisher
+9. SSE broadcaster (BEFORE tracker — dependency bug caught by BE subagent)
+10. Status tracker
+11. Event consumer (broker adapter)
+12. Upload/Contract/Version/Results/Comparison/AuthProxy handlers
+13. SSE handler
+14. HTTP Server (api.Deps)
+
+### Adapters (необходимость выявлена при первом go build)
+- **brokerSubscriberAdapter**: Go не унифицирует named type `broker.MessageHandler` и anonymous `func(ctx, []byte) error` в interface satisfaction
+- **uploadDMAdapter**: upload пакет определяет собственные DTO (CreateDocumentRequest, Document, etc.) для decoupling от egress layer
+- **uploadCmdPubAdapter**: upload.ProcessDocumentCommand vs commandpub.ProcessDocumentCommand
+
+### Code review исправления
+- M-1: Shutdown aggregates errors via errors.Join (не молча игнорирует)
+- M-2: main.go не вызывает log.Fatalf на ErrServerClosed (graceful shutdown)
+- M-3: main.go логирует Shutdown error
+- M-4: Двойной SIGTERM/SIGINT → forced exit (os.Exit(1))
+- N-8: Compile-time interface checks перенесены в adapters.go
+- N-9: newTestDMClient helper для тестов
+- N-13: net.Listen errors не игнорируются
+
+### Следующие задачи готовые к реализации
+- **ORCH-TASK-037 (high): Integration tests** — зависит от ORCH-TASK-036 ✓
+- ORCH-TASK-034 (high): Graceful shutdown — deps: 008✓ 029✓ 027✓
+- ORCH-TASK-024 (high): Export Service — dep: 014✓
+- ORCH-TASK-012 (high): CORS middleware — dep: 008✓
+- ORCH-TASK-013 (high): Rate limiter — deps: 004✓ 010✓
+- ORCH-TASK-032 (high): Prometheus metrics — dep: 003✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003✓

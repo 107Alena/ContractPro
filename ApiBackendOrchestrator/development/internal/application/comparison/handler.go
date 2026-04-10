@@ -146,7 +146,8 @@ func (h *Handler) HandleCompare() http.HandlerFunc {
 			return
 		}
 
-		// Step 2: Parse JSON body.
+		// Step 2: Parse JSON body (limit to 1 MB to prevent DoS).
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var req CompareRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			model.WriteError(w, r, model.ErrValidationError,

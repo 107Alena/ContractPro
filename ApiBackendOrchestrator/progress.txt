@@ -1154,3 +1154,40 @@ Integration: Middleware + Handler combined
 - ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
 - ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
 - ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
+
+## ORCH-TASK-024: Export Service — скачивание PDF/DOCX через presigned URL (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить architecture docs: security.md (RBAC matrix), api-specification.yaml (302 redirect), sequence-diagrams.md (export flow), high-architecture.md (artifact types)
+2. Изучить существующий код: dmclient/client.go (GetArtifact → 200 JSON / 302 redirect), results/handler.go (паттерн), routes.go (stub), error_response.go
+3. Реализовать export/handler.go: Handler struct (DMClient interface), HandleExport (302 redirect proxy), format validation (pdf/docx)
+4. Реализовать export/handler_test.go: 30 тестов
+5. Wiring: server.go (Deps.ExportHandler), routes.go (exportH nil-guard), app.go (export.NewHandler)
+6. Code review (code-reviewer subagent) → S-1, M-2, M-3, M-4, M-5
+
+### Что реализовано
+- **handler.go**: Handler struct с DMClient consumer-side interface (GetArtifact only). HandleExport(): defense-in-depth auth → UUID validation → format validation (pdf→EXPORT_PDF, docx→EXPORT_DOCX) → logger enrichment (WithDocumentID/WithVersionID) → DM GetArtifact → isValidRedirectURL (open redirect prevention) → 302 Found с Location + X-Correlation-Id. Empty response guard, content fallback (200 JSON pass-through). handleDMError: context.Canceled/DeadlineExceeded → 502, circuit open → 502, DMError → MapDMError(resourceHint=artifact), transport → 502, unknown → 500.
+- **handler_test.go**: 30 тестов (+ 33 sub-tests): happy path, auth defense-in-depth, format/UUID validation, DM errors (404/5xx/CB/transport/unknown/400/403), context cancellation (raw + wrapped), response edge cases, redirect URL validation (open redirect), roles, format mapping, isValidRedirectURL, concurrent safety.
+
+### Code review исправления
+- S-1: isValidRedirectURL — парсинг URL, валидация scheme (http/https) и host (non-empty), предотвращение open redirect с javascript:/data: схемами
+- M-2: context.Canceled/DeadlineExceeded обработка в handleDMError → 502 DM_UNAVAILABLE вместо 500
+- M-3: defense-in-depth auth check (no auth → 401, BUSINESS_USER → 403), как в results handler
+- M-4: empty response guard (nil Content + empty RedirectURL → 500 INTERNAL_ERROR)
+- M-5: data race fix — sync.Mutex на mock в concurrent test
+
+### Ключевые решения
+- Redirect URL validation: http + https (не только https) — для совместимости с MinIO в dev
+- resourceHint "artifact" для MapDMError — DM 404 → ARTIFACT_NOT_FOUND
+- Defense-in-depth RBAC: handler проверяет BUSINESS_USER → 403 (помимо middleware)
+- Нет OPM integration в handler — "BUSINESS_USER по политике OPM" из acceptance criteria будет реализован через OPM middleware позже, т.к. OPM Client ещё pending (ORCH-TASK-016)
+- Logger enrichment с WithDocumentID/WithVersionID для structured logs в DM error paths
+
+### Нет новых зависимостей
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-037 (high): Integration tests — dep: 036 ✓
+- ORCH-TASK-035 (high): Dockerfile + Docker Compose — dep: 034 ✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓

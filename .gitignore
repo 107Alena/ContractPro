@@ -2,5 +2,4 @@
 *.sh
 
 # Exceptions: tracked files
-!session.log
 !**/scripts/*.sh

@@ -17,7 +17,7 @@ import (
 //   - SecurityHeadersMiddleware -> ORCH-TASK-012 (implemented)
 //   - authMiddleware          -> ORCH-TASK-010 (implemented in internal/ingress/middleware/auth)
 //   - rbacMiddleware          -> ORCH-TASK-011 (implemented in internal/ingress/middleware/rbac)
-//   - rateLimitMiddleware     -> ORCH-TASK-013 (stub)
+//   - rateLimitMiddleware     -> ORCH-TASK-013 (implemented in internal/ingress/middleware/ratelimit)
 //
 // authMiddleware is wired at Server construction time via Deps.AuthMiddleware.
 // rbacMiddleware is wired at Server construction time via Deps.RBACMiddleware.
@@ -191,14 +191,6 @@ func isValidCorrelationID(s string) bool {
 		}
 	}
 	return true
-}
-
-// rateLimitMiddleware is a stub for per-organization rate limiting.
-// Real implementation (ORCH-TASK-013) will use Redis-backed token
-// buckets with separate read/write RPS limits and return 429 Too Many
-// Requests with a Retry-After header when exceeded.
-func rateLimitMiddleware(next http.Handler) http.Handler {
-	return next
 }
 
 // noopMiddleware is a pass-through middleware used as a fallback when the

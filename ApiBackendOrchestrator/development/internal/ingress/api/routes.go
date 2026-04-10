@@ -29,7 +29,7 @@ import (
 //   - uploadH: contract upload handler (nil → 501 Not Implemented)
 //   - contractH: contract CRUD handler (nil → 501 Not Implemented stubs)
 //   - versionH: version management handler (nil → 501 Not Implemented stubs)
-func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, authH *authproxy.Handler, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, sseH *sse.Handler) {
+func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, authH *authproxy.Handler, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, sseH *sse.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -50,7 +50,7 @@ func registerRoutes(r chi.Router, authMW, rbacMW func(http.Handler) http.Handler
 			r.Use(authMW)
 			// RBAC middleware: role-based access control from ORCH-TASK-011.
 			r.Use(rbacMW)
-			r.Use(rateLimitMiddleware)
+			r.Use(rateLimitMW)
 
 			// User profile.
 			if authH != nil {

@@ -18,8 +18,8 @@
 //   - SSE route (/api/v1/events/stream): authentication via query parameter,
 //     handled separately from the standard auth middleware.
 //
-// Middleware are currently stubs that pass through to the next handler.
-// Real implementations will be added in ORCH-TASK-009 through ORCH-TASK-013.
+// Middleware chain: Recovery → CORS → SecurityHeaders (global);
+// Auth → RBAC → RateLimit (protected routes).
 //
 // Route handlers are placeholder stubs returning 501 Not Implemented.
 // Real handlers will be added starting from ORCH-TASK-018.
@@ -62,16 +62,17 @@ type Server struct {
 // Deps holds the dependencies required to construct a Server.
 //
 // Config, Health, and Logger are required.
-// AuthMiddleware and RBACMiddleware are optional: when nil, a no-op
-// pass-through is used (useful for tests that don't need auth/RBAC).
+// AuthMiddleware, RBACMiddleware, and RateLimitMiddleware are optional:
+// when nil, a no-op pass-through is used (useful for tests).
 // UploadHandler is optional: when nil, a 501 Not Implemented stub is used.
 type Deps struct {
 	Config          config.HTTPConfig
 	CORSConfig      config.CORSConfig
 	Health          *health.Handler
 	Logger          *logger.Logger
-	AuthMiddleware  func(http.Handler) http.Handler
-	RBACMiddleware  func(http.Handler) http.Handler
+	AuthMiddleware      func(http.Handler) http.Handler
+	RBACMiddleware      func(http.Handler) http.Handler
+	RateLimitMiddleware func(http.Handler) http.Handler
 	AuthHandler     *authproxy.Handler
 	UploadHandler   http.HandlerFunc
 	ContractHandler    *contracts.Handler
@@ -112,13 +113,17 @@ func NewServer(deps Deps) *Server {
 	if rbacMW == nil {
 		rbacMW = noopMiddleware
 	}
+	rateLimitMW := deps.RateLimitMiddleware
+	if rateLimitMW == nil {
+		rateLimitMW = noopMiddleware
+	}
 
 	uploadH := deps.UploadHandler
 	if uploadH == nil {
 		uploadH = notImplemented
 	}
 
-	registerRoutes(r, authMW, rbacMW, uploadH, deps.AuthHandler, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.ComparisonHandler, deps.SSEHandler)
+	registerRoutes(r, authMW, rbacMW, rateLimitMW, uploadH, deps.AuthHandler, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.ComparisonHandler, deps.SSEHandler)
 
 	mainAddr := fmt.Sprintf(":%d", deps.Config.Port)
 	main := &http.Server{

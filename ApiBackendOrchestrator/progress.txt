@@ -1033,3 +1033,37 @@ Helpers: UOM 500, ensureCorrelationID (preserves/generates), decodeBody empty, i
 - ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
 - ORCH-TASK-016 (medium): OPM Client — dep: 009✓
 - ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003✓
+
+## ORCH-TASK-013: Rate limiter middleware (DONE, 2026-04-10)
+
+### План реализации
+1. Прочитать architecture docs (security.md §4, configuration.md §7) — rate limiting requirements
+2. Изучить код (kvstore, auth/context, middleware.go stub, server.go, app.go)
+3. Спроектировать Middleware + RedisStore + Lua script (backend-reliability-engineer subagent)
+4. Реализовать store.go: RateLimiterStore interface, RedisStore с Lua INCR+PEXPIRE
+5. Реализовать ratelimit.go: Middleware, NewMiddleware, Handler(), operationClass, rateLimitKey
+6. Реализовать тесты: ratelimit_test.go (27 тестов + 10 sub-tests), store_test.go (7 тестов)
+7. Wiring: server.go, routes.go, middleware.go, app.go
+8. Code review (code-reviewer subagent) → M-1 RPS>0 validation, M-2 edge case tests
+
+### Что реализовано
+- **store.go**: RateLimiterStore interface, Lua script (INCR+PEXPIRE atomic), evalFunc, RedisStore, NewRedisStore(redis.Cmdable)
+- **ratelimit.go**: Middleware struct, NewMiddleware (nil store + RPS>0 validation), Handler() (disabled→pass-through, enabled→auth→classify→check→allow/reject/degrade)
+- **kvstore/client.go**: RawRedis() any — expose underlying Redis client for Lua scripting
+- **server.go/routes.go/middleware.go**: Deps.RateLimitMiddleware, injected in routes, stub removed
+- **app.go**: step 7b wiring (RawRedis→redis.Cmdable→RedisStore→Middleware→Handler)
+
+### Ключевые решения
+- Lua INCR+PEXPIRE atomic, PEXPIRE only on current==1
+- evalFunc for test isolation, Redis failure → allow (degradation)
+- Disabled → zero-overhead (no closure per request)
+- RPS>0 defense-in-depth beyond config.Validate()
+- Нет новых зависимостей
+
+### Следующие приоритетные задачи
+- ORCH-TASK-037 (high): Integration tests — dep: 036 ✓
+- ORCH-TASK-034 (high): Graceful shutdown — deps: 008✓ 029✓ 027✓
+- ORCH-TASK-024 (high): Export Service — dep: 014✓
+- ORCH-TASK-032 (high): Prometheus metrics — dep: 003✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009✓

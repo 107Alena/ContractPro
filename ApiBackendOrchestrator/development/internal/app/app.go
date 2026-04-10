@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"contractpro/api-orchestrator/internal/application/authproxy"
 	"contractpro/api-orchestrator/internal/application/comparison"
@@ -23,6 +24,8 @@ import (
 	"contractpro/api-orchestrator/internal/egress/dmclient"
 	"contractpro/api-orchestrator/internal/egress/ssebroadcast"
 	"contractpro/api-orchestrator/internal/egress/uomclient"
+	"github.com/redis/go-redis/v9"
+
 	"contractpro/api-orchestrator/internal/infra/broker"
 	"contractpro/api-orchestrator/internal/infra/health"
 	"contractpro/api-orchestrator/internal/infra/kvstore"
@@ -31,6 +34,7 @@ import (
 	"contractpro/api-orchestrator/internal/ingress/api"
 	"contractpro/api-orchestrator/internal/ingress/consumer"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
+	"contractpro/api-orchestrator/internal/ingress/middleware/ratelimit"
 	"contractpro/api-orchestrator/internal/ingress/middleware/rbac"
 	"contractpro/api-orchestrator/internal/ingress/sse"
 )
@@ -97,6 +101,29 @@ func NewApp(cfg *config.Config) (*App, error) {
 	// 7. RBAC middleware.
 	rbacMW := rbac.NewMiddleware(log)
 
+	// 7b. Rate limiter middleware.
+	var rateLimitMW func(http.Handler) http.Handler
+	if cfg.RateLimit.Enabled {
+		rdb, ok := kvClient.RawRedis().(redis.Cmdable)
+		if !ok {
+			brokerClient.Close()
+			kvClient.Close()
+			return nil, fmt.Errorf("rate limiter: Redis client does not support Lua scripting")
+		}
+		rlStore := ratelimit.NewRedisStore(rdb)
+		rlMiddleware, err := ratelimit.NewMiddleware(cfg.RateLimit, rlStore, log)
+		if err != nil {
+			brokerClient.Close()
+			kvClient.Close()
+			return nil, fmt.Errorf("rate limiter: %w", err)
+		}
+		rateLimitMW = rlMiddleware.Handler()
+	} else {
+		// Disabled: pass-through middleware (no Redis needed).
+		rlMiddleware, _ := ratelimit.NewMiddleware(cfg.RateLimit, nil, log)
+		rateLimitMW = rlMiddleware.Handler()
+	}
+
 	// 8. Egress clients.
 	dmClient := dmclient.NewClient(cfg.DMClient, cfg.CircuitBreaker, log)
 	uomClient := uomclient.NewClient(cfg.UOMClient, log)
@@ -142,8 +169,9 @@ func NewApp(cfg *config.Config) (*App, error) {
 		CORSConfig:        cfg.CORS,
 		Health:            healthHandler,
 		Logger:            log,
-		AuthMiddleware:    authMW.Handler(),
-		RBACMiddleware:    rbacMW.Handler(),
+		AuthMiddleware:      authMW.Handler(),
+		RBACMiddleware:      rbacMW.Handler(),
+		RateLimitMiddleware: rateLimitMW,
 		AuthHandler:       authProxyHandler,
 		UploadHandler:     uploadHandler.Handle(),
 		ContractHandler:   contractHandler,

@@ -196,6 +196,14 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// RawRedis returns the underlying Redis API connection. In production
+// (NewClient) the returned value is *redis.Client, which callers may
+// type-assert for operations beyond the basic Get/Set/Delete API
+// (e.g., redis.Cmdable for Lua script execution).
+func (c *Client) RawRedis() any {
+	return c.rdb
+}
+
 // isClosed returns true if Close has been called.
 func (c *Client) isClosed() bool {
 	select {

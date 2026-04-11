@@ -10,39 +10,1400 @@
 <!-- **Статус:** done -->
 <!-- **Summary:** что было сделано, ключевые решения, результаты тестов -->
 
-## ORCH-TASK-033: OpenTelemetry tracing — spans, propagation, context
+---
+
+## ORCH-TASK-001: Scaffolding проекта — Go-модуль, структура директорий, Makefile
+**Дата:** 2026-04-08
+**Статус:** done
+
+### План реализации
+1. Спроектировать структуру на основе sibling-проекта DocumentProcessing (subagent: code-architect)
+2. Создать go.mod, cmd/orch-api/main.go (stub), Makefile, Dockerfile, .gitignore
+3. Создать internal/ директории с .gitkeep
+4. Code review (subagent: code-reviewer) → исправления
+5. Проверить make build, make test, make lint
+
+### Summary
+- **go.mod**: module contractpro/api-orchestrator, Go 1.26.1
+- **cmd/orch-api/main.go**: stub с log.Println
+- **Makefile**: build, test, lint, docker-build (паттерн идентичен DP)
+- **Dockerfile**: multi-stage (golang:1.26.1-alpine → alpine:3.21), non-root user `orchapi`, healthcheck
+- **.gitignore**: orch-api binary, .env, coverage files
+- **internal/**: config, domain/model, domain/port, application, app, ingress, egress, infra, integration
+- **Результаты тестов**: make build ✓, make test ✓ (no test files), make lint ✓ (0 warnings)
+- **Ключевое решение**: Dockerfile использует `COPY go.mod go.sum* ./` (glob) т.к. go.sum ещё не существует; будет заменено на точное имя при добавлении зависимостей
+- **Следующая задача**: ORCH-TASK-002 (config) или другие critical tasks, зависящие от 001
+
+## ORCH-TASK-002: Загрузка конфигурации (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture/configuration.md — определить все переменные
+2. Использовать DP config (DocumentProcessing/development/internal/config/) как образец паттерна
+3. Спроектировать Config struct с 14 sub-configs (backend-reliability-engineer subagent)
+4. Реализовать config.go: Config, Load(), Validate(), env helpers (envString, envInt, envInt64, envDuration, envBool, envStringSlice)
+5. Реализовать sub_configs.go: 14 sub-config structs с load-функциями
+6. Реализовать config_test.go: 24 теста
+7. Code review (code-reviewer subagent) → исправления: LogLevel enum validation, CB/Redis pool >= 1 checks, deterministic test env
+
+### Что реализовано
+- **config.go**: Config struct (корневая конфигурация), Load() с godotenv, Validate() с агрегированными ошибками, 6 env helpers
+- **sub_configs.go**: HTTPConfig, BrokerConfig (14 топиков), StorageConfig, RedisConfig, UploadConfig (AllowedTypes как []string), DMClientConfig, OPMClientConfig, UOMClientConfig, JWTConfig, SSEConfig, RateLimitConfig, CircuitBreakerConfig, CORSConfig (AllowedOrigins как []string), ObservabilityConfig
+- **config_test.go**: 24 теста покрывающие все acceptance criteria
+
+### Валидации
+- 8 обязательных полей (ошибка со списком всех недостающих)
+- Port collision (HTTP != Metrics)
+- Broker.Prefetch >= 1
+- Все duration > 0
+- Upload.MaxSize > 0
+- RateLimit: conditional (RPS > 0 только при Enabled=true)
+- JWT: файл существует (os.Stat)
+- LogLevel: enum (debug, info, warn, error)
+- CircuitBreaker.FailureThreshold >= 1, MaxRequests >= 1
+- Redis.PoolSize >= 1
+
+### Зависимость добавлена
+- github.com/joho/godotenv v1.5.1
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-004 (critical): Redis client — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-005 (critical): RabbitMQ broker client — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-006 (critical): S3 Object Storage client — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-003: Structured logging (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture/observability.md — определить обязательные поля и sensitive data policy
+2. Использовать DP observability (DocumentProcessing/development/internal/infra/observability/) как образец паттерна
+3. Спроектировать Logger и RequestContext (backend-reliability-engineer subagent)
+4. Реализовать context.go: RequestContext, WithRequestContext, RequestContextFrom, WithDocumentID/VersionID/JobID
+5. Реализовать logger.go: Logger, NewLogger, Info/Warn/Error/Debug, With, Slog, ErrorAttr, withRequestAttrs, parseLevel
+6. Реализовать logger_test.go: 28 тестов
+7. Code review (code-reviewer subagent) → исправления: shared constructor, ErrorAttr(nil)→null, pre-alloc prefix
+
+### Что реализовано
+- **context.go**: RequestContext struct (CorrelationID, OrganizationID, UserID, DocumentID, VersionID, JobID), WithRequestContext/RequestContextFrom, WithDocumentID/WithVersionID/WithJobID хелперы
+- **logger.go**: Logger struct обёрнутый над slog, NewLogger(level) с JSON на stdout, service="api-orchestrator" baked in, Info/Warn/Error/Debug с auto-extraction RequestContext из ctx, With() для component-scoped child loggers, Slog() escape hatch, ErrorAttr(err) helper (nil→JSON null), parseLevel (debug/info/warn/error), withRequestAttrs с pre-allocated prefix
+- **logger_test.go**: 28 тестов покрывающие: context round-trip (6), mandatory fields (4), level filtering (5), parseLevel table (1), With/component (3), ErrorAttr (4), Slog (1), extra args (1), JSON validity (1), NewLogger (2), нет дополнительных зависимостей
+
+### Ключевые решения
+- Пакет: `internal/infra/observability/logger` (отдельный sub-package для чистой зависимости)
+- RequestContext вместо JobContext (request-centric vs job-centric в DP)
+- `service` baked in через handler.WithAttrs (zero per-call overhead)
+- `component` через With() при создании компонента (не в RequestContext)
+- ErrorAttr(nil) → slog.Any("error", nil) → JSON null (соответствие architecture spec)
+- os.Stdout (не os.Stderr как в DP) — по спецификации observability.md
+- Shared constructor newLogger(level, w) для тестируемости без дублирования логики
+- Только stdlib зависимости (log/slog, context, io, os, strings)
+
+## ORCH-TASK-004: Redis-клиент (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (configuration.md, high-architecture.md) — определить Redis operations
+2. Использовать DP kvstore (DocumentProcessing/development/internal/infra/kvstore/) как образец паттерна
+3. Спроектировать Client с RedisAPI interface (backend-reliability-engineer subagent)
+4. Реализовать errors.go: ErrKeyNotFound, ErrClientClosed sentinels, mapError(), errClientClosed()
+5. Реализовать subscription.go: Subscription type с goroutine lifecycle (sync.Once, blocking Close)
+6. Реализовать client.go: RedisAPI interface, Client struct, NewClient, Get/Set/Delete/Publish/Subscribe/Ping/Close
+7. Реализовать client_test.go: 41 тест с mock + in-memory fake
+8. Code review (code-reviewer subagent) → исправления: ErrClientClosed sentinel, Subscription.closeErr хранение, doc улучшения
+
+### Что ре��лизовано
+- **errors.go**: ErrKeyNotFound, ErrClientClosed sentinels, mapError (context passthrough, redis.Nil → ErrKeyNotFound, fmt.Errorf wrapping), errClientClosed (wraps ErrClientClosed)
+- **subscription.go**: Subscription struct (pubsub, cancel, done, once, closeErr), blocking Close с sync.Once, caller MUST close documented
+- **client.go**: RedisAPI interface (Get, Set, Del, Publish, Subscribe, Ping, Close), Client struct (rdb, mu, done), NewClient(cfg) с Ping validation, newClientWithRedis для тестов, Get/Set/Delete/Publish/Subscribe/Ping/Close с isClosed guard
+- **client_test.go**: 41 тест: error mapping (4), Get (7), Set (6), Delete (6), Publish (5), Subscribe (1), Subscription lifecycle (4), Ping (3), Close (3), in-memory integration (1), concurrent access (1)
+
+### Ключевые решения
+- Без зависимости на domain/port — infra не импортирует domain layer, ошибки через fmt.Errorf с %w
+- ErrClientClosed sentinel — позволяет callers использовать errors.Is
+- Subscription.closeErr хранится для replay на повторных Close() вызовах
+- Subscribe создает goroutine с context cancellation — exits when Subscription.Close() or ctx cancelled
+- Delete идемпотентен — не возвращает ошибку для несуществующих ключей
+- Publish игнорирует subscriber count — Pub/Sub is fire-and-forget
+
+### Зависимость добавлена
+- github.com/redis/go-redis/v9 v9.18.0
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-006 (critical): S3 Object Storage client — зависит от ORCH-TASK-002 ✓
+- ORCH-TASK-007 (critical): Health check handler — зависит от ORCH-TASK-004 ✓, ORCH-TASK-005 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-005: RabbitMQ broker client (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, configuration.md, event-catalog.md) — определить topics и требования
+2. Использовать DP broker (DocumentProcessing/development/internal/infra/broker/) как образец паттерна
+3. Спроектировать Client с AMQPAPI/AMQPChannelAPI интерфейсами (backend-reliability-engineer subagent)
+4. Реализовать errors.go: BrokerError, sentinel errors, mapError, isRetryable
+5. Реализовать client.go: интерфейсы, wrappers, Client struct, NewClient, Publish с confirms+retry, Subscribe с QoS+manual ACK/NACK, Ping, Close
+6. Реализовать reconnect.go: reconnectLoop, reconnectWithBackoff, backoffDelay
+7. Реализовать client_test.go: 35 тестов с mock
+8. Code review (code-reviewer subagent) → исправления: pubMu для confirm serialization, RLock снят до I/O, subscribe registration race, ack/nack logging, reconnect logging, duplicate error message
+
+### Что реализовано
+- **errors.go**: ErrClientClosed, ErrNotConnected, ErrPublishConfirmFailed, ErrPublishNacked, ErrPublishMaxRetriesExhausted sentinels, BrokerError struct (Operation, Message, Retryable, Cause), mapError (context passthrough, AMQP code classification, unknown→retryable), isRetryable, errNotConnected/errClientClosed helpers
+- **client.go**: AMQPAPI interface (Channel, Close, NotifyClose, IsClosed), AMQPChannelAPI interface (+Confirm, NotifyPublish, Qos vs DP), amqpConnWrapper/amqpChanWrapper adapters, Client struct (address, prefetch, conn, pubCh, pubNotify, mu RWMutex, pubMu Mutex, subs, done, wg, dialFn, cancelFn/Ctx, log), NewClient(address, useTLS, prefetch, log) с dial+confirm mode+reconnect loop, Publish(ctx, topic, payload) с retry 3x backoff, publishOnce с pubMu serialization, Subscribe(topic, handler) с registration-first pattern, subscribe(topic, queue, handler) с Qos+QueueDeclare+Consume, consumeLoop с Ack/Nack logging, Ping() health check, Close() с idempotency
+- **reconnect.go**: reconnectLoop (NotifyClose+IsClosed detection), reconnectWithBackoff (dial+channel+confirm+swap+re-subscribe с logging), backoffDelay (1s-30s exponential + 25% jitter)
+- **client_test.go**: 35 тестов: publish (10: success/confirm nack/confirm closed/retry transient/no retry 404/max retries/ctx cancel/not connected/after close/ctx deadline), subscribe (7: success+prefix+qos+queue error+qos error+not connected+manual ack), handler ACK/NACK (2), ping (3), close (3), error mapping (4), isRetryable (2), backoff delay (3), reconnect (4), queue prefix table (1), broker error (3), concurrent safety (1)
+
+### Ключевые решения
+- **Без зависимости на domain/port** — собственный BrokerError тип и sentinel errors (как kvstore)
+- **pubMu Mutex** — сериализует publish+confirm цикл для предотвращения confirm misattribution при конкурентных Publish
+- **RLock снимается до I/O** — PublishWithContext выполняется без блокировки reconnect/Close
+- **Subscribe registration-first** — подписка записывается в subs до запуска consumer, с rollback при ошибке
+- **Queue prefix orch.sub.** — предотвращает коллизию с DP очередями
+- **Configurable prefetch** — Qos(prefetch, 0, false) на каждом consumer channel
+- **TLS support** — amqp.DialTLS с MinVersion TLS 1.2
+- **Ack/Nack logging** — ошибки Ack/Nack логируются на WARN уровне
+- **Reconnect logging** — Channel/Confirm/re-subscribe ошибки логируются
+
+### Зависимость добавлена
+- github.com/rabbitmq/amqp091-go v1.10.0
+
+## ORCH-TASK-006: S3 Object Storage client (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (configuration.md, high-architecture.md) — определить ORCH_STORAGE_* переменные, retry/CB/timeout требования
+2. Использовать DP objectstorage (DocumentProcessing/development/internal/infra/objectstorage/) как образец паттерна
+3. Спроектировать Client с S3API interface, retry + circuit breaker (backend-reliability-engineer subagent)
+4. Реализовать errors.go: ErrCircuitOpen, ErrObjectNotFound sentinels, StorageError struct, mapError, isRetryable, isCBFailure
+5. Реализовать client.go: S3API interface, Client struct, NewClient, PutObject/DeleteObject/HeadObject, executeWithRetry/executeWithCB/backoffDelay
+6. Реализовать client_test.go: 45 тестов
+7. Code review (code-reviewer subagent) → исправления: добавлены 3 теста (CB trips during retry, context cancelled during backoff, mapError code "404")
+
+### Что реализовано
+- **errors.go**: ErrCircuitOpen, ErrObjectNotFound sentinels, StorageError struct (Operation, Message, Retryable, Cause) с Error/Unwrap, nonRetryableS3Codes map, mapError (context passthrough, smithy.APIError classification с NotFound/NoSuchKey/404 → ErrObjectNotFound, net.Error → retryable, unknown → retryable), isRetryable (ErrCircuitOpen→false, ErrObjectNotFound→false, StorageError→Retryable, context.Canceled→false, DeadlineExceeded→true), isCBFailure (context.Canceled→false, ErrObjectNotFound→false, DeadlineExceeded→true, StorageError→Retryable, unknown→true)
+- **client.go**: S3API consumer-side interface (PutObject, DeleteObject, HeadObject), Client struct (s3, bucket, cb *gobreaker.CircuitBreaker[struct{}], uploadTimeout, opTimeout, maxRetries, log), NewClient(StorageConfig, CBConfig, Logger) с aws-sdk-go-v2 + UsePathStyle, newClientWithS3 для тестов, PutObject(ctx, key, io.ReadSeeker, contentType) с Seek(0) перед каждой попыткой, DeleteObject(ctx, key) идемпотентный, HeadObject(ctx, key) → nil | ErrObjectNotFound, executeWithRetry (retry loop: check parent ctx → backoff → per-attempt timeout → CB → fn, bail on ErrCircuitOpen/non-retryable), executeWithCB (gobreaker.Execute, map ErrOpenState/ErrTooManyRequests → ErrCircuitOpen), backoffDelay (500ms * 2^(n-1) + 25% jitter)
+- **client_test.go**: 45 тестов: PutObject (success, retry 5xx, retry timeout, retry network, no retry 403, all retries exhausted, context canceled, seek before retry, seek error), DeleteObject (success, retry, all retries, no retry 403, context canceled), HeadObject (success, NotFound, NoSuchKey, retry, no retry 403), CB (opens after threshold, 4xx doesn't trip, NotFound doesn't trip, half-open recovery, ErrCircuitOpen not retried, trips during retry, context cancelled during backoff), mapError (context canceled, deadline exceeded, NoSuchKey, NotFound, code "404", AccessDenied, InternalError, net.Error, unknown), isRetryable (6 cases), isCBFailure (5 cases), backoff delay, StorageError formatting/unwrap
+
+### Ключевые решения
+- **io.ReadSeeker вместо io.Reader** — позволяет Seek(0) перед каждой retry попыткой (multipart.File, *os.File, *bytes.Reader все реализуют ReadSeeker)
+- **Retry wraps CB, не наоборот** — каждая отдельная попытка проходит через CB; если CB OPEN, retry loop прерывается немедленно
+- **Per-attempt timeout** — каждая попытка получает свой context.WithTimeout (30s upload, 15s HEAD/DELETE); parent context deadline — общий бюджет
+- **gobreaker/v2 generic API** — CircuitBreaker[struct{}], IsSuccessful callback использует isCBFailure (inverted)
+- **4xx/NotFound не считаются CB failures** — только 5xx, timeout, connection errors инкрементируют consecutive failures
+- **context.DeadlineExceeded retryable** — per-attempt timeout retryable (parent ctx проверяется отдельно); isCBFailure тоже true для timeout
+- **Нет Close/Ping** — AWS SDK S3 client stateless, S3 не имеет lightweight ping
+- **Без зависимости на domain port** — как broker/kvstore, собственные error types
+
+### Зависимости добавлены
+- github.com/aws/aws-sdk-go-v2 v1.41.5
+- github.com/aws/aws-sdk-go-v2/service/s3 v1.99.0
+- github.com/aws/aws-sdk-go-v2/credentials v1.19.14
+- github.com/aws/smithy-go v1.24.3
+- github.com/sony/gobreaker/v2 v2.4.0
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-007 (critical): Health check handler — зависит от ORCH-TASK-004 ✓, ORCH-TASK-005 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-007: Health check handler (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, deployment.md, configuration.md) — определить health check требования
+2. Использовать DP health (DocumentProcessing/development/internal/infra/health/) как образец паттерна
+3. Спроектировать Handler с RedisPinger/BrokerPinger интерфейсами (backend-reliability-engineer subagent)
+4. Реализовать handler.go: интерфейсы, Handler struct, NewHandler, /healthz, /readyz с parallel checks
+5. Реализовать handler_test.go: 16 тестов
+6. Code review (code-reviewer subagent) → исправления: security (generic "unavailable"), body drain, URL normalization, GET-only, +4 теста
+
+### Что реализовано
+- **handler.go**: RedisPinger interface (Ping(ctx) error), BrokerPinger interface (Ping() error), Handler struct (notReady atomic.Bool, mux, redis, broker, dmURL, dmClient), NewHandler(redis, broker, dmBaseURL) с URL нормализацией, GET /healthz (всегда 200), GET /readyz (parallel checks → 200/503), SetNotReady() для graceful shutdown, checkRedis/checkBroker/checkDM, writeJSON helper
+- **handler_test.go**: 20 тестов: liveness (always 200, JSON content-type, ignores not-ready), readiness healthy (200 + all checks ok, JSON content-type), individual failures (redis down, broker down, DM non-200, DM connection refused), all down, SetNotReady (returns 503, skips checks), error status format (unavailable, no info leak), timeouts (slow Redis 5s → returns within 3s, slow DM 5s → returns within 3s), DM path (/healthz appended), URL normalization (trailing slash), HTTP method restriction (POST → 405 on both endpoints), concurrent safety (50 goroutines)
+
+### Ключевые решения
+- **Consumer-side интерфейсы** — RedisPinger/BrokerPinger определены в health пакете (dependency inversion), не импортируют kvstore/broker
+- **Parallel checks** — sync.WaitGroup + pre-allocated results slice (index 0=redis, 1=rabbitmq, 2=dm), избегает channel overhead
+- **readinessTimeout = 3s** — context.WithTimeout для всех checks; dmHTTPTimeout = 2s (HTTP client) меньше readinessTimeout
+- **Security** — ошибки не раскрываются в ответе (status: "unavailable" вместо raw error), предотвращение утечки инфраструктурных деталей
+- **GET-only** — Go 1.22+ method patterns ("GET /healthz", "GET /readyz"), 405 на другие методы
+- **URL normalization** — strings.TrimRight(dmBaseURL, "/") + "/healthz"
+- **Response body drain** — io.Copy(io.Discard, resp.Body) перед Close() для переиспользования TCP connection pool
+- **Только stdlib зависимости** — net/http, encoding/json, sync, sync/atomic, context, io, strings, time
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-008 (critical): HTTP-сервер — зависит от ORCH-TASK-007 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-008: HTTP-сервер (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, configuration.md, api-specification.yaml) — определить routes, middleware, timeouts
+2. Использовать DP health handler и chi router pattern как образец
+3. Спроектировать Server struct с Deps injection (backend-reliability-engineer subagent)
+4. Реализовать server.go: Server struct, NewServer, Start, StartWithListeners, Shutdown, MainAddr, MetricsAddr, handleMetricsStub, notImplemented
+5. Реализовать routes.go: registerRoutes с public/protected/SSE groups, sseStub
+6. Реализовать middleware.go: 4 middleware stubs (CORS, Auth, RBAC, RateLimit)
+7. Реализовать server_test.go: 42 теста
+8. Code review (code-reviewer subagent) → исправления: SSE Flusher check до WriteHeader, health Mount("/") вместо двух Mount, удалены unused Set*Listener
+
+### Что реализовано
+- **server.go**: Server struct (main *http.Server, metrics *http.Server, router chi.Router, log *logger.Logger, cfg HTTPConfig), Deps struct (Config, Health, Logger), NewServer(deps) с chi router + middleware + routes + dual server configuration, Start() с metrics goroutine, StartWithListeners(mainLn, metricsLn) для тестов, Shutdown(ctx) параллельный для обоих серверов, Router()/MainAddr()/MetricsAddr() accessors, handleMetricsStub (placeholder Prometheus), notImplemented (501 JSON)
+- **routes.go**: registerRoutes с тремя route groups: public auth (login/refresh/logout без auth), protected (auth→RBAC→rateLimit: contracts CRUD, versions, results, comparison, export, feedback, admin, users/me), SSE (events/stream вне auth group). sseStub с корректным порядком: Flusher check → headers → WriteHeader → body → flush
+- **middleware.go**: corsMiddleware, authMiddleware, rbacMiddleware, rateLimitMiddleware — все pass-through stubs с doc comments указывающими на future task IDs
+- **server_test.go**: 42 теста: constructor (5: fields, MainAddr, MetricsAddr, main timeouts, metrics timeouts), health integration (2: /healthz 200, /readyz 200), public auth (3: login/refresh/logout 501), protected contracts (5: upload/list/get/delete/archive 501), versions (5: list/upload/get/status/recheck 501), results (4: results/risks/summary/recommendations 501), comparison (2: compare/diff 501), export (1: 501), feedback (1: 501), admin (4: policies list/update, checklists list/update 501), user (1: me 501), SSE (1: event-stream content-type + connected comment), routing (2: unknown 404, wrong method 405), response format (2: notImplemented JSON, metrics text/plain), lifecycle (2: start+shutdown integration, live server contract), concurrent access (1: 50 goroutines), route registration (1: 29 routes not 404), middleware chain (1: stubs pass through), accessor (1: Router() non-nil)
+
+### Ключевые решения
+- **Chi router** — совместимо с DM service pattern
+- **Dual server** — main API (port 8080) + metrics (port 9090) на отдельных http.Server; Prometheus scraping не затронут auth/rate limiting
+- **Health mount через Mount("/")** — сохраняет полные пути /healthz и /readyz (chi Mount на sub-path стрипает prefix, что ломает health handler's exact pattern registration)
+- **SSE вне auth group** — EventSource API не поддерживает custom headers, auth через ?token= query param внутри handler
+- **WriteTimeout = RequestTimeout + 5s** — headroom для response writing, handler's context timeout первичный
+- **IdleTimeout = 2 * RequestTimeout** — для keep-alive connections
+- **Metrics server fixed timeouts** — 5s read/write, 30s idle (не зависят от config)
+- **Flusher check до WriteHeader** — корректный порядок в SSE stub, шаблон для ORCH-TASK-029
+
+### Зависимость добавлена
+- github.com/go-chi/chi/v5 v5.2.5
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-009 (critical): ErrorResponse + recovery middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-009: ErrorResponse + recovery middleware (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (error-handling.md, api-specification.yaml, observability.md) — определить формат ошибок, каталог кодов, DM маппинг
+2. Использовать DP domain errors (port/errors.go) и существующий server.go как образец паттерна
+3. Спроектировать ErrorResponse, ErrorCode, ErrorEntry, каталог, recovery middleware (backend-reliability-engineer subagent)
+4. Реализовать error_response.go: ErrorCode тип, 22 константы, errorCatalog, ErrorResponse struct, WriteError, WriteErrorWithMessage, LookupError, StatusCode
+5. Реализовать dm_errors.go: MapDMError с mapDMNotFound/mapDMConflict
+6. Реализовать recovery.go: RecoveryMiddleware с http.ErrAbortHandler re-panic
+7. Wiring: RecoveryMiddleware первым в chain (server.go)
+8. Реализовать тесты: error_response_test.go (21), dm_errors_test.go (23), recovery_test.go (11)
+9. Code review (code-reviewer subagent) → исправления: M-1 json.Encode error logging, M-2 http.ErrAbortHandler re-panic, N-10 notImplemented unified format, N-12 fragile count test
+
+### Что реализовано
+- **error_response.go**: ErrorCode тип (string), 22 константы (AUTH_TOKEN_MISSING, AUTH_TOKEN_EXPIRED, AUTH_TOKEN_INVALID, PERMISSION_DENIED, FILE_TOO_LARGE, UNSUPPORTED_FORMAT, INVALID_FILE, DOCUMENT_NOT_FOUND, VERSION_NOT_FOUND, ARTIFACT_NOT_FOUND, DIFF_NOT_FOUND, DOCUMENT_ARCHIVED, DOCUMENT_DELETED, VERSION_STILL_PROCESSING, RESULTS_NOT_READY, RATE_LIMIT_EXCEEDED, STORAGE_UNAVAILABLE, DM_UNAVAILABLE, OPM_UNAVAILABLE, BROKER_UNAVAILABLE, VALIDATION_ERROR, INTERNAL_ERROR), ErrorEntry struct (HTTPStatus, Message, Suggestion), errorCatalog map (22 записи с русскими сообщениями и подсказками), ErrorResponse struct (json tags: error_code, message, details omitempty, correlation_id, suggestion omitempty), WriteError(w, r, code, details) с auto-fill из каталога и RequestContext, WriteErrorWithMessage для кастомных сообщений, LookupError (unknown → INTERNAL_ERROR fallback), StatusCode хелпер, writeErrorJSON с slog.Error fallback при ошибке кодирования
+- **dm_errors.go**: MapDMError(statusCode, body, resourceHint) → ErrorCode маппинг: 5xx → DM_UNAVAILABLE, 404 → resourceHint-based (version/artifact/diff/document), 409 → body parsing (ARCHIVED/DELETED/PROCESSING/RESULTS_NOT_READY), default → INTERNAL_ERROR. Поддержка сокращённых DM кодов (ARCHIVED, DELETED, PROCESSING)
+- **recovery.go**: RecoveryMiddleware(logger) → chi middleware: http.ErrAbortHandler re-panic (для SSE), panic → ERROR log (value + stack + method + path) → 500 INTERNAL_ERROR через WriteError
+- **server.go**: RecoveryMiddleware wired первым (перед CORS), notImplemented обновлён на unified error_code формат
+- **error_response_test.go**: 21 тест: catalog completeness (all codes have entries), non-empty messages, valid HTTP statuses, HTTP status categories (22 subtests), LookupError known/unknown, StatusCode known/unknown, WriteError (HTTP status, Content-Type, X-Correlation-Id header, all required fields, details included/omitted, suggestion included/omitted, empty correlation, unknown code), WriteErrorWithMessage (overrides message, preserves suggestion/status), JSON field names, catalog counts match
+- **dm_errors_test.go**: 23 теста table-driven: 5xx (500/502/503, body ignored, hint ignored), 404 (default/document/version/artifact/diff), 409 (DOCUMENT_ARCHIVED/ARCHIVED/DOCUMENT_DELETED/DELETED/VERSION_STILL_PROCESSING/PROCESSING/RESULTS_NOT_READY/unknown/invalid json/empty body), other 4xx (400/418)
+- **recovery_test.go**: 11 тестов: no panic passthrough, string/error/int panics → 500, response body format (error_code/message/correlation_id/suggestion/no details), X-Correlation-Id header, Content-Type, http.ErrAbortHandler re-panic, with/without correlation ID
+
+### Ключевые решения
+- **ErrorCode как string тип** — type safety при передаче, но string в ErrorResponse struct для чистого JSON
+- **errorCatalog как package-level var map** — single source of truth, read-only после init, не экспортируется
+- **LookupError fallback** — unknown codes получают INTERNAL_ERROR entry, но сохраняют оригинальный error_code в ответе
+- **Details omitempty + Suggestion omitempty** — nil details и пустой suggestion не включаются в JSON
+- **writeErrorJSON helper** — DRY для WriteError/WriteErrorWithMessage, slog.Error при ошибке кодирования
+- **http.ErrAbortHandler re-panic** — позволяет net/http серверу корректно abort SSE и disconnected clients
+- **Cross-layer model→logger dependency** — прагматичный trade-off для auto-extraction correlation_id через RequestContextFrom
+- **MapDMError resourceHint** — лёгкий string параметр для disambiguate 404 (version/artifact/diff/document)
+- **DM conflict dual codes** — поддержка как полных (DOCUMENT_ARCHIVED) так и кратких (ARCHIVED) кодов от DM
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-010 (critical): JWT Auth middleware — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-014 (critical): DM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-016 (medium): OPM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-010: JWT Auth middleware (DONE, 2026-04-08)
+
+### План реализации
+1. Прочитать architecture docs (security.md, high-architecture.md, api-specification.yaml) — определить JWT формат, claims, validation rules
+2. Использовать существующие middleware stubs и error_response.go как интеграционные точки
+3. Спроектировать Middleware с LoadPublicKey, Claims, AuthContext (backend-reliability-engineer subagent)
+4. Реализовать context.go: Role тип, AuthContext struct, WithAuthContext/AuthContextFrom
+5. Реализовать claims.go: Claims struct с jwt.ClaimsValidator (sub/org UUID, role enum, jti UUID)
+6. Реализовать key.go: LoadPublicKey (RSA PKIX, ECDSA PKIX, RSA PKCS1), signingMethodForKey с curve validation
+7. Реализовать middleware.go: Middleware struct, NewMiddleware, Handler() с extractBearerToken/validateToken/keyFunc
+8. Wiring: server.go Deps.AuthMiddleware, routes.go authMW parameter, middleware.go noopMiddleware fallback
+9. Реализовать тесты: context_test.go (8), claims_test.go (12), key_test.go (10), middleware_test.go (24)
+10. Code review (code-reviewer subagent) → исправления: M-1 case-insensitive Bearer, M-2 correlation ID на error paths, N-3 ECDSA curve validation, N-4 unexport ValidRoles, N-5 jti UUID validation, N-6 remove unused signingMethod field, N-8 none algorithm test
+
+### Что реализовано
+- **context.go**: Role тип (LAWYER, BUSINESS_USER, ORG_ADMIN), validRoles map (unexported), IsValidRole, AuthContext struct (UserID, OrganizationID, Role, TokenID), WithAuthContext/AuthContextFrom с отдельным context key
+- **claims.go**: Claims struct (jwt.RegisteredClaims + Org + Role), Validate() → jwt.ClaimsValidator: sub UUID, org UUID, role enum, jti UUID — каждая проверка с отдельным error message
+- **key.go**: LoadPublicKey(path) → crypto.PublicKey: PKIX first (RSA+ECDSA), PKCS1 fallback (legacy RSA), unsupported type rejection. signingMethodForKey: RSA→RS256, ECDSA P-256→ES256, P-384/P-521→error
+- **middleware.go**: Middleware struct (publicKey, log), NewMiddleware(publicKey, log) с key type validation при конструкции, Handler() → chi-compatible middleware: correlation ID early (до error paths), extractBearerToken (case-insensitive per RFC 6750), validateToken (ParseWithClaims + 30s leeway + IssuedAt + ExpirationRequired), keyFunc (algorithm confusion prevention via type assertion), isExpiredError → AUTH_TOKEN_EXPIRED vs AUTH_TOKEN_INVALID. ValidateToken() exported для SSE handler (ORCH-TASK-029)
+- **server.go**: Deps.AuthMiddleware func(http.Handler) http.Handler, nil → noopMiddleware fallback
+- **routes.go**: registerRoutes(r, authMW) — authMW parameter вместо hardcoded stub
+- **middleware.go**: noopMiddleware pass-through, removed old authMiddleware stub
+- **54 теста**: claims_test (12: valid, missing/invalid sub/org/role/jti, all roles, valid UUIDs, registered claims passthrough), key_test (10: RSA PKIX, ECDSA PKIX, PKCS1, not found, invalid PEM, empty, signing method RSA/ECDSA/unsupported/wrong curve), context_test (8: round-trip, empty, IsValidRole 6 cases), middleware_test (24: RS256 valid/AuthContext/RequestContext, ES256 valid/AuthContext, missing/empty/non-Bearer, expired/clock-skew, wrong key, algorithm mismatch, missing sub/org/role/jti, invalid sub/org UUID, future iat, correlation ID generation/preservation/in-context/on-error/preserve-on-error, all roles, malformed, ValidateToken valid/expired, auth failure stops chain, JSON content-type, none algorithm, lowercase/uppercase Bearer)
+
+### Ключевые решения
+- **Отдельный пакет** internal/ingress/middleware/auth — dependency inversion, RBAC и SSE handler импортируют AuthContext
+- **AuthContext отделён от RequestContext** — Role для RBAC без зависимости на logger пакет
+- **Algorithm confusion prevention** — signingMethodForKey определяет ожидаемый алгоритм при конструкции; keyFunc проверяет тип метода токена через type assertion
+- **ECDSA P-256 curve validation** — отклонение P-384/P-521 при конструкции с ясным error message
+- **Case-insensitive Bearer** — per RFC 6750 §1.1 и RFC 9110 §11.1, strings.EqualFold
+- **Correlation ID early** — генерируется/сохраняется до error paths, все ответы (включая auth errors) содержат correlation_id в JSON body и X-Correlation-Id header
+- **ValidRoles unexported** — защита от runtime mutation через map assignment
+- **jti validated as UUID** — consistency с sub и org validation
+- **ValidateToken() exported** — для SSE handler (ORCH-TASK-029) без HTTP middleware overhead
+- **noopMiddleware fallback** — tests без auth зависимости, nil Deps.AuthMiddleware → pass-through
+
+### Зависимости добавлены
+- github.com/golang-jwt/jwt/v5
+- github.com/google/uuid
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-011 (critical): RBAC middleware — зависит от ORCH-TASK-010 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-014 (critical): DM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-011: RBAC middleware (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (security.md, high-architecture.md, api-specification.yaml) — определить матрицу доступа, роли, endpoint-role mapping
+2. Использовать существующий auth middleware (AuthContext, Role) как источник роли
+3. Спроектировать Middleware с companion chi.Mux для pattern matching (backend-reliability-engineer subagent)
+4. Реализовать rbac.go: Middleware struct, NewMiddleware(log), Handler(), access policy map, roleSet, 23 правила
+5. Реализовать rbac_test.go: 44 теста (131 с sub-tests)
+6. Wiring: server.go (Deps.RBACMiddleware), routes.go (rbacMW parameter), middleware.go (stub removed)
+7. Code review (code-reviewer subagent) → исправления: M-1 export comment (OPM policy), S-1 DEBUG log fail-open, S-2 unknown/empty role tests, S-3 matrix test completeness, N-1 unexport policyKeys
+
+### Что реализовано
+- **rbac.go**: Middleware struct (policy map[string]roleSet, matcher *chi.Mux, log), NewMiddleware(log) строит 23 access rules + companion chi.Mux, Handler() → chi middleware: AuthContextFrom → matcher.Match → policy lookup → roleSet.contains, fail-open для неизвестных routes (с DEBUG логом), missing AuthContext → 500 INTERNAL_ERROR, role not permitted → 403 PERMISSION_DENIED (WARN лог: user_id, role, method, path, route_pattern)
+- **rbac_test.go**: 44 теста (131 sub-tests): constructor (3), missing AuthContext (1), fail-open (1), permission denied (13), allowed access (14), error format (2), roleSet (2), policy completeness (1), full access matrix (69 sub-tests), handler call verification (2), unknown/empty role (2)
+- **server.go**: Deps.RBACMiddleware func(http.Handler) http.Handler, nil → noopMiddleware fallback
+- **routes.go**: registerRoutes(r, authMW, rbacMW) — rbacMW injected
+- **middleware.go**: rbacMiddleware stub removed, comments updated
+
+### Ключевые решения
+- **Companion chi.Mux** — обходит ограничение chi sub-router RoutePattern() (не полностью разрешён в middleware на Router.Route)
+- **roleSet map[Role]struct{}** — O(1) lookup, 3 pre-built sets: allRoles, lawyerAndAdmin, adminOnly
+- **Fail-open** — неизвестные routes пропускаются (forward compatibility), authentication всё ещё защищает
+- **Export allRoles at RBAC** — BUSINESS_USER restriction делегирована handler уровню (OPM policy check)
+- **AuthContext absence → 500** — programming error (auth middleware не настроен), не 403 (не раскрываем существование route)
+- **Thread safety** — policy и matcher immutable после конструкции
+- **Audit logging** — WARN на denial с полным контекстом, DEBUG на fail-open
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-017 (critical): Command Publisher — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-018 (critical): Contract Upload Coordinator — зависит от ORCH-TASK-006 ✓, ORCH-TASK-014 ✓, ORCH-TASK-017 ✗, ORCH-TASK-011 ✓
+- ORCH-TASK-019 (critical): Contract CRUD — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✗
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✗
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓
+
+## ORCH-TASK-014: DM Client (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (api-specification.yaml DM, high-architecture.md, integration-contracts.md, error-handling.md) — определить все DM endpoints, headers, retry/CB config
+2. Использовать objectstorage client (internal/infra/objectstorage/) как образец retry + CB паттерна
+3. Спроектировать DMClient interface с 12 методами, Client struct, error types (backend-reliability-engineer subagent)
+4. Реализовать errors.go: ErrCircuitOpen, ErrDMUnavailable sentinels, DMError struct, mapHTTPError, mapTransportError, isRetryable, isCBFailure
+5. Реализовать models.go: 6 request/param types, 12 response types
+6. Реализовать client.go: DMClient interface, Client struct, NewClient, 12 API methods, doGET/doJSON/setHeaders/buildURL/executeWithRetry/executeWithCB/backoffDelay
+7. Реализовать client_test.go: 47 тестов с httptest.NewServer
+8. Code review (code-reviewer subagent) → исправления: M-1 io.LimitReader (10MB cap), M-2 retryMax doc clarification, S-1 dead code removed, S-3 url.PathEscape, S-4 empty context test, S-5 302 body optimization, S-6 DeadlineExceeded test, S-7 Error log on exhaustion
+
+### Что реализовано
+- **errors.go**: ErrCircuitOpen, ErrDMUnavailable sentinels, DMError struct (Operation, StatusCode, Body, Retryable, Cause) с Error/Unwrap, mapHTTPError (5xx → Retryable:true, 4xx → Retryable:false), mapTransportError (context.Canceled/DeadlineExceeded → pass through raw, net.Error → Retryable:true, unknown → Retryable:true), isRetryable (ErrCircuitOpen→false, DMError.Retryable, context.Canceled→false, DeadlineExceeded→true), isCBFailure (context.Canceled→false, DeadlineExceeded→true, DMError.Retryable, unknown→true)
+- **models.go**: CreateDocumentRequest, CreateVersionRequest, ListDocumentsParams, ListVersionsParams, ListArtifactsParams, ListAuditParams, Document, DocumentWithCurrentVersion, DocumentList, DocumentVersion, DocumentVersionWithArtifacts, VersionList, ArtifactDescriptor, ArtifactDescriptorList, ArtifactResponse (Content json.RawMessage | RedirectURL string), TextDiff, StructuralDiff, VersionDiff, AuditRecord, AuditRecordList
+- **client.go**: DMClient interface (12 methods), Client struct (httpClient, baseURL, cb, timeoutRead/Write, retryMax, retryBackoff, log), NewClient(DMClientConfig, CBConfig, Logger) с CheckRedirect disabled, newClient shared constructor, compile-time interface check. 12 API methods: CreateDocument (POST), ListDocuments (GET+query), GetDocument (GET), DeleteDocument (DELETE), ArchiveDocument (POST), CreateVersion (POST), ListVersions (GET+query), GetVersion (GET), ListArtifacts (GET+query), GetArtifact (GET, dual 200/302), GetDiff (GET), ListAuditRecords (GET+query). Helpers: doGET, doJSON (JSON encode/decode, io.LimitReader 10MB), setHeaders (from auth.AuthContext + logger.RequestContext using original ctx), buildURL, executeWithRetry (retryMax total attempts, exponential backoff + 25% jitter, per-attempt timeout, Error log on exhaustion), executeWithCB (gobreaker.Execute, ErrOpenState/TooManyRequests → ErrCircuitOpen), backoffDelay. URL path escaping via url.PathEscape on all path parameters.
+- **client_test.go**: 47 тестов: headers propagation (1), CreateDocument success/400 no retry (2), GetDocument success/404 no retry/409 no retry (3), retry 5xx then success/all retries exhausted (2), DeleteDocument success (1), ArchiveDocument success (1), CreateVersion success (1), ListVersions success (1), GetVersion success (1), ListArtifacts with filters (1), GetArtifact JSON 200/redirect 302/302 missing Location/404 no retry (4), GetDiff success (1), ListAuditRecords success (1), context cancelled before call/during backoff (2), CB opens after threshold/4xx doesn't trip/half-open recovery/ErrCircuitOpen not retried/trips during retry (5), backoff delay values (1), DMError formatting with status/with cause/unwrap (3), isRetryable (5), isCBFailure (4), mapHTTPError (3), mapTransportError canceled/net.Error/DeadlineExceeded/unknown (4), empty context no panic (1), query params (1), interface check (1)
+
+### Ключевые решения
+- **CheckRedirect disabled глобально** — GetArtifact получает 302 Location header без follow, для остальных endpoints DM не выдаёт redirects
+- **io.LimitReader 10MB** — защита от OOM при misbehaving DM service (security fix из code review)
+- **url.PathEscape** — defense in depth для path parameters (обычно UUID, но защита от injection)
+- **DeadlineExceeded pass through raw** — согласовано с objectstorage pattern (context errors не wrapping)
+- **retryMax = total attempts** — прагматичное решение с документированной семантикой (не retry count)
+- **Error log on retry exhaustion** — observability для дебага после исчерпания попыток (code review fix)
+- **302 body drain** — io.Copy(io.Discard) для переиспользования TCP connection (optimization из code review)
+- **setHeaders из original ctx** — не из per-attempt ctx, потому что auth/logger values установлены upstream middleware
+- **Без зависимости на domain port** — как objectstorage/broker/kvstore, собственные error types; callers используют DMError.StatusCode/Body + model.MapDMError
+
+## ORCH-TASK-017: Command Publisher (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (event-catalog.md, high-architecture.md, integration-contracts.md) — определить структуру команд, topics, envelope
+2. Использовать broker client (internal/infra/broker/) Publish API и dmclient как образец egress pattern
+3. Спроектировать CommandPublisher interface с BrokerPublisher (consumer-side) (backend-reliability-engineer subagent)
+4. Реализовать commands.go: ProcessDocumentCommand, CompareVersionsCommand (бизнес-поля), event envelopes (JSON с envelope)
+5. Реализовать publisher.go: BrokerPublisher interface, CommandPublisher interface, Publisher struct, NewPublisher, PublishProcessDocument, PublishCompareVersions
+6. Реализовать publisher_test.go: 12 тестов с mock broker
+7. Code review (code-reviewer subagent) → исправления: S-1 duplicate correlation_id (→ job_id), S-2 broker error wrapping
+
+### Что реализовано
+- **commands.go**: ProcessDocumentCommand struct (10 бизнес-полей), CompareVersionsCommand struct (6 бизнес-полей), processDocumentEvent (12 полей с envelope: correlation_id, timestamp), compareVersionsEvent (8 полей с envelope)
+- **publisher.go**: BrokerPublisher interface (consumer-side, Publish(ctx, topic, payload) error), CommandPublisher interface (PublishProcessDocument, PublishCompareVersions), Publisher struct (broker, topicProcess, topicCompare, log), NewPublisher с component logger, compile-time interface check. PublishProcessDocument: RequestContextFrom → correlation_id, time.Now().UTC().RFC3339 → timestamp, field copy → json.Marshal → broker.Publish. PublishCompareVersions: аналогичный паттерн. WARN лог при ошибке с operation/topic/job_id/error. Broker errors обёрнуты fmt.Errorf с commandpub: prefix.
+- **publisher_test.go**: 12 тестов: interface check (1), correct topic+JSON — process (1), timestamp RFC3339 — process (1), broker error propagated — process (1), empty correlation_id — process (1), correct topic+JSON — compare (1), timestamp RFC3339 — compare (1), broker error propagated — compare (1), empty correlation_id — compare (1), all JSON fields exact match — process (1), all JSON fields exact match — compare (1), mock interface check (1)
+
+### Ключевые решения
+- **BrokerPublisher consumer-side interface** — dependency inversion, Publisher не импортирует infra/broker
+- **Команды (Command) vs события (Event)** — Command содержит только бизнес-поля, Event = Command + envelope (correlation_id, timestamp)
+- **correlation_id из RequestContext** — автоматически из context, не передаётся явно
+- **Broker retry/confirms делегированы** — infra/broker уже обрабатывает retry (3 попытки) и publisher confirms
+- **Broker errors обёрнуты** — fmt.Errorf("commandpub: Method: publish: %w", err) для консистентности с marshal error path
+- **WARN лог с job_id** — вместо дублирующегося correlation_id (который уже в RequestContext auto-extracted)
+- **Нет circuit breaker** — broker client handles reconnection internally
+- **Нет валидации полей** — ответственность вызывающего кода (Upload Coordinator / Comparison Coordinator)
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-018 (critical): Contract Upload Coordinator — зависит от ORCH-TASK-006 ✓, ORCH-TASK-014 ✓, ORCH-TASK-017 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-019 (critical): Contract CRUD — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-018: Contract Upload Coordinator (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, api-specification.yaml, event-catalog.md, security.md, sequence-diagrams.md) — определить upload flow, validation rules, error codes
+2. Изучить существующий код (objectstorage, dmclient, commandpub, auth, kvstore, model, routes) — определить все интерфейсы и типы
+3. Спроектировать Handler struct с consumer-side интерфейсами (backend-reliability-engineer subagent)
+4. Реализовать handler.go: Handler struct, Handle() http.HandlerFunc, uploadWithChecksum с checksumReadSeeker, sanitizeFilename, cleanupS3, saveTracking
+5. Реализовать handler_test.go: 28 тестов с mock implementations
+6. Wiring: server.go (Deps.UploadHandler), routes.go (uploadH parameter)
+7. Code review (code-reviewer subagent) → исправления: S-1 MaxBytesReader, M-2 orphan doc logging, M-3 title control chars, M-4 UTF-8-aware truncation
+8. Добавить 6 новых тестов для security fixes
+
+### Что реализовано
+- **handler.go**: Handler struct (storage ObjectStorage, dm DMClient, publisher CommandPublisher, kv KVStore, log *Logger, maxSize int64, uuidGen UUIDGenerator). Consumer-side интерфейсы (ObjectStorage: PutObject/DeleteObject, DMClient: CreateDocument/CreateVersion, CommandPublisher: PublishProcessDocument, KVStore: Set). Локальные DTO types для decoupled от egress packages. Handle() → http.HandlerFunc: auth context → correlation_id/job_id → MaxBytesReader body limit → multipart parsing → title validation (trim, ≤500 runes, control chars) → file validation (size ≤ maxSize, MIME = application/pdf, magic bytes %PDF-) → filename sanitization → streaming S3 upload с checksumReadSeeker → DM CreateDocument → DM CreateVersion → PublishProcessDocument → Redis tracking → 202 Accepted.
+- **checksumReadSeeker**: wraps io.ReadSeeker + hash.Hash, computes SHA-256 during Read, resets hash on Seek(0, SeekStart) for retry correctness.
+- **sanitizeFilename**: backslash normalization → filepath.Base → null/control char removal → path traversal removal → UTF-8-aware truncation to 255 bytes → fallback "upload.pdf".
+- **containsControlChars**: C0 (0x00-0x1F) + DEL (0x7F) detection для title validation.
+- **cleanupS3**: compensating S3 delete с error logging (idempotent).
+- **saveTracking**: Redis key "upload:{org}:{job}" с JSON payload и TTL 1h, non-critical (WARN on failure).
+- **server.go**: Deps.UploadHandler http.HandlerFunc, nil → notImplemented fallback.
+- **routes.go**: registerRoutes(r, authMW, rbacMW, uploadH), POST /contracts/upload → uploadH.
+- **handler_test.go**: 34 теста (+ 30 sub-tests): happy path (1), auth (1), title validation (7: empty, whitespace, too long, boundary 500, unicode 500/501, control chars/tab/null), file validation (5: missing, too large, unsupported MIME, invalid magic, too short for magic, empty), infrastructure failures+cleanup (5: S3 failure, DM CreateDoc+S3 cleanup, DM CreateVer+S3 cleanup+orphan log, broker no-cleanup, Redis non-critical), data integrity (4: checksum hex, S3 key format, Redis tracking key+payload, published command fields), non-multipart (1), sanitizeFilename (16 sub-tests: normal/path traversal fwd+bwd+embedded/null+control+DEL chars/empty+dot+dotdot fallback/long truncation/unicode/spaces/absolute+windows path/UTF-8 truncation), checksumReadSeeker (1), body size limit (1), containsControlChars (8 sub-tests).
+
+### Security fixes (из code review)
+- **S-1 MaxBytesReader**: `r.Body = http.MaxBytesReader(w, r.Body, maxSize+1MB)` перед ParseMultipartForm — защита от DoS через неограниченный multipart body
+- **M-2 Orphan document logging**: при ошибке CreateVersion логируется orphan_document_id на ERROR уровне для операционного sweep
+- **M-3 Title control chars**: containsControlChars() отклоняет title с C0/DEL символами — defense-in-depth против injection
+- **M-4 UTF-8-aware truncation**: DecodeLastRuneInString loop для корректного обрезания Cyrillic/CJK filenames без разрыва multi-byte sequences
+- **M-1 Retry contract documented**: checksumReadSeeker.Seek документирует контракт "MUST seek to offset 0 on retry"
+
+### Ключевые решения
+- **Consumer-side интерфейсы** — upload пакет определяет свои интерфейсы и DTO types, не импортирует egress packages (dependency inversion)
+- **UUIDGenerator seam** — func() string с defaultUUIDGenerator (uuid.New) и replaceable в тестах для deterministic IDs
+- **maxParseMemory = 10 MB** — Go spills multipart data to temp files beyond this, не ограничивает total body (MaxBytesReader делает это)
+- **Streaming SHA-256** — checksumReadSeeker wraps multipart.File, checksum computed during S3 upload (no re-read)
+- **Compensating cleanup strategy**: S3 delete на DM failure (idempotent), NO rollback на broker failure (version exists in DM с PENDING), WARN на Redis failure (non-critical tracking)
+- **Title validation: rune count** — utf8.RuneCountInString для корректной валидации Cyrillic (500 Cyrillic chars = 1000+ bytes)
+- **UploadResponse.Status = "UPLOADED"** — initial state до ProcessDocumentRequested command processing
+- **Нет новых зависимостей** — google/uuid уже в go.mod (auth middleware)
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-019 (critical): Contract CRUD — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-020 (critical): Version management — зависит от ORCH-TASK-014 ✓, ORCH-TASK-018 ✓
+- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-019: Contract CRUD handlers (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (api-specification.yaml, high-architecture.md, error-handling.md, integration-contracts.md) — определить endpoints, response formats, error mapping
+2. Изучить существующий код (dmclient interface+models, model errors, auth context, server+routes, logger) — определить интеграционные точки
+3. Спроектировать Handler с DMClient consumer-side интерфейсом (backend-reliability-engineer subagent)
+4. Реализовать response.go: ContractSummary, ContractDetails, ContractVersion, ContractListResponse, processingStatusMap, mapping functions
+5. Реализовать handler.go: Handler struct, NewHandler, HandleList/HandleGet/HandleArchive/HandleDelete, handleDMError, extractContractID, parseIntParam, writeJSON
+6. Реализовать handler_test.go: 44 теста с mock DM client
+7. Wiring: server.go (Deps.ContractHandler), routes.go (nil-guard + 4 route replacements)
+8. Code review (code-reviewer subagent) → исправления: M-1 search doc, M-2 nil fields doc, N-3 writeJSON structured logger, N-6 DM 400 test
+
+### Что реализовано
+- **response.go**: processingStatusMap (11 entries DM artifact_status → user-facing status), mapProcessingStatus (unknown → "UNKNOWN"), ContractSummary struct (contract_id, title, status, current_version_number *int, processing_status *string, created_at, updated_at), ContractVersion struct (omits source_file_key + artifact_status), ContractDetails struct (with *ContractVersion + *processing_status), ContractListResponse struct (items always [], never null), formatTime (UTC RFC3339), mapDocumentToContractSummary (document_id → contract_id, version fields nil), mapDocumentWithVersionToContractDetails (nil-safe current_version + processing_status), mapDocumentVersionToContractVersion (document_id → contract_id, omits internal fields)
+- **handler.go**: DMClient consumer-side interface (ListDocuments, GetDocument, DeleteDocument, ArchiveDocument), compile-time check var _ DMClient = (*dmclient.Client)(nil), Handler struct (dm, log), NewHandler с component logger. HandleList: auth check → parseIntParam (page ≥1, size 1-100) → status enum validation → search rune count ≤200 (validated but not forwarded, documented) → DM ListDocuments → map items → 200 JSON. HandleGet: auth check → UUID validation → WithDocumentID ctx enrichment → DM GetDocument → map to ContractDetails → 200 JSON. HandleArchive: auth check → UUID validation → DM ArchiveDocument → 200 ContractSummary. HandleDelete: аналогичный HandleArchive с DeleteDocument. handleDMError: ErrCircuitOpen → WARN + 502, DMError.StatusCode > 0 → MapDMError, DMError transport → ERROR + 502, unknown → ERROR + 500. extractContractID: chi.URLParam + uuid.Validate. parseIntParam: generic int query param parser with min/max. writeJSON: method on Handler с structured logger context.
+- **handler_test.go**: 44 теста (+ 22 sub-tests): HandleList (15: success, empty list items=[] not null, custom page/size DM forwarding, status filter forwarding, invalid page not-number/zero/negative, invalid size too-large/zero, invalid status, search too long, search accepted, DM 5xx→502, DM circuit open→502, no auth→401), HandleGet (10: with version processing_status=READY, without version null fields, invalid/empty UUID, DM 404→DOCUMENT_NOT_FOUND, DM 5xx→502, DM 400→500 INTERNAL_ERROR, all 11 processing status mappings as sub-tests, source_file_key/artifact_status not in response, no auth), HandleArchive (7: success status=ARCHIVED, invalid UUID, DM 404, DM 409 DOCUMENT_ARCHIVED, DM 409 DOCUMENT_DELETED, DM 5xx, no auth), HandleDelete (7: success status=DELETED, invalid UUID, DM 404, DM 409 DOCUMENT_DELETED, DM 409 DOCUMENT_ARCHIVED, DM 5xx, no auth), mapping (5: all status values 11 sub-tests, unknown→UNKNOWN, summary fields, details with version, details nil version), handleDMError (2: transport error→502, unknown error→500), interface check (1), format (2: Content-Type, RFC3339 time)
+
+### Security
+- **source_file_key** (S3 internal key) не экспонируется в ContractVersion
+- **artifact_status** (DM internal) не экспонируется — маппится в user-facing processing_status
+- **UUID validation** через google/uuid для contract_id path parameter
+- **Auth check** defense-in-depth — auth middleware уже проверяет, но handler дополнительно проверяет AuthContext presence
+- **Tenant isolation** через DM client X-Organization-ID header (из AuthContext)
+
+### Ключевые решения
+- **Импорт dmclient types** — в отличие от upload handler (который редефинирует типы), contracts handler использует dmclient types напрямую, потому что нужны почти все поля из 4 response моделей. Consumer-side interface — ключевая точка decoupling.
+- **search parameter** — валидируется но не forwarded в DM (DM ListDocumentsParams не имеет Search field). Задокументировано как planned API contract stability.
+- **List: CurrentVersionNumber/ProcessingStatus всегда nil** — DM ListDocuments возвращает Document без version info. N+1 запросы к DM неприемлемы для performance. GET endpoint даёт полные детали.
+- **Response time как string** — DTOs используют string для контроля wire format (RFC3339), mapping functions конвертируют time.Time → string.
+- **handleDMError shared method** — 3-way error classification (circuit open / HTTP status / transport) вынесен в shared helper, используется всеми 4 handlers.
+- **writeJSON как метод Handler** — использует structured logger с context (correlation_id, document_id) вместо bare slog
+- **Нет новых зависимостей** — chi, uuid уже в go.mod
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-020 (critical): Version management — зависит от ORCH-TASK-014 ✓, ORCH-TASK-018 ✓, ORCH-TASK-019 ✓ (implicit)
+- ORCH-TASK-021 (critical): Results Aggregator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-011 ✓
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓
+
+## ORCH-TASK-020: Version management handlers (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (api-specification.yaml, high-architecture.md, integration-contracts.md, event-catalog.md)
+2. Изучить существующий код (contracts, upload, dmclient, commandpub, routes, server)
+3. Спроектировать Handler с 4 consumer-side интерфейсами (backend-reliability-engineer subagent)
+4. Реализовать response.go: processingStatusMap, processingStatusMessages, DTOs, mapVersionToResponse
+5. Реализовать handler.go: interfaces, Handler, HandleList/HandleGet/HandleStatus/HandleUpload, helpers
+6. Wiring: server.go (Deps.VersionHandler), routes.go (versionH parameter, nil-guard)
+7. Реализовать handler_test.go: 47 тестов (+ 14 sub-tests)
+8. Code review (code-reviewer subagent) → исправления: M-5 concurrent processing guard
+
+### Что реализовано
+- **response.go**: processingStatusMap (11 entries), processingStatusMessages (12 + Russian), DTOs, mapVersionToResponse
+- **handler.go**: DMClient (4 methods), ObjectStorage, CommandPublisher (commandpub types), KVStore interfaces. HandleList (pagination), HandleGet (version details), HandleStatus (polling, server time), HandleUpload (multipart→validate→DM check→S3→DM create→publish→tracking→202). M-5: concurrent processing guard
+- **server.go + routes.go**: VersionHandler wiring with nil-guard
+- **handler_test.go**: 47 тестов covering all endpoints, error paths, status mapping, upload edge cases
+
+### Ключевые решения
+- CommandPublisher uses commandpub types directly (no adapter needed)
+- Single VersionResponse DTO for list+get (matches OpenAPI)
+- updated_at = server time.Now() for status polling (DM has no updated_at)
+- Concurrent processing guard: PENDING_UPLOAD/PENDING_PROCESSING/PROCESSING_IN_PROGRESS → 409
+- Body parsing before DM call (DoS protection)
+- Fast-fail on ARCHIVED/DELETED before S3 upload
+- Nil CurrentVersion: create without parent_version_id
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-027 (critical): Event Consumer — зависит от ORCH-TASK-005 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+
+## ORCH-TASK-021: Results Aggregator (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (api-specification.yaml, high-architecture.md, integration-contracts.md, error-handling.md) — определить endpoints, artifact types, role-based access, status handling
+2. Изучить существующий код (dmclient models/client, contracts handler/response, versions handler/response, routes, server, auth context)
+3. Спроектировать Handler с DMClient consumer-side интерфейсом (backend-reliability-engineer subagent)
+4. Реализовать response.go: processingStatusMap, processingStatusMessages, dataAvailableStatuses, artifact type constants, 4 response DTOs
+5. Реализовать handler.go: DMClient interface, Handler, HandleResults/HandleRisks/HandleSummary/HandleRecommendations, fetchArtifactsParallel/Sequential/Single, isDMNotFound, handleDMError, writeJSON, extractContractID/VersionID
+6. Wiring: server.go (Deps.ResultsHandler), routes.go (resultsH parameter, nil-guard)
+7. Реализовать handler_test.go: 28 тестов (+ 30 sub-tests)
+8. Code review (code-reviewer subagent) → исправления: S-2 presigned URL removed from logs, S-4 context cancellation test, N-2 redirect test, N-3 status message test, N-4 mapping comment
+
+### Что реализовано
+- **response.go**: processingStatusMap (11 entries), processingStatusMessages (10 entries), dataAvailableStatuses (2: FULLY_READY, PARTIALLY_AVAILABLE), 7 artifact type constants, 4 artifact type lists, 4 response DTOs (AnalysisResultsResponse, RiskListResponse, SummaryResponse, RecommendationsResponse) с json.RawMessage для zero-copy pass-through, mapProcessingStatus, mapProcessingStatusMessage, isDataAvailable
+- **handler.go**: DMClient consumer-side interface (GetVersion, GetArtifact), compile-time check var _ DMClient = (*dmclient.Client)(nil), Handler struct (dm, log), NewHandler с component logger. HandleResults (LAWYER/ORG_ADMIN only, 7 artifacts parallel), HandleRisks (LAWYER/ORG_ADMIN only, 2 sequential), HandleSummary (all roles, 3 sequential), HandleRecommendations (LAWYER/ORG_ADMIN only, 1 sequential). fetchArtifactsParallel (sync.WaitGroup+Mutex, concurrent goroutines), fetchArtifactsSequential, fetchSingleArtifact (404→null, transport→null, redirect→null), isDMNotFound, handleDMError (circuit open→502, DMError→MapDMError, transport→502, unknown→500), writeJSON, extractContractID/VersionID (UUID validation)
+- **server.go**: Deps.ResultsHandler *results.Handler
+- **routes.go**: registerRoutes с resultsH parameter, nil-guard (4 routes)
+- **handler_test.go**: 28 тестов (+ 30 sub-tests): HandleResults (12: BUSINESS_USER 403, no auth 401, invalid contract_id/version_id 400, processing 200+nulls, fully_ready 7 artifacts, partially_available, artifact 404 null, transport error null, circuit open 502, DM 404, OrgAdmin allowed, redirect null, context cancelled), HandleRisks (3: 403, 2 artifacts, nulls), HandleSummary (3: all roles ×3, 3 artifacts, nulls), HandleRecommendations (3: 403, 1 artifact, failed nulls), mapProcessingStatus (12 subtests), mapProcessingStatusMessage (3), isDataAvailable (18), isDMNotFound (3), all non-data statuses (9 subtests)
+
+### Ключевые решения
+- **json.RawMessage pass-through** — артефакты не десериализуются, передаются как есть из DM (zero-copy)
+- **Parallel vs sequential** — goroutines только для /results (7 artifacts), sequential для остальных (1-3 artifacts) — избегает overhead
+- **sync.Mutex для map** — даже при distinct keys, concurrent map writes unsafe в Go
+- **Defense-in-depth RBAC** — handler проверяет BUSINESS_USER независимо от RBAC middleware
+- **Graceful degradation** — per-artifact ошибки не ломают весь запрос, только ставят null
+- **Status gate** — артефакты не запрашиваются для non-terminal статусов, возвращается 200 с mapped status
+- **Presigned URL not logged** — убрано из log для предотвращения утечки credentials (S-2 fix)
+- **Нет новых зависимостей** — chi, uuid, dmclient уже в go.mod
+
+## ORCH-TASK-027: Event Consumer (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (event-catalog.md, high-architecture.md, integration-contracts.md) — определить 12 event topics, JSON payloads, handling rules
+2. Изучить существующий код (broker client Subscribe API, BrokerConfig 14 topics, Logger RequestContext)
+3. Спроектировать Consumer с BrokerSubscriber/EventHandler/RetryTracker interfaces (backend-reliability-engineer subagent)
+4. Реализовать events.go: 12 event structs с JSON tags, EventType constants, Warning sub-type
+5. Реализовать consumer.go: Consumer struct, NewConsumer, Start(), makeHandler, enrichContext, buildRetryKey, rawPreview, inMemoryRetryTracker
+6. Реализовать consumer_test.go: 39 тестов
+7. Code review (code-reviewer subagent) → исправления: M1 maxRetries→maxAttempts, M2 topic в topicBinding, S1 UTF-8 rawPreview, S4 cfg removed from Start, N5 compile-time check
+
+### Что реализовано
+- **events.go**: EventType тип (12 констант: 5 DP, 2 LIC/RE, 5 DM), Warning struct (code, message, severity), 12 event structs: DPStatusChangedEvent (9 полей), DPProcessingCompletedEvent (7 + warnings[]), DPProcessingFailedEvent (10 полей), DPComparisonCompletedEvent (7 полей), DPComparisonFailedEvent (10 полей), LICStatusChangedEvent (10, IsRetryable *bool), REStatusChangedEvent (аналог LIC), DMVersionArtifactsReadyEvent (6 + artifact_types[]), DMVersionAnalysisReadyEvent (аналог), DMVersionReportsReadyEvent (аналог), DMVersionPartiallyAvailableEvent (7 полей), DMVersionCreatedEvent (9 полей)
+- **consumer.go**: BrokerSubscriber consumer-side interface (Subscribe), EventHandler interface (HandleEvent с any-typed event + EventType discriminator), RetryTracker interface (Increment, Remove), inMemoryRetryTracker (sync.Mutex map, compile-time check). topicBinding struct (topic + eventType + newEvent factory). Consumer struct (broker, handler, retries, log, bindings, startOnce). NewConsumer(broker, handler, log, cfg) с panic на nil deps. Start() idempotent (sync.Once): iterate bindings → validate topic → makeHandler → broker.Subscribe. makeHandler closure: json.Unmarshal → enrichContext → buildRetryKey → handler.HandleEvent → retry tracking (maxAttempts=3). enrichContext: 12-case type switch → RequestContext injection. buildRetryKey: job_id+status для status events, job_id для completion, doc_id+ver_id для DM. rawPreview: UTF-8-safe truncation (200 bytes)
+- **consumer_test.go**: 39 тестов: Start (4: 12 topics, idempotent, broker error, empty topic), deserialization+routing (12: all event types), invalid JSON (2: garbage+empty body), retry (2: NACK→ACK cycle, success resets), context enrichment (2: DP all fields, DM no job_id), rawPreview (2: short, truncated), buildRetryKey (3: status, completion, DM), constructor panics (3), interface checks (4), optional fields (4: omitted, *bool nil, unknown fields, tracker)
+
+### Security fixes (из code review)
+- **M1**: maxRetries → maxAttempts — устранена семантическая неоднозначность (retries vs attempts)
+- **M2**: topic хранится в topicBinding — устранена dual-maintenance hazard (topicForBinding удалён)
+- **S1**: rawPreview UTF-8-safe — utf8.Valid проверка перед обрезкой, предотвращает invalid UTF-8 в логах
+- **S4**: cfg параметр убран из Start() — предотвращает несогласованность конфигов
+- **N5**: var _ RetryTracker = (*inMemoryRetryTracker)(nil) — compile-time check
+
+### Ключевые решения
+- **EventHandler.HandleEvent(ctx, eventType, event any)** — single method с type discriminator вместо 12 отдельных методов
+- **Poison pill protection** — invalid JSON → WARN + ACK, не блокирует очередь
+- **In-memory retry tracking** — допустимо для single-instance service; retry counter теряется при restart (bounded risk)
+- **Context enrichment** — event envelope fields → RequestContext → auto-extracted в каждом log entry
+- **buildRetryKey includes status** — для status events (dp/lic/re) ключ включает status, предотвращает collision между разными статусами одного job
+- **Нет новых зависимостей** — только stdlib (encoding/json, unicode/utf8, sync, context, fmt, strings)
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-028 (critical): Processing Status Tracker — зависит от ORCH-TASK-027 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-028 (critical): Processing Status Tracker — зависит от ORCH-TASK-027 ✓
+- ORCH-TASK-029 (critical): SSE Connection Manager — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓
+
+## ORCH-TASK-028: Processing Status Tracker (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md 5.2, event-catalog.md, sequence-diagrams.md) — определить маппинг статусов, monotonic ordering, SSE формат
+2. Использовать consumer events.go, consumer.go (EventHandler interface), kvstore.Client как интеграционные точки
+3. Спроектировать Tracker с KVStore consumer-side interface (backend-reliability-engineer subagent)
+4. Реализовать status.go: UserStatus (11 констант), statusOrder, terminalStatuses, statusMessages, SSEEvent, statusRecord, KVStore interface, ordering functions
+5. Реализовать tracker.go: Tracker struct, HandleEvent (12-way dispatch), tryTransition (Redis GET-check-SET), broadcast (Redis Pub/Sub), 12 per-event handlers
+6. Реализовать tracker_test.go: 63 теста
+7. Code review (code-reviewer subagent) → исправления: S-1.1 orgID guard, S-1.2 DMVersionCreated orgID, S-2.1 TOCTOU documented, S-6.1 missing orgID tests, N-3.2 corrupt log, N-5.3 YAGNI jobID
+
+### Что реализовано
+- **status.go**: UserStatus type (11 констант), statusOrder map (6 happy-path: UPLOADED→QUEUED→PROCESSING→ANALYZING→GENERATING_REPORTS→READY), terminalStatuses set (6: READY, FAILED, ANALYSIS_FAILED, REPORTS_FAILED, PARTIALLY_FAILED, REJECTED), statusMessages map (11 записей с русскими сообщениями NFR-5.2), SSEEvent struct (event_type, document_id, version_id, job_id, status, message, timestamp, is_retryable, error_code, error_message, base_version_id, target_version_id), statusRecord struct (status, updated_at), KVStore consumer-side interface (Get/Set/Publish), statusKey/sseChannel helpers, isTerminal/isForwardTransition/canTransition ordering logic, derefBool helper
+- **tracker.go**: Tracker struct (kv KVStore, log *Logger, now func()), NewTracker с component logger, HandleEvent (12-way dispatch: 5 DP + 2 LIC/RE + 5 DM), tryTransition (Redis GET-check-SET, orgID/docID/verID validation, ErrKeyNotFound sentinel, corrupt recovery, 24h TTL, TOCTOU documented), broadcast (Redis Pub/Sub sse:broadcast:{org}, error swallowed), handleDPStatusChanged (IN_PROGRESS→PROCESSING, REJECTED→REJECTED, TIMED_OUT→FAILED), handleDPProcessingCompleted (informational), handleDPProcessingFailed (→FAILED), handleDPComparisonCompleted/Failed (→comparison_update SSE), handleLICStatusChanged (IN_PROGRESS→ANALYZING, FAILED→ANALYSIS_FAILED immediate), handleREStatusChanged (IN_PROGRESS→GENERATING_REPORTS, FAILED→REPORTS_FAILED), handleDMVersionArtifactsReady (→ANALYZING), handleDMVersionAnalysisReady (→GENERATING_REPORTS), handleDMVersionReportsReady (→READY), handleDMVersionPartiallyAvailable (→PARTIALLY_FAILED), handleDMVersionCreated (RE_CHECK→version_created SSE), handleDMStatusEvent shared helper, buildStatusUpdateEvent
+- **tracker_test.go**: 63 теста: status ordering (9: isTerminal 11+5 values, isForwardTransition happy/backward/same/failure, canTransition forward/backward/terminal/failure-override), tryTransition (10: first write, forward, backward skip, terminal skip, failure override, Redis get/set error, key pattern, TTL, corrupt), broadcast (3: success, publish error, event JSON), dispatch (2: unknown type, wrong concrete type), DP handlers (9: IN_PROGRESS, REJECTED, TIMED_OUT, COMPLETED ignored, missing orgID, processing-completed no transition, processing-failed transitions, processing-failed error fields, processing-failed missing orgID), LIC handlers (5: IN_PROGRESS, COMPLETED ignored, FAILED, IsRetryable nil, unknown status, missing orgID), RE handlers (3+1: IN_PROGRESS, FAILED, COMPLETED ignored, missing orgID), DM handlers (8: artifacts-ready, analysis-ready, reports-ready, partially-available, version-created upload, version-created RE_CHECK, missing orgID ×3), comparison (3+1: completed, failed, completed missing orgID, failed missing orgID), scenarios (4: full happy path, out-of-order, failure mid-pipeline, duplicate), Redis NACK (1), warnings (1), timestamp (1), messages (1), interface (1), derefBool (1), key/channel (2)
+
+### Ключевые решения
+- **KVStore consumer-side interface** — 3 метода (Get/Set/Publish), не импортирует infra/kvstore
+- **Monotonic ordering** — statusOrder map для happy-path, terminalStatuses для failure. canTransition: forward-only + failure-override
+- **TOCTOU accepted** — GET-check-SET не атомарный, но events для одной версии обрабатываются последовательно одним consumer. Документировано для будущего масштабирования
+- **Error contract** — Redis Get/Set fail → return error → NACK. Publish fail → log ERROR, return nil → ACK (status persisted, SSE best-effort)
+- **Comparison events** — separate SSE event_type "comparison_update" (не status_update), no Redis status transition
+- **DM VersionCreated** — RE_CHECK → "version_created" SSE, UPLOAD → no broadcast
+- **DP ProcessingCompleted** — informational only, no status transition (await DM artifacts-ready)
+- **Immediate failure detection** — LIC/RE FAILED → immediate SSE push без ожидания DM Watchdog (ASSUMPTION-ORCH-13)
+- **Corrupt record recovery** — invalid JSON in Redis → overwrite (WARN log)
+- **now func() seam** — deterministic timestamps in tests
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter middleware — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-025 (medium): Feedback Service — зависит от ORCH-TASK-014 ✓, ORCH-TASK-004 ✓
+
+## ORCH-TASK-029: SSE Connection Manager (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, sse-protocol.md, security.md, configuration.md) — определить SSE endpoint, auth, channels
+2. Использовать существующий SSE stub (routes.go), auth middleware (ValidateToken), kvstore (Subscribe/Publish) как интеграционные точки
+3. Спроектировать Handler с TokenValidator/KVStore/Subscription interfaces (backend-reliability-engineer subagent)
+4. Реализовать handler.go: Handler struct, Handle() http.HandlerFunc, eventLoop, SSE wire format helpers, connection lifecycle
+5. Реализовать adapter.go: KVStoreAdapter bridging *kvstore.Client → sse.KVStore interface
+6. Реализовать handler_test.go: 35 тестов
+7. Wiring: SSEHandler в Deps struct (server.go), registerRoutes с nil-guard fallback (routes.go)
+8. Code review (code-reviewer subagent) → исправления: M-01 WriteTimeout disable, M-02 multiline data, M-03 event_type sanitization
+
+### Что реализовано
+- **handler.go**: Handler struct (validator TokenValidator, kv KVStore, cfg SSEConfig, log *Logger, uuidGen, now seams), NewHandler с component logger, Handle() → http.HandlerFunc: JWT query param extraction → ValidateToken → Flusher check → ResponseController.SetWriteDeadline(time.Time{}) → SSE headers → connID → registerConnection → Redis Subscribe с buffered events channel (cap 64) → writeComment("connected") → eventLoop. eventLoop: select (events→extractEventType+writeSSEEvent, heartbeat→writeHeartbeat+refreshConnection, maxAge→connection_expired, ctx.Done()). writeSSEEvent с multiline data support (strings.Split). sanitizeEventType (strip \n/\r). 520 строк.
+- **adapter.go**: KVStoreAdapter wrapping *kvstore.Client → sse.KVStore interface (Subscribe returns Subscription interface). 45 строк.
+- **handler_test.go**: 35 тестов + 14 sub-tests: auth (3), flusher (1), headers (1), connected comment (1), connection register/unregister (2), event delivery (4), heartbeat (2), max age (1), disconnect (1), write error (1), backpressure (1), subscribe failure (1), Redis failures (2), channel (1), subscription close (1), extractEventType (10), sanitizeEventType (6), multiline data (1), isExpiredError (4), key/channel (2), constructor (1), interface checks (3).
+
+### Ключевые решения
+- **Consumer-side Subscription interface** — only Close() error, satisfied by *kvstore.Subscription
+- **KVStoreAdapter** — thin adapter для bridging concrete → interface return type
+- **http.ResponseController.SetWriteDeadline(time.Time{})** — disable WriteTimeout для SSE (M-01 fix)
+- **Multiline data support** — strings.Split на \n, data: prefix per line (M-02 fix)
+- **sanitizeEventType** — strip \n/\r для предотвращения SSE injection (M-03 fix)
+- **Non-blocking event channel** — cap 64 + select default drop (slow client safe)
+- **Detached context в unregisterConnection** — 2s background для cleanup
+- **connection_expired event** — reconnect hint перед закрытием
+- **sseStub preserved** — nil-guard fallback в routes.go
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-030 (critical): SSE Broadcaster — зависит от ORCH-TASK-029 ✓, ORCH-TASK-028 ✓
+- ORCH-TASK-034 (high): Graceful shutdown — зависит от ORCH-TASK-008 ✓, ORCH-TASK-029 ✓, ORCH-TASK-027 ✓
+- ORCH-TASK-022 (high): Re-check Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+
+## ORCH-TASK-030: SSE Broadcaster (DONE, 2026-04-09)
+
+### План реализации
+1. Прочитать architecture docs — определить SSE broadcasting mechanism, Redis Pub/Sub channels
+2. Прочитать существующий код: SSE handler (handler.go, adapter.go), status tracker (tracker.go, status.go)
+3. Спроектировать SSE Broadcaster (backend-reliability-engineer subagent)
+4. Реализовать ssebroadcast/broadcaster.go: Event (moved from SSEEvent), Broadcaster interface, Publisher interface, Channel(), NewBroadcaster
+5. Рефакторинг statustracker: KVStore без Publish, broadcaster dependency, ssebroadcast.Event
+6. Рефакторинг SSE handler: ssebroadcast.Channel() вместо дублированного sseChannelPrefix
+7. Реализовать broadcaster_test.go: 11 тестов
+8. Code review (code-reviewer subagent) → исправления: M-1 stale doc comment, N-1 empty orgID guard
+
+### Что реализовано
+- **ssebroadcast/broadcaster.go**: Event struct (canonical SSE event payload), Broadcaster interface, Publisher consumer-side interface, Channel(orgID) exported function, NewBroadcaster с component logger, empty orgID guard
+- **statustracker/status.go**: SSEEvent removed (→ ssebroadcast.Event), Publish removed from KVStore (only Get/Set), sseChannelPrefix/sseChannel() removed
+- **statustracker/tracker.go**: Tracker.broadcaster field, NewTracker(kv, bc, log), SSEEvent → ssebroadcast.Event, broadcast() → _ = t.broadcaster.Broadcast()
+- **statustracker/tracker_test.go**: mockBroadcaster replaces mockKVStore.Publish, parseBroadcastedEvent, all 63 tests updated
+- **sse/handler.go**: ssebroadcast.Channel(orgID), sseChannelPrefix/sseChannel() removed, doc comment updated
+- **sse/handler_test.go**: ssebroadcast.Channel() in TestSSEChannel
+- **broadcaster_test.go**: 11 тестов: interface compliance (2), success, publish error, all event fields, omitempty, per-org channel, context cancelled, empty orgID guard, Channel() function (3 subtests), concurrent safety
+
+### Ключевые решения
+- Event живёт в egress/ssebroadcast (аналог commandpub) — canonical type для SSE events
+- Channel(orgID) — single source of truth, устраняет дублирование между statustracker и SSE handler
+- Broadcaster возвращает ошибки (не глотает) — callers decide policy
+- Status tracker: _ = t.broadcaster.Broadcast() — error intentionally ignored (status persisted, SSE best-effort)
+- KVStore interface сужен до Get/Set — Publish больше не нужен
+- Нет новых зависимостей
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-034 (high): Graceful shutdown — зависит от ORCH-TASK-008 ✓, ORCH-TASK-029 ✓, ORCH-TASK-027 ✓
+- ORCH-TASK-023 (high): Comparison Coordinator — зависит от ORCH-TASK-014 ✓, ORCH-TASK-017 ✓
+- ORCH-TASK-024 (high): Export Service — зависит от ORCH-TASK-014 ✓
+- ORCH-TASK-012 (high): CORS middleware — зависит от ORCH-TASK-008 ✓
+- ORCH-TASK-013 (high): Rate limiter — зависит от ORCH-TASK-004 ✓, ORCH-TASK-010 ✓
+- ORCH-TASK-015 (high): UOM Client — зависит от ORCH-TASK-009 ✓
+- ORCH-TASK-032 (high): Prometheus metrics — зависит от ORCH-TASK-003 ✓
+
+## ORCH-TASK-022: Re-check Coordinator (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить существующий код: versions handler (HandleUpload — ближайший паттерн), DM client, command publisher, routes, error handling
+2. Спроектировать HandleRecheck: решение — добавить метод в versions.Handler (общие зависимости: DMClient, CommandPublisher, KVStore)
+3. Реализовать HandleRecheck() в handler.go
+4. Добавить isStillProcessing() — whitelist подход для terminal statuses
+5. Обновить routes.go — подключить recheck в versionH nil-guard block
+6. Написать тесты (16 функций + 23 subtests)
+7. Code review (code-reviewer subagent) → исправления: M-1 empty SourceFileKey guard, N-1 broker failure comment
+
+### Что реализовано
+- **handler.go**: HandleRecheck() метод — POST /api/v1/contracts/{id}/versions/{vid}/recheck. Flow: auth → extract IDs → generate correlationID/jobID → enrich context → DM GetVersion (source file metadata + artifact_status) → isStillProcessing guard → empty SourceFileKey guard → DM CreateVersion (origin_type=RE_CHECK, reuse source file, parent_version_id=vid) → PublishProcessDocument → Redis tracking → 202 Accepted
+- **handler.go**: isStillProcessing(artifactStatus) — whitelist: FULLY_READY, PARTIALLY_AVAILABLE, PROCESSING_FAILED, REJECTED → false; all others → true (conservative, blocks 7 intermediate statuses)
+- **routes.go**: recheck route moved inside versionH nil-guard block, fallback to notImplemented when versionH is nil
+- **handler_test.go**: 16 тестов (+ 23 sub-tests): success, no auth (401), invalid contract_id/version_id (400), version not found (404), 7 processing statuses blocked (409), 4 terminal statuses allowed (202), CreateVersion request fields + command fields, DM 5xx (502), DM circuit open (502), CreateVersion failure (502), broker failure + no rollback (502), Redis non-critical (202), Redis tracking (key/TTL), empty SourceFileKey (500), no S3 operations, isStillProcessing 12 cases
+
+### Ключевые решения
+- **В versions.Handler, не отдельный пакет** — те же зависимости (DMClient, CommandPublisher, KVStore), тот же паттерн error handling и response format
+- **Whitelist terminal statuses** — безопаснее чем blacklist: неизвестные статусы трактуются как "still processing"
+- **Нет S3 upload** — reuse parent version's source_file_key/name/size/checksum
+- **Нет GetDocument** — DM CreateVersion сам отклонит archived/deleted документы; избегаем лишний network round-trip
+- **Empty SourceFileKey guard** — защита от corrupt parent version (edge case: upload failed mid-way)
+- **Broker failure = no rollback** — version уже создана в DM; CRITICAL лог для ops
+- **SourceFileMIMEType = application/pdf** — v1 поддерживает только PDF
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-034 (high): Graceful shutdown
+- ORCH-TASK-023 (high): Comparison Coordinator
+- ORCH-TASK-024 (high): Export Service
+- ORCH-TASK-012 (high): CORS middleware
+- ORCH-TASK-013 (high): Rate limiter
+- ORCH-TASK-015 (high): UOM Client
+- ORCH-TASK-032 (high): Prometheus metrics
+
+## ORCH-TASK-023: Comparison Coordinator (DONE, 2026-04-10)
+
+### План реализации
+1. Прочитать architecture docs (high-architecture.md, event-catalog.md, api-specification.yaml) — определить compare/diff endpoints, команду CompareDocumentVersionsRequested, формат diff
+2. Использовать versions/handler.go (HandleRecheck) как образец паттерна (isStillProcessing, handleDMError, UUID generation)
+3. Спроектировать Handler с DMClient (GetVersion, GetDiff) и CommandPublisher (PublishCompareVersions) интерфейсами (golang-pro subagent)
+4. Реализовать handler.go: Handler struct, NewHandler, HandleCompare (6 шагов), HandleGetDiff (4 шага), isStillProcessing, handleDMError, writeJSON, extractContractID, extractURLParam
+5. Реализовать handler_test.go: 28 тестов с mockDM и mockCmdPub
+6. Wiring: server.go Deps.ComparisonHandler, routes.go comparisonH parameter с nil-guard
+7. Code review (code-reviewer subagent) — реализация соответствует паттернам проекта
+
+### Что реализовано
+- **handler.go**: Handler struct (dm DMClient, cmdPub CommandPublisher, log, uuidGen), NewHandler с component logger
+  - **HandleCompare()**: POST /contracts/{id}/compare — auth extraction → contract_id UUID → parse JSON body → validate (base/target UUID, non-empty, not equal) → generate correlationID/jobID → DM GetVersion(base) → isStillProcessing guard → DM GetVersion(target) → same guard → PublishCompareVersions → 202 Accepted {contract_id, job_id, base_version_id, target_version_id, status:COMPARISON_QUEUED, message}
+  - **HandleGetDiff()**: GET /contracts/{id}/versions/{base_vid}/diff/{target_vid} — auth extraction → 3 UUID params → DM GetDiff → 200 pass-through VersionDiff
+  - **isStillProcessing()**: whitelist FULLY_READY/PARTIALLY_AVAILABLE/PROCESSING_FAILED/REJECTED
+  - **handleDMError()**: ErrCircuitOpen→502, DMError.StatusCode→MapDMError, transport→502, unknown→500
+  - **CompareRequest.validate()**: non-empty, valid UUID, base != target
+  - **CompareAcceptedResponse**: contract_id, job_id, base_version_id, target_version_id, status, message
+- **handler_test.go**: 28 тестов (+ 23 sub-tests): HandleCompare (17), HandleGetDiff (10), isStillProcessing (12), validate (6), handleDMError (2), interface (1)
+- **server.go**: Deps.ComparisonHandler *comparison.Handler
+- **routes.go**: comparisonH parameter, nil-guard block с HandleCompare/HandleGetDiff
+
+### Ключевые решения
+- **Отдельный пакет** — чистые зависимости: DM (GetVersion+GetDiff) и CommandPublisher (CompareVersions)
+- **Sequential version validation** — deterministic errors, consistent with recheck pattern
+- **No explicit contract ownership check** — DM API path validates implicitly
+- **Pass-through VersionDiff** — no mapping DTO, DM response = API contract
+- **isStillProcessing whitelist** — consistent with versions.isStillProcessing
+- **Broker failure = 502 BROKER_UNAVAILABLE** — per error catalog
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-034 (high): Graceful shutdown
+- ORCH-TASK-024 (high): Export Service
+- ORCH-TASK-031 (high): Auth proxy handlers (unblocked by ORCH-TASK-015)
+- ORCH-TASK-034 (high): Graceful shutdown
+- ORCH-TASK-012 (high): CORS middleware
+- ORCH-TASK-013 (high): Rate limiter
+- ORCH-TASK-032 (high): Prometheus metrics
+- ORCH-TASK-025 (medium): Feedback Service
+- ORCH-TASK-016 (medium): OPM Client
+
+## ORCH-TASK-015: UOM Client (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить паттерн dmclient (retry, CB, errors, headers)
+2. Изучить UOM architecture (integration-contracts.md, error-handling.md, security.md)
+3. Спроектировать: пакет uomclient, 4 метода, retry 2 попытки, fixed 200ms backoff, NO CB
+4. Реализовать models.go (6 типов: LoginRequest/Response, RefreshRequest/Response, LogoutRequest, UserProfile)
+5. Реализовать errors.go (UOMError + mapHTTPError + mapTransportError + isRetryable)
+6. Реализовать client.go (Login, Refresh, Logout, GetMe с retry)
+7. Добавить UOM error codes в error catalog (4 новых кода с русскими сообщениями)
+8. Создать uom_errors.go с MapUOMError (5xx→502, 401→credential, 4xx→validation)
+9. Написать тесты: 36 client + 17 error mapping = 53 теста
+10. Code review → fix S-5 (unused sentinel), S-9/S-10 (missing edge case tests)
+
+### Ключевые решения
+- NO circuit breaker: auth queries редки, fast fail приоритетен
+- Fixed backoff 200ms: для auth UX exponential не нужен
+- 2 total attempts: fast fail, user experience
+- X-User-ID header вместо JWT forwarding: service-to-service pattern
+- UOM optional: пустой BaseURL отключает auth proxy, JWT продолжает работать локально
+- 1MB response body limit (auth responses малы, vs 10MB у dmclient)
+
+### Файлы
+- internal/egress/uomclient/client.go — основной клиент
+- internal/egress/uomclient/errors.go — типы ошибок
+- internal/egress/uomclient/models.go — request/response DTO
+- internal/egress/uomclient/client_test.go — 36 тестов
+- internal/domain/model/error_response.go — 4 новых error code + catalog entries
+- internal/domain/model/uom_errors.go — MapUOMError
+- internal/domain/model/uom_errors_test.go — 17 тестов
+- internal/domain/model/error_response_test.go — обновлены allErrorCodes + HTTPStatusCategories
+
+### Следующие приоритетные задачи (updated)
+ORCH-TASK-031 (Auth proxy handlers) теперь разблокирована → ORCH-TASK-036 (App wiring, critical)
+
+## ORCH-TASK-031: Auth proxy handlers (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить UOM client API (models, interface, error types) и auth architecture
+2. Изучить паттерн contracts handler (consumer-side interface, DI, handleDMError, writeJSON)
+3. Спроектировать: пакет authproxy, 4 метода, UOMClient interface (backend-reliability-engineer subagent)
+4. Реализовать handler.go: HandleLogin, HandleRefresh, HandleLogout, HandleGetMe
+5. Wiring: server.go (Deps.AuthHandler), routes.go (registerRoutes + authH nil-guard)
+6. Написать тесты: 41 тестов + 3 subtests
+7. Code review (code-reviewer subagent) → M-1 doc comment, M-2/N-1/N-2 tests added
+
+### Что реализовано
+- **handler.go**: Handler struct (uom UOMClient, log *logger.Logger), NewHandler с component logger
+  - **HandleLogin()**: POST /auth/login — ensureCorrelationID → decodeBody (MaxBytesReader 4KB, DisallowUnknownFields) → validate email (TrimSpace, non-empty) + password (TrimSpace, non-empty) → uom.Login → 200 {access_token, refresh_token, token_type, expires_in, user}
+  - **HandleRefresh()**: POST /auth/refresh — ensureCorrelationID → decodeBody → validate refresh_token (TrimSpace, non-empty) → uom.Refresh → 200 {access_token, refresh_token, token_type, expires_in}
+  - **HandleLogout()**: POST /auth/logout — ensureCorrelationID → decodeBody → validate refresh_token → uom.Logout → 204 No Content
+  - **HandleGetMe()**: GET /users/me — AuthContext required (401 AUTH_TOKEN_MISSING) → uom.GetMe → 200 UserProfile
+  - **ensureCorrelationID()**: generates UUID v4 for public endpoints that bypass auth middleware
+  - **decodeBody()**: MaxBytesReader 4KB, DisallowUnknownFields, JSON decode
+  - **handleUOMError()**: context.Canceled/DeadlineExceeded→502, UOMError.StatusCode>0→MapUOMError, transport→502, unknown→500
+- **server.go**: Deps.AuthHandler *authproxy.Handler
+- **routes.go**: authH parameter, nil-guard for public (login/refresh/logout) and protected (/users/me)
+
+### Тесты (41 тестов + 3 subtests)
+HandleLogin: success, empty email, whitespace email, empty password, invalid JSON, invalid credentials, UOM down 503, transport error, context canceled, deadline exceeded, unknown error, email trimmed, correlation_id generated, body too large, unknown fields, UOM 400, empty JSON object, deadline wrapped in UOMError
+HandleRefresh: success, empty token, whitespace token, token expired, token revoked, UOM down, invalid JSON, context canceled
+HandleLogout: success 204, empty token, UOM down, invalid JSON, context canceled
+HandleGetMe: success, no auth 401, UOM down, UOM 404, all 3 roles (sub-tests)
+Helpers: UOM 500, ensureCorrelationID (preserves/generates), decodeBody empty, interface compliance, constructor
+
+### Ключевые решения
+- Отдельный пакет authproxy (не в auth middleware) — separation of concerns
+- ensureCorrelationID для public endpoints (auth middleware не вызывается)
+- HandleGetMe intentionally skips ensureCorrelationID (auth middleware sets it)
+- MaxBytesReader 4KB — auth payloads малы, защита от abuse
+- DisallowUnknownFields — предотвращение field injection
+- Password/tokens NEVER logged (sensitive data policy)
+- 204 No Content для logout (no JSON body)
+- Нет новых зависимостей
+
+### Следующие задачи готовые к реализации
+- **ORCH-TASK-036 (critical): App wiring** — ВСЕ зависимости теперь выполнены (018✓ 019✓ 020✓ 021✓ 030✓ 031✓)
+- ORCH-TASK-034 (high): Graceful shutdown
+- ORCH-TASK-024 (high): Export Service
+- ORCH-TASK-012 (high): CORS middleware
+- ORCH-TASK-013 (high): Rate limiter
+- ORCH-TASK-032 (high): Prometheus metrics
+- ORCH-TASK-025 (medium): Feedback Service
+- ORCH-TASK-016 (medium): OPM Client
+
+## ORCH-TASK-036: App wiring (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить все компоненты, их конструкторы и зависимости (20 NewXxx функций)
+2. Спроектировать App struct и DI порядок (backend-reliability-engineer subagent)
+3. Реализовать app.go: NewApp (14-step DI wiring), Start, Shutdown
+4. Создать adapters.go: 3 thin адаптера для type mismatches
+5. Обновить main.go: config → NewApp → signal → Start/Shutdown
+6. Реализовать тесты: adapters_test.go + app_test.go (10 тестов)
+7. Code review (code-reviewer subagent) → исправления: M-1..M-4, N-8, N-9, N-13
+
+### Что реализовано
+- **app.go**: App struct (log, health, kvClient, brokerClient, server, consumer), NewApp с 14-step DI wiring в dependency order, partial init cleanup (Redis/broker closed on failure), Start (consumer → server), Shutdown (SetNotReady → HTTP → broker → Redis, errors.Join)
+- **adapters.go**: brokerSubscriberAdapter (named vs unnamed func type), uploadDMAdapter (upload-local DTOs → dmclient types), uploadCmdPubAdapter (upload vs commandpub ProcessDocumentCommand), compile-time interface checks
+- **main.go**: config.Load → NewApp → signal listener (SIGTERM/SIGINT) → Start, double-signal forced exit, Shutdown error logged
+- **adapters_test.go**: 8 тестов с httptest servers для DM adapter и mock broker для cmdpub adapter
+- **app_test.go**: 2 теста — ordered teardown (broker→redis) и SetNotReady before HTTP shutdown
+
+### DI порядок в NewApp (14 шагов)
+1. Logger (no deps)
+2. Redis kvstore.NewClient (connect+ping)
+3. RabbitMQ broker.NewClient (connect+ping)
+4. S3 objectstorage.NewClient (lazy)
+5. Health handler
+6. JWT LoadPublicKey + auth.NewMiddleware
+7. RBAC middleware
+8. DM client + UOM client + Command publisher
+9. SSE broadcaster (BEFORE tracker — dependency bug caught by BE subagent)
+10. Status tracker
+11. Event consumer (broker adapter)
+12. Upload/Contract/Version/Results/Comparison/AuthProxy handlers
+13. SSE handler
+14. HTTP Server (api.Deps)
+
+### Adapters (необходимость выявлена при первом go build)
+- **brokerSubscriberAdapter**: Go не унифицирует named type `broker.MessageHandler` и anonymous `func(ctx, []byte) error` в interface satisfaction
+- **uploadDMAdapter**: upload пакет определяет собственные DTO (CreateDocumentRequest, Document, etc.) для decoupling от egress layer
+- **uploadCmdPubAdapter**: upload.ProcessDocumentCommand vs commandpub.ProcessDocumentCommand
+
+### Code review исправления
+- M-1: Shutdown aggregates errors via errors.Join (не молча игнорирует)
+- M-2: main.go не вызывает log.Fatalf на ErrServerClosed (graceful shutdown)
+- M-3: main.go логирует Shutdown error
+- M-4: Двойной SIGTERM/SIGINT → forced exit (os.Exit(1))
+- N-8: Compile-time interface checks перенесены в adapters.go
+- N-9: newTestDMClient helper для тестов
+- N-13: net.Listen errors не игнорируются
+
+### Следующие задачи готовые к реализации
+- **ORCH-TASK-037 (high): Integration tests** — зависит от ORCH-TASK-036 ✓
+- ORCH-TASK-034 (high): Graceful shutdown — deps: 008✓ 029✓ 027✓
+- ORCH-TASK-024 (high): Export Service — dep: 014✓
+- ORCH-TASK-013 (high): Rate limiter — deps: 004✓ 010✓
+- ORCH-TASK-032 (high): Prometheus metrics — dep: 003✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003✓
+
+## ORCH-TASK-012: CORS middleware и Security headers (DONE, 2026-04-10)
+
+### План реализации
+1. Прочитать architecture/security.md §5 (CORS) и §9 (Security headers) — требования
+2. Изучить существующий middleware.go (stub corsMiddleware), server.go (Deps), auth middleware (X-Correlation-Id pattern)
+3. Спроектировать CORSMiddleware и SecurityHeadersMiddleware (backend-reliability-engineer subagent)
+4. Реализовать middleware.go: CORSMiddleware (factory), SecurityHeadersMiddleware, isValidCorrelationID
+5. Обновить server.go: Deps.CORSConfig, wiring Recovery→CORS→SecurityHeaders
+6. Обновить app.go: передать cfg.CORS в api.Deps
+7. Реализовать middleware_test.go: 35 тестов + 23 sub-tests
+8. Code review (code-reviewer subagent) → исправления: S-1 CID validation, M-1 casing, N-1 PATCH, N-3 test name
+
+### Что реализовано
+- **middleware.go**: CORSMiddleware (factory func, config.CORSConfig + Logger), SecurityHeadersMiddleware (global), isValidCorrelationID (max 128 bytes, printable ASCII 0x20-0x7E)
+- **server.go**: Deps.CORSConfig added, wiring Recovery→CORS→SecurityHeaders
+- **app.go**: cfg.CORS passed to api.Deps.CORSConfig
+- **middleware_test.go**: 35 тестов + 23 sub-tests
+
+### Ключевые решения
+- CORS: O(1) origin lookup (map), wildcard '*' silently ignored (incompatible with credentials), preflight 204 No Content
+- CORS: disallowed origin passes through without CORS headers (browser enforces), Vary: Origin always set
+- SecurityHeaders: generates UUID v4 if no client X-Correlation-Id, validates client CID (length + printable ASCII)
+- SecurityHeaders: sets both X-Request-ID and X-Correlation-Id on response (redundant for coverage)
+- SecurityHeaders: propagates CID on request header for downstream middleware (auth middleware reads it)
+- SecurityHeaders: injects RequestContext into ctx (correlation_id available for public endpoints too)
+- Cache-Control: no-store globally, handlers can override (health, SSE)
+- PATCH added to Allow-Methods (future-proofing)
+- No new dependencies (uuid, config, logger already in go.mod)
+
+### Code review fixes
+- S-1: isValidCorrelationID added — max 128 bytes, printable ASCII only, invalid → generate UUID
+- M-1: X-Correlation-Id casing standardized across Allow-Headers, Expose-Headers, and constant
+- N-1: PATCH added to Allow-Methods
+- N-3: Test name TestCORS_Preflight_SecurityHeaders_NotInChain → TestCORS_Preflight_ShortCircuitsBeforeDownstream
+
+### Следующие задачи готовые к реализации
+- **ORCH-TASK-037 (high): Integration tests** — dep: 036 ✓
+- ORCH-TASK-034 (high): Graceful shutdown — deps: 008✓ 029✓ 027✓
+- ORCH-TASK-024 (high): Export Service — dep: 014✓
+- ORCH-TASK-013 (high): Rate limiter — deps: 004✓ 010✓
+- ORCH-TASK-032 (high): Prometheus metrics — dep: 003✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003✓
+
+## ORCH-TASK-013: Rate limiter middleware (DONE, 2026-04-10)
+
+### План реализации
+1. Прочитать architecture docs (security.md §4, configuration.md §7) — rate limiting requirements
+2. Изучить код (kvstore, auth/context, middleware.go stub, server.go, app.go)
+3. Спроектировать Middleware + RedisStore + Lua script (backend-reliability-engineer subagent)
+4. Реализовать store.go: RateLimiterStore interface, RedisStore с Lua INCR+PEXPIRE
+5. Реализовать ratelimit.go: Middleware, NewMiddleware, Handler(), operationClass, rateLimitKey
+6. Реализовать тесты: ratelimit_test.go (27 тестов + 10 sub-tests), store_test.go (7 тестов)
+7. Wiring: server.go, routes.go, middleware.go, app.go
+8. Code review (code-reviewer subagent) → M-1 RPS>0 validation, M-2 edge case tests
+
+### Что реализовано
+- **store.go**: RateLimiterStore interface, Lua script (INCR+PEXPIRE atomic), evalFunc, RedisStore, NewRedisStore(redis.Cmdable)
+- **ratelimit.go**: Middleware struct, NewMiddleware (nil store + RPS>0 validation), Handler() (disabled→pass-through, enabled→auth→classify→check→allow/reject/degrade)
+- **kvstore/client.go**: RawRedis() any — expose underlying Redis client for Lua scripting
+- **server.go/routes.go/middleware.go**: Deps.RateLimitMiddleware, injected in routes, stub removed
+- **app.go**: step 7b wiring (RawRedis→redis.Cmdable→RedisStore→Middleware→Handler)
+
+### Ключевые решения
+- Lua INCR+PEXPIRE atomic, PEXPIRE only on current==1
+- evalFunc for test isolation, Redis failure → allow (degradation)
+- Disabled → zero-overhead (no closure per request)
+- RPS>0 defense-in-depth beyond config.Validate()
+- Нет новых зависимостей
+
+### Следующие приоритетные задачи
+- ORCH-TASK-037 (high): Integration tests — dep: 036 ✓
+- ORCH-TASK-024 (high): Export Service — dep: 014✓
+- ORCH-TASK-032 (high): Prometheus metrics — dep: 003✓
+- ORCH-TASK-035 (high): Dockerfile + Docker Compose — dep: 034✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009✓
+
+## ORCH-TASK-034: Graceful shutdown (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить текущий код App.Shutdown(), main.go, server.go, SSE handler, consumer
+2. Прочитать deployment.md §5 — архитектура 9-фазного shutdown
+3. Спроектировать 7-фазный shutdown (backend-reliability-engineer subagent)
+4. Реализовать SSE Handler connection tracking + Shutdown()
+5. Реализовать улучшенный App.Shutdown() с 7 фазами
+6. Обновить main.go с timeout-based force exit
+7. Code review (code-reviewer subagent) → исправления M-1, M-2, M-3
+
+### Что реализовано
+- **SSE Handler (handler.go)**: connection tracking (sync.Mutex + map[string]connEntry + done channel), Shutdown() method (idempotent via sync.Once-like done channel, signals event loops via per-connection closeCh — race-free), Done() method для тестов, отклонение новых подключений после shutdown
+- **App.Shutdown() (app.go)**: 7 фаз — 1) SetNotReady, 2) SSE close, 3) HTTP drain, 4) Broker close, 5) Redis close, 6) Observability flush, 7) Done. ObservabilityShutdown interface (nil=no-op). Nil guards для всех компонентов. errors.Join для агрегации ошибок
+- **main.go**: timeout-based force exit (DeadlineExceeded → os.Exit(1)), double-signal force exit сохранён
+
+### Ключевые решения
+- SSE close ПЕРЕД HTTP drain (M-1): http.Server.Shutdown() блокирует на long-lived SSE connections; отмена SSE контекстов сначала позволяет handlers вернуться
+- closeCh pattern (M-2): Shutdown() сигнализирует event loop через канал вместо прямой записи в ResponseWriter — устраняет data race
+- Event loop отправляет `event: close, data: {"reason":"server_shutdown"}` перед выходом
+- ObservabilityShutdown interface — заглушка для будущих ORCH-TASK-032/033
+
+### Code review исправления
+- M-1: SSE Shutdown перед HTTP drain (critical для доставки close event)
+- M-2: closeCh pattern вместо direct ResponseWriter write (race-free, -race PASS)
+- M-3: nil guards для brokerClient и kvClient в Shutdown
+
+### Тесты
+- 5 SSE shutdown тестов: ClosesActiveConnections, Idempotent, RejectsNewConnections, ConnectionsRemovedFromTrackingOnExit, NoConnectionsIsNoop
+- 4 App shutdown тестов: SSEHandlerCalled, ObservabilityError, NilSSEHandler, NilObservability
+- Updated OrderedTeardown (4-step verify: sse→broker→redis→observability)
+- go test -race PASS
+
+## ORCH-TASK-032: Prometheus metrics (DONE, 2026-04-10)
+
+### План реализации
+1. Прочитать architecture/observability.md — 20 метрик в 8 категориях
+2. Изучить server.go (metrics stub на :9090), app.go (ObservabilityShutdown interface)
+3. Спроектировать Metrics struct, HTTPMiddleware, Handler, Shutdown (backend-reliability-engineer subagent)
+4. Реализовать metrics.go: 20 collectors, dedicated registry, Go/Process collectors
+5. Реализовать responseWriter: WriteHeader idempotent, Write override, Flush delegation, Unwrap
+6. Реализовать HTTPMiddleware с chi route pattern extraction + safeFallback
+7. Реализовать metrics_test.go: 49 тестов + 13 sub-tests
+8. Интегрировать: server.go (Deps.MetricsHandler + HTTPMetricsMiddleware), app.go (wiring + ObservabilityShutdown)
+9. Code review (code-reviewer subagent) → S-1, M-1, M-2 исправления
+10. go test -race -count=1 ✓, go test ./... ✓, go vet ✓, make build/test/lint ✓
+
+### Что реализовано
+- **metrics.go**: Metrics struct с 20 Prometheus collectors (HTTP 3, Upload 3, DM 3, S3 2, Broker 3, SSE 2, Security 2, Redis 2). Dedicated prometheus.Registry (не global) + GoCollector + ProcessCollector. NewMetrics(), Handler() (promhttp.HandlerFor с OpenMetrics), Registry(), Shutdown() (no-op, satisfies ObservabilityShutdown). responseWriter: WriteHeader idempotent (не делегирует повторные вызовы), Write() override (tracks implicit 200), Flush() delegation (для SSE), Unwrap() (для http.ResponseController). HTTPMiddleware(): chi route pattern extraction через RouteContext, safeFallback с allowlist (/healthz, /readyz, /metrics) + '__unmatched__' sentinel для unknown paths (cardinality protection). routePattern() + safeFallback().
+- **server.go**: Deps.MetricsHandler http.Handler, Deps.HTTPMetricsMiddleware func(http.Handler) http.Handler. Middleware chain: HTTPMetrics → Recovery → CORS → SecurityHeaders. Conditional: nil → fallback stub/no-op. handleMetricsStub comment updated.
+- **app.go**: Step 1b: appMetrics := metrics.NewMetrics(). MetricsHandler + HTTPMetricsMiddleware в api.Deps. observability = appMetrics. Comments updated.
+
+### Code review исправления
+- S-1: routePattern → safeFallback с allowlist (/healthz, /readyz, /metrics), unknown → '__unmatched__' (предотвращение cardinality explosion через 404 routes)
+- M-1: WriteHeader не делегирует повторные вызовы (предотвращение "superfluous WriteHeader" warnings)
+- M-2: Write() override для корректного wroteHeader tracking (Write → implicit 200, subsequent WriteHeader ignored)
+
+### Тесты (49 тестов + 13 sub-tests)
+Constructor: AllCollectorsRegistered, GoCollectorsPresent, IsolatedRegistry
+Handler: PrometheusFormat, ContentType, ContainsAllCategories, NoGlobalMetricsLeak, ScrapableByPrometheus
+Shutdown: ReturnsNil, Interface
+HTTP: RequestsTotal, RequestDuration (histogram+buckets), RequestSize
+Upload: Total, Size, Duration
+DM: RequestsTotal, CircuitBreakerState ×3 states
+S3: OperationsTotal, OperationDuration
+Broker: PublishTotal, PublishDuration, EventsReceivedTotal
+SSE: ConnectionsActive, EventsPushedTotal
+Security: RateLimitHitsTotal, AuthFailuresTotal ×3 reasons
+Redis: OperationsTotal ×5 types, OperationDuration
+Middleware: RecordsTotalAndDuration, RoutePatternPreventsCardinality ×3 UUIDs, RecordsRequestSize, SkipsRequestSizeWhenUnknown, CapturesStatusCode ×5, DefaultStatusCode200, FallbackSafePath, UnmatchedCardinality, DeepNestedRoute, NotFoundRoute → __unmatched__, FlushDelegation, LargeBody 10MB
+ResponseWriter: Flush, FlushNoFlusher, Unwrap, WriteHeaderOnce, WriteThenWriteHeader
+RoutePattern: ChiContext, NoChiContextSafePath, NoChiContextUnsafePath
+SafeFallback: 6 sub-tests
+Concurrent: 10 goroutines × 100 ops
+Integration: Middleware + Handler combined
+
+### Зависимость добавлена
+- github.com/prometheus/client_golang v1.23.2
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-037 (high): Integration tests — dep: 036 ✓
+- ORCH-TASK-024 (high): Export Service — dep: 014 ✓
+- ORCH-TASK-035 (high): Dockerfile + Docker Compose — dep: 034 ✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
+
+## ORCH-TASK-024: Export Service — скачивание PDF/DOCX через presigned URL (DONE, 2026-04-10)
+
+### План реализации
+1. Изучить architecture docs: security.md (RBAC matrix), api-specification.yaml (302 redirect), sequence-diagrams.md (export flow), high-architecture.md (artifact types)
+2. Изучить существующий код: dmclient/client.go (GetArtifact → 200 JSON / 302 redirect), results/handler.go (паттерн), routes.go (stub), error_response.go
+3. Реализовать export/handler.go: Handler struct (DMClient interface), HandleExport (302 redirect proxy), format validation (pdf/docx)
+4. Реализовать export/handler_test.go: 30 тестов
+5. Wiring: server.go (Deps.ExportHandler), routes.go (exportH nil-guard), app.go (export.NewHandler)
+6. Code review (code-reviewer subagent) → S-1, M-2, M-3, M-4, M-5
+
+### Что реализовано
+- **handler.go**: Handler struct с DMClient consumer-side interface (GetArtifact only). HandleExport(): defense-in-depth auth → UUID validation → format validation (pdf→EXPORT_PDF, docx→EXPORT_DOCX) → logger enrichment (WithDocumentID/WithVersionID) → DM GetArtifact → isValidRedirectURL (open redirect prevention) → 302 Found с Location + X-Correlation-Id. Empty response guard, content fallback (200 JSON pass-through). handleDMError: context.Canceled/DeadlineExceeded → 502, circuit open → 502, DMError → MapDMError(resourceHint=artifact), transport → 502, unknown → 500.
+- **handler_test.go**: 30 тестов (+ 33 sub-tests): happy path, auth defense-in-depth, format/UUID validation, DM errors (404/5xx/CB/transport/unknown/400/403), context cancellation (raw + wrapped), response edge cases, redirect URL validation (open redirect), roles, format mapping, isValidRedirectURL, concurrent safety.
+
+### Code review исправления
+- S-1: isValidRedirectURL — парсинг URL, валидация scheme (http/https) и host (non-empty), предотвращение open redirect с javascript:/data: схемами
+- M-2: context.Canceled/DeadlineExceeded обработка в handleDMError → 502 DM_UNAVAILABLE вместо 500
+- M-3: defense-in-depth auth check (no auth → 401, BUSINESS_USER → 403), как в results handler
+- M-4: empty response guard (nil Content + empty RedirectURL → 500 INTERNAL_ERROR)
+- M-5: data race fix — sync.Mutex на mock в concurrent test
+
+### Ключевые решения
+- Redirect URL validation: http + https (не только https) — для совместимости с MinIO в dev
+- resourceHint "artifact" для MapDMError — DM 404 → ARTIFACT_NOT_FOUND
+- Defense-in-depth RBAC: handler проверяет BUSINESS_USER → 403 (помимо middleware)
+- Нет OPM integration в handler — "BUSINESS_USER по политике OPM" из acceptance criteria будет реализован через OPM middleware позже, т.к. OPM Client ещё pending (ORCH-TASK-016)
+- Logger enrichment с WithDocumentID/WithVersionID для structured logs в DM error paths
+
+### Нет новых зависимостей
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-037 (high): Integration tests — dep: 036 ✓
+- ORCH-TASK-035 (high): Dockerfile + Docker Compose — dep: 034 ✓
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
+
+## ORCH-TASK-035: Dockerfile + Docker Compose (DONE, 2026-04-11)
+
+### План реализации
+1. Изучить architecture/deployment.md — определить структуру Dockerfile и docker-compose
+2. Изучить текущий Dockerfile (ORCH-TASK-001) — определить необходимые обновления
+3. Спроектировать полный набор Docker-файлов (backend-reliability-engineer subagent)
+4. Обновить Dockerfile: ARG VERSION, -X main.version ldflags, HEALTHCHECK /healthz
+5. Создать docker-compose.yaml: 5 сервисов с health checks и depends_on
+6. Создать .dockerignore, .env.example, generate-dev-jwt.sh, keys/.gitignore
+7. Обновить Makefile: 7 новых целей для Docker Compose workflow
+8. Обновить main.go: var version = "dev" для ldflags injection
+9. Code review (code-reviewer subagent) → fix: compose-clean в .PHONY
+
+### Что реализовано
+
+**Dockerfile (обновлён)**:
+- ARG VERSION=dev → -X main.version=${VERSION} в ldflags (встраивание версии в бинарник)
+- go.sum (без glob *) — проект зрелый, go.sum всегда есть
+- HEALTHCHECK /healthz (не /readyz) — Docker HEALTHCHECK это liveness probe, readyz проверяет downstream deps (Redis, RabbitMQ, DM) которые могут быть ещё не готовы при старте
+
+**docker-compose.yaml (создан)**:
+- 5 сервисов: rabbitmq, redis, minio, minio-init, orch-api
+- rabbitmq:3-management-alpine — AMQP :5672, Management UI :15672, healthcheck rabbitmq-diagnostics ping
+- redis:7-alpine — :6379, healthcheck redis-cli ping
+- minio/minio:latest — S3 API :9000, Console :9001, healthcheck mc ready local
+- minio-init (minio/mc) — auto-create bucket contractpro-uploads (idempotent --ignore-existing), restart: no
+- orch-api — build from context, depends_on всех service_healthy + minio-init service_completed_successfully
+- Named volumes: rabbitmq-data, redis-data, minio-data
+- keys/ → /keys:ro (JWT public key mount)
+- Environment overrides: broker/redis/s3 addresses, JWT path, debug log, ratelimit off, CORS localhost
+- stop_grace_period: 35s (> ORCH_SHUTDOWN_TIMEOUT 30s)
+- Container names: cp-orch-* prefix (isolation от DP Docker Compose)
+
+**.dockerignore (создан)**:
+- Исключает: *_test.go, testdata/, *.md, keys/, scripts/, .env*, Docker meta, .git, IDE files, бинарник
+
+**.env.example (создан)**:
+- Все переменные с комментариями и defaults
+- [COMPOSE OVERRIDE] метки для переменных, переопределяемых в docker-compose
+- Рекомендации для non-Docker запуска (localhost вместо container names)
+
+**scripts/generate-dev-jwt.sh (создан)**:
+- RSA-2048 генерация приватного + публичного ключей
+- Idempotent (не перезаписывает существующие)
+- chmod 600 для private, 644 для public
+
+**keys/.gitignore (создан)**: *.pem — предотвращение коммита ключей
+**.gitignore (обновлён)**: keys/*.pem — дополнительная защита
+
+**Makefile (обновлён)**:
+- docker-build: добавлен --build-arg VERSION=$(IMAGE_TAG)
+- generate-jwt: запуск generate-dev-jwt.sh
+- .env (file target): копирование .env.example если .env отсутствует
+- compose-up: build + start all (prerequisites: .env + generate-jwt)
+- compose-down: stop, preserve volumes
+- compose-clean: stop + remove volumes
+- compose-logs: follow orch-api logs
+- compose-ps: container status
+- compose-restart: rebuild only orch-api (infrastructure stays)
+
+**cmd/orch-api/main.go (обновлён)**:
+- var version = "dev" — linker target для -X main.version
+
+### Ключевые решения
+- /healthz вместо /readyz в Docker HEALTHCHECK — liveness, не readiness (DM вне compose → readyz будет fail → бесконечный restart loop)
+- minio-init как отдельный сервис — MinIO не создаёт bucket автоматически
+- stop_grace_period: 35s — запас над 30s shutdown timeout
+- ORCH_RATELIMIT_ENABLED=false в dev — упрощение отладки
+- ORCH_CORS_ALLOWED_ORIGINS=localhost:3000,5173 — React/Vite dev servers
+- cp-orch-* container names — без конфликтов с DP compose cp-* containers
+
+### Нет новых зависимостей
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
+- ORCH-TASK-026 (medium): Admin Proxy — deps: 016❌ 011✓ (blocked by OPM Client → UNBLOCKED after ORCH-TASK-016)
+
+## ORCH-TASK-037: Integration tests (DONE, 2026-04-11)
+
+### План реализации
+1. Изучить существующий код: app.go DI wiring, все consumer-side интерфейсы, event types, handlers
+2. Спроектировать архитектуру тестов (backend-reliability-engineer subagent): testEnv wiring, in-memory fakes, SSE client
+3. Реализовать in-memory fakes: fakeBroker, fakeObjectStorage, fakeKVStore (с Pub/Sub), fakeDMServer, testJWTSigner
+4. Реализовать testenv.go: 18-step DI wiring зеркалирующий production app.go
+5. Реализовать SSE test client с single reader goroutine
+6. Реализовать 5 end-to-end тестов
+7. Проверить go test -race, go vet, make build/test/lint
+
+### Что реализовано
+- **fakes.go** (730 строк): 5 in-memory fakes
+  - `fakeBroker`: BrokerSubscriber + BrokerPublisher, InjectEvent для синхронной инъекции событий, PublishedMessages для ассертов
+  - `fakeObjectStorage`: PutObject/DeleteObject с map[string][]byte, HasObject хелпер
+  - `fakeKVStore`: единый KV + Pub/Sub — удовлетворяет 4 consumer-side интерфейса (statustracker.KVStore, ssebroadcast.Publisher, sse.KVStore, upload.KVStore)
+  - `fakeDMServer`: httptest.Server с chi router — 9 маршрутов (CRUD documents/versions, get artifacts/diffs), SeedDocument/SeedVersion/SeedArtifact/SeedDiff
+  - `testJWTSigner`: ECDSA P-256 key pair, SignToken(userID, orgID, role) → signed ES256 JWT
+
+- **testenv.go** (360 строк): testEnv struct
+  - 18-step DI wiring зеркалирующий app.go: все fakes → real broadcaster → real tracker → real consumer → real auth/RBAC → real DM client (pointed at fake) → real handlers → api.Server → httptest.Server
+  - Adapters: testUploadDMAdapter, testUploadCmdPubAdapter (аналоги production adapters.go)
+  - Helpers: DoRequest (authenticated), UploadContract (multipart PDF), InjectEvent, SeedStatus
+
+- **sseclient.go** (170 строк): SSE test client
+  - Single background reader goroutine парсящий SSE wire format
+  - connectSSE → WaitForConnected → NextEvent с timeout
+
+- **integration_test.go** (610 строк): 5 end-to-end тестов
+  - TestUploadToSSEPipeline: upload PDF → 202 → command published → S3 object → inject DP IN_PROGRESS → SSE PROCESSING → Redis verified
+  - TestRecheckPipeline: seed doc+ver → POST recheck → 202 → new version → command published
+  - TestComparePipeline: seed doc + 2 vers → POST compare → 202 → CompareDocumentVersionsRequested published
+  - TestLICFailureToSSE: seed ANALYZING → SSE connect → inject LIC FAILED → SSE ANALYSIS_FAILED + error details → Redis verified
+  - TestReportsReadyToResults: seed GENERATING_REPORTS + artifacts → inject DM reports-ready → SSE READY → GET /results → 200 with data
+
+### Ключевые решения
+- Fakes на уровне consumer-side интерфейсов (не Redis protocol level) — нет новых зависимостей
+- fakeKVStore объединяет KV + Pub/Sub в одной структуре — SSE handler получает события через тот же механизм что и в production
+- fakeBroker.InjectEvent вызывает handler синхронно — тесты детерминированы (единственный async gap — Pub/Sub delivery в fakeKVStore, ~<1ms)
+- SSE client с single reader goroutine — избегает race condition при чередовании WaitForConnected и NextEvent
+- Real auth.Middleware с testJWTSigner — тесты покрывают полный JWT auth flow включая SSE ?token= query param
+
+### Нет новых зависимостей
+
+### Следующие задачи готовые к реализации (deps выполнены)
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-016 (medium): OPM Client — dep: 009 ✓
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003 ✓
+- ORCH-TASK-026 (medium): Admin Proxy — deps: 016❌ 011✓ (blocked by OPM Client)
+
+## ORCH-TASK-016: OPM Client (DONE, 2026-04-11)
+
+### План реализации
+1. Прочитать architecture docs — определить OPM endpoints и контракт
+2. Использовать UOMClient как образец паттерна (2 attempts, fixed backoff, no CB)
+3. Спроектировать OPMClient + DisabledClient + MapOPMError (backend-reliability-engineer)
+4. Реализовать errors.go, client.go, opm_errors.go, error_response.go changes
+5. Реализовать client_test.go + opm_errors_test.go
+6. Code review (code-reviewer) → N-01/N-05/N-06 fixes
+
+### Что реализовано
+- **opmclient/errors.go**: OPMError, ErrOPMDisabled, mapHTTPError/mapTransportError/isRetryable
+- **opmclient/client.go**: OPMClient interface (4 метода, json.RawMessage), Client, DisabledClient, NewOPMClient, retry/headers/buildURL
+- **model/opm_errors.go**: MapOPMError (5xx→OPM_UNAVAILABLE, 404→POLICY/CHECKLIST_NOT_FOUND, 400→VALIDATION, 4xx→INTERNAL)
+- **model/error_response.go**: +ErrPolicyNotFound, +ErrChecklistNotFound (2 new codes + catalog)
+- **47 тестов** (35 client + 12 model)
+
+### Ключевые решения
+- json.RawMessage pass-through (ASSUMPTION-ORCH-04: OPM не спроектирован)
+- DisabledClient pattern (не nil checks)
+- UOMClient pattern (опциональная зависимость)
+
+### Следующие задачи готовые к реализации
+- ORCH-TASK-025 (medium): Feedback Service — deps: 014✓ 004✓
+- ORCH-TASK-026 (medium): Admin Proxy — deps: 016✓ 011✓ (UNBLOCKED)
+- ORCH-TASK-033 (medium): OpenTelemetry tracing — dep: 003✓
+
+## ORCH-TASK-025: Feedback Service — приём и сохранение обратной связи
 **Дата:** 2026-04-11
 **Статус:** done
 
 ### План реализации
-1. Изучить архитектурную документацию по tracing (observability.md §3) и существующую кодовую базу (subagent: Explore)
-2. Спроектировать архитектуру пакета (subagent: code-architect) — файловая структура, API, интеграция, noop strategy
-3. Создать пакет internal/infra/observability/tracing:
-   - tracing.go — Tracer struct, NewTracer, OTLP/HTTP exporter, noop fallback
-   - sampler.go — ParentBased + TraceIDRatioBased(0.10) custom sampler
-   - middleware.go — chi HTTP middleware (orch.http.request parent span)
-   - propagation.go — W3C traceparent injection/extraction, correlation_id
-   - attributes.go — 10 span names, 15 attribute keys, 4 builder functions
-4. Написать тесты (49 тестов: tracing 19, sampler 4, middleware 16, propagation 5, attributes 7)
-5. Интегрировать в app.go (NewTracer step 1c, compositeObservability, TracingMiddleware) и server.go (middleware chain)
-6. Code review (subagent: code-reviewer) → исправления (M-5, M-6, M-7, N-3, N-4)
+1. Изучить существующие handler-паттерны (export, comparison, contracts)
+2. Спроектировать handler по architecture/high-architecture.md §6.14, §8.8
+3. Создать пакет internal/application/feedback с handler.go
+4. Создать тесты handler_test.go (34 теста + 11 sub-tests)
+5. Подключить в routes.go, server.go, app.go (DI wiring)
+6. Code review (subagent: code-reviewer)
 7. Полный прогон go test -race -count=1 ./... + go vet + Makefile targets
 
 ### Summary
-- **tracing.go**: Tracer struct с OTel TracerProvider, noop.TracerProvider при отключении (zero-cost). NewTracer: OTLP/HTTP exporter при TracingEnabled+TracingEndpoint, W3C TraceContext+Baggage global propagator. Shutdown: sync.Once идемпотентный (M-6 code review fix). Methods: StartSpan, SpanFromContext, Shutdown, Enabled, Provider.
-- **sampler.go**: NewOrchSampler() — ParentBased(TraceIDRatioBased(0.10)). Head-based 10% sampling в SDK, tail-based (100% errors, 100% slow >2s) делегируется collector (Jaeger/Tempo).
-- **middleware.go**: HTTPMiddleware(t *Tracer) — chi-compatible, responseCapture wrapper (WriteHeader idempotent, Flush delegation для SSE, Unwrap для ResponseController). Span: SpanKindServer, http.method/http.route/http.status_code + orch.correlation_id/organization_id/user_id. 5xx → codes.Error.
-- **propagation.go**: InjectHTTPHeaders (W3C traceparent для DM sync calls), ExtractHTTPHeaders, CorrelationAttribute (для async event linking).
-- **attributes.go**: 10 span name констант, 15 attribute key констант, HTTPRequestAttrs/DMRequestAttrs/BrokerPublishAttrs/S3UploadAttrs.
-- **Wiring**: app.go — NewTracer (step 1c, before Redis), compositeObservability{tracer, metrics} для shutdown. server.go — TracingMiddleware в Deps, chain: HTTPMetrics → Recovery → CORS → SecurityHeaders → **Tracing** → Auth → RBAC → RateLimit.
-- **Ключевое решение**: OTLP/HTTP (не gRPC) — меньше зависимостей, совместимость с DP domain. Noop tracer через OTel noop package — zero allocations, compiler inlining. Head-based sampling в SDK, tail-based в collector.
-- **Тесты**: 49 тестов. tracing (19): noop/enabled/shutdown/StartSpan/SpanFromContext/Enabled/Provider. sampler (4): constructor/description/ParentBased/TraceIDRatio. middleware (16): passthrough/span/attributes/correlation/auth/errors/default200/chiPattern/SpanKind/propagation/concurrent. propagation (5): noop/traceparent/extract/correlation. attributes (7): HTTP/DM/broker/S3/span names/keys.
-- **Результаты**: go test -race -count=1 ./... PASS (32 пакета, 0 failures), go vet clean, make build/test/lint OK.
-- **Code review**: Approve — M-5 global state cleanup (applied), M-6 sync.Once Shutdown (applied), M-7 enabled double-shutdown test (added), N-3 unused helper removed, N-4 sampler test improved.
-- **Зависимости**: go.opentelemetry.io/otel v1.43.0, otel/trace v1.43.0, otel/sdk v1.43.0, otlptracehttp v1.43.0.
-- **ORCH-TASK-033 — последняя задача в проекте. Все 37 задач ApiBackendOrchestrator выполнены.**
-
----
+- **handler.go**: Handler struct с DMClient (GetVersion) и KVStore (Set) consumer-side интерфейсами
+- **HandleSubmit()**: auth → UUID validation → JSON parsing (DisallowUnknownFields, MaxBytesReader 1MB) → validate (is_useful *bool required, comment ≤2000 runes, trimmed) → DM GetVersion → Redis Set (TTL 30 дней) → 201 Created
+- **feedbackRecord**: feedback_id, contract_id, version_id, organization_id, user_id, is_useful, comment, created_at (RFC3339)
+- **Redis key**: `feedback:{org_id}:{version_id}:{feedback_id}`, TTL 30 дней (ASSUMPTION-ORCH-08)
+- **Redis failure**: non-critical — WARN лог, 201 возвращается (fallback storage до поддержки USER_FEEDBACK артефакта в DM)
+- **RBAC**: все роли (LAWYER, BUSINESS_USER, ORG_ADMIN) — per security.md matrix
+- **DM error handling**: context.Canceled/DeadlineExceeded→502, ErrCircuitOpen→502, DMError→MapDMError(version), transport→502, unknown→500
+- **Wiring**: Deps.FeedbackHandler в server.go, registerRoutes с nil-guard, app.go: feedback.NewHandler(dmClient, kvClient, log)
+- **Тесты**: 34 теста (+ 11 sub-tests): happy path (3), auth (1), all roles (3), UUID (4), body validation (8), DM errors (6), Redis failure (1), data integrity (5), response format (1), feedbackKey (3), validate (8), interface (1), constructor (1), concurrent (1), no-call guards (2)
+- **Результаты**: go test -race -count=1 ./... PASS (31 пакет, 0 failures), go vet clean, make build/test/lint OK
+- **Нет новых зависимостей**
+- **Оставшиеся задачи**: ORCH-TASK-026 (Admin Proxy), ORCH-TASK-033 (OpenTelemetry tracing)
 
 ## ORCH-TASK-026: Admin Proxy Service — проксирование политик и чек-листов в OPM
 **Дата:** 2026-04-11
@@ -75,55 +1436,34 @@
 - **Нет новых зависимостей**
 - **Оставшаяся задача**: ORCH-TASK-033 (OpenTelemetry tracing)
 
----
-
-## ORCH-TASK-025: Feedback Service — приём и сохранение обратной связи
+## ORCH-TASK-033: OpenTelemetry tracing — spans, propagation, context
 **Дата:** 2026-04-11
 **Статус:** done
 
 ### План реализации
-1. Изучить существующие handler-паттерны (export, comparison, contracts)
-2. Спроектировать handler по architecture/high-architecture.md §6.14, §8.8
-3. Создать пакет internal/application/feedback с handler.go
-4. Создать тесты handler_test.go (34 теста + 11 sub-tests)
-5. Подключить в routes.go, server.go, app.go (DI wiring)
-6. Code review (subagent: code-reviewer)
+1. Изучить архитектурную документацию по tracing (observability.md §3) и существующую кодовую базу (subagent: Explore)
+2. Спроектировать архитектуру пакета (subagent: code-architect) — файловая структура, API, интеграция, noop strategy
+3. Создать пакет internal/infra/observability/tracing:
+   - tracing.go — Tracer struct, NewTracer, OTLP/HTTP exporter, noop fallback
+   - sampler.go — ParentBased + TraceIDRatioBased(0.10) custom sampler
+   - middleware.go — chi HTTP middleware (orch.http.request parent span)
+   - propagation.go — W3C traceparent injection/extraction, correlation_id
+   - attributes.go — 10 span names, 15 attribute keys, 4 builder functions
+4. Написать тесты (49 тестов: tracing 19, sampler 4, middleware 16, propagation 5, attributes 7)
+5. Интегрировать в app.go (NewTracer step 1c, compositeObservability, TracingMiddleware) и server.go (middleware chain)
+6. Code review (subagent: code-reviewer) → исправления (M-5, M-6, M-7, N-3, N-4)
 7. Полный прогон go test -race -count=1 ./... + go vet + Makefile targets
 
 ### Summary
-- **handler.go**: Handler struct с DMClient (GetVersion) и KVStore (Set) consumer-side интерфейсами
-- **HandleSubmit()**: auth → UUID validation → JSON parsing (DisallowUnknownFields, MaxBytesReader 1MB) → validate (is_useful *bool required, comment ≤2000 runes, trimmed) → DM GetVersion → Redis Set (TTL 30 дней) → 201 Created
-- **feedbackRecord**: feedback_id, contract_id, version_id, organization_id, user_id, is_useful, comment, created_at (RFC3339)
-- **Redis key**: `feedback:{org_id}:{version_id}:{feedback_id}`, TTL 30 дней (ASSUMPTION-ORCH-08)
-- **Redis failure**: non-critical — WARN лог, 201 возвращается (fallback storage до поддержки USER_FEEDBACK артефакта в DM)
-- **RBAC**: все роли (LAWYER, BUSINESS_USER, ORG_ADMIN) — per security.md matrix
-- **DM error handling**: context.Canceled/DeadlineExceeded→502, ErrCircuitOpen→502, DMError→MapDMError(version), transport→502, unknown→500
-- **Wiring**: Deps.FeedbackHandler в server.go, registerRoutes с nil-guard, app.go: feedback.NewHandler(dmClient, kvClient, log)
-- **Тесты**: 34 теста (+ 11 sub-tests): happy path (3), auth (1), all roles (3), UUID (4), body validation (8), DM errors (6), Redis failure (1), data integrity (5), response format (1), feedbackKey (3), validate (8), interface (1), constructor (1), concurrent (1), no-call guards (2)
-- **Результаты**: go test -race -count=1 ./... PASS (31 пакет, 0 failures), go vet clean, make build/test/lint OK
-- **Нет новых зависимостей**
-- **Оставшиеся задачи**: ORCH-TASK-026 (Admin Proxy), ORCH-TASK-033 (OpenTelemetry tracing)
-
----
-
-## ORCH-TASK-001: Scaffolding проекта — Go-модуль, структура директорий, Makefile
-**Дата:** 2026-04-08
-**Статус:** done
-
-### План реализации
-1. Спроектировать структуру на основе sibling-проекта DocumentProcessing (subagent: code-architect)
-2. Создать go.mod, cmd/orch-api/main.go (stub), Makefile, Dockerfile, .gitignore
-3. Создать internal/ директории с .gitkeep
-4. Code review (subagent: code-reviewer) → исправления
-5. Проверить make build, make test, make lint
-
-### Summary
-- **go.mod**: module contractpro/api-orchestrator, Go 1.26.1
-- **cmd/orch-api/main.go**: stub с log.Println
-- **Makefile**: build, test, lint, docker-build (паттерн идентичен DP)
-- **Dockerfile**: multi-stage (golang:1.26.1-alpine → alpine:3.21), non-root user `orchapi`, healthcheck
-- **.gitignore**: orch-api binary, .env, coverage files
-- **internal/**: config, domain/model, domain/port, application, app, ingress, egress, infra, integration
-- **Результаты тестов**: make build ✓, make test ✓ (no test files), make lint ✓ (0 warnings)
-- **Ключевое решение**: Dockerfile использует `COPY go.mod go.sum* ./` (glob) т.к. go.sum ещё не существует; будет заменено на точное имя при добавлении зависимостей
-- **Следующая задача**: ORCH-TASK-002 (config) или другие critical tasks, зависящие от 001
+- **tracing.go**: Tracer struct с OTel TracerProvider, noop.TracerProvider при отключении (zero-cost). NewTracer: OTLP/HTTP exporter при TracingEnabled+TracingEndpoint, W3C TraceContext+Baggage global propagator. Shutdown: sync.Once идемпотентный (M-6 code review fix). Methods: StartSpan, SpanFromContext, Shutdown, Enabled, Provider.
+- **sampler.go**: NewOrchSampler() — ParentBased(TraceIDRatioBased(0.10)). Head-based 10% sampling в SDK, tail-based (100% errors, 100% slow >2s) делегируется collector (Jaeger/Tempo).
+- **middleware.go**: HTTPMiddleware(t *Tracer) — chi-compatible, responseCapture wrapper (WriteHeader idempotent, Flush delegation для SSE, Unwrap для ResponseController). Span: SpanKindServer, http.method/http.route/http.status_code + orch.correlation_id/organization_id/user_id. 5xx → codes.Error.
+- **propagation.go**: InjectHTTPHeaders (W3C traceparent для DM sync calls), ExtractHTTPHeaders, CorrelationAttribute (для async event linking).
+- **attributes.go**: 10 span name констант, 15 attribute key констант, HTTPRequestAttrs/DMRequestAttrs/BrokerPublishAttrs/S3UploadAttrs.
+- **Wiring**: app.go — NewTracer (step 1c, before Redis), compositeObservability{tracer, metrics} для shutdown. server.go — TracingMiddleware в Deps, chain: HTTPMetrics → Recovery → CORS → SecurityHeaders → **Tracing** → Auth → RBAC → RateLimit.
+- **Ключевое решение**: OTLP/HTTP (не gRPC) — меньше зависимостей, совместимость с DP domain. Noop tracer через OTel noop package — zero allocations, compiler inlining. Head-based sampling в SDK, tail-based в collector.
+- **Тесты**: 49 тестов. tracing (19): noop/enabled/shutdown/StartSpan/SpanFromContext/Enabled/Provider. sampler (4): constructor/description/ParentBased/TraceIDRatio. middleware (16): passthrough/span/attributes/correlation/auth/errors/default200/chiPattern/SpanKind/propagation/concurrent. propagation (5): noop/traceparent/extract/correlation. attributes (7): HTTP/DM/broker/S3/span names/keys.
+- **Результаты**: go test -race -count=1 ./... PASS (32 пакета, 0 failures), go vet clean, make build/test/lint OK.
+- **Code review**: Approve — M-5 global state cleanup (applied), M-6 sync.Once Shutdown (applied), M-7 enabled double-shutdown test (added), N-3 unused helper removed, N-4 sampler test improved.
+- **Зависимости**: go.opentelemetry.io/otel v1.43.0, otel/trace v1.43.0, otel/sdk v1.43.0, otlptracehttp v1.43.0.
+- **ORCH-TASK-033 — последняя задача в проекте. Все 37 задач ApiBackendOrchestrator выполнены.**

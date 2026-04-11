@@ -10,6 +10,39 @@
 <!-- **Статус:** done -->
 <!-- **Summary:** что было сделано, ключевые решения, результаты тестов -->
 
+## ORCH-TASK-026: Admin Proxy Service — проксирование политик и чек-листов в OPM
+**Дата:** 2026-04-11
+**Статус:** done
+
+### План реализации
+1. Изучить OPM client (opmclient), существующие handler-паттерны (authproxy, contracts)
+2. Спроектировать handler по architecture/high-architecture.md — прозрачный прокси (ASSUMPTION-ORCH-04)
+3. Создать пакет internal/application/adminproxy с handler.go
+4. Создать тесты handler_test.go (40 тестов)
+5. Обновить server.go (Deps), routes.go (замена stubs), app.go (DI wiring)
+6. Code review (subagent: code-reviewer) → исправления (аудит-логирование, resource_hint в логах)
+7. Полный прогон go test -race -count=1 ./... + go vet + Makefile targets
+
+### Summary
+- **handler.go**: Handler struct с OPMClient consumer-side интерфейсом (4 метода)
+- **HandleListPolicies()**: defense-in-depth auth → OPM ListPolicies(orgID) → 200 json.RawMessage pass-through
+- **HandleUpdatePolicy()**: auth → policyID validation → readBody (MaxBytesReader 1MB, json.Valid) → OPM UpdatePolicy → 200
+- **HandleListChecklists()**: auth → OPM ListChecklists(orgID) → 200
+- **HandleUpdateChecklist()**: auth → checklistID validation → readBody → OPM UpdateChecklist → 200
+- **readBody**: MaxBytesReader 1MB DoS protection, empty body guard, json.Valid validation
+- **handleOPMError**: context.Canceled/DeadlineExceeded → 502, ErrOPMDisabled → 502, OPMError HTTP → MapOPMError(resourceHint), transport → 502, unknown → 500
+- **writeRawJSON**: nil data → `{}` fallback
+- **RBAC**: adminOnly (ORG_ADMIN) — enforced by middleware, handler performs defense-in-depth auth check
+- **Аудит**: Update handlers логируют organization_id + user_id для мутационных операций
+- **Wiring**: Deps.AdminProxyHandler в server.go, routes.go с nil-guard, app.go: opmclient.NewOPMClient + adminproxy.NewHandler
+- **Тесты**: 40 тестов: HandleListPolicies (7), HandleUpdatePolicy (11), HandleListChecklists (4), HandleUpdateChecklist (6), response format (2), handleOPMError (2), interface (1), constructor (1), readBody (5), writeRawJSON (3), concurrent (1), pass-through (2), wrapped errors (1), no-call guards (2), nil body (1)
+- **Результаты**: go test -race -count=1 ./... PASS (32 пакета, 0 failures), go vet clean, make build/test/lint OK
+- **Code review**: Approve — S1 аудит-логирование applied, N5 resource_hint в логах applied
+- **Нет новых зависимостей**
+- **Оставшаяся задача**: ORCH-TASK-033 (OpenTelemetry tracing)
+
+---
+
 ## ORCH-TASK-025: Feedback Service — приём и сохранение обратной связи
 **Дата:** 2026-04-11
 **Статус:** done

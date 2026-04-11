@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"time"
 
+	"contractpro/api-orchestrator/internal/application/adminproxy"
 	"contractpro/api-orchestrator/internal/application/authproxy"
 	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
@@ -87,6 +88,7 @@ type Deps struct {
 	ComparisonHandler  *comparison.Handler
 	ExportHandler      *export.Handler
 	FeedbackHandler    *feedback.Handler
+	AdminProxyHandler  *adminproxy.Handler
 	SSEHandler         *sse.Handler
 }
 
@@ -137,7 +139,7 @@ func NewServer(deps Deps) *Server {
 		uploadH = notImplemented
 	}
 
-	registerRoutes(r, authMW, rbacMW, rateLimitMW, uploadH, deps.AuthHandler, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.ComparisonHandler, deps.ExportHandler, deps.FeedbackHandler, deps.SSEHandler)
+	registerRoutes(r, authMW, rbacMW, rateLimitMW, uploadH, deps.AuthHandler, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.ComparisonHandler, deps.ExportHandler, deps.FeedbackHandler, deps.AdminProxyHandler, deps.SSEHandler)
 
 	mainAddr := fmt.Sprintf(":%d", deps.Config.Port)
 	main := &http.Server{

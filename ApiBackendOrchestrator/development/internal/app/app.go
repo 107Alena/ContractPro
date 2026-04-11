@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"contractpro/api-orchestrator/internal/application/adminproxy"
 	"contractpro/api-orchestrator/internal/application/authproxy"
 	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
@@ -25,6 +26,7 @@ import (
 	"contractpro/api-orchestrator/internal/config"
 	"contractpro/api-orchestrator/internal/egress/commandpub"
 	"contractpro/api-orchestrator/internal/egress/dmclient"
+	"contractpro/api-orchestrator/internal/egress/opmclient"
 	"contractpro/api-orchestrator/internal/egress/ssebroadcast"
 	"contractpro/api-orchestrator/internal/egress/uomclient"
 	"github.com/redis/go-redis/v9"
@@ -149,6 +151,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 	// 8. Egress clients.
 	dmClient := dmclient.NewClient(cfg.DMClient, cfg.CircuitBreaker, log)
 	uomClient := uomclient.NewClient(cfg.UOMClient, log)
+	opmClient := opmclient.NewOPMClient(cfg.OPMClient, log)
 	cmdPub := commandpub.NewPublisher(
 		brokerClient,
 		cfg.Broker.TopicProcessDocument,
@@ -181,6 +184,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 	comparisonHandler := comparison.NewHandler(dmClient, cmdPub, log)
 	exportHandler := export.NewHandler(dmClient, log)
 	feedbackHandler := feedback.NewHandler(dmClient, kvClient, log)
+	adminProxyHandler := adminproxy.NewHandler(opmClient, log)
 	authProxyHandler := authproxy.NewHandler(uomClient, log)
 
 	// 13. SSE handler — uses auth middleware as token validator.
@@ -206,6 +210,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 		ComparisonHandler:     comparisonHandler,
 		ExportHandler:         exportHandler,
 		FeedbackHandler:       feedbackHandler,
+		AdminProxyHandler:     adminProxyHandler,
 		SSEHandler:            sseHandler,
 	})
 

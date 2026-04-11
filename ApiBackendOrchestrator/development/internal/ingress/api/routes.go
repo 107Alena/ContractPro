@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"contractpro/api-orchestrator/internal/application/adminproxy"
 	"contractpro/api-orchestrator/internal/application/authproxy"
 	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
@@ -31,7 +32,7 @@ import (
 //   - uploadH: contract upload handler (nil → 501 Not Implemented)
 //   - contractH: contract CRUD handler (nil → 501 Not Implemented stubs)
 //   - versionH: version management handler (nil → 501 Not Implemented stubs)
-func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, authH *authproxy.Handler, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, exportH *export.Handler, feedbackH *feedback.Handler, sseH *sse.Handler) {
+func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, authH *authproxy.Handler, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, exportH *export.Handler, feedbackH *feedback.Handler, adminH *adminproxy.Handler, sseH *sse.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -127,10 +128,17 @@ func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler)
 			}
 
 			// Admin.
-			r.Get("/admin/policies", notImplemented)
-			r.Put("/admin/policies/{policy_id}", notImplemented)
-			r.Get("/admin/checklists", notImplemented)
-			r.Put("/admin/checklists/{checklist_id}", notImplemented)
+			if adminH != nil {
+				r.Get("/admin/policies", adminH.HandleListPolicies())
+				r.Put("/admin/policies/{policy_id}", adminH.HandleUpdatePolicy())
+				r.Get("/admin/checklists", adminH.HandleListChecklists())
+				r.Put("/admin/checklists/{checklist_id}", adminH.HandleUpdateChecklist())
+			} else {
+				r.Get("/admin/policies", notImplemented)
+				r.Put("/admin/policies/{policy_id}", notImplemented)
+				r.Get("/admin/checklists", notImplemented)
+				r.Put("/admin/checklists/{checklist_id}", notImplemented)
+			}
 		})
 
 		// --- SSE endpoint ---

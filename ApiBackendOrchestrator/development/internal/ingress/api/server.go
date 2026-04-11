@@ -37,6 +37,7 @@ import (
 	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/export"
+	"contractpro/api-orchestrator/internal/application/feedback"
 	"contractpro/api-orchestrator/internal/application/results"
 	"contractpro/api-orchestrator/internal/application/versions"
 	"contractpro/api-orchestrator/internal/config"
@@ -85,6 +86,7 @@ type Deps struct {
 	ResultsHandler     *results.Handler
 	ComparisonHandler  *comparison.Handler
 	ExportHandler      *export.Handler
+	FeedbackHandler    *feedback.Handler
 	SSEHandler         *sse.Handler
 }
 
@@ -135,7 +137,7 @@ func NewServer(deps Deps) *Server {
 		uploadH = notImplemented
 	}
 
-	registerRoutes(r, authMW, rbacMW, rateLimitMW, uploadH, deps.AuthHandler, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.ComparisonHandler, deps.ExportHandler, deps.SSEHandler)
+	registerRoutes(r, authMW, rbacMW, rateLimitMW, uploadH, deps.AuthHandler, deps.ContractHandler, deps.VersionHandler, deps.ResultsHandler, deps.ComparisonHandler, deps.ExportHandler, deps.FeedbackHandler, deps.SSEHandler)
 
 	mainAddr := fmt.Sprintf(":%d", deps.Config.Port)
 	main := &http.Server{

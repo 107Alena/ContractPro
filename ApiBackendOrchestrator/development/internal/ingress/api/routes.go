@@ -7,6 +7,7 @@ import (
 	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/export"
+	"contractpro/api-orchestrator/internal/application/feedback"
 	"contractpro/api-orchestrator/internal/application/results"
 	"contractpro/api-orchestrator/internal/application/versions"
 	"contractpro/api-orchestrator/internal/ingress/sse"
@@ -30,7 +31,7 @@ import (
 //   - uploadH: contract upload handler (nil → 501 Not Implemented)
 //   - contractH: contract CRUD handler (nil → 501 Not Implemented stubs)
 //   - versionH: version management handler (nil → 501 Not Implemented stubs)
-func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, authH *authproxy.Handler, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, exportH *export.Handler, sseH *sse.Handler) {
+func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, authH *authproxy.Handler, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, exportH *export.Handler, feedbackH *feedback.Handler, sseH *sse.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -119,7 +120,11 @@ func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler)
 			}
 
 			// Feedback.
-			r.Post("/contracts/{contract_id}/versions/{version_id}/feedback", notImplemented)
+			if feedbackH != nil {
+				r.Post("/contracts/{contract_id}/versions/{version_id}/feedback", feedbackH.HandleSubmit())
+			} else {
+				r.Post("/contracts/{contract_id}/versions/{version_id}/feedback", notImplemented)
+			}
 
 			// Admin.
 			r.Get("/admin/policies", notImplemented)

@@ -17,6 +17,7 @@ import (
 	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/export"
+	"contractpro/api-orchestrator/internal/application/feedback"
 	"contractpro/api-orchestrator/internal/application/results"
 	"contractpro/api-orchestrator/internal/application/statustracker"
 	"contractpro/api-orchestrator/internal/application/upload"
@@ -179,6 +180,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 	resultsHandler := results.NewHandler(dmClient, log)
 	comparisonHandler := comparison.NewHandler(dmClient, cmdPub, log)
 	exportHandler := export.NewHandler(dmClient, log)
+	feedbackHandler := feedback.NewHandler(dmClient, kvClient, log)
 	authProxyHandler := authproxy.NewHandler(uomClient, log)
 
 	// 13. SSE handler — uses auth middleware as token validator.
@@ -203,6 +205,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 		ResultsHandler:        resultsHandler,
 		ComparisonHandler:     comparisonHandler,
 		ExportHandler:         exportHandler,
+		FeedbackHandler:       feedbackHandler,
 		SSEHandler:            sseHandler,
 	})
 

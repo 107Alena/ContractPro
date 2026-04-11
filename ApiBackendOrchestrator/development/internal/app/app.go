@@ -37,6 +37,7 @@ import (
 	"contractpro/api-orchestrator/internal/infra/objectstorage"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/infra/observability/metrics"
+	"contractpro/api-orchestrator/internal/infra/observability/tracing"
 	"contractpro/api-orchestrator/internal/ingress/api"
 	"contractpro/api-orchestrator/internal/ingress/consumer"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -46,10 +47,32 @@ import (
 )
 
 // ObservabilityShutdown flushes pending traces, metrics, and log buffers
-// during graceful shutdown. Prometheus metrics (ORCH-TASK-032) are wired;
-// OpenTelemetry tracing (ORCH-TASK-033) will extend this interface.
+// during graceful shutdown. Both Prometheus metrics (ORCH-TASK-032) and
+// OpenTelemetry tracing (ORCH-TASK-033) are wired via compositeObservability.
 type ObservabilityShutdown interface {
 	Shutdown(ctx context.Context) error
+}
+
+// compositeObservability shuts down both tracing and metrics in sequence.
+// Traces are flushed first (time-sensitive export), then metrics (pull-based, no-op).
+type compositeObservability struct {
+	tracer  *tracing.Tracer
+	metrics *metrics.Metrics
+}
+
+func (c *compositeObservability) Shutdown(ctx context.Context) error {
+	var errs []error
+	if c.tracer != nil {
+		if err := c.tracer.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("tracing: %w", err))
+		}
+	}
+	if c.metrics != nil {
+		if err := c.metrics.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("metrics: %w", err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // App holds all wired components and manages the application lifecycle.
@@ -71,8 +94,7 @@ type App struct {
 	sseHandler *sse.Handler
 
 	// Observability shutdown (flush traces/metrics/logs).
-	// Prometheus metrics (ORCH-TASK-032) are wired; OpenTelemetry tracing
-	// (ORCH-TASK-033) will be added when implemented.
+	// Composites Prometheus metrics (ORCH-TASK-032) and OpenTelemetry tracing (ORCH-TASK-033).
 	observability ObservabilityShutdown
 }
 
@@ -86,6 +108,18 @@ func NewApp(cfg *config.Config) (*App, error) {
 
 	// 1b. Prometheus metrics — no external dependency, always enabled.
 	appMetrics := metrics.NewMetrics()
+
+	// 1c. OpenTelemetry tracing — conditional on ORCH_TRACING_ENABLED.
+	// When disabled, returns a zero-cost noop tracer (no connections opened).
+	appTracer, err := tracing.NewTracer(context.Background(), cfg.Observability)
+	if err != nil {
+		return nil, fmt.Errorf("tracing: %w", err)
+	}
+	if appTracer.Enabled() {
+		log.Info(context.Background(), "OpenTelemetry tracing enabled",
+			"endpoint", cfg.Observability.TracingEndpoint,
+		)
+	}
 
 	// 2. Redis client — connects and pings on construction.
 	kvClient, err := kvstore.NewClient(cfg.Redis)
@@ -202,6 +236,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 		RateLimitMiddleware:   rateLimitMW,
 		MetricsHandler:        appMetrics.Handler(),
 		HTTPMetricsMiddleware: appMetrics.HTTPMiddleware(),
+		TracingMiddleware:     tracing.HTTPMiddleware(appTracer),
 		AuthHandler:           authProxyHandler,
 		UploadHandler:         uploadHandler.Handle(),
 		ContractHandler:       contractHandler,
@@ -224,7 +259,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 		server:        server,
 		consumer:      eventConsumer,
 		sseHandler:    sseHandler,
-		observability: appMetrics,
+		observability: &compositeObservability{tracer: appTracer, metrics: appMetrics},
 	}, nil
 }
 
@@ -304,7 +339,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Phase 6: Flush observability (Prometheus no-op, OpenTelemetry TBD).
+	// Phase 6: Flush observability (OpenTelemetry traces first, then Prometheus metrics).
 	a.log.Info(ctx, "shutdown phase 6/7: flushing observability")
 	if a.observability != nil {
 		if err := a.observability.Shutdown(ctx); err != nil {

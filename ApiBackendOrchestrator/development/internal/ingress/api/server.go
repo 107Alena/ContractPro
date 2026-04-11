@@ -18,7 +18,7 @@
 //   - SSE route (/api/v1/events/stream): authentication via query parameter,
 //     handled separately from the standard auth middleware.
 //
-// Middleware chain: Recovery → CORS → SecurityHeaders (global);
+// Middleware chain: HTTPMetrics → Recovery → CORS → SecurityHeaders → Tracing (global);
 // Auth → RBAC → RateLimit (protected routes).
 //
 // Route handlers are placeholder stubs returning 501 Not Implemented.
@@ -80,6 +80,7 @@ type Deps struct {
 	RateLimitMiddleware func(http.Handler) http.Handler
 	MetricsHandler        http.Handler
 	HTTPMetricsMiddleware func(http.Handler) http.Handler
+	TracingMiddleware     func(http.Handler) http.Handler
 	AuthHandler     *authproxy.Handler
 	UploadHandler   http.HandlerFunc
 	ContractHandler    *contracts.Handler
@@ -114,6 +115,9 @@ func NewServer(deps Deps) *Server {
 	r.Use(RecoveryMiddleware(log))
 	r.Use(CORSMiddleware(deps.CORSConfig, log))
 	r.Use(SecurityHeadersMiddleware())
+	if deps.TracingMiddleware != nil {
+		r.Use(deps.TracingMiddleware)
+	}
 
 	// System endpoints: mount the health handler's ServeMux at the root
 	// so that /healthz and /readyz paths are preserved as-is. Mounting at

@@ -1,0 +1,58 @@
+{
+  "agent_instructions": {
+    "before_start": [
+      "Этот файл — backlog задач Frontend, отложенных за пределы текущего релиза (v1.1+). Не приступай к выполнению задач отсюда без явного решения о промоушене",
+      "Если задача промоутится в активную работу — переноси её в Frontend/tasks.json (с сохранением ID), затем прочитай новые dependencies",
+      "Прочитай этот файл и git log --oneline -20 для понимания контекста"
+    ],
+    "during_work": [
+      "Backlog-задачи могут потребовать декомпозиции на момент промоушена — проверь актуальность acceptance criteria",
+      "Не трогай код, не связанный с текущей задачей"
+    ],
+    "before_finish": [
+      "Выполни ВСЕ test_steps из задачи",
+      "Меняй status на done ТОЛЬКО после успешного прохождения всех тестов",
+      "Напиши summary в progress.md",
+      "ЗАПРЕЩЕНО удалять или редактировать задачи — только менять status"
+    ],
+    "note": "FE-TASK-003 — реализация AuditPage (UI журнала действий и аудита для ORG_ADMIN). Отложена в v1.1, т.к. backend-зависимости (ORCH-TASK-044..046) сами в backlog. Дизайн готов в Figma как зафиксированный контракт. Триггер промоушена: закрытие ORCH-TASK-045 (минимум — basic read API)."
+  },
+  "tasks": [
+    {
+      "id": "FE-TASK-003",
+      "category": "feature",
+      "priority": "high",
+      "description": "Реализация AuditPage по существующему дизайну в Figma (10. Журнал действий и аудит, ~9 состояний). Включает: AuditMetrics, DateRangeFilter, QuickFilters, AuditTable с виртуализацией, EventDetailPanel, suspicious-маркеры, экспорт CSV/PDF, retention-archived view. Доступно только ORG_ADMIN (RBAC permission `audit.view`). Замена заглушки v1: до этой задачи маршрут /audit не активен, sidebar-пункт скрыт.",
+      "acceptance_criteria": [
+        "Реализация pages/audit/AuditPage.tsx по макету Figma — все 9 состояний 1:1 (Default, Loading, Empty, Error, FilterApplied, SuspiciousActivity, Export, RetentionArchived, EventDetail open)",
+        "Хук useAudit(filters: AuditFilters) — useQuery на GET /api/v1/audit с поддержкой фильтров (from, to, action, user_id, resource_type, suspicious_only); query-key qk.audit(filters); staleTime 15s; refetchOnWindowFocus: true (по §4.3 архитектуры)",
+        "Хук useAuditExport() — useMutation на GET /api/v1/audit/export с обработкой 302 redirect (window.location.assign на presigned URL); rate-limit error 429 → toast 'Превышен лимит экспортов на сегодня' + Retry-After от backend",
+        "Хук useArchivedAudit(filters) — useQuery на GET /api/v1/audit/archived (только если backend-флаг архивирования включён, иначе возвращает empty)",
+        "Виртуализация AuditTable через @tanstack/react-virtual — справляется с 10k+ строк без деградации (по §11.2 архитектуры)",
+        "DateRangeFilter — date-fns + ru locale (NFR-5.2); presets ('сегодня', '7 дней', '30 дней', 'произвольный диапазон'); отражается в URL search params",
+        "QuickFilters — multi-select chips для action (18+ значений из ApiBackendOrchestrator/architecture/security.md §10.1: AUTH_LOGIN, CONTRACT_UPLOAD, ...); фильтры также в URL",
+        "EventDetailPanel — drawer/sheet справа с полным JSON записи (timestamp, action, user_id, resource_type, resource_id, correlation_id, ip_address, user_agent, details, result, duration_ms); кнопка 'Скопировать correlation_id'",
+        "Suspicious-маркер — RiskBadge или specialized SuspiciousIcon в строке таблицы при suspicious_pattern != null; tooltip с описанием паттерна (BRUTE_FORCE_LOGIN, MASS_DOWNLOAD, OFF_HOURS_ADMIN, NEW_USER_DELETION)",
+        "RBAC: маршрут /audit активирован (был v1.1-заглушкой), защищён <RequireRole roles={['ORG_ADMIN']}>; LAWYER/BUSINESS_USER → редирект на /403; sidebar-пункт 'Журнал' активирован (был скрыт в v1) и виден через <Can I='audit.view'>",
+        "Обработка ошибок: 401 expired → silent refresh; 403 → /403 экран; 404 (записей нет) → EmptyState 'Аудит-записей пока нет'; 502 → sticky-toast 'Сервис аудита временно недоступен'",
+        "i18n: все строки через i18next (ru); NFR-5.2: сообщения об ошибках на русском с подсказкой следующего шага",
+        "Storybook stories покрывают все 9 состояний + Hover/Focus для интерактивных контролов",
+        "e2e-тесты (Playwright): (1) ORG_ADMIN заходит на /audit → видит таблицу с записями; (2) применение date range фильтра меняет результат; (3) клик на строку открывает EventDetailPanel; (4) экспорт CSV → файл скачивается; (5) BUSINESS_USER пытается /audit → 403; (6) фильтр suspicious_only=true → видны только маркированные записи",
+        "a11y: axe-playwright не находит блокирующих нарушений; таблица навигируется с клавиатуры",
+        "Bundle-size budget: chunks/audit ≤ 100 КБ gzip (включая виртуализацию + date-picker)"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run typecheck — без ошибок (тип AuditRecord сгенерирован из OpenAPI после ORCH-TASK-044)",
+        "Шаг 2: npm run lint — без ошибок",
+        "Шаг 3: npm run test — unit-тесты для useAudit, useAuditExport и компонентов проходят",
+        "Шаг 4: npm run e2e -- --grep audit — 6 e2e-тестов проходят",
+        "Шаг 5: визуальная регрессия Chromatic — 9 stories для AuditPage соответствуют макету",
+        "Шаг 6: npm run build && npx size-limit — chunks/audit в пределах 100 КБ gzip",
+        "Шаг 7: ручная проверка с реальным backend — фильтры/пагинация/экспорт работают end-to-end",
+        "Шаг 8: load-тест UI — открыть /audit на организации с 10k+ записей, скролл таблицы плавный (≥ 50 fps), нет JS-тротлинга"
+      ],
+      "dependencies": ["ORCH-TASK-045"],
+      "status": "pending"
+    }
+  ]
+}

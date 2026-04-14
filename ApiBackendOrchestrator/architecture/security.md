@@ -117,10 +117,11 @@ Frontend                    Orchestrator                 UOM
 
 | Ситуация | HTTP-статус | Тело ответа |
 |----------|-------------|-------------|
-| Отсутствует заголовок Authorization | 401 | `{"error_code": "MISSING_TOKEN", "message": "Требуется аутентификация"}` |
-| Невалидная подпись / истёк токен | 401 | `{"error_code": "INVALID_TOKEN", "message": "Недействительный токен авторизации"}` |
-| Невалидный refresh token | 401 | `{"error_code": "INVALID_REFRESH_TOKEN", "message": "Недействительный токен обновления"}` |
-| UOM недоступен (login/refresh) | 503 | `{"error_code": "AUTH_SERVICE_UNAVAILABLE", "message": "Сервис аутентификации временно недоступен"}` |
+| Отсутствует заголовок Authorization | 401 | `{"error_code": "AUTH_TOKEN_MISSING", "message": "Требуется аутентификация"}` |
+| Истёк access token (`exp` в прошлом) | 401 | `{"error_code": "AUTH_TOKEN_EXPIRED", "message": "Срок действия токена истёк"}` |
+| Невалидная подпись / повреждённый токен / отсутствуют обязательные claims | 401 | `{"error_code": "AUTH_TOKEN_INVALID", "message": "Недействительный токен авторизации"}` |
+| Невалидный refresh token | 401 | `{"error_code": "AUTH_TOKEN_INVALID", "message": "Недействительный токен обновления"}` |
+| UOM недоступен (login/refresh) | 502 | `{"error_code": "UOM_UNAVAILABLE", "message": "Сервис аутентификации временно недоступен"}` |
 
 ### 1.6 Публичные endpoints (без JWT)
 
@@ -179,6 +180,7 @@ GET /api/v1/events/stream?token=eyJhbGciOiJSUzI1NiIs...
 | `/contracts/{id}/versions/{vid}/export` | POST | Допуск | По политике OPM | Допуск |
 | `/contracts/{id}/versions/{vid}/compare` | POST | Допуск | Запрет | Допуск |
 | `/contracts/{id}/versions/{vid}/recheck` | POST | Допуск | Запрет | Допуск |
+| `/contracts/{id}/versions/{vid}/confirm-type` | POST | Допуск | Запрет | Допуск |
 | `/contracts/{id}/versions/{vid}/feedback` | POST | Допуск | Допуск | Допуск |
 | `/contracts/{id}/archive` | POST | Допуск | Запрет | Допуск |
 | `/contracts/{id}` | DELETE | Допуск | Запрет | Допуск |
@@ -204,9 +206,10 @@ var accessRules = map[string][]string{
     "GET  /api/v1/contracts":                                {"LAWYER", "BUSINESS_USER", "ORG_ADMIN"},
     "GET  /api/v1/contracts/{id}/versions/{vid}/results":    {"LAWYER", "ORG_ADMIN"},
     "GET  /api/v1/contracts/{id}/versions/{vid}/summary":    {"LAWYER", "BUSINESS_USER", "ORG_ADMIN"},
-    "POST /api/v1/contracts/{id}/versions/{vid}/compare":    {"LAWYER", "ORG_ADMIN"},
-    "POST /api/v1/contracts/{id}/versions/{vid}/recheck":    {"LAWYER", "ORG_ADMIN"},
-    "POST /api/v1/contracts/{id}/archive":                   {"LAWYER", "ORG_ADMIN"},
+    "POST /api/v1/contracts/{id}/versions/{vid}/compare":      {"LAWYER", "ORG_ADMIN"},
+    "POST /api/v1/contracts/{id}/versions/{vid}/recheck":      {"LAWYER", "ORG_ADMIN"},
+    "POST /api/v1/contracts/{id}/versions/{vid}/confirm-type": {"LAWYER", "ORG_ADMIN"},
+    "POST /api/v1/contracts/{id}/archive":                     {"LAWYER", "ORG_ADMIN"},
     "DELETE /api/v1/contracts/{id}":                          {"LAWYER", "ORG_ADMIN"},
     "GET  /api/v1/admin/policies":                           {"ORG_ADMIN"},
     "PUT  /api/v1/admin/policies/{id}":                      {"ORG_ADMIN"},
@@ -235,6 +238,8 @@ HTTP-статус: **403 Forbidden**.
 | `ORG_ADMIN` | Все (аналогично LAWYER) |
 
 Results Aggregator проверяет роль из auth context и запрашивает из DM только разрешённые типы артефактов.
+
+Дополнительно для BUSINESS_USER: доступ к экспорту (`EXPORT_PDF`/`EXPORT_DOCX`) определяется computed-флагом `permissions.export_enabled` в `UserProfile` (см. high-architecture.md §6.21 Permissions Resolver). Флаг агрегируется из политики OPM `business_user_export` с fallback на `ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT` (default `false`). Frontend читает флаг из `GET /users/me`, не дёргает OPM напрямую.
 
 ---
 
@@ -330,36 +335,49 @@ Content-Type: application/json
 
 ## 5. CORS (Cross-Origin Resource Sharing)
 
+> **Архитектурное решение (ADR-6, high-architecture.md):** v1 production deployment — **same-origin** (единый nginx раздаёт SPA-статику и проксирует `/api/*` на Orchestrator). CORS-middleware **не активируется** в production. Конфигурация ниже — заготовка на случай:
+> - будущего разделения доменов (cross-origin deployment),
+> - внешних кросс-доменных интеграций (ЭДО, CRM — публичный API),
+> - не-стандартных dev-окружений.
+
 ### 5.1 Конфигурация
 
 | Параметр | Значение по умолчанию | Env-переменная |
 |----------|----------------------|----------------|
-| Allowed Origins | Same-origin only (пусто = запрет) | `ORCH_CORS_ALLOWED_ORIGINS` (comma-separated) |
+| Allowed Origins | Same-origin only (пусто = CORS не активируется) | `ORCH_CORS_ALLOWED_ORIGINS` (comma-separated) |
 | Allowed Methods | `GET, POST, PUT, DELETE, OPTIONS` | -- |
-| Allowed Headers | `Authorization, Content-Type, X-Correlation-ID` | -- |
-| Exposed Headers | `X-Request-ID, Retry-After` | -- |
+| Allowed Headers | `Authorization, Content-Type, X-Correlation-Id, traceparent, tracestate` | -- |
+| Exposed Headers | `X-Request-Id, Retry-After, traceparent` | -- |
 | Max-Age (preflight cache) | 3600 секунд (1 час) | -- |
 | Allow Credentials | `true` | -- |
 
+**Канонический case заголовков:** `X-Correlation-Id`, `X-Request-Id` (mixed case). HTTP-спецификация case-insensitive, но строгие прокси/WAF могут отличаться — фиксируем единую форму, совпадающую с frontend-кодом (`Frontend §7.2`).
+
+**Заголовки `traceparent` / `tracestate`** — W3C Trace Context (RFC 9110). Frontend OpenTelemetry-инструментация (`@opentelemetry/instrumentation-fetch`, см. Frontend §14.3) автоматически инжектит их в каждый запрос. При cross-origin без них в Allow-Headers preflight будет блокировать **все** запросы.
+
 ### 5.2 Правила
 
-1. **По умолчанию** -- same-origin only. CORS-запросы отклоняются, если `ORCH_CORS_ALLOWED_ORIGINS` не задан.
-2. **Production:** `ORCH_CORS_ALLOWED_ORIGINS=https://app.contractpro.ru` -- разрешён только домен frontend-приложения.
-3. **Development:** `ORCH_CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173` -- разрешены локальные dev-серверы.
-4. Wildcard `*` **запрещён** (credentials mode несовместим с `*`).
+1. **Production v1 (same-origin) — `ORCH_CORS_ALLOWED_ORIGINS` пустой.** CORS middleware пропускает запросы без CORS-обработки. nginx-proxy единый для SPA и API (см. Frontend §13.2 nginx.conf).
+2. **Production cross-origin (будущее) — `ORCH_CORS_ALLOWED_ORIGINS=https://app.contractpro.ru`** — список явных доменов frontend-приложения.
+3. **Development cross-origin — `ORCH_CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173`** — для случаев, когда Vite proxy не используется.
+4. **Wildcard `*` запрещён** (credentials mode несовместим с `*`).
 
 ### 5.3 Preflight-запросы
 
-Для `OPTIONS`-запросов middleware возвращает ответ сразу, не передавая запрос дальше по цепочке:
+Для `OPTIONS`-запросов middleware возвращает ответ сразу, не передавая запрос дальше по цепочке (только если `ORCH_CORS_ALLOWED_ORIGINS` непустой):
 
 ```
 OPTIONS /api/v1/contracts
 Origin: https://app.contractpro.ru
+Access-Control-Request-Method: POST
+Access-Control-Request-Headers: authorization, content-type, x-correlation-id, traceparent
 
 → 204 No Content
   Access-Control-Allow-Origin: https://app.contractpro.ru
   Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
-  Access-Control-Allow-Headers: Authorization, Content-Type, X-Correlation-ID
+  Access-Control-Allow-Headers: Authorization, Content-Type, X-Correlation-Id, traceparent, tracestate
+  Access-Control-Expose-Headers: X-Request-Id, Retry-After, traceparent
+  Access-Control-Allow-Credentials: true
   Access-Control-Max-Age: 3600
   Vary: Origin
 ```
@@ -489,7 +507,7 @@ Origin: https://app.contractpro.ru
 |----------|-----|-------------|
 | `page` | int | >= 1, default 1 |
 | `size` | int | 1--100, default 20 |
-| `status` | string | Опциональный, whitelist: `UPLOADED`, `QUEUED`, `PROCESSING`, `ANALYZING`, `GENERATING_REPORTS`, `READY`, `PARTIALLY_FAILED`, `FAILED`, `REJECTED` |
+| `status` | string | Опциональный, whitelist: `UPLOADED`, `QUEUED`, `PROCESSING`, `ANALYZING`, `AWAITING_USER_INPUT`, `GENERATING_REPORTS`, `READY`, `PARTIALLY_FAILED`, `FAILED`, `REJECTED` |
 | `search` | string | Опциональный, 1--200 символов, trimmed |
 
 ---

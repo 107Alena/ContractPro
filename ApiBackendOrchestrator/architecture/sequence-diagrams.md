@@ -641,3 +641,84 @@ sequenceDiagram
 
     ORCH-->>FE: 200 {status: "PARTIALLY_FAILED",<br/>summary: "...", risks: null,<br/>error: "Часть анализа не была завершена"}
 ```
+
+---
+
+## 8.15 Подтверждение типа договора при низкой уверенности (UR-3 / FR-2.1.3)
+
+### Happy path
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant ORCH as Orchestrator
+    participant Redis as Redis
+    participant RMQ as RabbitMQ
+    participant LIC as Legal Intelligence Core
+
+    Note over LIC: Анализ типа договора<br/>confidence < threshold
+
+    LIC->>RMQ: ClassificationUncertain<br/>→ lic.events.classification-uncertain<br/>{version_id, suggested_type,<br/>confidence: 0.62, threshold: 0.75,<br/>alternatives: [...]}
+    RMQ->>ORCH: deliver event
+
+    ORCH->>Redis: SET status:{vid} = AWAITING_USER_INPUT
+    ORCH->>Redis: SET confirmation:wait:{vid} TTL 24h
+    ORCH-->>FE: SSE event_type: type_confirmation_required<br/>{status: "AWAITING_USER_INPUT",<br/>suggested_type, confidence,<br/>threshold, alternatives}
+
+    Note over FE: Модалка выбора типа<br/>пользователь выбирает
+
+    FE->>ORCH: POST /api/v1/contracts/{id}/versions/{vid}/confirm-type<br/>{contract_type, confirmed_by_user: true}
+    ORCH->>ORCH: JWT Auth → RBAC (LAWYER | ORG_ADMIN)
+
+    ORCH->>Redis: GET status:{vid}
+    Redis-->>ORCH: AWAITING_USER_INPUT (OK)
+
+    ORCH->>ORCH: Validate contract_type<br/>против whitelist LIC
+
+    ORCH->>Redis: SETEX orch-user-confirmed-type:{vid} 60s<br/>(idempotency)
+
+    ORCH->>RMQ: publish UserConfirmedType<br/>→ orch.commands.user-confirmed-type<br/>{correlation_id, job_id, contract_type,<br/>confirmed_by_user_id, ...}
+
+    ORCH->>Redis: SET status:{vid} = ANALYZING
+    ORCH->>Redis: DEL confirmation:wait:{vid}
+
+    ORCH-->>FE: 202 Accepted<br/>{document_id, version_id, status: "ANALYZING"}
+    ORCH-->>FE: SSE status_update<br/>{status: "ANALYZING", message: "Анализ возобновлён"}
+
+    RMQ->>LIC: UserConfirmedType
+    Note over LIC: Анализ продолжается<br/>с зафиксированным типом
+```
+
+### Альтернатива: версия не в AWAITING_USER_INPUT (409)
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant ORCH as Orchestrator
+    participant Redis as Redis
+
+    FE->>ORCH: POST /confirm-type {contract_type}
+    ORCH->>Redis: GET status:{vid}
+    Redis-->>ORCH: ANALYZING (уже подтверждено)
+
+    ORCH-->>FE: 409 {error_code: "VERSION_NOT_AWAITING_INPUT",<br/>message: "Подтверждение типа уже не требуется или ещё рано",<br/>suggestion: "Обновите страницу — актуальный статус доступен в реальном времени"}
+```
+
+### Альтернатива: таймаут подтверждения (24h)
+
+```mermaid
+sequenceDiagram
+    participant W as Watchdog (Orchestrator)
+    participant Redis as Redis
+    participant ORCH as Orchestrator
+    participant FE as Frontend
+
+    Note over W: Периодический скан<br/>(или Redis Keyspace Notifications)
+
+    Redis-->>W: TTL expired<br/>confirmation:wait:{vid}
+
+    W->>Redis: SET status:{vid} = FAILED
+    W->>Redis: SET error_code:{vid} = USER_CONFIRMATION_TIMEOUT
+
+    ORCH-->>FE: SSE status_update<br/>{status: "FAILED",<br/>error_code: "USER_CONFIRMATION_TIMEOUT",<br/>message: "Время на подтверждение типа договора истекло"}
+```

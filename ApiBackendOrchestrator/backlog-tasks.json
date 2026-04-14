@@ -1,0 +1,131 @@
+{
+  "agent_instructions": {
+    "before_start": [
+      "Этот файл — backlog задач, отложенных за пределы текущего релиза (v1.1+). Не приступай к выполнению задач отсюда без явного решения о промоушене",
+      "Если задача промоутится в активную работу — переноси её в ApiBackendOrchestrator/tasks.json (с сохранением ID), затем прочитай новые dependencies",
+      "Прочитай этот файл и git log --oneline -20 для понимания контекста"
+    ],
+    "during_work": [
+      "Backlog-задачи могут потребовать декомпозиции на момент промоушена — проверь актуальность acceptance criteria",
+      "Не трогай код, не связанный с текущей задачей"
+    ],
+    "before_finish": [
+      "Выполни ВСЕ test_steps из задачи",
+      "Меняй status на done ТОЛЬКО после успешного прохождения всех тестов",
+      "Напиши summary в progress.md",
+      "ЗАПРЕЩЕНО удалять или редактировать задачи — только менять status"
+    ],
+    "note": "Задачи ORCH-TASK-044..046 — реализация Audit Service (UI аудита для ORG_ADMIN, отложено в v1.1). Триггер промоушена: либо требование клиента/регулятора (152-ФЗ), либо переход на v1.1. Frontend-парная задача — FE-TASK-003 в Frontend/backlog-tasks.json."
+  },
+  "tasks": [
+    {
+      "id": "ORCH-TASK-044",
+      "category": "architecture",
+      "priority": "high",
+      "description": "Архитектурный дизайн Audit Service для product-facing UI аудита (NFR-3.4 / раздел 9 ТЗ + Frontend §18 п.5). Текущий audit-механизм — structured logs в ELK/Grafana (security.md §10) — не подходит как product API: logs не оптимизированы под product pagination, нет SLA на чтение, tenant isolation сложна. Задача определяет архитектуру нового storage-tier audit для UI ORG_ADMIN: где жить (отдельный сервис vs модуль Orchestrator), data model, write-path (event-driven vs sync), retention strategy, contract публичного API.",
+      "acceptance_criteria": [
+        "ADR создан и согласован: Audit Service как (а) отдельный stateful домен с собственным репозиторием, либо (б) stateful модуль внутри Orchestrator (нарушает принцип stateless, требует обоснования). Решение зафиксировано с trade-offs",
+        "Data model спроектирован: таблица audit_records с полями timestamp, action (enum из security.md §10.1, 18+ значений), user_id, organization_id, resource_type, resource_id, correlation_id, ip_address, user_agent, details (JSONB), result (SUCCESS/FAILURE), duration_ms; индексы для filtering по (organization_id, timestamp DESC), (organization_id, user_id, timestamp DESC), (organization_id, action, timestamp DESC)",
+        "Write-path спроектирован: Orchestrator продолжает писать audit как structured logs (для ELK/Grafana — observability), параллельно публикует событие orch.events.audit-record в RabbitMQ; Audit Service потребляет события и пишет в БД. Преимущество: не блокирует HTTP-ответ Orchestrator + ELK остаётся single source of truth для observability",
+        "Retention strategy спроектирована: 3 года по NFR-3.5, конфигурируемо (AUDIT_RETENTION_DAYS); фоновый job archival для записей > retention (либо partition-based: партиции по месяцам, drop старых); архивные данные либо удаляются, либо переносятся в холодное хранилище (S3 Glacier — TBD на этапе имплементации)",
+        "Read API контракт зафиксирован в OpenAPI: GET /api/v1/audit?from=ISO8601&to=ISO8601&action=string&user_id=UUID&resource_type=string&page=int&size=int (max size=100); response: {items: AuditRecord[], total: int, page: int, size: int}; RBAC только ORG_ADMIN; tenant isolation по organization_id из JWT (никогда из query)",
+        "ApiBackendOrchestrator/architecture/api-specification.yaml расширен: добавлен endpoint GET /audit, schemas AuditRecord и AuditList, тег [Audit]",
+        "ApiBackendOrchestrator/architecture/high-architecture.md расширен: §3.x границы относительно нового Audit Service, §6.x новый компонент Audit Read Proxy (если выбрана опция отдельного сервиса) либо §6.x новый компонент Audit Service Module (если в Orchestrator)",
+        "ApiBackendOrchestrator/architecture/event-catalog.md расширен: исходящее событие orch.events.audit-record (Orchestrator publishes) с полной JSON-схемой по security.md §10.2",
+        "ApiBackendOrchestrator/architecture/security.md §10 обновлён: явное упоминание Audit Service как product-tier хранилища, разделение product-tier vs observability-tier (logs)",
+        "Если выбрана опция отдельного сервиса — создан AuditService/architecture/ с минимум 3 файлами (high-architecture.md, api-specification.yaml как internal API между Orchestrator и Audit Service, configuration.md с env-переменными)"
+      ],
+      "test_steps": [
+        "Шаг 1: review ADR с командами Orchestrator, DM, security — нет блокирующих возражений",
+        "Шаг 2: openapi-generator validate api-specification.yaml — endpoint GET /audit добавлен, без ошибок",
+        "Шаг 3: согласование с продуктом — фильтры и пагинация покрывают 9 Figma-состояний экрана 'Журнал действий и аудит'",
+        "Шаг 4: ручной capacity check — оценка размера audit-таблицы для 1000 контрактов/день × 18 действий × 3 года ≈ 20M записей; индексы покрывают типичные запросы (filter by date range + organization)"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-045",
+      "category": "feature",
+      "priority": "high",
+      "description": "Реализация Audit Service: persistent storage + write-path + read API. Включает: PostgreSQL-таблицу audit_records со схемой из ORCH-TASK-044, миграции, индексы, partitioning by month (если решено в ADR); event consumer для orch.events.audit-record (записывает в БД); read-handler GET /api/v1/audit с фильтрами, пагинацией, RBAC, tenant isolation; модификация Orchestrator для публикации событий audit-record параллельно с logs.",
+      "acceptance_criteria": [
+        "PostgreSQL миграция: таблица audit_records с полной схемой из ORCH-TASK-044, индексы, partitioning by month (RANGE partition по timestamp)",
+        "Audit Service / модуль реализует: (1) consumer событий orch.events.audit-record с at-least-once delivery + idempotency через correlation_id; (2) GET /api/v1/audit handler с обязательным фильтром organization_id (из JWT, не из query); (3) поддержка фильтров by date range, action, user_id, resource_type; (4) пагинация (cursor-based для эффективности на больших объёмах, либо offset-based с явным max page); (5) max size=100, default size=20",
+        "Orchestrator расширен: новый egress publisher AuditRecordPublisher — публикует orch.events.audit-record на каждое аудируемое действие (18+ типов из security.md §10.1) параллельно с написанием structured log; non-blocking (failure publish → WARN-лог, не блокирует HTTP-ответ)",
+        "RBAC middleware: GET /api/v1/audit доступен только ORG_ADMIN (из JWT claim role); другие роли → 403 PERMISSION_DENIED",
+        "Tenant isolation enforced: SQL-запрос всегда содержит WHERE organization_id = $1 (из JWT), даже если клиент передал organization_id в query → query-параметр игнорируется",
+        "Конфигурация: AUDIT_DB_CONNECTION (PostgreSQL connection string), AUDIT_RETENTION_DAYS (default 1095 = 3 года), AUDIT_PARTITION_INTERVAL (default 'monthly'), AUDIT_QUERY_MAX_SIZE (default 100)",
+        "Метрики Prometheus: audit_records_written_total (counter, label action), audit_query_duration_seconds (histogram, label organization_id_hash), audit_storage_size_bytes (gauge)",
+        "Unit-тесты: handler (happy path с пагинацией, 401, 403 не-ORG_ADMIN, 400 невалидные фильтры, tenant isolation — клиент A не видит записи клиента B), consumer (idempotency через correlation_id, валидация payload), publisher (non-blocking failure)",
+        "Integration-тест: end-to-end — Orchestrator принимает HTTP-запрос (например, POST /contracts/upload) → publisher публикует audit-record → consumer записывает в БД → GET /api/v1/audit от ORG_ADMIN возвращает запись"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/audit/... (или соответствующий путь) — все тесты проходят",
+        "Шаг 2: интеграционный тест с testcontainers Postgres — миграция применяется, индексы созданы, partition создан",
+        "Шаг 3: load-test (k6 или vegeta) — GET /api/v1/audit?size=100 при 100k записей в БД отвечает p95 ≤ 500ms",
+        "Шаг 4: tenant isolation тест — SQL injection попытка через query string (organization_id=...) не возвращает чужие данные",
+        "Шаг 5: openapi-generator validate api-specification.yaml — без ошибок"
+      ],
+      "dependencies": ["ORCH-TASK-044"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-046",
+      "category": "feature",
+      "priority": "medium",
+      "description": "Расширение Audit Service: detection подозрительной активности, экспорт аудита, retention archived view. Соответствует продвинутым Figma-состояниям экрана аудита: 'Suspicious Activity' (id 256:2), 'Export' (id 258:2), 'Retention Archived' (id 258:37).",
+      "acceptance_criteria": [
+        "Детектор подозрительной активности: фоновый job, периодически (default 5 мин) сканирует audit_records и помечает паттерны: (а) >10 неудачных AUTH_LOGIN_FAILED с одного IP за 5 мин; (б) >50 CONTRACT_VIEW от одного user_id за 1 мин (массовое скачивание); (в) POLICY_UPDATE / CHECKLIST_UPDATE вне рабочих часов организации (TBD: где брать рабочие часы — OPM или env); (г) DELETE-операции от user, который недавно был добавлен (<24h в систему)",
+        "Suspicious flag: новое поле audit_records.suspicious_pattern (nullable string, e.g. 'BRUTE_FORCE_LOGIN', 'MASS_DOWNLOAD', 'OFF_HOURS_ADMIN', 'NEW_USER_DELETION'); миграция добавляет колонку и индекс",
+        "GET /api/v1/audit поддерживает фильтр ?suspicious_only=true — возвращает только записи с suspicious_pattern != NULL",
+        "Endpoint экспорта аудита: GET /api/v1/audit/export?format={csv|pdf}&from=&to=&action=... — возвращает 302 Redirect на presigned S3 URL (по аналогии с export отчётов в §8.6); RBAC ORG_ADMIN; rate limit (max 5 экспортов в день на организацию)",
+        "Endpoint retention-archived: GET /api/v1/audit/archived — возвращает заархивированные записи (старше AUDIT_RETENTION_DAYS, перенесённые в холодное хранилище); либо HTTP 200 с пустым списком, если архивирование не настроено в данном окружении",
+        "Архивирование: фоновый job (default ежедневно), переносит записи старше retention в S3 Glacier (либо удаляет, конфигурируется AUDIT_ARCHIVE_STRATEGY=delete|s3)",
+        "Конфигурация: AUDIT_SUSPICIOUS_DETECTION_INTERVAL (5m), AUDIT_EXPORT_RATE_LIMIT (5/day per org), AUDIT_ARCHIVE_STRATEGY (delete|s3), AUDIT_S3_BUCKET_ARCHIVE",
+        "Unit-тесты: detector (4 паттерна, граничные случаи), export handler (CSV формат корректен, presigned URL TTL 5 мин, rate limit 429 после 5 экспортов), archived handler",
+        "Integration-тест: seed 100 audit-записей с разными timestamps → запуск архивирования с retention=1day → проверка, что записи перенесены/удалены, GET /audit их не возвращает, GET /audit/archived возвращает (если S3-strategy)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/audit/detection/... — все тесты проходят",
+        "Шаг 2: go test -race ./internal/audit/export/... — экспорт CSV/PDF работает",
+        "Шаг 3: integration тест с testcontainers + minio (S3 mock) — архивирование работает",
+        "Шаг 4: ручная проверка с реальным фронтендом (FE-TASK-003): на странице /audit отображаются suspicious записи с маркером, экспорт скачивается, archived view доступен"
+      ],
+      "dependencies": ["ORCH-TASK-045"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-047",
+      "category": "feature",
+      "priority": "medium",
+      "description": "Endpoint POST /api/v1/auth/sse-ticket для замены JWT-в-URL на одноразовый sse_ticket при аутентификации SSE-соединений. Backend-часть Frontend ADR-FE-10 (Frontend/architecture/adr/010-sse-ticket-auth.md). Текущее решение (полный JWT в query-параметре GET /events/stream?token=...) митигирует серверную поверхность утечки (security.md §1.7), но не закрывает клиентскую: browser history, third-party JS (Sentry/GA/расширения), CDN raw access logs, screenshots/shared screen, snowballing-эффект при XSS. Замена на opaque-ticket (60с TTL, одноразовый, scoped только на SSE) существенно снижает blast radius при утечке.",
+      "acceptance_criteria": [
+        "OpenAPI: добавлен endpoint POST /api/v1/auth/sse-ticket в api-specification.yaml; auth обязательна (Bearer JWT в Authorization header); response 200 {ticket: string (16-byte URL-safe base64), expires_in: integer (default 60)}; ошибки 401",
+        "internal/ingress/api/sseticket: handler IssueSSETicket — генерирует cryptorand 16 байт → base64.RawURLEncoding (22 символа без padding); сохраняет в Redis ключ sse-ticket:{ticket} → JSON {user_id, organization_id, exp} с TTL ORCH_SSE_TICKET_TTL (default 60s)",
+        "internal/ingress/api/sse: handler GET /events/stream расширен поддержкой query-параметра ?ticket=... (помимо ?token=...); если присутствует ticket — вычитывает Redis-ключ, валидирует org_id/exp, удаляет ключ (одноразовость через DEL после успешной валидации), открывает SSE-соединение от имени пользователя из ticket",
+        "Backwards compatibility: оба механизма (?token= и ?ticket=) поддерживаются параллельно по фича-флагу ORCH_SSE_TICKET_AUTH_ENABLED (default true — frontend может мигрировать на ticket; обратное отключение возможно для отката); при включённом флаге оба query-параметра валидны, при отключённом — только ?token=",
+        "RBAC: endpoint POST /auth/sse-ticket доступен любой аутентифицированной роли (LAWYER/BUSINESS_USER/ORG_ADMIN), как и сам /events/stream",
+        "Rate limiting: POST /auth/sse-ticket ограничен 30 RPS на организацию (ORCH_RATELIMIT_SSE_TICKET_RPS, default 30) — защита от ticket-flooding атак",
+        "Идемпотентность не требуется: каждый вызов POST /auth/sse-ticket генерирует НОВЫЙ ticket (frontend на каждый reconnect запрашивает свежий)",
+        "Конфигурация: ORCH_SSE_TICKET_TTL (default 60s), ORCH_SSE_TICKET_AUTH_ENABLED (default true), ORCH_RATELIMIT_SSE_TICKET_RPS (default 30); добавлено в configuration.md в подраздел SSE",
+        "Метрики Prometheus: orch_sse_tickets_issued_total (counter), orch_sse_tickets_consumed_total (counter, label result=valid|expired|invalid), orch_sse_ticket_ttl_seconds (histogram — фактическое время от issue до consume)",
+        "Логирование: НЕ логировать сам ticket (как и JWT); логировать только {user_id, organization_id, action: 'sse_ticket_issued'|'sse_ticket_consumed'|'sse_ticket_invalid'}",
+        "Audit: новый action SSE_TICKET_ISSUED добавлен в security.md §10.1 audit-операций (через Action-publisher из ORCH-TASK-045 если уже реализовано, иначе только в structured logs)",
+        "security.md §1.7 обновлён: новый раздел про sse_ticket-auth, описание flow, ссылка на ADR-FE-10; threat T-8 в §13 обновляет mitigations (короткоживущий opaque ticket вместо JWT)",
+        "Unit-тесты: handler IssueSSETicket (happy path, 401 без JWT, rate limit 429), handler /events/stream с ticket (happy path consume, 401 invalid ticket, 401 expired ticket, 401 ticket-уже-использован, валидация org_id), backwards compat (?token= и ?ticket= оба работают при включённом флаге)",
+        "Integration-тест: POST /auth/sse-ticket → GET /events/stream?ticket=... → SSE-стрим открыт; повторный GET с тем же ticket → 401; ticket в Redis удалён после первого использования; при ORCH_SSE_TICKET_TTL=2s ожидание 3s → ticket экспирирован → 401"
+      ],
+      "test_steps": [
+        "Шаг 1: openapi-generator validate api-specification.yaml — POST /auth/sse-ticket валиден",
+        "Шаг 2: go test -race ./internal/ingress/api/sseticket/... — все unit-тесты проходят",
+        "Шаг 3: go test -race ./internal/ingress/api/sse/... — расширенные тесты для ?ticket= проходят, backwards compat не сломан",
+        "Шаг 4: go test -race ./internal/integration/... — новый E2E-тест проходит",
+        "Шаг 5: ручной тест с curl: (1) POST /auth/sse-ticket → получаем ticket; (2) curl /events/stream?ticket=... → SSE-стрим; (3) curl с тем же ticket повторно → 401; (4) curl /events/stream?token=<JWT> → также работает (backwards compat)",
+        "Шаг 6: метрики Prometheus отражают issued/consumed корректно"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "agent_instructions": {
+    "before_start": [
+      "Прочитай этот файл и git log --oneline -20",
+      "Выбери ОДНУ задачу со статусом pending и наивысшим приоритетом",
+      "Проверь, что все dependencies этой задачи имеют статус done"
+    ],
+    "during_work": [
+      "Работай только над выбранной задачей",
+      "Делай коммиты после каждого логического изменения",
+      "Не трогай макеты/токены, не связанные с текущей задачей"
+    ],
+    "before_finish": [
+      "Выполни ВСЕ test_steps из задачи",
+      "Меняй status на done ТОЛЬКО после успешного прохождения всех тестов",
+      "Напиши summary в progress.md",
+      "ЗАПРЕЩЕНО удалять или редактировать задачи — только менять status"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "DESIGN-TASK-001",
+      "category": "design-system",
+      "priority": "high",
+      "description": "Доработка макета Figma (file Lxhk7jQyXL3iuoTpiOHxcb): завести Figma Variables для цветовой палитры и устранить дрейф hex-значений. Текущая ситуация: в файле 0 коллекций Variables и 0 переменных (getLocalVariableCollectionsAsync), все цвета вбиты сырыми hex'ами. Frontend-архитектура (Frontend/architecture/high-architecture.md §8.2) ссылается на палитру как на источник истины — без Variables невозможно построить автоматический пайплайн извлечения токенов и неизбежен расход с кодовой базой (см. ревью архитектуры, замечание №1: brand был зафиксирован как #E8600A, а в Figma фактически используется #F55E12).",
+      "acceptance_criteria": [
+        "В Figma-файле создана коллекция Variables 'ContractPro / Foundations' с группами: Brand, Text, Surface, Border, Status, Risk",
+        "Brand: brand/500 = #F55E12 (primary CTA), brand/600 = #D14D0D (hover/active), brand/50 = светлый тинт (производный от brand/500, согласовать с дизайнером)",
+        "Text: text/primary = #11111C (ink), text/muted = #666B78, text/inverse = #FFFFFF",
+        "Surface: surface/default = #FFFFFF, surface/muted = #F9FAFB",
+        "Border: border/default = #D9DEE5",
+        "Status: status/success = #21966B, status/warning = #FAD133, status/danger = #DB2626, status/info (согласовать с дизайнером)",
+        "Risk: risk/high = #DB2626, risk/medium = #FAD133, risk/low = #21966B (алиасы на Status, чтобы при изменении палитры менялось одновременно)",
+        "Все 10 основных экранов (Landing, Auth, Dashboard, Новая проверка, Результат, Сравнение, Документы, Карточка документа, Отчёты, Аудит) и все ~70 state-фреймов перепривязаны к Variables (никаких сырых hex для перечисленных назначений)",
+        "Создан фрейм 'Foundations / Color Tokens' с визуальной легендой всех токенов и подписями имён переменных — служит контрактом для frontend",
+        "В Figma выпущена publishable Library с этой коллекцией Variables (для последующего извлечения через Figma REST API)",
+        "Подготовлен экспорт коллекции Variables в JSON (через Figma plugin или REST API) — приложить к задаче для последующего скрипта генерации tokens.css"
+      ],
+      "test_steps": [
+        "Шаг 1: в Figma запустить getLocalVariableCollectionsAsync — должна вернуться 1 коллекция 'ContractPro / Foundations' с минимум 16 переменными",
+        "Шаг 2: визуальный аудит — на всех 10 экранах открыть Inspect → проверить, что у CTA-кнопок, бейджей рисков и статусных меток в свойстве fill стоит ссылка на переменную, а не hex",
+        "Шаг 3: автоматический grep по экспортированному JSON-снапшоту файла — отсутствие #E8600A, #C84E00, #16A34A, #F59E0B, #DC2626, #0F1115 (старые значения, которые больше не должны появляться)",
+        "Шаг 4: сверка с Frontend/architecture/high-architecture.md §8.2 — все hex-значения в tokens.css 1:1 совпадают с Variables в Figma",
+        "Шаг 5: проверка Library publishing — коллекция доступна для подключения в другие Figma-файлы",
+        "Шаг 6: smoke-тест экспорта — Variables успешно выгружаются в JSON через Figma REST API (GET /v1/files/{file_key}/variables/local)"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "DESIGN-TASK-002",
+      "category": "design-screens",
+      "priority": "high",
+      "description": "Спроектировать в Figma admin-страницы AdminPoliciesPage и AdminChecklistsPage для роли ORG_ADMIN (UR-12 / FR-6.1). На текущий момент в Figma-файле Lxhk7jQyXL3iuoTpiOHxcb присутствуют 10 main screens, ни один из которых не покрывает административную функциональность — есть только role-restricted states ('No Policy Template', 'Limited Access', 'Access Restricted') внутри основных экранов. Backend-контракт готов: OpenAPI описывает 4 endpoint'а (GET/PUT /admin/policies, GET/PUT /admin/checklists), Orchestrator §8.9 описывает sequence. Без макетов Frontend в v1 ставит placeholder с EmptyState (FE-TASK-001), полноценный UI (FE-TASK-002) разблокируется этой задачей.",
+      "acceptance_criteria": [
+        "Создан макет AdminPoliciesPage (1440px) минимум с 5 состояниями: Default (список политик), Loading, Empty (политик нет), Error (OPM_UNAVAILABLE 502), Editing (открыта форма редактирования политики)",
+        "Создан макет AdminChecklistsPage (1440px) минимум с 5 состояниями: Default (список чек-листов), Loading, Empty, Error, Editing",
+        "Поля и контролы на макетах соответствуют schemas в ApiBackendOrchestrator/architecture/api-specification.yaml: Policy / PolicyUpdateRequest (минимум: id, name, description, enabled, severity ∈ {high, medium, low}); Checklist / ChecklistUpdateRequest (минимум: id, name, items[], каждый item с enabled и severity)",
+        "Покрыто FR-6.1 'включать/отключать пункты чек-листов, настраивать строгость/правила': UI-control для toggle-чек-листов (switch), для изменения severity (radio или dropdown), для глобальной строгости организации (slider или segmented control)",
+        "Использованы Variables из DESIGN-TASK-001 (если та закрыта раньше) — иначе hex-значения в макете явно помечены тегом 'to-be-tokenized' для последующей миграции",
+        "Спроектированы role-restricted состояния: что видит LAWYER/BUSINESS_USER при попытке зайти на admin-страницу — отдельный экран '403 Доступ ограничен' либо скрытие пункта меню (согласовать с продуктом)",
+        "Согласован копирайт на русском (NFR-5.2): названия полей, плейсхолдеры, сообщения об ошибках, подсказки",
+        "Зафиксирован вопрос к backend-команде: соответствует ли реальная модель данных OPM спроектированным полям (поднять до начала имплементации FE-TASK-002, чтобы избежать дрейфа PolicyUpdateRequest/ChecklistUpdateRequest)",
+        "Mobile/tablet-вариант — TBD; зафиксировать в задаче решение продукта (нужен ли в v1.0.1 или только desktop)",
+        "Создан фрейм 'Admin Foundations' с описанием иерархии: Организация → Политики → Чек-листы → Пункты чек-листа — единая ментальная модель для UI и разработчиков"
+      ],
+      "test_steps": [
+        "Шаг 1: code-walkthrough макетов с frontend-командой — все поля сопоставлены с OpenAPI schemas; нестыковок нет (или зафиксированы как открытые вопросы к backend)",
+        "Шаг 2: согласование с backend — реальная модель OPM соответствует макету; при необходимости — backend заводит задачу на расширение PolicyUpdateRequest/ChecklistUpdateRequest",
+        "Шаг 3: согласование с продуктом — UX-flow редактирования политики, копирайт на русском, role-restricted поведение",
+        "Шаг 4: проверка a11y — контраст текста на кнопках, размер интерактивных областей ≥ 44×44px (WCAG 2.1 AA)",
+        "Шаг 5: визуальный аудит — все hex-значения либо ссылаются на Variables (после DESIGN-TASK-001), либо помечены тегом 'to-be-tokenized'",
+        "Шаг 6: передача макета во frontend через Figma Inspect mode — все компоненты доступны для использования"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    }
+  ]
+}

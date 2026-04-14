@@ -19,9 +19,9 @@ The Orchestrator is a **coordinating layer** (not a domain service) that:
 - Requirements mapping (UR/FR/NFR)
 - 12 architectural assumptions (ASSUMPTION-ORCH-01..12)
 - Component boundaries vs DM, DP, OPM, UOM, LIC, RE
-- Data model (Redis ephemeral state, status mapping)
-- 20 internal components across ingress/application/egress/infrastructure layers
-- 10 user scenarios with happy path + error branches
+- Data model (Redis ephemeral state, status mapping — 10 user statuses including `AWAITING_USER_INPUT` for FR-2.1.3 low-confidence type confirmation)
+- 21 internal components across ingress/application/egress/infrastructure layers (Type Confirmation Handler — §6.15a)
+- 11 user scenarios with happy path + error branches (§8.11 — type confirmation)
 - 5 ADRs (monolith, REST, SSE, upload proxy, JWT)
 
 **api-specification.yaml** — OpenAPI 3.0 spec:

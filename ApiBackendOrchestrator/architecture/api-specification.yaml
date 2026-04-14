@@ -400,6 +400,62 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /contracts/{contract_id}/versions/{version_id}/confirm-type:
+    post:
+      tags: [Versions]
+      summary: Подтверждение типа договора при низкой уверенности (UR-3 / FR-2.1.3)
+      description: |
+        Возобновляет обработку версии, остановленной в статусе AWAITING_USER_INPUT.
+        Вызывается пользователем после получения SSE-события `type_confirmation_required`.
+
+        Контракт:
+        - Тело запроса: `{contract_type, confirmed_by_user: true}`. `contract_type` —
+          либо `suggested_type` из события, либо одно из значений `alternatives[].contract_type`,
+          либо произвольный валидный тип (контролируется LIC).
+        - Версия должна находиться в статусе `AWAITING_USER_INPUT`. Иначе — 409
+          с error_code `VERSION_NOT_AWAITING_INPUT`.
+        - После успешного вызова Orchestrator публикует команду `UserConfirmedType`
+          в LIC и переводит версию в `ANALYZING`.
+
+        По истечении `ORCH_USER_CONFIRMATION_TIMEOUT` (default 24h) без подтверждения
+        версия автоматически переводится в `FAILED` с error_code `USER_CONFIRMATION_TIMEOUT`
+        (watchdog оркестратора).
+      operationId: confirmContractType
+      parameters:
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/VersionIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmTypeRequest'
+      responses:
+        '202':
+          description: Подтверждение принято, обработка возобновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          description: Невалидный contract_type (не соответствует whitelist LIC)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Версия не в статусе AWAITING_USER_INPUT (например, уже подтверждена, истёк таймаут или ещё анализируется)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   # ==================== Results ====================
   /contracts/{contract_id}/versions/{version_id}/results:
     get:
@@ -908,13 +964,14 @@ components:
 
     UserProcessingStatus:
       type: string
-      enum: [UPLOADED, QUEUED, PROCESSING, ANALYZING, GENERATING_REPORTS, READY, PARTIALLY_FAILED, FAILED, REJECTED]
+      enum: [UPLOADED, QUEUED, PROCESSING, ANALYZING, AWAITING_USER_INPUT, GENERATING_REPORTS, READY, PARTIALLY_FAILED, FAILED, REJECTED]
       description: |
         User-friendly статус обработки:
         - UPLOADED — договор загружен
         - QUEUED — в очереди на обработку
         - PROCESSING — извлечение текста и структуры
         - ANALYZING — юридический анализ
+        - AWAITING_USER_INPUT — пайплайн остановлен в ожидании подтверждения пользователя (FR-2.1.3): тип договора определён с низкой уверенностью, требуется выбор/подтверждение через POST /contracts/{contract_id}/versions/{version_id}/confirm-type. Из этого статуса возможны переходы только в ANALYZING (после подтверждения) или FAILED (по таймауту, ORCH_USER_CONFIRMATION_TIMEOUT).
         - GENERATING_REPORTS — формирование отчётов
         - READY — результаты готовы
         - PARTIALLY_FAILED — частично доступно (есть ошибки)
@@ -942,6 +999,22 @@ components:
         message:
           type: string
           description: Статус на русском языке
+
+    ConfirmTypeRequest:
+      type: object
+      required: [contract_type, confirmed_by_user]
+      properties:
+        contract_type:
+          type: string
+          description: |
+            Подтверждённый пользователем тип договора (e.g. "услуги", "поставка", "подряд",
+            "аренда", "NDA"). Whitelist валидных значений контролируется LIC; передача
+            значения вне whitelist приводит к 400 VALIDATION_ERROR.
+          example: услуги
+        confirmed_by_user:
+          type: boolean
+          description: Маркер того, что выбор сделан пользователем явно (а не системой). Должен быть `true` — иначе 400.
+          example: true
 
     ContractSummary:
       type: object
@@ -1395,6 +1468,7 @@ components:
     # ---- User ----
     UserProfile:
       type: object
+      required: [user_id, email, name, role, organization_id, organization_name, permissions]
       properties:
         user_id:
           type: string
@@ -1412,6 +1486,30 @@ components:
           format: uuid
         organization_name:
           type: string
+        permissions:
+          $ref: '#/components/schemas/UserPermissions'
+
+    UserPermissions:
+      type: object
+      description: |
+        Computed-флаги разрешений пользователя, агрегированные оркестратором из:
+        (1) роли пользователя (из JWT);
+        (2) политик организации (из OPM);
+        (3) fallback-defaults оркестратора (env ORCH_OPM_FALLBACK_*).
+        Frontend потребляет готовые boolean'ы — не интерпретирует политики OPM напрямую
+        (см. Frontend/architecture/high-architecture.md §5.6, useCanExport()).
+        Расчёт описан в high-architecture.md §6.21 (Permissions Resolver).
+      required: [export_enabled]
+      properties:
+        export_enabled:
+          type: boolean
+          description: |
+            Разрешён ли экспорт отчётов (PDF/DOCX) пользователю.
+            - LAWYER, ORG_ADMIN: всегда true (безусловное разрешение по роли).
+            - BUSINESS_USER: значение определяется политикой организации (OPM).
+              Если OPM недоступен или политика не задана — fallback на
+              ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT (default false, см. configuration.md).
+          example: false
 
     # ---- Error ----
     ErrorResponse:
@@ -1420,14 +1518,19 @@ components:
       properties:
         error_code:
           type: string
-          description: Машиночитаемый код ошибки (e.g. FILE_TOO_LARGE, AUTH_TOKEN_EXPIRED)
+          description: Машиночитаемый код ошибки (e.g. FILE_TOO_LARGE, AUTH_TOKEN_EXPIRED, VALIDATION_ERROR)
         message:
           type: string
           description: Описание ошибки на русском языке (NFR-5.2)
         details:
           type: object
           nullable: true
-          description: Дополнительные данные об ошибке
+          description: |
+            Дополнительные данные об ошибке. Структура зависит от error_code.
+            Для VALIDATION_ERROR — соответствует ValidationErrorDetails (поле fields).
+            Для FILE_TOO_LARGE — { max_size_bytes, actual_size_bytes }.
+            Для RATE_LIMIT_EXCEEDED — { retry_after_seconds }.
+            Для 5xx — null (внутренние детали не раскрываются клиенту).
         suggestion:
           type: string
           nullable: true
@@ -1436,3 +1539,60 @@ components:
           type: string
           format: uuid
           description: ID корреляции для обращения в поддержку
+
+    ValidationErrorDetails:
+      type: object
+      description: |
+        Структура поля `details` для ErrorResponse при error_code=VALIDATION_ERROR.
+        Гарантированный контракт для маппинга на формы (React Hook Form и др.).
+        См. error-handling.md §3.8 для полного описания и whitelist кодов.
+      required: [fields]
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationFieldError'
+
+    ValidationFieldError:
+      type: object
+      required: [field, code, message]
+      properties:
+        field:
+          type: string
+          description: |
+            Путь к полю в формате JSONPath-lite (совместим с setName React Hook Form).
+            Примеры: "title", "parties.0.name", "policy.severity".
+          example: title
+        code:
+          type: string
+          description: |
+            Машинный код причины. Закрытый whitelist (см. error-handling.md §3.8):
+            REQUIRED, INVALID_FORMAT, INVALID_UUID, INVALID_DATE, INVALID_ENUM,
+            NOT_IN_WHITELIST, TOO_SHORT, TOO_LONG, OUT_OF_RANGE, MISMATCH,
+            DUPLICATE, INVALID_REFERENCE.
+          enum:
+            - REQUIRED
+            - INVALID_FORMAT
+            - INVALID_UUID
+            - INVALID_DATE
+            - INVALID_ENUM
+            - NOT_IN_WHITELIST
+            - TOO_SHORT
+            - TOO_LONG
+            - OUT_OF_RANGE
+            - MISMATCH
+            - DUPLICATE
+            - INVALID_REFERENCE
+          example: REQUIRED
+        message:
+          type: string
+          description: Человекочитаемое описание на русском (NFR-5.2). Frontend может проигнорировать в пользу собственной i18n по `code`.
+          example: Поле «Название» обязательно для заполнения.
+        params:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: |
+            Параметры для интерполяции в i18n-шаблоны на стороне frontend.
+            Примеры: для TOO_LONG — {max: 100}; для OUT_OF_RANGE — {min: 0, max: 1};
+            для INVALID_ENUM — {allowed: ["a","b","c"]}; для MISMATCH — {other_field: "password"}.

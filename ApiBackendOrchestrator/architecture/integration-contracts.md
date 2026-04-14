@@ -646,12 +646,13 @@ UOM — **критическая зависимость** для login/refresh/l
 
 Полные JSON-схемы всех событий, описания полей и реакции оркестратора — см. [event-catalog.md](event-catalog.md).
 
-## 2.1 Исходящие команды (Orchestrator → DP)
+## 2.1 Исходящие команды (Orchestrator → DP / LIC)
 
 | Топик | Событие | Потребитель | Публикуется |
 |-------|---------|-------------|-------------|
 | `dp.commands.process-document` | `ProcessDocumentRequested` | DP | Contract Upload Coordinator, Re-check Coordinator |
 | `dp.commands.compare-versions` | `CompareDocumentVersionsRequested` | DP | Comparison Coordinator |
+| `orch.commands.user-confirmed-type` | `UserConfirmedType` | LIC | Type Confirmation Handler (POST /confirm-type) |
 
 **Гарантии публикации:**
 
@@ -672,12 +673,13 @@ UOM — **критическая зависимость** для login/refresh/l
 | 4 | `dp.events.comparison-completed` | `ComparisonCompletedEvent` | DP | SSE push, уведомление о готовности diff |
 | 5 | `dp.events.comparison-failed` | `ComparisonFailedEvent` | DP | SSE push ошибки сравнения |
 | 6 | `lic.events.status-changed` | `LICStatusChangedEvent` | LIC | SSE push: прогресс/ошибка анализа (ASSUMPTION-ORCH-13) |
-| 7 | `re.events.status-changed` | `REStatusChangedEvent` | RE | SSE push: прогресс/ошибка отчётов (ASSUMPTION-ORCH-13) |
-| 8 | `dm.events.version-created` | `VersionCreated` | DM | Информирование о создании версии |
-| 9 | `dm.events.version-artifacts-ready` | `VersionProcessingArtifactsReady` | DM | SSE push: ANALYZING |
-| 10 | `dm.events.version-analysis-ready` | `VersionAnalysisArtifactsReady` | DM | SSE push: GENERATING_REPORTS |
-| 11 | `dm.events.version-reports-ready` | `VersionReportsReady` | DM | SSE push: READY (финальный) |
-| 12 | `dm.events.version-partially-available` | `VersionPartiallyAvailable` | DM | SSE push: PARTIALLY_FAILED (safety net — DM Watchdog) |
+| 7 | `lic.events.classification-uncertain` | `ClassificationUncertain` | LIC | Перевод версии в `AWAITING_USER_INPUT` + SSE push `type_confirmation_required` (FR-2.1.3); запуск watchdog `ORCH_USER_CONFIRMATION_TIMEOUT` |
+| 8 | `re.events.status-changed` | `REStatusChangedEvent` | RE | SSE push: прогресс/ошибка отчётов (ASSUMPTION-ORCH-13) |
+| 9 | `dm.events.version-created` | `VersionCreated` | DM | Информирование о создании версии |
+| 10 | `dm.events.version-artifacts-ready` | `VersionProcessingArtifactsReady` | DM | SSE push: ANALYZING |
+| 11 | `dm.events.version-analysis-ready` | `VersionAnalysisArtifactsReady` | DM | SSE push: GENERATING_REPORTS |
+| 12 | `dm.events.version-reports-ready` | `VersionReportsReady` | DM | SSE push: READY (финальный) |
+| 13 | `dm.events.version-partially-available` | `VersionPartiallyAvailable` | DM | SSE push: PARTIALLY_FAILED (safety net — DM Watchdog) |
 
 ---
 
@@ -762,6 +764,7 @@ orch.sub.{topic_name}
 | `orch.sub.dp.events.comparison-completed` | `dp.events.comparison-completed` |
 | `orch.sub.dp.events.comparison-failed` | `dp.events.comparison-failed` |
 | `orch.sub.lic.events.status-changed` | `lic.events.status-changed` |
+| `orch.sub.lic.events.classification-uncertain` | `lic.events.classification-uncertain` |
 | `orch.sub.re.events.status-changed` | `re.events.status-changed` |
 | `orch.sub.dm.events.version-created` | `dm.events.version-created` |
 | `orch.sub.dm.events.version-artifacts-ready` | `dm.events.version-artifacts-ready` |
@@ -812,11 +815,14 @@ RabbitMQ поддерживает множество потребителей ч
            │  ┌─────────────────────────────────────┐  │
            │  │ dp.commands.process-document        │  │
            │  │ dp.commands.compare-versions        │  │
+           │  │ orch.commands.user-confirmed-type   │  │
            │  └─────────────────────────────────────┘  │
            │                                           │
            │  Subscribes (async):                      │
            │  ┌─────────────────────────────────────┐  │
            │  │ dp.events.* (5 events)              │  │
+           │  │ lic.events.* (2 events)             │  │
+           │  │ re.events.* (1 event)               │  │
            │  │ dm.events.* (5 events)              │  │
            │  └─────────────────────────────────────┘  │
            │                                           │

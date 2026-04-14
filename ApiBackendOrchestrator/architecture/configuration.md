@@ -185,6 +185,25 @@ UOM (User & Organization Management) — критическая зависимо
 | `ORCH_SSE_HEARTBEAT_INTERVAL` | Интервал SSE ping (`:heartbeat`) | `15s` | Поддерживает TCP-соединение живым через прокси/LB |
 | `ORCH_SSE_MAX_CONNECTION_AGE` | Макс. время жизни SSE-соединения | `24h` | Принудительный reconnect для предотвращения утечки горутин |
 
+### Подтверждение типа договора (FR-2.1.3)
+
+Параметры обработки сценария 8.11 (Type Confirmation Handler).
+
+| Переменная | Описание | По умолчанию | Заметки |
+|-----------|----------|-------------|---------|
+| `ORCH_USER_CONFIRMATION_TIMEOUT` | Таймаут ожидания подтверждения типа договора пользователем (статус `AWAITING_USER_INPUT`) | `24h` | По истечении watchdog переводит версию в `FAILED` с error_code `USER_CONFIRMATION_TIMEOUT`. Технически реализуется как TTL Redis-ключа `confirmation:wait:{version_id}` |
+| `ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL` | TTL ключа идемпотентности `POST /confirm-type` | `60s` | Защищает от двойного клика; повторный вызов в окне возвращает 202 без повторной публикации команды |
+
+### Permissions Resolver (UR-10)
+
+Параметры компонента §6.21 — computed-флагов разрешений в `GET /users/me` (`UserProfile.permissions`). Frontend потребляет готовые boolean'ы; raw policy из OPM не запрашивает.
+
+| Переменная | Описание | По умолчанию | Заметки |
+|-----------|----------|-------------|---------|
+| `ORCH_PERMISSIONS_CACHE_TTL` | TTL Redis-кеша computed permissions per `(org_id, role)` | `5m` | Инвалидация — событием `permissions:invalidate:{org_id}` от Admin Proxy при `PUT /admin/policies/{id}` |
+| `ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT` | Fallback-значение `permissions.export_enabled` для BUSINESS_USER при недоступности OPM или отсутствии политики | `false` | Консервативный default — UR-2 «доступ ограничен» приоритетнее UR-10 «экспорт». Для прод-окружений с явно открытым экспортом — установить в `true` |
+| `ORCH_OPM_PERMISSIONS_TIMEOUT` | Timeout запроса в OPM при cache miss | `2s` | По истечении — fallback на env, WARN-лог. /users/me не блокируется на OPM |
+
 ---
 
 ## Устойчивость
@@ -211,12 +230,14 @@ Circuit breaker защищает оркестратор от каскадных 
 
 ### CORS
 
-Настройки Cross-Origin Resource Sharing для frontend-приложений.
+Настройки Cross-Origin Resource Sharing.
+
+> **v1 production = same-origin** (см. ADR-6 в high-architecture.md). `ORCH_CORS_ALLOWED_ORIGINS` оставляется **пустым** — CORS middleware не активируется. Frontend и Orchestrator обслуживаются единым nginx (см. Frontend §13.2 nginx.conf). Конфигурация ниже — заготовка для cross-origin сценариев (внешние интеграции, разделение доменов в v1.x+).
 
 | Переменная | Описание | По умолчанию | Заметки |
 |-----------|----------|-------------|---------|
-| `ORCH_CORS_ALLOWED_ORIGINS` | Разрешённые origins (через запятую) | _(пусто — same-origin only)_ | Пример: `https://app.contractpro.ru,https://staging.contractpro.ru` |
-| `ORCH_CORS_MAX_AGE` | Время кэширования preflight-ответа (секунды) | `3600` | 1 час. Снижает количество OPTIONS-запросов |
+| `ORCH_CORS_ALLOWED_ORIGINS` | Разрешённые origins (через запятую) | _(пусто — same-origin, CORS не активируется)_ | Пример (cross-origin): `https://app.contractpro.ru,https://staging.contractpro.ru`. В v1 production не задаётся |
+| `ORCH_CORS_MAX_AGE` | Время кэширования preflight-ответа (секунды) | `3600` | 1 час. Применимо только при cross-origin. Снижает количество OPTIONS-запросов |
 
 ---
 
@@ -243,6 +264,7 @@ Circuit breaker защищает оркестратор от каскадных 
 |-----------|-------------|---------|
 | `ORCH_BROKER_TOPIC_PROCESS_DOCUMENT` | `dp.commands.process-document` | ProcessDocumentRequested |
 | `ORCH_BROKER_TOPIC_COMPARE_VERSIONS` | `dp.commands.compare-versions` | CompareDocumentVersionsRequested |
+| `ORCH_BROKER_TOPIC_USER_CONFIRMED_TYPE` | `orch.commands.user-confirmed-type` | UserConfirmedType (в LIC, FR-2.1.3) |
 
 ### Входящие события от DP
 
@@ -263,6 +285,7 @@ Circuit breaker защищает оркестратор от каскадных 
 | Переменная | По умолчанию | Событие |
 |-----------|-------------|---------|
 | `ORCH_BROKER_TOPIC_LIC_STATUS_CHANGED` | `lic.events.status-changed` | LICStatusChangedEvent |
+| `ORCH_BROKER_TOPIC_LIC_CLASSIFICATION_UNCERTAIN` | `lic.events.classification-uncertain` | ClassificationUncertain (FR-2.1.3) |
 | `ORCH_BROKER_TOPIC_RE_STATUS_CHANGED` | `re.events.status-changed` | REStatusChangedEvent |
 
 ### Входящие события от DM

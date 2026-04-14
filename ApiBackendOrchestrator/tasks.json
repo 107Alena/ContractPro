@@ -907,6 +907,254 @@
       "status": "done",
       "completed_at": "2026-04-11",
       "summary": "Пакет internal/integration: end-to-end integration tests с in-memory fakes. 4 файла: fakes.go (fakeBroker для consumer.BrokerSubscriber + commandpub.BrokerPublisher с InjectEvent/PublishedMessages, fakeObjectStorage для upload/versions ObjectStorage с PutObject/DeleteObject/HasObject, fakeKVStore — единый in-memory KV + Pub/Sub для statustracker.KVStore/ssebroadcast.Publisher/sse.KVStore/upload.KVStore с Subscribe → fakeSubscription, fakeDMServer — httptest.Server с chi router имитирующий DM REST API (POST documents/versions, GET documents/versions/artifacts/diffs, DELETE/archive), testJWTSigner — ECDSA P-256 ES256 генерация и подпись JWT), testenv.go (testEnv struct с 18-step DI wiring зеркалирующий app.go NewApp: logger → fakeKVStore → fakeBroker → fakeObjectStorage → fakeDMServer → real ssebroadcast.Broadcaster → real statustracker.Tracker → real consumer.Consumer → testJWTSigner → real auth.Middleware → real rbac.Middleware → dmclient.Client → commandpub.Publisher → upload/contracts/versions/results/comparison/export handlers → sse.Handler → api.Server → httptest.Server. Adapters: testUploadDMAdapter, testUploadCmdPubAdapter, noopRedisPinger, noopBrokerPinger. Helpers: DoRequest, UploadContract, InjectEvent, SeedStatus), sseclient.go (sseClient с single background reader goroutine, connectSSE, WaitForConnected, NextEvent, Close), integration_test.go (5 тестов). Тест 1 TestUploadToSSEPipeline: multipart upload PDF → 202 Accepted → ProcessDocumentRequested published → S3 object created → inject DP IN_PROGRESS → SSE status_update PROCESSING → Redis status verified. Тест 2 TestRecheckPipeline: seed document+version (FULLY_READY) → POST recheck → 202 → new version created → ProcessDocumentRequested published. Тест 3 TestComparePipeline: seed document + 2 versions → POST compare → 202 COMPARISON_QUEUED → CompareDocumentVersionsRequested published with correct base/target. Тест 4 TestLICFailureToSSE: seed status ANALYZING → SSE connect → inject LIC FAILED → SSE status_update ANALYSIS_FAILED with error_code/is_retryable → Redis status ANALYSIS_FAILED. Тест 5 TestReportsReadyToResults: seed status GENERATING_REPORTS + DM version/artifacts → SSE connect → inject DM version-reports-ready → SSE status_update READY → GET /results → 200 with aggregated artifacts (risks, summary, aggregate_score from DM). go test -race -count=1 ./internal/integration/... PASS. go test -race -count=1 ./... — 28 пакетов, 0 failures. go vet clean. make build/test/lint OK. Нет новых зависимостей."
+    },
+    {
+      "id": "ORCH-TASK-038",
+      "category": "documentation",
+      "priority": "high",
+      "description": "Спецификация контракта подтверждения типа договора при низкой уверенности классификации (UR-3 / FR-2.1.3). Doc-only задача: фиксирует недостающий контракт между LIC, Orchestrator и Frontend в архитектурной документации. Implementation выделена в отдельные задачи ORCH-TASK-039..043.",
+      "acceptance_criteria": [
+        "OpenAPI: enum UserProcessingStatus в api-specification.yaml расширен значением AWAITING_USER_INPUT (между ANALYZING и GENERATING_REPORTS); описание добавлено в enum",
+        "OpenAPI: добавлен endpoint POST /contracts/{contract_id}/versions/{version_id}/confirm-type с request body ConfirmTypeRequest {contract_type: string, confirmed_by_user: boolean}, ответ 202 Accepted; ошибки 400/401/403/404/409",
+        "event-catalog.md §1.3: добавлена исходящая команда UserConfirmedType (Orchestrator → LIC, топик orch.commands.user-confirmed-type)",
+        "event-catalog.md §2.2.2: добавлено входящее событие ClassificationUncertain (LIC → Orchestrator, топик lic.events.classification-uncertain) с полями suggested_type, confidence, threshold, alternatives",
+        "event-catalog.md §5 матрицы топиков и §7 lifecycle обновлены: добавлена ветка AWAITING_USER_INPUT и таймаута",
+        "integration-contracts.md §2.1, §2.2, §4.1, §5: добавлены команда, событие, очередь подписки, обновлена ASCII-диаграмма",
+        "error-handling.md: добавлены коды VERSION_NOT_AWAITING_INPUT (409) и USER_CONFIRMATION_TIMEOUT (409) в §3.5 и §3.10",
+        "high-architecture.md §5.2: маппинг статусов расширен 4 строками для AWAITING_USER_INPUT, ANALYZING (после подтверждения), FAILED (по таймауту)",
+        "high-architecture.md §6.1 и §6.15a: добавлен компонент Type Confirmation Handler",
+        "high-architecture.md §8.11: добавлен сценарий с happy path и 4 error branches (wrong state, invalid type, timeout, RBAC)",
+        "sequence-diagrams.md §8.15: 3 mermaid-диаграммы — happy path, 409 VERSION_NOT_AWAITING_INPUT, watchdog timeout",
+        "configuration.md: добавлены ORCH_USER_CONFIRMATION_TIMEOUT (24h), ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL (60s), ORCH_BROKER_TOPIC_USER_CONFIRMED_TYPE, ORCH_BROKER_TOPIC_LIC_CLASSIFICATION_UNCERTAIN",
+        "security.md §2.2 и §2.3: POST /confirm-type добавлен в RBAC-матрицу (LAWYER + ORG_ADMIN); status whitelist для GET /contracts расширен AWAITING_USER_INPUT",
+        "observability.md §5.4: status distribution panel расширен AWAITING_USER_INPUT",
+        "Frontend/architecture/high-architecture.md синхронизирован: §2 (FSD структура), §8.3 (widgets), §17.1 (routes), §19 (чек-лист 10 статусов); открытый вопрос про low-confidence удалён из §18 после фиксации контракта"
+      ],
+      "test_steps": [
+        "Шаг 1: openapi-generator validate api-specification.yaml — без ошибок",
+        "Шаг 2: grep AWAITING_USER_INPUT по 10 файлам ApiBackendOrchestrator/architecture/ — присутствует во всех релевантных",
+        "Шаг 3: ручная вычитка sequence-diagrams.md §8.15 — happy path соответствует event-catalog.md и high-architecture.md §8.11"
+      ],
+      "dependencies": ["ORCH-TASK-037"],
+      "status": "done",
+      "completed_at": "2026-04-15",
+      "summary": "Контракт зафиксирован в 10 файлах ApiBackendOrchestrator/architecture/ + Frontend/architecture/high-architecture.md. Ключевые сущности: статус AWAITING_USER_INPUT (10-й в UserProcessingStatus enum), endpoint POST /confirm-type с ConfirmTypeRequest, исходящая команда UserConfirmedType (orch.commands.user-confirmed-type → LIC), входящее событие ClassificationUncertain (lic.events.classification-uncertain), 2 новых error_code (VERSION_NOT_AWAITING_INPUT, USER_CONFIRMATION_TIMEOUT), 4 новые env-переменные, новый компонент §6.15a Type Confirmation Handler, сценарий §8.11, sequence §8.15 (3 mermaid-диаграммы). Implementation вынесена в ORCH-TASK-039..043."
+    },
+    {
+      "id": "ORCH-TASK-039",
+      "category": "feature",
+      "priority": "high",
+      "description": "Расширение Processing Status Tracker поддержкой статуса AWAITING_USER_INPUT. Status tracker в Redis должен принимать новый статус, валидировать переходы (только ANALYZING → AWAITING_USER_INPUT и AWAITING_USER_INPUT → ANALYZING|FAILED), и устанавливать дополнительный watchdog-ключ confirmation:wait:{version_id} с TTL ORCH_USER_CONFIRMATION_TIMEOUT при входе в этот статус.",
+      "acceptance_criteria": [
+        "internal/application/statustracker: enum UserStatus расширен AWAITING_USER_INPUT (10 значений, синхронно с api-specification.yaml UserProcessingStatus)",
+        "Транзишены: ANALYZING → AWAITING_USER_INPUT (валидно), AWAITING_USER_INPUT → ANALYZING (валидно — после подтверждения), AWAITING_USER_INPUT → FAILED (валидно — по таймауту), любой другой переход в/из AWAITING_USER_INPUT возвращает ошибку ErrInvalidTransition",
+        "Метод SetAwaitingUserInput(ctx, vid, payload) атомарно: SET status:{vid} = AWAITING_USER_INPUT + SET confirmation:wait:{vid} с TTL = ORCH_USER_CONFIRMATION_TIMEOUT (Redis MULTI/EXEC или Lua script)",
+        "Метод ConfirmType(ctx, vid) атомарно: проверка status == AWAITING_USER_INPUT + SET status:{vid} = ANALYZING + DEL confirmation:wait:{vid}; возвращает ErrNotAwaitingInput если статус другой (для маппинга в HTTP 409 VERSION_NOT_AWAITING_INPUT)",
+        "Метод TimeoutAwaitingInput(ctx, vid) для watchdog: SET status:{vid} = FAILED + SET error_code:{vid} = USER_CONFIRMATION_TIMEOUT",
+        "Конфигурация ORCH_USER_CONFIRMATION_TIMEOUT (default 24h) добавлена в internal/config (Config struct + Validate)",
+        "Unit-тесты покрывают: все валидные транзишены, все запрещённые транзишены (ErrInvalidTransition), atomicity SetAwaitingUserInput (status и watchdog-ключ выставлены вместе), atomicity ConfirmType (race с двумя параллельными вызовами — побеждает один, второй получает ErrNotAwaitingInput), TTL watchdog-ключа равен конфигу"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/application/statustracker/... — все тесты проходят",
+        "Шаг 2: go test -race ./internal/config/... — валидация ORCH_USER_CONFIRMATION_TIMEOUT (positive duration, default 24h) проходит",
+        "Шаг 3: тест с miniredis — после SetAwaitingUserInput оба ключа (status и confirmation:wait) присутствуют, TTL второго = заданному значению"
+      ],
+      "dependencies": ["ORCH-TASK-038"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-040",
+      "category": "feature",
+      "priority": "high",
+      "description": "Consumer для входящего события lic.events.classification-uncertain (FR-2.1.3). При получении: валидация envelope, перевод версии в AWAITING_USER_INPUT через Status Tracker (ORCH-TASK-039), публикация SSE-события type_confirmation_required в Redis Pub/Sub channel sse:broadcast:{org_id} с payload {document_id, version_id, status, suggested_type, confidence, threshold, alternatives}.",
+      "acceptance_criteria": [
+        "internal/ingress/consumer: новый handler ClassificationUncertainHandler реализует BrokerSubscriber для топика ORCH_BROKER_TOPIC_LIC_CLASSIFICATION_UNCERTAIN (default lic.events.classification-uncertain)",
+        "Десериализация payload по схеме event-catalog.md §2.2.2 (correlation_id, timestamp, job_id, document_id, version_id, organization_id, suggested_type, confidence, threshold, alternatives)",
+        "Валидация обязательных полей; невалидное сообщение → WARN-лог + ACK (отбрасывается, не блокирует очередь)",
+        "Идемпотентность через Redis ключ lic-uncertain:{version_id} (TTL 24h) — повторное получение того же события игнорируется",
+        "Вызов StatusTracker.SetAwaitingUserInput(ctx, version_id, payload) — переводит версию в новый статус и стартует watchdog",
+        "SSE Broadcaster: публикация события type_confirmation_required (event_type отличается от status_update) в channel sse:broadcast:{org_id} с full payload",
+        "Очередь orch.sub.lic.events.classification-uncertain создаётся в app.go при wiring (durable, manual ACK, prefetch 10)",
+        "Unit-тесты: happy path (event → status update + SSE push), idempotency (повторное событие → noop), invalid payload → WARN+ACK, статус-tracker error → NACK + requeue"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/ingress/consumer/classificationuncertain/... — все тесты проходят",
+        "Шаг 2: тест с fake broker — публикация события приводит к (а) status:{vid} = AWAITING_USER_INPUT в Redis, (б) сообщению в SSE Pub/Sub channel с правильным event_type",
+        "Шаг 3: повторное событие с тем же version_id → status и SSE-канал не изменяются (идемпотентность)"
+      ],
+      "dependencies": ["ORCH-TASK-039"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-041",
+      "category": "feature",
+      "priority": "high",
+      "description": "HTTP-handler POST /api/v1/contracts/{contract_id}/versions/{version_id}/confirm-type. Обрабатывает подтверждение типа договора пользователем: JWT auth + RBAC (LAWYER, ORG_ADMIN), валидация ConfirmTypeRequest, проверка статуса AWAITING_USER_INPUT, идемпотентность по version_id, публикация UserConfirmedType в LIC через Command Publisher, перевод статуса в ANALYZING, SSE push status_update.",
+      "acceptance_criteria": [
+        "internal/ingress/api/confirmtype: новый handler ConfirmType реализует http.Handler",
+        "Маршрут POST /contracts/{contract_id}/versions/{version_id}/confirm-type зарегистрирован в api.Server router; защищён authMW + rbacMW (LAWYER, ORG_ADMIN)",
+        "Десериализация ConfirmTypeRequest {contract_type: string, confirmed_by_user: boolean}; если confirmed_by_user != true или contract_type пустой → 400 VALIDATION_ERROR",
+        "Валидация contract_type против whitelist (для v1 — статический список из ТЗ: 'услуги', 'поставка', 'подряд', 'аренда', 'NDA' и др.; whitelist конфигурируется через ORCH_CONTRACT_TYPE_WHITELIST или встроен в код); невалидное → 400 VALIDATION_ERROR с details.fields",
+        "Идемпотентность: SETEX orch-user-confirmed-type:{vid} 60s (ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL); если ключ уже существует → 202 без публикации команды (повторный ответ)",
+        "Чтение upload tracking из Redis для получения correlation_id и job_id оригинального ProcessDocumentRequested",
+        "Вызов StatusTracker.ConfirmType(ctx, vid) — атомарный переход AWAITING_USER_INPUT → ANALYZING; ErrNotAwaitingInput → 409 VERSION_NOT_AWAITING_INPUT",
+        "Командный паблишер: publish UserConfirmedType в ORCH_BROKER_TOPIC_USER_CONFIRMED_TYPE с {correlation_id, job_id, document_id, version_id, organization_id, confirmed_by_user_id, contract_type}",
+        "SSE push: status_update {status: ANALYZING, message: 'Анализ возобновлён'}",
+        "Ответ 202 Accepted с UploadResponse {document_id, version_id, status: ANALYZING, message}",
+        "Unit-тесты handler: happy path, 400 (invalid body, contract_type не в whitelist, confirmed_by_user=false), 401 (нет токена), 403 (BUSINESS_USER), 404 (version_id отсутствует в Redis), 409 (статус не AWAITING_USER_INPUT), идемпотентность (двойной вызов в окне 60с)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/ingress/api/confirmtype/... — все тесты проходят",
+        "Шаг 2: ручной curl POST /confirm-type с валидным телом → 202 + публикация команды в fake broker подтверждена",
+        "Шаг 3: повторный curl в окне 60с → 202 + команда НЕ публикуется повторно",
+        "Шаг 4: curl с ролью BUSINESS_USER → 403 FORBIDDEN"
+      ],
+      "dependencies": ["ORCH-TASK-039"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-042",
+      "category": "feature",
+      "priority": "medium",
+      "description": "Watchdog для версий, застрявших в AWAITING_USER_INPUT дольше ORCH_USER_CONFIRMATION_TIMEOUT. Реализация через Redis Keyspace Notifications (preferred) или периодический скан ключей confirmation:wait:* (fallback). При истечении TTL ключа: перевод версии в FAILED с error_code USER_CONFIRMATION_TIMEOUT, SSE push.",
+      "acceptance_criteria": [
+        "internal/application/confirmationwatchdog: новый Background Job — стартует через app.go вместе с consumer",
+        "Преферируемая реализация: подписка на Redis Keyspace Notifications (config 'notify-keyspace-events Ex' — expired events) на pattern __keyevent@0__:expired для ключей confirmation:wait:*",
+        "Fallback (если notifications недоступны): периодический SCAN (interval ORCH_WATCHDOG_SCAN_INTERVAL, default 1m) с фильтром по pattern + проверка TTL",
+        "При обнаружении истёкшего ключа: извлечение version_id из ключа → StatusTracker.TimeoutAwaitingInput(ctx, vid) → SSE push status_update {status: FAILED, error_code: USER_CONFIRMATION_TIMEOUT, message: 'Время на подтверждение типа договора истекло'}",
+        "Идемпотентность: если StatusTracker.TimeoutAwaitingInput возвращает ErrInvalidTransition (статус уже не AWAITING_USER_INPUT — пользователь успел подтвердить в гонке), watchdog логирует INFO и пропускает",
+        "Метрика orch_user_confirmation_timeouts_total (Prometheus counter) — инкрементируется при срабатывании watchdog",
+        "Graceful shutdown: при context cancellation watchdog корректно отписывается от Pub/Sub и завершает горутину",
+        "Unit-тесты: keyspace notification → status переводится в FAILED + SSE push, race с пользовательским ConfirmType (gracefully handled), graceful shutdown без leak горутин"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/application/confirmationwatchdog/... — все тесты проходят",
+        "Шаг 2: integration с miniredis: SET confirmation:wait:VID-1 TTL 1s, ждать 2s → status:VID-1 = FAILED, SSE Pub/Sub channel получил status_update с error_code USER_CONFIRMATION_TIMEOUT",
+        "Шаг 3: метрика orch_user_confirmation_timeouts_total инкрементировалась на 1"
+      ],
+      "dependencies": ["ORCH-TASK-039"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-043",
+      "category": "integration",
+      "priority": "high",
+      "description": "End-to-end integration-тест полного цикла подтверждения типа договора: upload → ANALYZING → seed ClassificationUncertain → SSE type_confirmation_required → POST /confirm-type → UserConfirmedType published → seed READY → GET /results возвращает согласованный contract_type. Покрывает интеграцию ORCH-TASK-039..042 в одном сценарии.",
+      "acceptance_criteria": [
+        "internal/integration: новый файл lowconfidence_test.go с тестом TestLowConfidenceTypeConfirmation (использует существующий testEnv из testenv.go)",
+        "Тест 1 happy path: (1) upload PDF → 202; (2) seed DP IN_PROGRESS → ANALYZING в Redis; (3) connect SSE; (4) inject lic.events.classification-uncertain {suggested_type: 'услуги', confidence: 0.62, threshold: 0.75, alternatives: [{contract_type: 'подряд', confidence: 0.31}]}; (5) проверка SSE event type_confirmation_required с правильным payload; (6) проверка status:{vid} = AWAITING_USER_INPUT в Redis + наличие confirmation:wait:{vid} ключа; (7) POST /confirm-type {contract_type: 'услуги', confirmed_by_user: true} → 202; (8) проверка orch.commands.user-confirmed-type в fake broker + payload содержит выбранный тип; (9) проверка status:{vid} = ANALYZING + отсутствие confirmation:wait:{vid}; (10) SSE event status_update {status: ANALYZING}",
+        "Тест 2 wrong state: вызов POST /confirm-type для версии в статусе ANALYZING (без предшествующего ClassificationUncertain) → 409 VERSION_NOT_AWAITING_INPUT",
+        "Тест 3 timeout: установить ORCH_USER_CONFIRMATION_TIMEOUT = 1s, inject ClassificationUncertain, ждать 2s → status:{vid} = FAILED с error_code USER_CONFIRMATION_TIMEOUT + SSE event status_update FAILED",
+        "Тест 4 RBAC: BUSINESS_USER пытается POST /confirm-type → 403 FORBIDDEN (без публикации команды)",
+        "Все тесты используют go test -race -count=1, не флакают, не зависят от внешних сервисов"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race -count=1 ./internal/integration/... — все 4 теста проходят",
+        "Шаг 2: go test -race -count=1 ./... — полный регресс passing (все пакеты)",
+        "Шаг 3: make build/test/lint — все цели OK"
+      ],
+      "dependencies": ["ORCH-TASK-040", "ORCH-TASK-041", "ORCH-TASK-042"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-048",
+      "category": "feature",
+      "priority": "high",
+      "description": "Foundation: Go-типы и helper-builders для VALIDATION_ERROR.details согласно зафиксированному контракту (error-handling.md §3.8 + api-specification.yaml schemas ValidationErrorDetails / ValidationFieldError). Frontend парный helper applyValidationErrors() уже зафиксирован в Frontend §20.4a — критически важна совместимость структуры.",
+      "acceptance_criteria": [
+        "internal/domain/model/validation: новый файл validation_error.go со структурами ValidationFieldError {Field string `json:\"field\"`; Code ValidationCode `json:\"code\"`; Message string `json:\"message\"`; Params map[string]any `json:\"params,omitempty\"`} и ValidationErrorDetails {Fields []ValidationFieldError `json:\"fields\"`}",
+        "Тип ValidationCode — string-типизированный enum с 12 константами: REQUIRED, INVALID_FORMAT, INVALID_UUID, INVALID_DATE, INVALID_ENUM, NOT_IN_WHITELIST, TOO_SHORT, TOO_LONG, OUT_OF_RANGE, MISMATCH, DUPLICATE, INVALID_REFERENCE. Метод (c ValidationCode) IsValid() bool",
+        "Helper-builders: NewRequired(field string) ValidationFieldError, NewInvalidUUID(field string) ValidationFieldError, NewTooLong(field string, max int) ValidationFieldError (с params), NewInvalidEnum(field string, allowed []string) ValidationFieldError, NewNotInWhitelist(field string, allowedCount int) ValidationFieldError, и т.д. для всех 12 кодов",
+        "Builder ValidationErrorBuilder с методом Add(err ValidationFieldError) *ValidationErrorBuilder для аккумуляции (chainable); Build() возвращает *DomainError с error_code=VALIDATION_ERROR, message='Данные запроса содержат ошибки.', suggestion='Исправьте указанные ошибки и повторите запрос.', details=ValidationErrorDetails",
+        "JSON-сериализация: omitempty для params (null если не передан), gradual marshaling — Field/Code/Message всегда присутствуют",
+        "i18n message: подстановка params в текст message на стороне backend через простой template (e.g. 'Минимум {min} символов'); набор шаблонов на русском (NFR-5.2) — в коде или отдельном файле i18n/ru/validation.json",
+        "Unit-тесты: (1) каждый из 12 builders генерирует корректную структуру; (2) Builder.Add chainable, Build с пустым массивом fields возвращает nil error (нет ошибок — нет VALIDATION_ERROR); (3) JSON marshal/unmarshal round-trip; (4) ValidationCode.IsValid() для всех 12 кодов true, для произвольной строки false; (5) message-шаблоны корректно интерполируют params"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/domain/model/validation/... — все unit-тесты проходят",
+        "Шаг 2: go vet ./internal/domain/model/validation/... — без warnings",
+        "Шаг 3: ручная проверка JSON: NewRequired('title').Build().ToJSON() даёт payload, точно соответствующий примеру в error-handling.md §3.8"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-049",
+      "category": "refactoring",
+      "priority": "high",
+      "description": "Миграция всех существующих handlers оркестратора, возвращающих 400 VALIDATION_ERROR, на использование структур из ORCH-TASK-048. Сейчас разные handlers возвращают VALIDATION_ERROR с ad-hoc message-строками без details.fields — frontend не может автоматически связать ошибку с полем формы. Цель: каждый возврат VALIDATION_ERROR обогащён details.fields[] с правильным field-path и semantic code.",
+      "acceptance_criteria": [
+        "Аудит всех handlers: внутренний поиск 'VALIDATION_ERROR' / возвратов 400 с этим кодом — собран список endpoints",
+        "Известные endpoints с VALIDATION_ERROR (из текущей документации, может быть расширено аудитом): POST /contracts/upload (поля: title, file), POST /contracts/{id}/versions/upload, POST /contracts/{id}/compare (base_version_id, target_version_id), POST /confirm-type (contract_type), POST /contracts/{id}/versions/{vid}/feedback (is_useful, comment), PUT /admin/policies/{id} (PolicyUpdateRequest fields), PUT /admin/checklists/{id} (ChecklistUpdateRequest fields)",
+        "Каждый handler использует ValidationErrorBuilder из ORCH-TASK-048: проверяет все обязательные/формат-ные условия, аккумулирует field-errors, возвращает один VALIDATION_ERROR со всеми полями (а не первый встретившийся)",
+        "Field-path соответствует JSONPath-lite (см. error-handling.md §3.8): top-level — 'title'; вложенные — 'parties.0.name', 'policy.severity'; для multipart — 'file'",
+        "Все validation-paths логируются на DEBUG-уровне с correlation_id (для observability — какие именно поля чаще всего нарушают пользователи)",
+        "Метрика Prometheus orch_validation_errors_total (counter, labels: endpoint, code) — для дашборда top-N validation errors по endpoints",
+        "Unit-тесты для каждого мигрированного handler: (1) валидный запрос → success path не сломан; (2) одна ошибка по полю → details.fields содержит ровно 1 элемент с правильным field/code; (3) множественные ошибки → details.fields содержит все поля одновременно (не первое встретившееся); (4) field-path корректен для вложенных структур",
+        "Integration-тест: POST /contracts/upload без title и с невалидным файлом → 400 VALIDATION_ERROR, details.fields содержит [{field:'title', code:'REQUIRED'}, {field:'file', code:'INVALID_FORMAT' или REQUIRED}]"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/ingress/api/... — все handler-тесты проходят (включая новые validation-кейсы)",
+        "Шаг 2: go test -race ./internal/integration/... — integration-тест с проверкой структуры VALIDATION_ERROR проходит",
+        "Шаг 3: ручная проверка curl: POST /contracts/upload с пустым title → ответ содержит details.fields с правильной структурой по контракту",
+        "Шаг 4: openapi-generator validate api-specification.yaml — все примеры VALIDATION_ERROR соответствуют schema ValidationErrorDetails",
+        "Шаг 5: метрика orch_validation_errors_total появляется в /metrics"
+      ],
+      "dependencies": ["ORCH-TASK-048"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-050",
+      "category": "feature",
+      "priority": "high",
+      "description": "Permissions Resolver: реализация computed-флагов разрешений в GET /users/me (UR-10). Контракт зафиксирован в api-specification.yaml (UserProfile.permissions: UserPermissions) + high-architecture.md §6.21 + configuration.md (3 env-переменные). Frontend useCanExport() (Frontend §5.6) уже спроектирован под этот контракт — критически важна совместимость структуры.",
+      "acceptance_criteria": [
+        "internal/application/permissions: новый компонент Resolver с методом ResolveForUser(ctx, role, orgID) (UserPermissions, error)",
+        "Логика для export_enabled: LAWYER/ORG_ADMIN → всегда true; BUSINESS_USER → cache lookup → OPM lookup (policy name='business_user_export', поле enabled) → fallback на ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT (default false)",
+        "Redis-кеш: ключ permissions:{org_id}:{role}, TTL ORCH_PERMISSIONS_CACHE_TTL (default 5m); JSON-сериализованный UserPermissions; cache hit логируется DEBUG, cache miss — INFO",
+        "Инвалидация: подписка на Redis Pub/Sub channel permissions:invalidate:{org_id}; при получении — DEL permissions:{org_id}:* (все роли организации). Admin Proxy Service публикует событие в этот channel при PUT /admin/policies/{id}",
+        "Non-blocking при OPM-down: timeout ORCH_OPM_PERMISSIONS_TIMEOUT (default 2s) + circuit breaker; при failure — fallback на env, НЕ кешировать в Redis (чтобы при восстановлении OPM получить актуал), WARN-лог с {correlation_id, org_id, reason}",
+        "GET /users/me handler расширен: после получения профиля из UOM — параллельный (errgroup.Group) вызов Resolver.ResolveForUser; результат вставляется в UserProfile.permissions перед сериализацией",
+        "Конфиг: добавлены 3 переменные в internal/config (Config struct + Validate): ORCH_PERMISSIONS_CACHE_TTL (default 5m, positive duration), ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT (default false, bool), ORCH_OPM_PERMISSIONS_TIMEOUT (default 2s, positive duration <= 10s)",
+        "Метрики Prometheus: orch_permissions_cache_hit_total{flag, org_id_hash} (counter), orch_permissions_cache_miss_total{flag} (counter), orch_permissions_opm_fallback_total{flag, reason} (counter, reason ∈ timeout|opm_unavailable|circuit_open|no_policy), orch_permissions_resolve_duration_seconds (histogram)",
+        "Admin Proxy Service: PUT /admin/policies/{id} после успешного OPM-вызова публикует событие в Redis Pub/Sub permissions:invalidate:{org_id} (best-effort, не блокирует ответ)",
+        "Unit-тесты: (1) LAWYER/ORG_ADMIN → export_enabled=true без OPM-вызова; (2) BUSINESS_USER cache hit → возврат cached без OPM; (3) BUSINESS_USER cache miss + OPM success → значение из policy + кеш записан; (4) BUSINESS_USER cache miss + OPM timeout → fallback значение, кеш НЕ записан, WARN; (5) BUSINESS_USER cache miss + OPM 5xx → fallback; (6) инвалидация Pub/Sub удаляет все ключи org; (7) метрики увеличиваются для каждого пути; (8) integration GET /users/me возвращает UserProfile с permissions.export_enabled"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/application/permissions/... — все unit-тесты проходят",
+        "Шаг 2: go test -race ./internal/ingress/api/users/... — handler-тесты для GET /users/me с мокнутым Resolver проходят",
+        "Шаг 3: go test -race ./internal/integration/... — integration-тест GET /users/me возвращает UserProfile с правильным permissions для всех 3 ролей",
+        "Шаг 4: integration с miniredis: cache hit verified, инвалидация Pub/Sub verified",
+        "Шаг 5: openapi-generator validate api-specification.yaml — UserPermissions schema валидна",
+        "Шаг 6: ручная проверка: BUSINESS_USER login → GET /users/me → permissions.export_enabled = false (default); ORG_ADMIN PUT /admin/policies/{id} с {enabled: true} → BUSINESS_USER login снова → permissions.export_enabled = true"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-051",
+      "category": "feature",
+      "priority": "medium",
+      "description": "CORS middleware config update в соответствии с ADR-6 (Same-origin deployment topology) и обновлённым security.md §5. Превентивные правки на случай будущего разделения доменов или внешних кросс-доменных интеграций — в v1 production CORS middleware не активируется (ORCH_CORS_ALLOWED_ORIGINS пустой), но при cross-origin сценариях (cross-origin dev, future external integrations) middleware должен корректно обрабатывать W3C Trace Context headers (traceparent, tracestate) от OpenTelemetry-инструментации frontend (Frontend §14.3) и пропускать унифицированный case заголовков (X-Correlation-Id вместо X-Correlation-ID).",
+      "acceptance_criteria": [
+        "internal/ingress/api/middleware: CORS-middleware Allow-Headers расширены до 'Authorization, Content-Type, X-Correlation-Id, traceparent, tracestate' (5 значений)",
+        "Exposed-Headers расширены до 'X-Request-Id, Retry-After, traceparent' (3 значения; traceparent для возможности прочитать ответный trace на frontend)",
+        "Case заголовков унифицирован: X-Correlation-Id (mixed case), X-Request-Id (mixed case) — соответствует Frontend §7.2 axios interceptor",
+        "Middleware остаётся **выключенным по default** — если ORCH_CORS_ALLOWED_ORIGINS пустой, OPTIONS-preflight не обрабатывается специально, requests проходят как обычно (same-origin assumed). Только при непустом env активируется полный CORS-flow",
+        "Wildcard origin '*' остаётся запрещённым (validation в config.Load — error при '*' в ORCH_CORS_ALLOWED_ORIGINS)",
+        "Тесты middleware: (1) при пустом ORCH_CORS_ALLOWED_ORIGINS OPTIONS-запрос проходит handler цепочку как любой другой (или 404 если route не определён) — никаких CORS-headers в ответе; (2) при заполненном ORCH_CORS_ALLOWED_ORIGINS preflight для cross-origin запроса возвращает 204 с правильными Allow-Headers/Allow-Methods/Allow-Credentials; (3) preflight с request-header 'traceparent' проходит (не блокируется); (4) request с Origin не из whitelist → ответ без Allow-Origin (браузер заблокирует)",
+        "Audit grep по коду: имя X-Correlation-ID (uppercase D) больше нигде не используется — везде X-Correlation-Id; включает: middleware, sync HTTP-клиенты к DM/OPM/UOM (integration-contracts.md §3.1), structured logger (observability.md), audit-formatter (security.md §10.2)",
+        "Все упоминания в integration-contracts.md §3.1 (sync request headers) обновлены на X-Correlation-Id"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -race ./internal/ingress/api/middleware/... — все CORS-тесты проходят",
+        "Шаг 2: ручная проверка curl для cross-origin сценария: ORCH_CORS_ALLOWED_ORIGINS=https://test.example, OPTIONS /contracts с Access-Control-Request-Headers: traceparent → 204 с Access-Control-Allow-Headers содержащим traceparent",
+        "Шаг 3: ручная проверка default same-origin: ORCH_CORS_ALLOWED_ORIGINS пустой, OPTIONS /contracts → 405 или handler-default response (без CORS-headers)",
+        "Шаг 4: grep -rn 'X-Correlation-ID' internal/ — 0 совпадений (всё переименовано в X-Correlation-Id); grep 'X-Correlation-Id' — присутствует во всех правильных местах",
+        "Шаг 5: integration-тест с реальным Frontend-stub шлющим traceparent — запрос проходит, header читается на backend"
+      ],
+      "dependencies": [],
+      "status": "pending"
     }
   ]
 }

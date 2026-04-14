@@ -96,6 +96,46 @@
 
 ---
 
+### 1.3 UserConfirmedType
+
+**Направление:** Orchestrator --> LIC
+**Топик:** `orch.commands.user-confirmed-type`
+**Потребитель:** LIC (Legal Intelligence Core)
+**Trigger:** Пользователь вызвал `POST /api/v1/contracts/{id}/versions/{vid}/confirm-type` для версии, остановленной в статусе `AWAITING_USER_INPUT` (FR-2.1.3).
+**Idempotency key:** `orch-user-confirmed-type:{version_id}`
+
+```json
+{
+  "correlation_id": "string (UUID)",
+  "timestamp": "string (ISO 8601)",
+  "job_id": "string (UUID)",
+  "document_id": "string (UUID)",
+  "version_id": "string (UUID)",
+  "organization_id": "string (UUID)",
+  "confirmed_by_user_id": "string (UUID)",
+  "contract_type": "string"
+}
+```
+
+**Обязательные поля:** все поля обязательны.
+
+**Описание полей:**
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `correlation_id` | UUID | Сквозной идентификатор операции — переиспользуется из исходного `ProcessDocumentRequested` (не генерируется заново). |
+| `timestamp` | ISO 8601 | Время приёма HTTP-запроса от пользователя. |
+| `job_id` | UUID | Идентификатор задания обработки (тот же, что и в исходной команде). |
+| `document_id` | UUID | Идентификатор документа. |
+| `version_id` | UUID | Идентификатор версии. |
+| `organization_id` | UUID | Идентификатор организации (tenant), извлечённый из JWT. |
+| `confirmed_by_user_id` | UUID | Идентификатор пользователя, выполнившего подтверждение (для audit trail). |
+| `contract_type` | string | Тип договора, выбранный/подтверждённый пользователем. Должен принадлежать whitelist LIC, иначе оркестратор отклоняет запрос на стадии 400 VALIDATION_ERROR. |
+
+> **Порядок действий оркестратора:** (1) валидация версии в Redis статус-трекере (`status == AWAITING_USER_INPUT`) --> (2) валидация `contract_type` против whitelist --> (3) публикация `UserConfirmedType` в LIC --> (4) перевод версии в `ANALYZING` (Redis + SSE push) --> (5) HTTP 202 клиенту.
+
+---
+
 ## 2. Входящие события (Orchestrator принимает)
 
 ### 2.1 События от DP (Document Processing)
@@ -367,6 +407,56 @@
 | `FAILED` | LIC не смог выполнить анализ | SSE: немедленное уведомление `ANALYSIS_FAILED` с `error_message`. Не ждать DM Watchdog |
 
 > **Мгновенное обнаружение сбоя:** При `status=FAILED` оркестратор немедленно уведомляет пользователя через SSE, не дожидаясь DM Stale Version Watchdog (который сработает через 5–10 мин как safety net). Пользователь видит ошибку за секунды, а не за минуты.
+
+---
+
+#### 2.2.2 ClassificationUncertain
+
+**Направление:** LIC --> Orchestrator
+**Топик:** `lic.events.classification-uncertain`
+**Обработчик:** Event Router --> Processing Status Tracker --> SSE Publisher
+**Idempotency key:** `lic-uncertain:{version_id}`
+**Triggered by:** LIC обнаружил, что уверенность классификации (`ClassificationResult.confidence`) ниже сконфигурированного порога (LIC-side; ориентир для SSE — поле `threshold` в payload). Pipeline на стороне LIC приостановлен в ожидании `UserConfirmedType`.
+
+```json
+{
+  "correlation_id": "string (UUID)",
+  "timestamp": "string (ISO 8601)",
+  "job_id": "string (UUID)",
+  "document_id": "string (UUID)",
+  "version_id": "string (UUID)",
+  "organization_id": "string (UUID)",
+  "suggested_type": "string",
+  "confidence": "float (0.0–1.0)",
+  "threshold": "float (0.0–1.0)",
+  "alternatives": [
+    {
+      "contract_type": "string",
+      "confidence": "float (0.0–1.0)"
+    }
+  ]
+}
+```
+
+**Обязательные поля:** `correlation_id`, `timestamp`, `job_id`, `document_id`, `version_id`, `organization_id`, `suggested_type`, `confidence`, `threshold`.
+**Optional:** `alternatives` (omitempty; пустой массив `[]` если LIC не может предложить альтернатив).
+
+**Описание полей:**
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `correlation_id` | UUID | Корреляция исходной операции. |
+| `timestamp` | ISO 8601 | Время публикации события LIC. |
+| `job_id` | UUID | Идентификатор задания. |
+| `document_id` | UUID | Идентификатор документа. |
+| `version_id` | UUID | Идентификатор версии. |
+| `organization_id` | UUID | Идентификатор организации. |
+| `suggested_type` | string | Тип, который LIC считает наиболее вероятным (топ-1). |
+| `confidence` | float | Уверенность модели в `suggested_type` (0.0–1.0). По условию ниже `threshold`. |
+| `threshold` | float | Порог уверенности, ниже которого требуется подтверждение пользователя. Передаётся для UI: «уверенность 62% < порог 75%». |
+| `alternatives` | array | Список альтернативных типов с уверенностями (top-N, отсортированы по убыванию). |
+
+> **Реакция оркестратора:** (1) перевести версию в статус `AWAITING_USER_INPUT` в Redis статус-трекере; (2) опубликовать SSE-событие `type_confirmation_required` с тем же payload (плюс `status: AWAITING_USER_INPUT`) для всех подписчиков организации; (3) запустить watchdog-таймер `ORCH_USER_CONFIRMATION_TIMEOUT` (default 24h). По истечении таймера — перевод в `FAILED` с error_code `USER_CONFIRMATION_TIMEOUT`.
 
 ---
 
@@ -711,6 +801,7 @@
 |-------|---------|-------------|
 | `dp.commands.process-document` | ProcessDocumentRequested | DP |
 | `dp.commands.compare-versions` | CompareDocumentVersionsRequested | DP |
+| `orch.commands.user-confirmed-type` | UserConfirmedType | LIC |
 
 ### Входящие (Orchestrator подписан)
 
@@ -721,6 +812,9 @@
 | `dp.events.processing-failed` | ProcessingFailedEvent | DP |
 | `dp.events.comparison-completed` | ComparisonCompletedEvent | DP |
 | `dp.events.comparison-failed` | ComparisonFailedEvent | DP |
+| `lic.events.status-changed` | LICStatusChangedEvent | LIC |
+| `lic.events.classification-uncertain` | ClassificationUncertain | LIC |
+| `re.events.status-changed` | REStatusChangedEvent | RE |
 | `dm.events.version-artifacts-ready` | VersionProcessingArtifactsReady | DM |
 | `dm.events.version-analysis-ready` | VersionAnalysisArtifactsReady | DM |
 | `dm.events.version-reports-ready` | VersionReportsReady | DM |
@@ -800,6 +894,20 @@
 18. [SSE]  Оркестратор --> Frontend: "Отчёты готовы для скачивания"
 ```
 
+**При низкой уверенности классификации (FR-2.1.3):**
+
+```
+[SUB]  Оркестратор <-- lic.events.classification-uncertain
+       Оркестратор: статус → AWAITING_USER_INPUT, watchdog 24h
+[SSE]  Оркестратор --> Frontend: type_confirmation_required {suggested_type, confidence, alternatives}
+       Pipeline LIC приостановлен, ждёт UserConfirmedType
+[HTTP] Frontend --> Оркестратор: POST /confirm-type {contract_type}
+[PUB]  Оркестратор --> orch.commands.user-confirmed-type (в LIC)
+       Оркестратор: статус → ANALYZING
+[SSE]  Оркестратор --> Frontend: status_update {status: ANALYZING}
+       LIC возобновляет анализ → дальше как с шага 14 happy path
+```
+
 **При ошибке на любом этапе:**
 
 ```
@@ -811,4 +919,8 @@
 
 [SUB]  Оркестратор <-- dm.events.version-partially-available
 [SSE]  Оркестратор --> Frontend: "Результаты доступны частично"
+
+[WATCHDOG] AWAITING_USER_INPUT > ORCH_USER_CONFIRMATION_TIMEOUT
+       Оркестратор: статус → FAILED, error_code USER_CONFIRMATION_TIMEOUT
+[SSE]  Оркестратор --> Frontend: "Время на подтверждение типа договора истекло"
 ```

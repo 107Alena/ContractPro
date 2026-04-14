@@ -1,0 +1,1319 @@
+{
+  "agent_instructions": {
+    "before_start": [
+      "Прочитай этот файл и git log --oneline -20",
+      "Прочитай Frontend/architecture/high-architecture.md — каноничный источник архитектурных решений",
+      "Выбери ОДНУ задачу со статусом pending и наивысшим приоритетом",
+      "Проверь, что все dependencies этой задачи имеют статус done"
+    ],
+    "during_work": [
+      "Работай только над выбранной задачей",
+      "Делай коммиты после каждого логического изменения (conventional commits)",
+      "Не трогай код, не связанный с текущей задачей",
+      "Соблюдай FSD-правила (eslint-plugin-boundaries): app→processes→pages→widgets→features→entities→shared. Зависимости вверх и горизонтально между слайсами одного слоя — запрещены",
+      "Все пользовательские строки на русском (NFR-5.2)",
+      "Все типы API — из shared/api/openapi.d.ts (генерируется из ApiBackendOrchestrator/architecture/api-specification.yaml). Ручные типы для API запрещены"
+    ],
+    "before_finish": [
+      "Выполни ВСЕ test_steps из задачи",
+      "Меняй status на done ТОЛЬКО после успешного прохождения всех тестов",
+      "Напиши summary в Frontend/progress.md",
+      "ЗАПРЕЩЕНО удалять или редактировать задачи — только менять status"
+    ],
+    "related_files": [
+      "Frontend/backlog-tasks.json — отложенные в v1.1+",
+      "Design/tasks.json — задачи дизайн-команды",
+      "ApiBackendOrchestrator/tasks.json — backend задачи"
+    ],
+    "note": "ID-нумерация: FE-TASK-001/002 (admin: placeholder + full UI) — в начале списка ниже. FE-TASK-003 (audit page) — в backlog-tasks.json (отложено в v1.1). Основная имплементация — FE-TASK-004 и далее. Главный архитектурный документ — Frontend/architecture/high-architecture.md, содержит §1-§21 со всеми deciding details."
+  },
+  "tasks": [
+    {
+      "id": "FE-TASK-001",
+      "category": "feature",
+      "priority": "medium",
+      "description": "Placeholder-реализация admin-страниц для v1: маршруты /admin/policies и /admin/checklists защищены RBAC-guard, рендерят EmptyState 'Раздел в разработке. Появится в версии 1.0.1'. Никаких вызовов API, никаких форм. Цель — разблокировать роутинг, RBAC и code-split chunks/admin до получения дизайна (DESIGN-TASK-002). Ссылка на §17.1, §18 п.4 в Frontend/architecture/high-architecture.md.",
+      "acceptance_criteria": [
+        "Создан pages/admin-policies/AdminPoliciesPage.tsx — рендерит <EmptyState title='Раздел в разработке' description='Управление политиками организации появится в версии 1.0.1' icon='settings' />",
+        "Создан pages/admin-checklists/AdminChecklistsPage.tsx — аналогично, но description про 'управление чек-листами обязательных условий'",
+        "Маршруты /admin/policies и /admin/checklists зарегистрированы в app/router/routeTree, обёрнуты в <RequireRole roles={['ORG_ADMIN']}>; lazy-loaded в чанк chunks/admin",
+        "BUSINESS_USER и LAWYER при попытке открыть /admin/* получают <Navigate to='/403' replace />; ORG_ADMIN видит EmptyState",
+        "Sidebar (widgets/sidebar-navigation): пункт 'Администрирование' с подпунктами 'Политики' и 'Чек-листы' виден только при <Can I='admin.policies'>; для других ролей пункт скрыт",
+        "Никаких вызовов API, никаких useQuery/useMutation; никаких форм; никаких импортов из shared/api для admin-логики (placeholder самодостаточен)",
+        "Storybook stories для AdminPoliciesPage и AdminChecklistsPage с состоянием Default + RoleRestricted (показывает 403 mock)",
+        "e2e-тесты (Playwright): (1) ORG_ADMIN заходит на /admin/policies → видит EmptyState; (2) BUSINESS_USER заходит на /admin/policies → редирект на /403; (3) пункт меню 'Администрирование' виден только ORG_ADMIN",
+        "Bundle-size budget: chunks/admin ≤ 10 КБ gzip (только EmptyState + RBAC, без тяжёлых зависимостей)"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run typecheck — без ошибок",
+        "Шаг 2: npm run lint — без ошибок (eslint-plugin-boundaries не нарушен)",
+        "Шаг 3: npm run test — все unit/integration тесты проходят",
+        "Шаг 4: npm run e2e -- --grep admin — 3 e2e-теста проходят",
+        "Шаг 5: npm run build && npx size-limit — chunks/admin в пределах 10 КБ gzip",
+        "Шаг 6: ручная проверка в браузере — sidebar показывает 'Администрирование' для ORG_ADMIN; страницы рендерят EmptyState"
+      ],
+      "dependencies": [
+        "FE-TASK-025",
+        "FE-TASK-028",
+        "FE-TASK-031",
+        "FE-TASK-032"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-002",
+      "category": "feature",
+      "priority": "high",
+      "description": "Полноценная реализация admin-страниц AdminPoliciesPage и AdminChecklistsPage по макету DESIGN-TASK-002. Заменяет EmptyState из FE-TASK-001 на формы редактирования политик и чек-листов организации (UR-12 / FR-6.1). Включает: список + детальный экран, React Hook Form + Zod-валидация, мутации PUT /admin/policies/{id} и PUT /admin/checklists/{id}, обработка OPM_UNAVAILABLE (502).",
+      "acceptance_criteria": [
+        "AdminPoliciesPage реализована по макету DESIGN-TASK-002 — все 5 состояний (Default/Loading/Empty/Error/Editing) визуально 1:1 с Figma",
+        "AdminChecklistsPage реализована по макету DESIGN-TASK-002 — все 5 состояний 1:1 с Figma",
+        "Хук useAdminPolicies() — useQuery на GET /admin/policies, query-key qk.admin.policies, staleTime 30s",
+        "Хук useUpdatePolicy() — useMutation на PUT /admin/policies/{id}, инвалидация qk.admin.policies при success",
+        "Аналогично для checklists: useAdminChecklists() + useUpdateChecklist()",
+        "Формы на React Hook Form + Zod-схемах, синхронизированных с PolicyUpdateRequest/ChecklistUpdateRequest из openapi-typescript",
+        "Обработка ошибок: OPM_UNAVAILABLE (502) → sticky-toast 'Сервис политик временно недоступен' с кнопкой 'Повторить'; VALIDATION_ERROR → inline-ошибки в полях через details.fields (через applyValidationErrors helper из FE-TASK-014)",
+        "Оптимистичные обновления для toggle-операций (включение/выключение чек-листа); rollback при ошибке мутации",
+        "Удалён EmptyState из FE-TASK-001 — pages/admin-policies/AdminPoliciesPage.tsx переписан полностью",
+        "Storybook stories покрывают все 5 состояний для обеих страниц + Hover/Focus/Disabled для интерактивных контролов",
+        "e2e-тесты (Playwright): (1) ORG_ADMIN редактирует severity политики → видит обновлённое значение после reload; (2) toggle чек-листа отражается оптимистично + персистится после reload; (3) при недоступности OPM показан sticky-toast с кнопкой 'Повторить'",
+        "a11y: axe-playwright не находит блокирующих нарушений на admin-страницах",
+        "Bundle-size budget: chunks/admin ≤ 80 КБ gzip (включая формы и validators)"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run typecheck — без ошибок (типы PolicyUpdateRequest/ChecklistUpdateRequest сгенерированы из OpenAPI)",
+        "Шаг 2: npm run lint — без ошибок",
+        "Шаг 3: npm run test — unit-тесты для хуков (useAdminPolicies, useUpdatePolicy) и компонентов проходят",
+        "Шаг 4: npm run e2e -- --grep admin — 3 e2e-теста + старые из FE-TASK-001 проходят",
+        "Шаг 5: визуальная регрессия Chromatic — все 10 stories для admin-страниц соответствуют макету",
+        "Шаг 6: npm run build && npx size-limit — chunks/admin в пределах 80 КБ gzip",
+        "Шаг 7: ручная проверка с реальным backend — редактирование политики/чек-листа работает end-to-end"
+      ],
+      "dependencies": [
+        "FE-TASK-001",
+        "FE-TASK-013",
+        "FE-TASK-014",
+        "DESIGN-TASK-002"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-004",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Scaffolding проекта: Vite 5 + React 18 + TypeScript 5 strict, package.json с базовыми зависимостями, tsconfig.json с strict-флагами",
+      "acceptance_criteria": [
+        "package.json: имя contractpro-frontend, type=module, scripts (dev, build, preview, typecheck) — минимум",
+        "Зависимости: react@18.3, react-dom@18.3, react-router-dom@6.22, typescript@5.4 (dev)",
+        "tsconfig.json: strict=true, noUncheckedIndexedAccess=true, exactOptionalPropertyTypes=true, jsx=react-jsx, paths alias '@/*' → 'src/*'",
+        "vite.config.ts: @vitejs/plugin-react-swc; alias @ → src; build target ES2022",
+        "src/main.tsx + src/App.tsx — минимальная заглушка ('Hello ContractPro')",
+        "index.html — корневой div с id=root",
+        "npm run dev запускает dev-сервер на 5173, открывается заглушка",
+        "npm run build собирает dist/ без ошибок",
+        "npm run typecheck (tsc --noEmit) проходит без ошибок"
+      ],
+      "test_steps": [
+        "Шаг 1: npm install — без ошибок",
+        "Шаг 2: npm run typecheck — 0 errors",
+        "Шаг 3: npm run dev — открывается http://localhost:5173 с заглушкой",
+        "Шаг 4: npm run build — dist/ создаётся, нет ошибок"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-005",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "ESLint + Prettier + eslint-plugin-boundaries (FSD-правила) + import sorting",
+      "acceptance_criteria": [
+        "ESLint 9 flat config (eslint.config.js): @typescript-eslint, react, react-hooks, jsx-a11y, eslint-plugin-boundaries",
+        "eslint-plugin-boundaries настроен на FSD-слои (app, processes, pages, widgets, features, entities, shared) с правилом 'верхние слои не зависят от нижних, горизонтальные импорты между слайсами запрещены' — конфигурация по §2.1 архитектуры",
+        "Prettier config (.prettierrc): single quotes, semi=true, printWidth=100, trailingComma=all",
+        "scripts: lint (eslint .), lint:fix (eslint . --fix), format (prettier --write .)",
+        "Тестовое нарушение FSD (например, импорт из features в entities) → eslint выдаёт ошибку"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run lint — без ошибок на текущем коде",
+        "Шаг 2: создать тестовый файл src/entities/test/bad.ts с импортом из features/* → npm run lint выдаёт boundaries error → удалить файл",
+        "Шаг 3: npm run format — prettier применяется ко всем файлам без ошибок"
+      ],
+      "dependencies": [
+        "FE-TASK-004"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-006",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Husky + lint-staged + commitlint для pre-commit и commit-msg хуков",
+      "acceptance_criteria": [
+        "husky установлен, .husky/pre-commit и .husky/commit-msg созданы",
+        "lint-staged config в package.json: *.{ts,tsx} → eslint --fix + prettier --write; *.{json,md} → prettier --write",
+        "commitlint config с conventional commits (feat, fix, refactor, test, docs, chore, build, ci)",
+        "prepare script в package.json: husky install"
+      ],
+      "test_steps": [
+        "Шаг 1: тестовый коммит с неконвенциональным сообщением ('test') → отклонён commitlint",
+        "Шаг 2: коммит с неотформатированным файлом → lint-staged автоматически форматирует",
+        "Шаг 3: валидный коммит ('feat: test') → проходит"
+      ],
+      "dependencies": [
+        "FE-TASK-005"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-007",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "FSD скелет: создать структуру src/{app,processes,pages,widgets,features,entities,shared}/ согласно §2 архитектуры с пустыми index.ts на каждый намеченный слайс",
+      "acceptance_criteria": [
+        "Структура папок 1:1 с §2 архитектуры — все слайсы из FSD-блока созданы как пустые директории с index.ts",
+        "shared/ui, shared/api, shared/auth, shared/lib, shared/config, shared/i18n, shared/observability — поддиректории",
+        "tsconfig path-aliases работают: import { foo } from '@/shared/lib/foo' разрешается",
+        "eslint-plugin-boundaries конфиг покрывает все созданные слайсы (нет 'unknown element' предупреждений)",
+        "Пустые index.ts экспортируют пустые объекты (например, export {})  — проходят typecheck"
+      ],
+      "test_steps": [
+        "Шаг 1: ls src/ — присутствуют все 7 FSD-папок",
+        "Шаг 2: npm run typecheck — без ошибок",
+        "Шаг 3: npm run lint — без warnings про unknown elements"
+      ],
+      "dependencies": [
+        "FE-TASK-005"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-008",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Vite proxy для dev-окружения: /api/* → http://localhost:8080 (Orchestrator), /api/v1/events/stream — SSE passthrough без буферизации",
+      "acceptance_criteria": [
+        "vite.config.ts: server.proxy: { '/api': { target: 'http://localhost:8080', changeOrigin: true, ws: false } }",
+        "SSE endpoint работает корректно — события стримятся без буферизации (configureProxy с настройками для SSE)",
+        "Same-origin в dev — браузер видит /api/* на localhost:5173, проксируется на :8080 (см. ADR-6 backend high-architecture)",
+        "vite.config.ts документирован комментарием со ссылкой на §13.2 + ADR-6"
+      ],
+      "test_steps": [
+        "Шаг 1: запустить мок backend на :8080 (например, через MSW node) → fetch('/api/v1/users/me') возвращает JSON",
+        "Шаг 2: SSE endpoint /api/v1/events/stream — события приходят real-time",
+        "Шаг 3: в Network tab браузера URL-ы относительные (/api/...), не http://localhost:8080/..."
+      ],
+      "dependencies": [
+        "FE-TASK-004"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-009",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Production Dockerfile (multi-stage node:20 → nginx:1.27-alpine) + nginx.conf с SPA fallback + reverse-proxy на /api/* + SSE passthrough + security headers по §13.1-13.2 архитектуры",
+      "acceptance_criteria": [
+        "Dockerfile 1:1 с §13.1: build stage (npm ci → typecheck → lint → test:ci → build), runtime nginx-alpine, non-root user (USER nginx), EXPOSE 8080",
+        "nginx.conf 1:1 с §13.2: gzip, immutable assets cache, no-cache index.html, /api/v1/events/stream с proxy_buffering off + chunked, /api/ reverse-proxy с client_max_body_size 25m, SPA fallback try_files",
+        "Security headers: X-Content-Type-Options nosniff, Referrer-Policy strict-origin-when-cross-origin, Permissions-Policy, Strict-Transport-Security",
+        "docker/entrypoint.sh: runtime-инъекция window.__ENV__ из env-переменных (VITE_API_BASE_URL, VITE_SENTRY_DSN, VITE_OTEL_ENDPOINT)",
+        "docker build выполняется без ошибок"
+      ],
+      "test_steps": [
+        "Шаг 1: docker build -t contractpro-frontend . — успешно",
+        "Шаг 2: docker run --rm -p 8080:8080 contractpro-frontend — nginx стартует, http://localhost:8080 отдаёт index.html",
+        "Шаг 3: curl -I http://localhost:8080 — присутствуют security headers",
+        "Шаг 4: curl http://localhost:8080/non-existent-route — отдаёт index.html (SPA fallback)"
+      ],
+      "dependencies": [
+        "FE-TASK-004"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-010",
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "GitHub Actions CI (.github/workflows/ci.yml) согласно §13.3: typecheck, lint, test:ci, build, size-limit + Chromatic при PR",
+      "acceptance_criteria": [
+        "Workflow quality: checkout, setup-node@v4 (cache npm), npm ci, npm run typecheck, npm run lint, npm run test:ci, npm run build, npx size-limit",
+        "Workflow chromatic: запускается при pull_request, использует CHROMATIC_TOKEN secret",
+        "Workflow e2e: npx playwright install --with-deps, npm run e2e",
+        "Workflow docker: при push на master — docker buildx + push в registry с tag = github.sha",
+        "size-limit конфиг в package.json: main chunk ≤ 200 КБ gzip, отдельные чанки ≤ 150 КБ gzip"
+      ],
+      "test_steps": [
+        "Шаг 1: ручной запуск через 'act' (если установлен) или симуляция push → workflow проходит",
+        "Шаг 2: реальный PR → CI запускается, все jobs зелёные",
+        "Шаг 3: размер бандла укладывается в budget"
+      ],
+      "dependencies": [
+        "FE-TASK-009"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-011",
+      "category": "api-layer",
+      "priority": "critical",
+      "description": "openapi-typescript генерация типов из ApiBackendOrchestrator/architecture/api-specification.yaml в src/shared/api/openapi.d.ts; CI-gate на актуальность",
+      "acceptance_criteria": [
+        "Скрипт gen:api в package.json: 'openapi-typescript ../ApiBackendOrchestrator/architecture/api-specification.yaml -o src/shared/api/openapi.d.ts'",
+        "Запускается в prepare hook (husky) и в CI как gate — fail если diff после регенерации",
+        "Сгенерированный openapi.d.ts валиден TypeScript, импортирует корректно: import type { components, paths } from '@/shared/api/openapi'",
+        "Минимальный smoke-тест: type ContractList = components['schemas']['ContractList'] разрешается без ошибок"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run gen:api — файл src/shared/api/openapi.d.ts создаётся",
+        "Шаг 2: npm run typecheck — проходит, типы валидны",
+        "Шаг 3: импорт type ErrorResponse = components['schemas']['ErrorResponse'] работает в любом файле"
+      ],
+      "dependencies": [
+        "FE-TASK-007"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-012",
+      "category": "api-layer",
+      "priority": "critical",
+      "description": "axios HTTP-клиент в src/shared/api/client.ts с interceptors (auth, X-Correlation-Id, error normalization, 401→silent refresh, 429→retry-after) по §7.2-7.4 архитектуры",
+      "acceptance_criteria": [
+        "axios instance с baseURL='/api/v1' (env), timeout=30000",
+        "Request interceptor: добавляет Authorization: Bearer {token} из sessionStore (если есть), генерирует X-Correlation-Id (UUID v4) если не передан",
+        "Response interceptor: на 401 AUTH_TOKEN_EXPIRED — shared-promise refresh flow (§5.4); на 429 — sleep по Retry-After + 1 retry; на остальные ошибки — нормализация в OrchestratorError",
+        "Класс OrchestratorError(error_code, message, suggestion?, details?, correlationId?, status) — расширяет Error",
+        "Retry-policy для 502/503 GET — 3 попытки exponential backoff (1s/2s/4s)",
+        "SECURITY-комментарий не нужен (не относится к SSE)",
+        "Unit-тесты с MSW: 401→refresh→retry, 429→retry-after, 5xx→OrchestratorError, network error→retry"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/shared/api/client.test.ts — все тесты проходят",
+        "Шаг 2: ручная проверка через consol: http.get('/users/me') возвращает данные с правильными headers"
+      ],
+      "dependencies": [
+        "FE-TASK-011",
+        "FE-TASK-027"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-013",
+      "category": "api-layer",
+      "priority": "critical",
+      "description": "TanStack Query setup: QueryClient + QueryClientProvider в app/providers; централизованный реестр query-keys (qk) в src/shared/api/query-keys.ts по §4.2",
+      "acceptance_criteria": [
+        "QueryClient с defaultOptions: queries.staleTime=30_000, retry=1, refetchOnWindowFocus=false (override per-query)",
+        "QueryClientProvider в app/providers/QueryProvider.tsx",
+        "qk-объект в src/shared/api/query-keys.ts — иерархическая структура по §4.2: me, contracts (all/list/byId/versions/version/status/results/risks/summary/recommendations/diff), admin (policies/checklists), audit",
+        "Экспорт из shared/api: qk, queryClient",
+        "Type-safety: qk.contracts.byId(id) возвращает тип `readonly ['contracts', string]`",
+        "DevTools опционально подключены в dev режиме"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run typecheck — типы query-keys валидны",
+        "Шаг 2: тестовый useQuery с qk.me → данные кешируются под ключом ['me']"
+      ],
+      "dependencies": [
+        "FE-TASK-012"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-014",
+      "category": "api-layer",
+      "priority": "critical",
+      "description": "Каталог ошибок: src/shared/api/errors/ — ErrorCode enum (22 кода), ERROR_UX mapping (title/hint/action) по §7.3, helper toUserMessage по §20.4",
+      "acceptance_criteria": [
+        "src/shared/api/errors/codes.ts: type ErrorCode из openapi.d.ts ErrorResponse.error_code (опциональный enum)",
+        "src/shared/api/errors/catalog.ts: ERROR_UX 1:1 с §7.3 — все 22 кода с title (рус), hint?, action ('retry'|'login'|'none'|undefined)",
+        "src/shared/api/errors/handler.ts: toUserMessage(err) → { title, hint?, action?, correlationId? } — приоритет server message над ERROR_UX.title",
+        "src/shared/api/errors/apply-validation.ts: applyValidationErrors(err, setError) для VALIDATION_ERROR (см. §20.4a) — типобезопасно через openapi-typescript ValidationFieldError",
+        "Unit-тесты для toUserMessage и applyValidationErrors (MSW мокает разные error-responses)"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/shared/api/errors — все тесты проходят",
+        "Шаг 2: applyValidationErrors c мокнутым details.fields — корректно вызывает setError для каждого поля"
+      ],
+      "dependencies": [
+        "FE-TASK-012"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-015",
+      "category": "api-layer",
+      "priority": "high",
+      "description": "SSE wrapper в src/shared/api/sse.ts: openEventStream с auto-reconnect, heartbeat watchdog, exponential backoff, polling fallback после 5 неудачных reconnect — по §7.7",
+      "acceptance_criteria": [
+        "openEventStream({ documentId?, onEvent }) → unsubscribe fn",
+        "EventSource подключается к /api/v1/events/stream?token={jwt}&document_id={?id}",
+        "Listen: addEventListener('status_update', handler); JSON.parse payload",
+        "Heartbeat watchdog: 45s timeout без событий → close + reconnect",
+        "Exponential backoff: 2^retry seconds, max 30s, после 5 retries → polling fallback (3s интервал на /status endpoint)",
+        "24-часовой soft-reset (§7.7)",
+        "SECURITY-комментарий перед setSearchParams('token', token) — точно как в §7.7 архитектуры со ссылкой на ADR-FE-10",
+        "Unit-тесты с EventSource mock: connect, status_update, reconnect on error, heartbeat timeout, polling fallback"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/shared/api/sse.test.ts — все тесты проходят",
+        "Шаг 2: интеграция с MSW SSE handler — события доставляются"
+      ],
+      "dependencies": [
+        "FE-TASK-013"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-016",
+      "category": "api-layer",
+      "priority": "high",
+      "description": "useEventStream хук в src/shared/api/use-event-stream.ts по §20.2: подписка на SSE, setQueryData в TanStack Query, инвалидация results при READY, toast при FAILED/REJECTED",
+      "acceptance_criteria": [
+        "useEventStream(documentId?: string) → подписывается через openEventStream в useEffect",
+        "На каждое событие: queryClient.setQueryData(qk.contracts.status(doc, ver), event)",
+        "При status === 'READY': queryClient.invalidateQueries(qk.contracts.results(doc, ver))",
+        "При status === 'FAILED' или 'REJECTED': toast.error(message, { correlationId })",
+        "При status === 'AWAITING_USER_INPUT': toast.warning + триггер модалки LowConfidenceConfirm (через event-bus или callback)",
+        "Cleanup в return useEffect — отписка от SSE"
+      ],
+      "test_steps": [
+        "Шаг 1: интеграционный тест с MSW SSE handler + useEventStream → setQueryData вызван",
+        "Шаг 2: эмулировать READY → query invalidates",
+        "Шаг 3: эмулировать FAILED → toast.error вызван"
+      ],
+      "dependencies": [
+        "FE-TASK-015"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-017",
+      "category": "design-system",
+      "priority": "critical",
+      "description": "Tailwind CSS 3.4 + tokens.css из Figma по §8.2: brand (#F55E12), risk/status/neutrals; tailwind.config.ts маппит CSS-vars",
+      "acceptance_criteria": [
+        "src/app/styles/tokens.css 1:1 с §8.2: --color-brand-500 #F55E12, --color-brand-600 #D14D0D, --color-brand-50 #FFF3EB, --color-fg #11111C, --color-fg-muted #666B78, --color-bg #FFFFFF, --color-bg-muted #F9FAFB, --color-border #D9DEE5, --color-success/warning/danger/risk-high/medium/low по §8.2",
+        "Шапка tokens.css с комментарием 'Source of truth: Figma file Lxhk7jQyXL3iuoTpiOHxcb' и ссылкой на ADR-FE-09 (token pipeline) — DESIGN-TASK-001 в Design/tasks.json",
+        "tailwind.config.ts: colors.brand/risk/etc. ссылаются на CSS-переменные через var(--color-...)",
+        "src/app/styles/reset.css или импорт base reset",
+        "main.tsx импортирует tokens.css + reset + tailwind base/components/utilities",
+        "Тестовая страница с background: bg-brand-500 — отображается оранжевым #F55E12"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run dev — открыть страницу с тестовым div className='bg-brand-500 text-white p-4'>Test → видно оранжевый бейдж",
+        "Шаг 2: DevTools → Computed → background-color: rgb(245, 94, 18) (#F55E12)",
+        "Шаг 3: tailwind утилиты bg-risk-high, text-fg-muted, border-border — работают"
+      ],
+      "dependencies": [
+        "FE-TASK-007"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-018",
+      "category": "design-system",
+      "priority": "high",
+      "description": "Storybook 8 setup с Vite-builder + Chromatic config + addon-a11y",
+      "acceptance_criteria": [
+        "Storybook 8 установлен с @storybook/react-vite, @storybook/addon-essentials, @storybook/addon-a11y",
+        ".storybook/main.ts: stories pattern 'src/**/*.stories.@(ts|tsx)', framework react-vite",
+        ".storybook/preview.ts: глобальная подгрузка tokens.css, тема light/dark (опц.)",
+        "scripts: storybook (dev), build-storybook (для Chromatic)",
+        "Тестовая stories для Button (если уже создан в FE-TASK-019) — отображается",
+        "Chromatic CLI устанавливается, .chromaticrc или env var CHROMATIC_PROJECT_TOKEN"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run storybook — открывается на :6006",
+        "Шаг 2: видна тестовая story (или welcome page если других нет)",
+        "Шаг 3: build-storybook успешно создаёт storybook-static/"
+      ],
+      "dependencies": [
+        "FE-TASK-017"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-019",
+      "category": "design-system",
+      "priority": "critical",
+      "description": "Базовые UI-примитивы в src/shared/ui/ на Radix-UI + Tailwind: Button, Badge, Chip, Input, Label",
+      "acceptance_criteria": [
+        "Button: variants (primary, secondary, ghost, danger), sizes (sm, md, lg), states (default, hover, active, focus, disabled, loading), iconLeft/iconRight props",
+        "Badge: variants (success, warning, danger, neutral, brand)",
+        "Chip: с remove-кнопкой опционально, для filter chips",
+        "Input: types (text, email, password, number), states (default, focus, error, disabled), Label-связка через htmlFor",
+        "Label: связан с Input через aria-описание",
+        "Используют class-variance-authority + tailwind-merge + clsx",
+        "Storybook stories для каждого: Default, Hover, Focus, Disabled, Loading (где применимо), Error",
+        "Все компоненты a11y: ARIA-атрибуты, keyboard navigation"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run storybook → Button stories покрывают все variants и states",
+        "Шаг 2: axe-проверка не находит блокирующих нарушений",
+        "Шаг 3: keyboard navigation работает (Tab, Enter, Space на Button)"
+      ],
+      "dependencies": [
+        "FE-TASK-018"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-020",
+      "category": "design-system",
+      "priority": "critical",
+      "description": "UI-примитивы overlays: Modal/Dialog (Radix Dialog), Toast (Radix Toast), Tooltip (Radix Tooltip), Popover (Radix Popover)",
+      "acceptance_criteria": [
+        "Modal: controlled (open/onOpenChange), focus-trap, ESC closes, backdrop click closes (опц.), sizes (sm, md, lg), Header/Body/Footer slots",
+        "Toast: variants (success, error, warning, info, sticky), Toaster в app shell, useToast хук с API toast.success/error/warn/info/sticky",
+        "Tooltip: delay 500ms, positioning (top/right/bottom/left), maxWidth",
+        "Popover: controlled, positioning, anchor",
+        "Все a11y: focus-trap в Modal, role/aria для Toast (live-region), Tooltip с aria-describedby",
+        "Storybook stories с Default + интерактивными примерами"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook stories отображают все варианты",
+        "Шаг 2: keyboard test — ESC закрывает Modal, Tab внутри Modal не уходит на background",
+        "Шаг 3: a11y axe-check без блокирующих нарушений"
+      ],
+      "dependencies": [
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-021",
+      "category": "design-system",
+      "priority": "high",
+      "description": "DataTable компонент в src/shared/ui/table/ на TanStack Table 8 — compound pattern, серверная пагинация, сортировка, фильтры, row-selection, empty/loading/error slots",
+      "acceptance_criteria": [
+        "Compound API: <DataTable><Toolbar/><Columns/><Rows/><Pagination/></DataTable>",
+        "Поддержка серверной пагинации (page, size, total) + сортировки + фильтров — параметры контролируются извне",
+        "Slots для empty/loading/error состояний",
+        "Column visibility toggle (опц.)",
+        "Row selection (опц., через checkbox column)",
+        "TypeScript generic по типу строки",
+        "Storybook stories: Default, Loading, Empty, Error, WithPagination, WithSorting"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook stories покрывают все состояния",
+        "Шаг 2: keyboard navigation по строкам/колонкам работает",
+        "Шаг 3: сортировка по клику на заголовок работает"
+      ],
+      "dependencies": [
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-022",
+      "category": "design-system",
+      "priority": "high",
+      "description": "FileDropZone компонент с react-dropzone + table-driven validation через FILE_FORMATS из shared/config/file-formats.ts (см. §7.5)",
+      "acceptance_criteria": [
+        "src/shared/config/file-formats.ts: FILE_FORMATS таблица 1:1 с §7.5 — pdf активен, docx/doc за FEATURE_DOCX_UPLOAD; getActiveFormats() фильтрует",
+        "FileDropZone props: accept (auto из getActiveFormats), maxSize, onDrop, onError",
+        "States: drag-hover, selected, error (file too large/wrong format/corrupt), loading, disabled",
+        "Magic-bytes валидация через async validateFile() (§7.5) — отвергает подмену расширения",
+        "Сообщения об ошибках на русском (NFR-5.2): 'Файл больше 20 МБ', 'Поддерживается только PDF', etc.",
+        "Storybook stories для всех состояний"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook — все состояния отображаются",
+        "Шаг 2: Drag PDF файл → onDrop вызывается с File",
+        "Шаг 3: Drag .exe файл с MIME=application/pdf → magic-bytes отвергает (INVALID_FILE)",
+        "Шаг 4: Drag файл >20МБ → ошибка FILE_TOO_LARGE"
+      ],
+      "dependencies": [
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-023",
+      "category": "design-system",
+      "priority": "high",
+      "description": "ProcessingProgress widget — 10-шаговый статус-индикатор по §8.3 (с опциональной паузой AWAITING_USER_INPUT как inline-CTA)",
+      "acceptance_criteria": [
+        "Принимает status: UserProcessingStatus (10 значений из openapi.d.ts)",
+        "Рендерит progress-bar + список шагов с подсветкой текущего",
+        "Маппинг status → user-friendly название на русском (см. §5.2 backend high-architecture mapping)",
+        "Для AWAITING_USER_INPUT не рендерится как обычный шаг — вместо этого inline-CTA 'Подтвердите тип договора' с кнопкой (callback на открытие модалки)",
+        "Для FAILED/REJECTED/PARTIALLY_FAILED — error-state с red-ish цветом",
+        "Storybook stories для каждого из 10 статусов"
+      ],
+      "test_steps": [
+        "Шаг 1: 10 stories отображаются корректно",
+        "Шаг 2: AWAITING_USER_INPUT story показывает CTA-кнопку",
+        "Шаг 3: FAILED story показывает error-state"
+      ],
+      "dependencies": [
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-024",
+      "category": "design-system",
+      "priority": "medium",
+      "description": "Entity UI: RiskBadge + StatusBadge в src/entities/risk/ui/ и src/entities/version/ui/",
+      "acceptance_criteria": [
+        "RiskBadge: props { level: 'high'|'medium'|'low' }, цвета из tokens (var(--color-risk-*)), tooltip с legend",
+        "StatusBadge: props { status: UserProcessingStatus }, маппит 10 статусов в user-строку + цвет + иконку",
+        "Storybook stories для всех вариантов"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook отображает все 3 уровня риска и 10 статусов",
+        "Шаг 2: tooltip RiskBadge работает"
+      ],
+      "dependencies": [
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-025",
+      "category": "design-system",
+      "priority": "medium",
+      "description": "Прочие shared/ui компоненты: EmptyState, LegalDisclaimer, Pagination, SearchInput, Breadcrumbs, Tabs, Accordion, SegmentedControl",
+      "acceptance_criteria": [
+        "EmptyState: title, description, icon?, CTA-button?",
+        "LegalDisclaimer: фиксированный текст из ТЗ ('выводы носят рекомендательный характер...') — отображается на всех Result-экранах",
+        "Pagination: page, total, onPageChange",
+        "SearchInput: с debounce 300ms, иконкой, clear-кнопкой",
+        "Breadcrumbs: items[], автомаппинг через React Router useMatches",
+        "Tabs (Radix): controlled, animated transitions",
+        "Accordion (Radix): single/multiple, animated",
+        "SegmentedControl: controlled, similar to RadioGroup",
+        "Все компоненты со Storybook stories"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook — все компоненты отображаются",
+        "Шаг 2: keyboard navigation работает для Tabs и Accordion"
+      ],
+      "dependencies": [
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-026",
+      "category": "auth",
+      "priority": "critical",
+      "description": "Session store на Zustand: accessToken in-memory, user profile, helpers — по ADR-FE-03 + §5.2",
+      "acceptance_criteria": [
+        "src/shared/auth/session-store.ts: Zustand store с accessToken (string|null), user (User|null), tokenExpiry (number|null)",
+        "Тип User из openapi-typescript components.UserProfile (включая permissions)",
+        "Actions: setAccess(token, expiresIn), setUser(user), clear()",
+        "Не сериализуется (не persist) — по ADR-FE-03 access in-memory",
+        "Selectors: useSession((s) => s.user?.role), useSession((s) => s.user?.permissions?.export_enabled)",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/shared/auth/session-store.test.ts — все тесты проходят",
+        "Шаг 2: setAccess → useSession((s) => s.accessToken) возвращает токен"
+      ],
+      "dependencies": [
+        "FE-TASK-007"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-027",
+      "category": "auth",
+      "priority": "critical",
+      "description": "Auth-flow: processes/auth-flow/ — login/refresh/logout с shared-promise refresh pattern по §5.4. Refresh-token в sessionStorage (ADR-FE-03 fallback)",
+      "acceptance_criteria": [
+        "POST /auth/login → setAccess + setUser (запрашивает /users/me)",
+        "Auto-refresh: таймер за 60с до exp → POST /auth/refresh",
+        "Shared-promise: один in-flight refresh даже при N параллельных 401",
+        "POST /auth/logout → clear store + redirect /login + queryClient.clear()",
+        "Refresh-token хранится в sessionStorage с обфускацией (ADR-FE-03 fallback на v1; миграция на httpOnly cookie — backlog §18 п.1)",
+        "Edge-cases: refresh failure → soft-logout + sticky-toast 'Сессия завершена'; tab-resume → silent refresh",
+        "Unit-тесты с MSW: happy login, refresh-race (N параллельных 401), refresh-failure"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/processes/auth-flow — все тесты проходят",
+        "Шаг 2: симуляция 5 параллельных 401 → 1 refresh запрос"
+      ],
+      "dependencies": [
+        "FE-TASK-026",
+        "FE-TASK-012"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-028",
+      "category": "auth",
+      "priority": "critical",
+      "description": "RBAC на клиенте: PERMISSIONS table, useCan, Can component, RequireRole, useCanExport — по §5.5-5.6",
+      "acceptance_criteria": [
+        "src/shared/auth/rbac.ts: PERMISSIONS object 1:1 с §5.5 (без export.download.business — закрыто §18, см. useCanExport)",
+        "useCan(permission): boolean — проверяет роль из useSession",
+        "<Can I=permission fallback?>{children}</Can> — компонентный guard",
+        "<RequireRole roles>{children}</RequireRole> — route-guard, редирект на /403 если роль не входит",
+        "src/shared/auth/use-can-export.ts: useCanExport() по §5.6 — комбинация роли + permissions.export_enabled",
+        "Unit-тесты для всех hooks с разными ролями"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/shared/auth — все тесты проходят",
+        "Шаг 2: useCanExport для BUSINESS_USER с export_enabled=false → false; с true → true; LAWYER → true всегда"
+      ],
+      "dependencies": [
+        "FE-TASK-026"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-029",
+      "category": "page",
+      "priority": "high",
+      "description": "LoginPage по Figma 'Auth Page (Desktop + Mobile)': React Hook Form + Zod, applyValidationErrors интеграция, redirect на /dashboard или ?redirect=...",
+      "acceptance_criteria": [
+        "Компонент src/pages/auth/LoginPage.tsx — desktop layout 1:1 с Figma; mobile вариант через breakpoint",
+        "Форма: email (type=email, required, format), password (type=password, required, minLength 8) — Zod schema",
+        "POST /auth/login через features/auth/login → success: setAccess + setUser + navigate(redirect ?? '/dashboard')",
+        "Server validation errors → applyValidationErrors прокидывает в form.setError",
+        "Общие ошибки (401 invalid credentials) → form-level error message + clear password field",
+        "PromoSidebar widget слева (по Figma)",
+        "Storybook stories: Default, Loading, ServerError, ValidationError",
+        "e2e-тест: успешный login + неуспешный + retry"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook stories отображаются",
+        "Шаг 2: e2e — заполнить форму валидными данными → редирект на /dashboard",
+        "Шаг 3: e2e — невалидный email → inline-error",
+        "Шаг 4: e2e — wrong password → form-level error"
+      ],
+      "dependencies": [
+        "FE-TASK-027",
+        "FE-TASK-014",
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-030",
+      "category": "layout",
+      "priority": "critical",
+      "description": "App-shell: providers (QueryClient, Router, I18n, Theme, ErrorBoundary), App.tsx entry",
+      "acceptance_criteria": [
+        "src/app/App.tsx: композиция всех providers по §1.1-§9 архитектуры",
+        "Sentry.ErrorBoundary (route-level) с RouteError fallback (§9.2)",
+        "QueryClientProvider, RouterProvider, I18nProvider, Toaster",
+        "i18n базовый setup: i18next + react-i18next, ru namespace загружен из shared/i18n/locales/ru/*.json",
+        "main.tsx: createRoot + <App />",
+        "Все error-страницы (403/404/500/offline) подключены через router (см. FE-TASK-033)"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run dev — приложение стартует, нет console-errors",
+        "Шаг 2: тестовый throw в компоненте → Sentry.ErrorBoundary показывает RouteError",
+        "Шаг 3: i18n.t('hello') возвращает значение из ru.json"
+      ],
+      "dependencies": [
+        "FE-TASK-013",
+        "FE-TASK-026",
+        "FE-TASK-020"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-031",
+      "category": "layout",
+      "priority": "high",
+      "description": "Routing: createBrowserRouter с data-loaders по §6, lazy-loaded pages, route guards, breadcrumbs handle",
+      "acceptance_criteria": [
+        "src/app/router/routeTree.tsx: все маршруты из §17.1 (auth, dashboard, contracts, contracts/new, contracts/:id, contracts/:id/versions/:vid/result, comparison, reports, settings, errors)",
+        "Каждая page — React.lazy import (chunks отдельные)",
+        "Route-guards: <RequireRole roles=['ORG_ADMIN']> для /admin/* /audit/*",
+        "Loaders для contract-detail и result-page по §6.2 (parallel ensureQueryData)",
+        "errorElement: RouteErrorBoundary",
+        "handle.crumb: () => 'Главная' | ... — для Breadcrumbs",
+        "Code-splitting: chunks/diff-viewer, chunks/pdf-preview, chunks/admin (FE-TASK-001)"
+      ],
+      "test_steps": [
+        "Шаг 1: переход по всем маршрутам — корректный chunk загружается",
+        "Шаг 2: BUSINESS_USER пытается /admin/policies → редирект на /403",
+        "Шаг 3: /404 показывается для несуществующего маршрута"
+      ],
+      "dependencies": [
+        "FE-TASK-030",
+        "FE-TASK-028"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-032",
+      "category": "layout",
+      "priority": "high",
+      "description": "Sidebar widget (widgets/sidebar-navigation/): collapsed/expanded, role-based menu items via Can",
+      "acceptance_criteria": [
+        "Структура: logo, primary nav (Dashboard, Контракты, Отчёты), secondary (Настройки), admin-section (Политики, Чек-листы — только для ORG_ADMIN)",
+        "Активный пункт подсвечивается (по NavLink active prop)",
+        "Collapsed/expanded состояние через Zustand UI-store",
+        "Role-restricted items через <Can I='admin.policies'>",
+        "Audit-пункт скрыт в v1 (см. §18 п.5)",
+        "Mobile: drawer-вариант (Sheet от Radix или кастомный)",
+        "Storybook stories: Expanded, Collapsed, AsLawyer, AsBusinessUser, AsOrgAdmin"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook — все 5 stories корректно",
+        "Шаг 2: ORG_ADMIN видит admin-section, BUSINESS_USER нет",
+        "Шаг 3: collapsed/expanded toggle работает"
+      ],
+      "dependencies": [
+        "FE-TASK-031",
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-033",
+      "category": "layout",
+      "priority": "medium",
+      "description": "Topbar widget + Breadcrumbs widget + Error pages (403, 404, 500, /offline)",
+      "acceptance_criteria": [
+        "Topbar: search-input (опц), user-menu dropdown (имя, роль, organization_name, кнопка Выйти), notifications (опц)",
+        "Breadcrumbs widget на основе useMatches() React Router",
+        "src/pages/errors/: ForbiddenPage (403 с CTA 'На главную'), NotFoundPage (404 с CTA 'К документам'), ServerErrorPage (500 с correlation_id и кнопкой Скопировать), OfflinePage (auto-detect через navigator.onLine)",
+        "Sticky-баннер 'Нет соединения' через события online/offline",
+        "Все экраны на русском (NFR-5.2)",
+        "Storybook stories"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook — все error-экраны и Topbar отображаются",
+        "Шаг 2: ручной тест: navigator.onLine=false → баннер появляется",
+        "Шаг 3: переход на /404 → NotFoundPage"
+      ],
+      "dependencies": [
+        "FE-TASK-031",
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-034",
+      "category": "feature",
+      "priority": "critical",
+      "description": "contract-upload feature: src/features/contract-upload/ — multipart upload с progress, валидация через FileDropZone, error mapping",
+      "acceptance_criteria": [
+        "Хук useUploadContract — useMutation на POST /contracts/upload",
+        "FormData с file + title, onUploadProgress callback",
+        "applyValidationErrors интеграция (для title/file полей)",
+        "Error handling: FILE_TOO_LARGE/UNSUPPORTED_FORMAT/INVALID_FILE → inline-ошибки в форме",
+        "Success: navigate на /contracts/{id}/versions/{vid}/result + открытие SSE-стрима",
+        "Unit-тесты + integration-тест с MSW"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/features/contract-upload — все тесты проходят",
+        "Шаг 2: e2e — upload PDF → 202 → редирект на result page"
+      ],
+      "dependencies": [
+        "FE-TASK-022",
+        "FE-TASK-014",
+        "FE-TASK-013"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-035",
+      "category": "feature",
+      "priority": "high",
+      "description": "version-upload + version-recheck features: загрузка новой версии существующего договора + повторная проверка",
+      "acceptance_criteria": [
+        "useUploadVersion: POST /contracts/{id}/versions/upload (multipart)",
+        "useRecheckVersion: POST /contracts/{id}/versions/{vid}/recheck (no body, 202)",
+        "Обработка 409 VERSION_STILL_PROCESSING → toast с подсказкой",
+        "Invalidation qk.contracts.versions(id) при success",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/features/version-upload и version-recheck",
+        "Шаг 2: e2e — recheck кнопка → 202 → новая версия в списке"
+      ],
+      "dependencies": [
+        "FE-TASK-034"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-036",
+      "category": "feature",
+      "priority": "high",
+      "description": "comparison-start feature: запуск сравнения версий + получение diff",
+      "acceptance_criteria": [
+        "useStartComparison: POST /contracts/{id}/compare с {base_version_id, target_version_id}",
+        "useDiff(id, base, target): useQuery на GET .../diff/{target} — при 404 показывает 'Сравнение не готово'",
+        "Обработка 409 если версии не готовы",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/features/comparison-start",
+        "Шаг 2: e2e — выбрать 2 версии → запустить compare → дождаться SSE → diff отображается"
+      ],
+      "dependencies": [
+        "FE-TASK-013"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-037",
+      "category": "feature",
+      "priority": "high",
+      "description": "low-confidence-confirm feature: модалка подтверждения типа договора (FR-2.1.3) — реакция на SSE type_confirmation_required + POST /confirm-type",
+      "acceptance_criteria": [
+        "Модалка LowConfidenceConfirmModal (открывается из useEventStream при AWAITING_USER_INPUT)",
+        "Показывает suggested_type, confidence (например '62%'), threshold ('< 75%'), список alternatives",
+        "User выбирает тип (radio или dropdown) или вводит свой → подтверждение",
+        "useConfirmType: POST /contracts/{id}/versions/{vid}/confirm-type с {contract_type, confirmed_by_user: true}",
+        "Обработка 409 VERSION_NOT_AWAITING_INPUT → toast 'Подтверждение уже не требуется'",
+        "RBAC: только LAWYER+ORG_ADMIN — для BUSINESS_USER модалка не открывается",
+        "Unit-тесты + e2e"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/features/low-confidence-confirm",
+        "Шаг 2: e2e с MSW — inject SSE event → модалка открывается → submit → POST → 202"
+      ],
+      "dependencies": [
+        "FE-TASK-016",
+        "FE-TASK-020"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-038",
+      "category": "feature",
+      "priority": "medium",
+      "description": "Filters + search + pagination shared features в features/filters/, features/search/, features/pagination/",
+      "acceptance_criteria": [
+        "FilterChips компонент (multi-select + 'Ещё фильтры' модалка)",
+        "Search-input с debounce + URL search params интеграция",
+        "Pagination — обёртка над shared/ui Pagination с TanStack Query placeholderData",
+        "useDebounce hook в shared/lib/hooks/",
+        "Unit-тесты для useDebounce"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/features/filters и search",
+        "Шаг 2: Storybook stories"
+      ],
+      "dependencies": [
+        "FE-TASK-019"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-039",
+      "category": "feature",
+      "priority": "high",
+      "description": "export-download + share-link features: GET /export/{format} с 302 redirect на presigned URL",
+      "acceptance_criteria": [
+        "useExportDownload(id, vid, format): useMutation, обрабатывает 302 — извлекает Location и делает window.location.assign",
+        "Условный рендер кнопки через useCanExport (для BUSINESS_USER зависит от permissions.export_enabled)",
+        "Share-link: получение защищённой ссылки + копирование в clipboard через useCopy hook",
+        "ExportShareModal в widgets/export-share-modal/",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test src/features/export-download",
+        "Шаг 2: e2e — клик на 'Скачать PDF' → редирект на presigned URL"
+      ],
+      "dependencies": [
+        "FE-TASK-028",
+        "FE-TASK-020"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-040",
+      "category": "feature",
+      "priority": "medium",
+      "description": "feedback-submit + contract-archive + contract-delete features",
+      "acceptance_criteria": [
+        "useFeedbackSubmit: POST /feedback с {is_useful, comment}",
+        "useArchiveContract: POST /contracts/{id}/archive с оптимистичным обновлением + rollback при ошибке",
+        "useDeleteContract: DELETE /contracts/{id} с confirmation modal",
+        "Unit-тесты"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test для каждой feature",
+        "Шаг 2: e2e — feedback отправляется, archive переводит в архив"
+      ],
+      "dependencies": [
+        "FE-TASK-013"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-041",
+      "category": "page",
+      "priority": "high",
+      "description": "LandingPage (1) — статичная Hero/Features/Pricing/FAQ страница",
+      "acceptance_criteria": [
+        "Layout 1:1 с Figma 'Landing Page' (1440x7410)",
+        "Секции: HeroSection, FeaturesSection, PricingSection, FAQAccordion (Radix Accordion)",
+        "Адаптивно через breakpoints — есть отдельный mobile-вариант? Если нет — responsive",
+        "CTA-кнопки (Войти, Зарегистрироваться) → /login",
+        "Storybook story"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook — рендер корректен",
+        "Шаг 2: Chromatic visual regression"
+      ],
+      "dependencies": [
+        "FE-TASK-031",
+        "FE-TASK-025"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-042",
+      "category": "page",
+      "priority": "critical",
+      "description": "DashboardPage (3) — главный экран после логина: WhatMattersCards, LastCheckCard, QuickStart, OrgCard, RecentChecksTable, KeyRisksCards",
+      "acceptance_criteria": [
+        "Layout 1:1 с Figma 'Dashboard' (4 состояния)",
+        "Параллельная загрузка: useMe + useContracts(size=5) + useRecentChecks (через TanStack Query)",
+        "Виджеты: WhatMattersCards, LastCheckCard (последняя проверка), QuickStart (CTA upload), OrgCard, RecentChecksTable, KeyRisksCards",
+        "SSE подключается через useEventStream() для real-time обновления статусов",
+        "Empty/Loading/Error состояния каждого виджета",
+        "Storybook stories для всех 4 состояний"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook — 4 состояния отображаются",
+        "Шаг 2: e2e — login → dashboard загружается с реальными данными",
+        "Шаг 3: SSE event → статус обновляется в RecentChecksTable"
+      ],
+      "dependencies": [
+        "FE-TASK-032",
+        "FE-TASK-021",
+        "FE-TASK-016"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-043",
+      "category": "page",
+      "priority": "critical",
+      "description": "NewCheckPage (4) — экран загрузки нового договора с 12 состояниями Figma; orchestrates contract-upload feature + low-confidence-confirm",
+      "acceptance_criteria": [
+        "Layout 1:1 с Figma 'Новая проверка' (12 состояний)",
+        "Виджеты: FileDropZone (drag-and-drop), PasteTextTab (опц., через табы), WillHappenSteps (что произойдёт), WhatWeCheck (что проверяем)",
+        "Форма: title (required) + file (required, через FileDropZone)",
+        "Submit → contract-upload feature → редирект на ResultPage + открытие SSE",
+        "Validation states: drag-hover, selected, error (file too large/wrong format), processing-start, low-confidence-type",
+        "Storybook stories для всех 12 состояний"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook — 12 stories",
+        "Шаг 2: e2e — drag PDF + title → upload → редирект",
+        "Шаг 3: Chromatic"
+      ],
+      "dependencies": [
+        "FE-TASK-034",
+        "FE-TASK-022",
+        "FE-TASK-037"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-044",
+      "category": "page",
+      "priority": "critical",
+      "description": "ContractsListPage (7) — список договоров: MetricsStrip, WhatMattersCards, SearchBar, FilterChips, DocumentsTable с виртуализацией",
+      "acceptance_criteria": [
+        "Layout 1:1 с Figma 'Документы' (9 + 1 tablet состояния)",
+        "useContracts(filters) с server-side pagination",
+        "DocumentsTable + виртуализация через @tanstack/react-virtual (>100 строк)",
+        "FilterChips: статус, дата, тип договора",
+        "SearchInput с debounce, URL search params",
+        "Empty/Loading/Error/Limited Access (для BUSINESS_USER) состояния",
+        "Storybook stories"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook покрывает 9 состояний",
+        "Шаг 2: e2e — фильтр по статусу меняет результат",
+        "Шаг 3: load test 1000 строк — скролл плавный"
+      ],
+      "dependencies": [
+        "FE-TASK-021",
+        "FE-TASK-038",
+        "FE-TASK-032"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-045",
+      "category": "page",
+      "priority": "high",
+      "description": "ContractDetailPage (8) — карточка документа с 12 виджетами и PDF preview (lazy-loaded chunk)",
+      "acceptance_criteria": [
+        "Layout 1:1 с Figma 'Карточка документа' (9 + 1 tablet состояния)",
+        "Loaders (React Router data-loaders): параллельные useContract(id) + useVersions(id)",
+        "Виджеты: DocumentHeader, SummaryCard, QuickStart, LastCheck, KeyRisks, Recommendations, VersionsTimeline, ChecksHistory, VersionPicker, ReportsShared, DeviationsChecklist, PDFNavigator (lazy-loaded pdfjs-dist)",
+        "RBAC: BUSINESS_USER не видит KeyRisks и Recommendations (Pattern B Section hiding из §5.6.1)",
+        "Storybook stories для 9 состояний"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook покрывает 9 состояний",
+        "Шаг 2: e2e — открыть detail page с реальными данными",
+        "Шаг 3: PDF preview lazy-загружается только при тумблере"
+      ],
+      "dependencies": [
+        "FE-TASK-021",
+        "FE-TASK-024",
+        "FE-TASK-028"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-046",
+      "category": "page",
+      "priority": "critical",
+      "description": "ResultPage (5) — экран результатов проверки с 8 состояниями; RisksList БЕЗ виртуализации (см. §11.2)",
+      "acceptance_criteria": [
+        "Layout 1:1 с Figma 'Результат' (8 состояний)",
+        "Виджеты: DocumentCard, RiskProfileCard, MandatoryConditions, RisksList (без виртуализации, ~5-30 рисков), SummaryTable, DeviationsFromPolicy, NextActions, FeedbackBlock, LegalDisclaimer",
+        "Параллельная загрузка артефактов (см. §17.5): useResults, useRisks, useSummary, useRecommendations",
+        "RBAC фильтрация: BUSINESS_USER видит только Summary + AggregateScore + KeyParameters (через backend response — frontend не фильтрует, см. §17.5)",
+        "ExportShareButton в header (через useCanExport)",
+        "RecheckButton в header",
+        "RiskDetailsDrawer открывается по клику на карточку риска",
+        "Storybook stories для 8 состояний"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook покрывает 8 состояний",
+        "Шаг 2: e2e — открыть result → все секции видны для LAWYER",
+        "Шаг 3: e2e BUSINESS_USER — видит только Summary",
+        "Шаг 4: клик на риск → drawer открывается"
+      ],
+      "dependencies": [
+        "FE-TASK-023",
+        "FE-TASK-024",
+        "FE-TASK-039",
+        "FE-TASK-040",
+        "FE-TASK-035"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-047",
+      "category": "page",
+      "priority": "high",
+      "description": "ComparisonPage (6) — сравнение версий с DiffViewer (lazy-loaded chunk diff-match-patch); 9 состояний Figma",
+      "acceptance_criteria": [
+        "Layout 1:1 с Figma 'Сравнение' (9 состояний)",
+        "Виджеты: VersionMetaHeader, ComparisonVerdictCard, ChangeCounters, TabsFilters, ChangesTable, RiskProfileDelta, KeyDiffsBySection, SideBySideDiff (DiffViewer), RisksGroups",
+        "DiffViewer: lazy-loaded import('diff-match-patch'), Web Worker для вычисления, window-based виртуализация по параграфам",
+        "URL params: ?base=&target= для shareable ссылок",
+        "RBAC: только LAWYER+ORG_ADMIN (через RequireRole или Can на странице)",
+        "Storybook stories"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook покрывает 9 состояний",
+        "Шаг 2: e2e — выбрать 2 версии → comparison запускается → diff отображается",
+        "Шаг 3: bundle-size: chunks/diff-viewer ≤ 150 КБ gzip"
+      ],
+      "dependencies": [
+        "FE-TASK-036",
+        "FE-TASK-021"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-048",
+      "category": "page",
+      "priority": "medium",
+      "description": "ReportsPage (9) — отчёты и shared results: 10 состояний Figma",
+      "acceptance_criteria": [
+        "Layout 1:1 с Figma 'Отчёты' (10 + 1 tablet состояний)",
+        "Виджеты: ReportsMetrics, ReportsTable, ReportDetailPanel, ShareModal, ExpiredLinkBanner",
+        "RBAC: возможно полный access restricted для BUSINESS_USER (см. §5.6.1 Pattern A) — уточнить с дизайном",
+        "Storybook stories"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook покрывает 10 состояний",
+        "Шаг 2: e2e — таблица отчётов отображается"
+      ],
+      "dependencies": [
+        "FE-TASK-021",
+        "FE-TASK-039"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-049",
+      "category": "page",
+      "priority": "low",
+      "description": "SettingsPage — базовый экран настроек профиля пользователя (не описан в Figma явно, минимальный layout)",
+      "acceptance_criteria": [
+        "Отображает useMe данные: имя, email, role, organization_name",
+        "Кнопка 'Выйти' → logout",
+        "Опционально: переключение языка (если i18n будет содержать другие локали)",
+        "Storybook story"
+      ],
+      "test_steps": [
+        "Шаг 1: Storybook отображает страницу",
+        "Шаг 2: e2e — клик 'Выйти' → редирект на /login + clear store"
+      ],
+      "dependencies": [
+        "FE-TASK-030",
+        "FE-TASK-027"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-050",
+      "category": "observability",
+      "priority": "medium",
+      "description": "Sentry SDK интеграция: privacy scrubber, Session Replay, source-maps в release tagging по §14.2",
+      "acceptance_criteria": [
+        "@sentry/react установлен, init в src/shared/observability/sentry.ts",
+        "DSN из window.__ENV__.SENTRY_DSN (runtime-config)",
+        "Session Replay 10% sessions + 100% при ошибках, maskAllText: true",
+        "Scrubber: убирает Authorization, token, password из событий",
+        "Release tagging — git SHA из process.env.VITE_GIT_SHA или Vite-env",
+        "Sentry.ErrorBoundary в App.tsx",
+        "Source-maps загружаются в Sentry release, не включаются в bundle (vite.config.ts: build.sourcemap='hidden')"
+      ],
+      "test_steps": [
+        "Шаг 1: тестовый throw в компоненте → событие появляется в Sentry-mock",
+        "Шаг 2: bundle не содержит source-map files",
+        "Шаг 3: scrubber: Sentry-event не содержит Bearer-токена в request-headers"
+      ],
+      "dependencies": [
+        "FE-TASK-030"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-051",
+      "category": "observability",
+      "priority": "medium",
+      "description": "OpenTelemetry SDK + OTLP/HTTP exporter + instrumentation-fetch по §14.3",
+      "acceptance_criteria": [
+        "@opentelemetry/sdk-trace-web + @opentelemetry/instrumentation-fetch + @opentelemetry/exporter-trace-otlp-http",
+        "Init в src/shared/observability/otel.ts",
+        "Endpoint из window.__ENV__.OTEL_ENDPOINT",
+        "Span-атрибуты: http.route, app.user_role, app.org_id, app.correlation_id (из useSession + axios interceptor)",
+        "traceparent автоматически инжектится в fetch — same-origin (ADR-6) исключает CORS-блок",
+        "Известное ограничение: SSE не покрывается (см. §14.3) — задокументировано"
+      ],
+      "test_steps": [
+        "Шаг 1: тестовый fetch → spans экспортируются на OTEL_ENDPOINT (можно проверить через mock)",
+        "Шаг 2: traceparent header присутствует в Network-tab"
+      ],
+      "dependencies": [
+        "FE-TASK-012"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-052",
+      "category": "observability",
+      "priority": "low",
+      "description": "Structured logger wrapper + web-vitals + кастомные RUM-события",
+      "acceptance_criteria": [
+        "src/shared/observability/logger.ts: debug/info/warn/error методы, обогащают correlation_id, user_id, org_id, route, release",
+        "В prod warn+ → Sentry breadcrumbs; dev → console",
+        "web-vitals подключён → отправляет LCP/INP/CLS/TTFB в Sentry Performance",
+        "Кастомные события: contract.upload.started, contract.upload.completed, sse.reconnect, auth.refresh.failed"
+      ],
+      "test_steps": [
+        "Шаг 1: logger.warn('test') → попадает в Sentry-mock как breadcrumb",
+        "Шаг 2: web-vitals срабатывают на page-load"
+      ],
+      "dependencies": [
+        "FE-TASK-050"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-053",
+      "category": "testing",
+      "priority": "high",
+      "description": "Vitest + Testing Library setup + coverage config",
+      "acceptance_criteria": [
+        "Vitest 1.6 + @testing-library/react 15 + @testing-library/user-event 14 установлены",
+        "vitest.config.ts: jsdom environment, setup-файл для testing-library matchers",
+        "Coverage: text + html, threshold lines/statements ≥ 80%, branches ≥ 75% для shared/* и entities/*",
+        "scripts: test (watch), test:ci (--coverage)",
+        "Sample-тест проходит"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run test:ci — успешно, coverage report генерируется",
+        "Шаг 2: thresholds enforced: ниже 80% lines → fail"
+      ],
+      "dependencies": [
+        "FE-TASK-007"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-054",
+      "category": "testing",
+      "priority": "high",
+      "description": "MSW (Mock Service Worker) setup для dev/test/Storybook + handlers для всех Orchestrator endpoints",
+      "acceptance_criteria": [
+        "msw 2.x установлен, public/mockServiceWorker.js сгенерирован",
+        "tests/msw/handlers/ — handlers для каждого endpoint OpenAPI (auth, contracts, versions, results, risks, summary, recommendations, comparison, export, feedback, admin, audit, users)",
+        "tests/msw/handlers/sse.ts — собственный плагин для SSE (через ReadableStream)",
+        "tests/msw/server.ts — для node (vitest), tests/msw/browser.ts — для dev/Storybook",
+        "Storybook decorator подключает MSW",
+        "Vitest setup-файл подключает msw server"
+      ],
+      "test_steps": [
+        "Шаг 1: тестовый useContracts() в Vitest → возвращает мокнутые данные",
+        "Шаг 2: Storybook story с MSW handler → отображает мокнутые данные",
+        "Шаг 3: dev-сервер (npm run dev) с MSW.start() → fetch('/users/me') возвращает mock"
+      ],
+      "dependencies": [
+        "FE-TASK-053",
+        "FE-TASK-018"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-055",
+      "category": "testing",
+      "priority": "high",
+      "description": "Playwright e2e setup + axe-playwright a11y checker",
+      "acceptance_criteria": [
+        "@playwright/test 1.44 установлен, playwright.config.ts: parallel, base URL http://localhost:5173",
+        "tests/e2e/ структура с фикстурами (auth-state как storage state, organization data)",
+        "axe-playwright подключён — каждый e2e-сценарий запускает axe-проверку, блокирующие нарушения = fail",
+        "Sample-тест: '/' → редирект на /login если не авторизован",
+        "scripts: e2e (headed), e2e:ci (headless)",
+        "CI integration"
+      ],
+      "test_steps": [
+        "Шаг 1: npx playwright install --with-deps",
+        "Шаг 2: npm run e2e — sample-тест проходит",
+        "Шаг 3: axe-проверка на login page не находит блокирующих нарушений"
+      ],
+      "dependencies": [
+        "FE-TASK-029"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "FE-TASK-056",
+      "category": "documentation",
+      "priority": "medium",
+      "description": "README quickstart + CONTRIBUTING.md + ADR index",
+      "acceptance_criteria": [
+        "Frontend/README.md: quickstart (5 минут до запуска), команды (dev/build/test/storybook/e2e), env-переменные, troubleshooting",
+        "Frontend/CONTRIBUTING.md: FSD-правила, PR-гейты, conventional commits, code review checklist",
+        "Frontend/architecture/adr/README.md: индекс всех ADR с статусами"
+      ],
+      "test_steps": [
+        "Шаг 1: новый разработчик по README за 5 минут запускает dev-сервер",
+        "Шаг 2: ссылки в README/CONTRIBUTING/ADR-index работают"
+      ],
+      "dependencies": [
+        "FE-TASK-009"
+      ],
+      "status": "pending"
+    }
+  ]
+}

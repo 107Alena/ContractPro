@@ -332,6 +332,9 @@ TTL:    1h
 | DP: `StatusChanged(IN_PROGRESS)` | `PROCESSING` | Извлечение текста и структуры |
 | DM: `version-artifacts-ready` | `ANALYZING` | Юридический анализ |
 | LIC: `StatusChanged(IN_PROGRESS)` | `ANALYZING` | Юридический анализ выполняется |
+| LIC: `ClassificationUncertain` | `AWAITING_USER_INPUT` | Требуется подтверждение типа договора (FR-2.1.3) |
+| HTTP: `POST /confirm-type` | `ANALYZING` | Подтверждение получено, анализ возобновлён |
+| Watchdog: `AWAITING_USER_INPUT > ORCH_USER_CONFIRMATION_TIMEOUT` | `FAILED` (`USER_CONFIRMATION_TIMEOUT`) | Время на подтверждение истекло |
 | DM: `version-analysis-ready` | `GENERATING_REPORTS` | Формирование отчётов |
 | RE: `StatusChanged(IN_PROGRESS)` | `GENERATING_REPORTS` | Формирование отчётов выполняется |
 | DM: `version-reports-ready` / `FULLY_READY` | `READY` | Результаты готовы |
@@ -374,6 +377,8 @@ TTL:    1h
 |  [Export Service]                                                        |
 |  [Feedback Service]                                                      |
 |  [Admin Proxy Service]                                                   |
+|  [Type Confirmation Handler]                                             |
+|  [Permissions Resolver]                                                  |
 |                                                                          |
 |  EGRESS                                                                  |
 |  ~~~~~~                                                                  |
@@ -623,6 +628,19 @@ data: {"document_id":"uuid","version_id":"uuid","status":"ANALYZING","message":"
 **Выходы:** Проксированный ответ OPM.
 **Зависимости:** OPM HTTP Client.
 
+## 6.15a Type Confirmation Handler
+
+**Назначение:** Обработка цикла подтверждения типа договора при низкой уверенности классификации (UR-3 / FR-2.1.3 — сценарий 8.11).
+
+**Ответственность:**
+1. Подписка на `lic.events.classification-uncertain` (через Event Consumer): перевод версии в `AWAITING_USER_INPUT`, запуск watchdog-таймера, публикация SSE-события `type_confirmation_required`.
+2. HTTP-handler для `POST /contracts/{id}/versions/{vid}/confirm-type`: проверка состояния (Redis), валидация `contract_type` против whitelist LIC, публикация команды `UserConfirmedType` в LIC, перевод версии в `ANALYZING`, идемпотентность по `version_id` (Redis ключ `orch-user-confirmed-type:{version_id}`, TTL 60с).
+3. Watchdog: периодическое сканирование Redis ключей `confirmation:wait:{version_id}` с истёкшим TTL → перевод соответствующих версий в `FAILED` с error_code `USER_CONFIRMATION_TIMEOUT`, SSE push.
+
+**Входы:** HTTP request от R-1/R-3, событие `lic.events.classification-uncertain`, истечение Redis TTL.
+**Выходы:** HTTP 202 / 400 / 409 клиенту; команда `UserConfirmedType` в LIC; SSE push (`type_confirmation_required`, `status_update`).
+**Зависимости:** Processing Status Tracker, Command Publisher, SSE Broadcaster, Redis Client.
+
 ## 6.16 DM Client
 
 **Назначение:** Sync HTTP-клиент для DM REST API.
@@ -671,6 +689,36 @@ data: {"document_id":"uuid","version_id":"uuid","status":"ANALYZING","message":"
 - `/healthz` — liveness: процесс жив. Всегда 200.
 - `/readyz` — readiness: Redis + RabbitMQ + DM (HTTP ping) доступны. 200/503.
 - `/metrics` — Prometheus metrics endpoint.
+
+## 6.21 Permissions Resolver
+
+**Назначение:** Computed-флаги разрешений пользователя для frontend (`UserProfile.permissions` в `GET /users/me`). Frontend не интерпретирует raw policy из OPM — потребляет готовые boolean'ы.
+
+**Ответственность:**
+1. При запросе `GET /users/me`: после получения профиля из UOM — собрать `UserPermissions`-структуру.
+2. Для каждого флага определить значение по правилу: `role-based default` → (для условных) `OPM policy lookup` → (при недоступности OPM) `env fallback`.
+3. Кешировать computed permissions per `(organization_id, role)` в Redis с TTL `ORCH_PERMISSIONS_CACHE_TTL` (default 5 мин). Инвалидация — при `PUT /admin/policies/{id}` (Admin Proxy Service публикует событие в Redis Pub/Sub `permissions:invalidate:{org_id}`).
+4. **Non-blocking при OPM down:** если OPM недоступен и кеш пустой — вернуть fallback-значения с WARN-логом. `GET /users/me` не блокируется на OPM.
+
+**Текущие флаги (v1):**
+
+| Флаг | LAWYER | BUSINESS_USER | ORG_ADMIN |
+|------|--------|---------------|-----------|
+| `export_enabled` | `true` (безусловно) | OPM policy `business_user_export` → fallback `ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT` (default `false`) | `true` (безусловно) |
+
+**Расчёт `export_enabled` для BUSINESS_USER:**
+1. Cache lookup: Redis `permissions:{org_id}:BUSINESS_USER` → если hit, вернуть `cached.export_enabled`.
+2. Cache miss: OPM Client `GET /api/v1/policies?organization_id={org_id}` (с timeout 2с, circuit breaker).
+3. OPM success: найти policy `name == "business_user_export"`, прочитать `enabled` boolean. Записать в Redis с TTL.
+4. OPM failure (timeout, 5xx, circuit open): использовать `ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT`. Не кешировать (чтобы при восстановлении OPM получить актуальное значение). WARN-лог с `correlation_id`.
+
+**Входы:** запрос `GET /users/me` (после JWT auth + UOM proxy).
+**Выходы:** `UserPermissions` JSON.
+**Зависимости:** OPM Client (sync HTTP), Redis Client (cache + pub/sub).
+
+**Метрики:**
+- `orch_permissions_cache_hit_total{flag, org_id_hash}` — counter
+- `orch_permissions_opm_fallback_total{flag, reason}` — counter (`reason` ∈ `timeout, opm_unavailable, circuit_open, no_policy`)
 
 ---
 
@@ -966,6 +1014,46 @@ Sequence diagrams для каждого сценария — см. [sequence-dia
    d. Публикация `ProcessDocumentRequested`.
 3. HTTP 202 Accepted.
 
+## 8.11 Подтверждение типа договора при низкой уверенности (UR-3 / FR-2.1.3)
+
+**Trigger:** LIC в процессе анализа определил, что `ClassificationResult.confidence < threshold` (порог конфигурируется LIC-side). Pipeline LIC приостановлен в ожидании выбора пользователя.
+
+### Happy path
+
+1. LIC публикует `ClassificationUncertain` в `lic.events.classification-uncertain` с `{suggested_type, confidence, threshold, alternatives[]}`.
+2. Event Consumer → Type Confirmation Handler:
+   a. Валидация envelope (correlation_id, version_id, organization_id).
+   b. Processing Status Tracker: установка статуса `AWAITING_USER_INPUT` в Redis.
+   c. Запуск watchdog-таймера на `ORCH_USER_CONFIRMATION_TIMEOUT` (default 24h, ключ `confirmation:wait:{version_id}` в Redis с TTL).
+   d. SSE Broadcaster: публикация события `type_confirmation_required` в Redis Pub/Sub channel `sse:broadcast:{org_id}` с payload `{document_id, version_id, status: "AWAITING_USER_INPUT", suggested_type, confidence, threshold, alternatives}`.
+3. Frontend получает SSE-событие → отображает пользователю модалку выбора типа.
+4. Frontend: `POST /api/v1/contracts/{id}/versions/{vid}/confirm-type` с `{contract_type, confirmed_by_user: true}`.
+5. JWT Auth → RBAC (LAWYER, ORG_ADMIN — см. матрицу RBAC).
+6. Type Confirmation Handler:
+   a. Чтение статуса из Redis. Если `status != AWAITING_USER_INPUT` → HTTP 409 `VERSION_NOT_AWAITING_INPUT`.
+   b. Валидация `contract_type` (whitelist, контракт LIC). Невалидно → HTTP 400 `VALIDATION_ERROR`.
+   c. Загрузка оригинального `correlation_id` и `job_id` из upload tracking (Redis).
+   d. Command Publisher: публикация `UserConfirmedType` в `orch.commands.user-confirmed-type` с `{correlation_id, job_id, document_id, version_id, organization_id, confirmed_by_user_id, contract_type}`.
+   e. Processing Status Tracker: статус → `ANALYZING`. Снятие watchdog-таймера.
+   f. SSE push: `{status: "ANALYZING", message: "Анализ возобновлён"}`.
+7. HTTP 202 Accepted: `{document_id, version_id, status: "ANALYZING"}`.
+8. LIC получает `UserConfirmedType` → возобновляет анализ → дальше как с шага 14 happy path сценария 8.2.
+
+### Альтернативные ветки
+
+**Версия не в `AWAITING_USER_INPUT`** (уже подтверждена другим пользователем, истёк таймаут или ещё анализируется): → HTTP 409 `VERSION_NOT_AWAITING_INPUT`: `"Подтверждение типа уже не требуется или ещё рано"`. UI должен синхронизировать статус через polling/SSE.
+
+**Невалидный `contract_type`** (вне whitelist LIC): → HTTP 400 `VALIDATION_ERROR` с `details.fields: [{field: "contract_type", code: "NOT_IN_WHITELIST"}]`.
+
+**Истёк таймаут подтверждения:** Watchdog обнаруживает истёкший ключ Redis (через периодический сканер или Redis Keyspace Notifications). Действия:
+1. Processing Status Tracker: статус → `FAILED` с error_code `USER_CONFIRMATION_TIMEOUT`.
+2. Command Publisher: публикация `UserConfirmedType` НЕ выполняется. Вместо этого — внутренняя нотификация LIC через отдельный механизм (TBD: либо «taimout» событие, либо LIC сам отслеживает свой timeout). В v1 — LIC может бесконечно держать состояние, оркестратор ему ничего не сообщает (LIC очистит состояние по своему собственному TTL).
+3. SSE push: `{status: "FAILED", error_code: "USER_CONFIRMATION_TIMEOUT", message: "Время на подтверждение типа договора истекло"}`.
+
+**RBAC: BUSINESS_USER** пытается подтвердить тип: → HTTP 403 `FORBIDDEN`. По умолчанию подтверждение типа доступно только LAWYER и ORG_ADMIN (бизнес-пользователь может загружать, но юридические решения принимает юрист).
+
+**Дублирующий вызов** (двойной клик пользователя): Idempotency через ключ `orch-user-confirmed-type:{version_id}` в Redis (TTL 60с). Повторный вызов в окне идемпотентности → HTTP 202 с теми же данными, без повторной публикации команды.
+
 ---
 
 # 9. ADR (Architectural Decision Records)
@@ -1094,3 +1182,42 @@ Sequence diagrams для каждого сценария — см. [sequence-dia
   "jti": "unique token id (UUID)"
 }
 ```
+
+## ADR-6: Same-origin deployment topology
+
+**Контекст:** Frontend (SPA) и Orchestrator (REST API) в production-окружении могут быть развёрнуты как:
+- (A) **Same-origin** — единый nginx раздаёт SPA-статику и проксирует `/api/*` на Orchestrator. Браузер видит один origin.
+- (B) **Cross-origin** — frontend на `app.contractpro.ru`, API на `api.contractpro.ru`. Браузер активирует CORS-механизм.
+
+**Варианты:**
+
+| Вариант | Плюсы | Минусы |
+|---------|-------|--------|
+| Same-origin (A) | CORS не активируется; cookies без `SameSite=None`; `connect-src 'self'` достаточно для CSP; OpenTelemetry `traceparent` / `tracestate` инжектируются без preflight; меньше DevOps complexity (один nginx, один cert) | Frontend и Orchestrator деплоятся вместе (общий release-цикл) |
+| Cross-origin (B) | Независимое масштабирование frontend (CDN) и API; раздельные SLA; API как публичный продукт для интеграций | Сложная CORS-конфигурация; preflight overhead; CSRF при cookies; отдельные cert/DNS; OTel-headers требуют явного allow-list |
+
+**Решение:** Same-origin (A) для v1.
+
+**Обоснование:**
+1. ContractPro в v1 — внутренний продукт для юристов организаций; публичный API для внешних интеграций (ЭДО, CRM) **не в скоупе v1**.
+2. Frontend `§13.2 nginx.conf` уже спроектирован под A: единый nginx раздаёт `/` (SPA) и проксирует `/api/v1/*` + `/api/v1/events/stream` (SSE passthrough) на Orchestrator.
+3. Упрощает 152-ФЗ compliance — единый TLS-перимтр, единый audit-perimeter.
+4. OpenTelemetry-инструментация (`@opentelemetry/instrumentation-fetch`) автоматически инжектит `traceparent` в каждый запрос — при cross-origin без явного allow-list это блокирует **все** запросы. Same-origin исключает этот класс багов.
+5. Refresh token в HttpOnly-cookie (Frontend ADR-FE-03 / §18 п.1) проще реализуется без `SameSite=None; Secure; Partitioned` сложностей.
+6. SSE-аутентификация через `?token=` (см. ADR-FE-10 миграция на `sse_ticket`) не пересекается с CORS — same-origin EventSource не делает preflight.
+
+**Конфигурация:**
+- Production: `ORCH_CORS_ALLOWED_ORIGINS=` **пустой** (default same-origin only). CORS middleware не активируется.
+- Dev: используется Vite proxy (`vite.config.ts → server.proxy: {'/api': 'http://localhost:8080'}`) — same-origin в dev-окружении тоже.
+- Backend `Allowed Headers` включает `traceparent` и `tracestate` **превентивно** — на случай будущего разделения доменов или внешних кросс-доменных интеграций (см. security.md §5.1).
+
+**Когда пересмотреть (триггеры перехода на B):**
+- Появление публичного API для интеграций партнёров (ЭДО, CRM-системы) — `api.contractpro.ru` как официальный endpoint.
+- Раздельное масштабирование frontend через CDN (CloudFront/CloudFlare).
+- Multi-tenant white-label deployment с разными доменами для разных клиентов.
+
+**Митигации текущих рисков:**
+- Общий release-цикл frontend/orchestrator → координация через CI: контракт-тест на OpenAPI gate перед merge (см. Frontend §10.2 contract tests).
+- При необходимости разделить деплой — backend-конфигурация уже готова (CORS middleware есть, env-переменные есть), нужно только заполнить `ORCH_CORS_ALLOWED_ORIGINS`.
+
+**Frontend ссылки:** `Frontend/architecture/high-architecture.md` §7.2 (HTTP-клиент с относительным baseURL), §13.2 (nginx.conf), §14.3 (OTel `traceparent` без CORS-блока), §21 (ADR table).

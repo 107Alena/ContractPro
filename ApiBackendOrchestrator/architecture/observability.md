@@ -401,7 +401,7 @@ orch.sse.connection
 - Полученные события по типам — `rate(orch_events_received_total[5m])` с группировкой по `event_type`.
 - Полученные события по доменам — `rate(orch_events_received_total[5m])` с группировкой по `source_domain`.
 - SSE-события, отправленные клиентам — `rate(orch_sse_events_pushed_total[5m])` с группировкой по `event_type`.
-- Распределение статусов (из логов) — количество версий в каждом user-facing статусе (`UPLOADED`, `QUEUED`, `PROCESSING`, `ANALYZING`, `GENERATING_REPORTS`, `READY`, `PARTIALLY_FAILED`, `FAILED`, `REJECTED`).
+- Распределение статусов (из логов) — количество версий в каждом user-facing статусе (`UPLOADED`, `QUEUED`, `PROCESSING`, `ANALYZING`, `AWAITING_USER_INPUT`, `GENERATING_REPORTS`, `READY`, `PARTIALLY_FAILED`, `FAILED`, `REJECTED`).
 - Время от загрузки до READY (из traces) — `orch.http.request` upload → последнее `orch.event.process` с `version-reports-ready`.
 
 **Фильтры:** time range, organization_id, source_domain, event_type.

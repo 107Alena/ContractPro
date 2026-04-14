@@ -1076,7 +1076,9 @@
         "Шаг 3: ручная проверка JSON: NewRequired('title').Build().ToJSON() даёт payload, точно соответствующий примеру в error-handling.md §3.8"
       ],
       "dependencies": [],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-15",
+      "implementation_notes": "Created internal/domain/model/validation/validation_error.go with: ValidationCode enum (12 constants), ValidationFieldError struct (JSON-compatible with OpenAPI schema), ValidationErrorDetails struct, 12 helper builders (NewRequired, NewInvalidFormat, NewInvalidUUID, NewInvalidDate, NewInvalidEnum, NewNotInWhitelist, NewTooShort, NewTooLong, NewOutOfRange, NewMismatch, NewDuplicate, NewInvalidReference), ValidationErrorBuilder with chainable Add() and Build(), ValidationError implementing error interface, Russian i18n message templates with {placeholder} interpolation (sorted keys for determinism). Comprehensive test suite in validation_error_test.go. Code review: no critical/high issues. All 34 package tests pass with -race."
     },
     {
       "id": "ORCH-TASK-049",

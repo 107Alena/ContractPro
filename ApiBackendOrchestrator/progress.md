@@ -1466,4 +1466,43 @@ Integration: Middleware + Handler combined
 - **Результаты**: go test -race -count=1 ./... PASS (32 пакета, 0 failures), go vet clean, make build/test/lint OK.
 - **Code review**: Approve — M-5 global state cleanup (applied), M-6 sync.Once Shutdown (applied), M-7 enabled double-shutdown test (added), N-3 unused helper removed, N-4 sampler test improved.
 - **Зависимости**: go.opentelemetry.io/otel v1.43.0, otel/trace v1.43.0, otel/sdk v1.43.0, otlptracehttp v1.43.0.
-- **ORCH-TASK-033 — последняя задача в проекте. Все 37 задач ApiBackendOrchestrator выполнены.**
+- **ORCH-TASK-033 — последняя задача из первоначальных 37. Далее — задачи расширения (ORCH-TASK-038+).**
+
+---
+
+## ORCH-TASK-048: Foundation: Go-типы для VALIDATION_ERROR.details
+
+**Дата**: 2026-04-15
+**Статус**: DONE
+
+### Описание
+Реализация Go-типов и helper-builders для структурированных ошибок валидации (VALIDATION_ERROR.details) согласно контракту error-handling.md §3.8 и api-specification.yaml. Совместимость с Frontend helper applyValidationErrors().
+
+### План реализации
+1. Изучить существующий error handling (model/error_response.go: ErrorCode, ErrorResponse, WriteError, errorCatalog)
+2. Спроектировать архитектуру пакета (subagent: code-architect) — validation sub-package без импорта parent model
+3. Реализовать validation_error.go: ValidationCode enum (12 кодов), ValidationFieldError, ValidationErrorDetails, ValidationError, 12 helper builders, ValidationErrorBuilder, i18n message templates
+4. Написать тесты: все 12 builders, Builder chaining, empty/nil Build, JSON round-trip, omitempty params, IsValid, message interpolation, JSONPath-lite field paths
+5. Code review (subagent: code-reviewer) → исправления (sorted keys в renderMessage, guard для empty allowed в NewInvalidEnum)
+6. Полный прогон go test -race -count=1 ./... + go vet + Makefile targets
+
+### Файлы
+- `internal/domain/model/validation/validation_error.go` — основная реализация
+- `internal/domain/model/validation/validation_error_test.go` — unit-тесты
+
+### Summary
+- **ValidationCode**: string-типизированный enum, 12 констант (REQUIRED, INVALID_FORMAT, INVALID_UUID, INVALID_DATE, INVALID_ENUM, NOT_IN_WHITELIST, TOO_SHORT, TOO_LONG, OUT_OF_RANGE, MISMATCH, DUPLICATE, INVALID_REFERENCE). Метод IsValid() bool через lookup в validCodes map.
+- **Message templates**: Russian-language i18n шаблоны (NFR-5.2) с `{placeholder}` синтаксисом. renderMessage() интерполирует params в отсортированном порядке ключей (deterministic).
+- **Helper builders**: 12 функций (NewRequired, NewInvalidFormat, NewInvalidUUID, NewInvalidDate, NewInvalidEnum, NewNotInWhitelist, NewTooShort, NewTooLong, NewOutOfRange, NewMismatch, NewDuplicate, NewInvalidReference). Каждый возвращает ValidationFieldError с правильным Code, Message и Params.
+- **ValidationErrorBuilder**: chainable Add(), HasErrors(), Build(). Build() копирует slice (defensive copy, предотвращает aliasing). Возвращает nil при пустом списке ошибок.
+- **ValidationError**: implements error interface, содержит ErrorCode="VALIDATION_ERROR", Message, Suggestion, Details.
+- **JSON**: omitempty для Params (пропускается при nil), Field/Code/Message всегда присутствуют.
+- **Использование в handlers**: `vb := validation.NewBuilder(); vb.Add(validation.NewRequired("title")); if verr := vb.Build(); verr != nil { model.WriteError(w, r, model.ErrValidationError, verr.Details); return }`
+- **Тесты**: 22+ тестов. ValidationCode (3: all valid, unknown, count), templates (4: no params, single param, multiple params, unknown code), builders (12: все 12 кодов), builder (5: empty, single, chaining, HasErrors, copy), error interface (1), JSON (5: with params, without params, details structure, full payload, round-trip), field paths (1).
+- **Code review**: No critical/high issues. Medium: sorted keys for determinism (fixed), empty allowed guard (fixed). Low: no errors.Is/As support (acceptable for leaf type).
+- **Результаты**: go test -race -count=1 ./... PASS (34 пакета, 0 failures), go vet clean, make build/test/lint OK.
+
+### Следующие задачи
+- **ORCH-TASK-049** (depends on 048): Миграция handlers на VALIDATION_ERROR — аудит всех handlers, замена строковых details на ValidationErrorBuilder
+- **ORCH-TASK-039**: Processing Status Tracker: AWAITING_USER_INPUT support (unblocks 040, 041, 042, 043)
+- **ORCH-TASK-050**: Permissions Resolver (no deps)

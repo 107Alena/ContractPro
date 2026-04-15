@@ -249,6 +249,20 @@ func loadCORSConfig() CORSConfig {
 	}
 }
 
+// TypeConfirmationConfig holds settings for the user type confirmation flow
+// (FR-2.1.3). When LIC classification confidence is low, the user is asked
+// to confirm the contract type. If no confirmation arrives within the timeout,
+// the version is moved to FAILED with error_code USER_CONFIRMATION_TIMEOUT.
+type TypeConfirmationConfig struct {
+	ConfirmationTimeout time.Duration // ORCH_USER_CONFIRMATION_TIMEOUT (default: 24h)
+}
+
+func loadTypeConfirmationConfig() TypeConfirmationConfig {
+	return TypeConfirmationConfig{
+		ConfirmationTimeout: envDuration("ORCH_USER_CONFIRMATION_TIMEOUT", 24*time.Hour),
+	}
+}
+
 // ObservabilityConfig holds logging, metrics, and tracing settings.
 type ObservabilityConfig struct {
 	LogLevel        string // ORCH_LOG_LEVEL (default: "info")

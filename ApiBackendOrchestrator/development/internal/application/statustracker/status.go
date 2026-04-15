@@ -6,6 +6,7 @@ package statustracker
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -17,6 +18,7 @@ const (
 	StatusQueued            UserStatus = "QUEUED"
 	StatusProcessing        UserStatus = "PROCESSING"
 	StatusAnalyzing         UserStatus = "ANALYZING"
+	StatusAwaitingUserInput UserStatus = "AWAITING_USER_INPUT"
 	StatusGeneratingReports UserStatus = "GENERATING_REPORTS"
 	StatusReady             UserStatus = "READY"
 	StatusFailed            UserStatus = "FAILED"
@@ -24,6 +26,12 @@ const (
 	StatusReportsFailed     UserStatus = "REPORTS_FAILED"
 	StatusPartiallyFailed   UserStatus = "PARTIALLY_FAILED"
 	StatusRejected          UserStatus = "REJECTED"
+)
+
+// Sentinel errors for the type confirmation flow (FR-2.1.3).
+var (
+	ErrNotAwaitingInput  = errors.New("statustracker: version is not awaiting user input")
+	ErrInvalidTransition = errors.New("statustracker: invalid status transition")
 )
 
 // statusOrder defines the monotonic ordering for happy-path statuses.
@@ -55,6 +63,7 @@ var statusMessages = map[UserStatus]string{
 	StatusQueued:            "В очереди на обработку",
 	StatusProcessing:        "Извлечение текста и структуры",
 	StatusAnalyzing:         "Юридический анализ",
+	StatusAwaitingUserInput: "Ожидание подтверждения типа договора",
 	StatusGeneratingReports: "Формирование отчётов",
 	StatusReady:             "Анализ завершён",
 	StatusFailed:            "Ошибка обработки",
@@ -80,13 +89,29 @@ type KVStore interface {
 }
 
 const (
-	statusKeyPrefix = "status"
-	statusTTL       = 24 * time.Hour
+	statusKeyPrefix         = "status"
+	statusTTL               = 24 * time.Hour
+	confirmationKeyPrefix   = "confirmation:wait"
+	confirmationMetaPrefix  = "confirmation:meta"
 )
 
 // statusKey builds the Redis key for a version's processing status.
 func statusKey(orgID, docID, verID string) string {
 	return statusKeyPrefix + ":" + orgID + ":" + docID + ":" + verID
+}
+
+// confirmationKey builds the Redis watchdog key for user type confirmation.
+// The key carries a TTL equal to ORCH_USER_CONFIRMATION_TIMEOUT; its expiry
+// signals that the user has not confirmed in time. Uses only verID because
+// version IDs are UUIDs (globally unique across organizations).
+func confirmationKey(verID string) string {
+	return confirmationKeyPrefix + ":" + verID
+}
+
+// ConfirmationMetaKey builds the Redis key for storing org/doc metadata
+// alongside the watchdog key. Exported for use by the watchdog (ORCH-TASK-042).
+func ConfirmationMetaKey(verID string) string {
+	return confirmationMetaPrefix + ":" + verID
 }
 
 // isTerminal returns true if the status cannot be overwritten.
@@ -106,16 +131,35 @@ func isForwardTransition(current, next UserStatus) bool {
 	return nextIdx > curIdx
 }
 
+// awaitingUserInputTransitions defines the valid transitions involving
+// AWAITING_USER_INPUT. It is not on the happy path (not in statusOrder)
+// and not terminal (not in terminalStatuses) — it is a side-branch from
+// ANALYZING. canTransition checks this table before statusOrder/terminal.
+var awaitingUserInputTransitions = map[UserStatus]map[UserStatus]struct{}{
+	StatusAnalyzing:         {StatusAwaitingUserInput: {}},
+	StatusAwaitingUserInput: {StatusAnalyzing: {}, StatusFailed: {}},
+}
+
 // canTransition decides whether a transition from current to next is allowed.
 //
 // Rules:
 //  1. If current is terminal, no transition is allowed.
-//  2. If next is a failure/terminal status, transition is always allowed
+//  2. Transitions involving AWAITING_USER_INPUT follow a dedicated table:
+//     ANALYZING → AWAITING_USER_INPUT, AWAITING_USER_INPUT → ANALYZING | FAILED.
+//  3. If next is a failure/terminal status, transition is always allowed
 //     from any non-terminal current status.
-//  3. If next is a happy-path status, it must be strictly forward.
+//  4. If next is a happy-path status, it must be strictly forward.
 func canTransition(current, next UserStatus) bool {
 	if isTerminal(current) {
 		return false
+	}
+	if current == StatusAwaitingUserInput {
+		_, ok := awaitingUserInputTransitions[current][next]
+		return ok
+	}
+	if next == StatusAwaitingUserInput {
+		_, ok := awaitingUserInputTransitions[current][next]
+		return ok
 	}
 	if isTerminal(next) {
 		return true

@@ -765,7 +765,8 @@ func TestValidate_FullConfig(t *testing.T) {
 			Timeout:          30 * time.Second,
 			MaxRequests:      3,
 		},
-		Observability: ObservabilityConfig{LogLevel: "info"},
+		Observability:    ObservabilityConfig{LogLevel: "info"},
+		TypeConfirmation: TypeConfirmationConfig{ConfirmationTimeout: 24 * time.Hour},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error, got: %v", err)

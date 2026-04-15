@@ -27,10 +27,12 @@ var _ consumer.EventHandler = (*Tracker)(nil)
 // deployment changes to parallel consumers per version, tryTransition must
 // be upgraded to a Redis Lua script or WATCH/MULTI/EXEC.
 type Tracker struct {
-	kv          KVStore
-	broadcaster ssebroadcast.Broadcaster
-	log         *logger.Logger
-	now         func() time.Time
+	kv                  KVStore
+	confirmStore        ConfirmationStore
+	broadcaster         ssebroadcast.Broadcaster
+	log                 *logger.Logger
+	now                 func() time.Time
+	confirmationTimeout time.Duration
 }
 
 // NewTracker creates a Tracker with the given dependencies.

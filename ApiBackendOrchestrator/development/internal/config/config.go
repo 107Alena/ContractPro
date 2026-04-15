@@ -13,20 +13,21 @@ import (
 // Config is the root configuration for the API/Backend Orchestrator.
 // Loaded from environment variables with the ORCH_ prefix at startup.
 type Config struct {
-	HTTP           HTTPConfig
-	Broker         BrokerConfig
-	Storage        StorageConfig
-	Redis          RedisConfig
-	Upload         UploadConfig
-	DMClient       DMClientConfig
-	OPMClient      OPMClientConfig
-	UOMClient      UOMClientConfig
-	JWT            JWTConfig
-	SSE            SSEConfig
-	RateLimit      RateLimitConfig
-	CircuitBreaker CircuitBreakerConfig
-	CORS           CORSConfig
-	Observability  ObservabilityConfig
+	HTTP             HTTPConfig
+	Broker           BrokerConfig
+	Storage          StorageConfig
+	Redis            RedisConfig
+	Upload           UploadConfig
+	DMClient         DMClientConfig
+	OPMClient        OPMClientConfig
+	UOMClient        UOMClientConfig
+	JWT              JWTConfig
+	SSE              SSEConfig
+	RateLimit        RateLimitConfig
+	CircuitBreaker   CircuitBreakerConfig
+	CORS             CORSConfig
+	Observability    ObservabilityConfig
+	TypeConfirmation TypeConfirmationConfig
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -51,8 +52,9 @@ func Load() (*Config, error) {
 		SSE:            loadSSEConfig(),
 		RateLimit:      loadRateLimitConfig(),
 		CircuitBreaker: loadCircuitBreakerConfig(),
-		CORS:           loadCORSConfig(),
-		Observability:  loadObservabilityConfig(),
+		CORS:             loadCORSConfig(),
+		Observability:    loadObservabilityConfig(),
+		TypeConfirmation: loadTypeConfirmationConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -164,6 +166,11 @@ func (c *Config) Validate() error {
 		// valid
 	default:
 		problems = append(problems, "ORCH_LOG_LEVEL must be one of: debug, info, warn, error")
+	}
+
+	// Type confirmation timeout.
+	if c.TypeConfirmation.ConfirmationTimeout <= 0 {
+		problems = append(problems, "ORCH_USER_CONFIRMATION_TIMEOUT must be > 0")
 	}
 
 	// Rate limiting conditional validation.

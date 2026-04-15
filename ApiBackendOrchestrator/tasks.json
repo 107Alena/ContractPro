@@ -960,7 +960,9 @@
         "Шаг 3: тест с miniredis — после SetAwaitingUserInput оба ключа (status и confirmation:wait) присутствуют, TTL второго = заданному значению"
       ],
       "dependencies": ["ORCH-TASK-038"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-15",
+      "implementation_notes": "Extended statustracker with AWAITING_USER_INPUT support. Changes: (1) status.go: added StatusAwaitingUserInput enum, awaitingUserInputTransitions table (ANALYZING↔AWAITING_USER_INPUT, AWAITING_USER_INPUT→FAILED), ErrNotAwaitingInput/ErrInvalidTransition sentinel errors, confirmationKey/ConfirmationMetaKey helpers. (2) confirmation.go: ConfirmationStore interface with 3 atomic methods, RedisConfirmationStore with cjson.decode Lua scripts (PX millisecond TTLs), Tracker.SetAwaitingUserInput/ConfirmType/TimeoutAwaitingInput methods with SSE broadcast, WithConfirmation builder. (3) config: TypeConfirmationConfig with ORCH_USER_CONFIRMATION_TIMEOUT (default 24h, positive duration validation). (4) confirmation_test.go: 30+ tests covering transitions, happy paths, error cases, concurrent race (10 goroutines, exactly 1 winner), full cycle (set→confirm, set→timeout), Redis store eval passthrough, sentinel error mapping. Code review: 2 high fixed (PX→ms, errors.Is), 3 medium fixed (strings.Contains, comments). All 34 packages pass with -race."
     },
     {
       "id": "ORCH-TASK-040",

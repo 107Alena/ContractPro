@@ -1506,3 +1506,47 @@ Integration: Middleware + Handler combined
 - **ORCH-TASK-049** (depends on 048): Миграция handlers на VALIDATION_ERROR — аудит всех handlers, замена строковых details на ValidationErrorBuilder
 - **ORCH-TASK-039**: Processing Status Tracker: AWAITING_USER_INPUT support (unblocks 040, 041, 042, 043)
 - **ORCH-TASK-050**: Permissions Resolver (no deps)
+
+---
+
+## ORCH-TASK-039: Расширение Status Tracker поддержкой AWAITING_USER_INPUT
+**Дата:** 2026-04-15
+**Статус:** done
+
+### План реализации
+1. Изучить существующий код statustracker, config, kvstore, ssebroadcast
+2. Спроектировать архитектуру: ConfirmationStore interface + Lua scripts (subagent: code-architect)
+3. Реализовать расширение UserStatus enum и transition validation в status.go
+4. Создать confirmation.go: ConfirmationStore interface, RedisConfirmationStore, Tracker methods
+5. Добавить TypeConfirmationConfig (ORCH_USER_CONFIRMATION_TIMEOUT) в config
+6. Написать unit-тесты (confirmation_test.go)
+7. Code review (subagent: code-reviewer) → исправить issues
+8. Полный прогон: go test -race -count=1 ./... + go vet + make
+
+### Изменённые файлы
+- `internal/application/statustracker/status.go` — enum, transitions, sentinel errors, key helpers
+- `internal/application/statustracker/confirmation.go` — NEW: interface, Redis Lua impl, Tracker methods
+- `internal/application/statustracker/confirmation_test.go` — NEW: 30+ тестов
+- `internal/config/config.go` — добавлен TypeConfirmation в Config struct + validation
+- `internal/config/sub_configs.go` — TypeConfirmationConfig + loadTypeConfirmationConfig()
+- `internal/config/config_test.go` — обновлён TestValidate_FullConfig
+
+### Summary
+- **StatusAwaitingUserInput**: 12-й статус в enum (не terminal, не в statusOrder). Отдельная таблица `awaitingUserInputTransitions`: ANALYZING → AWAITING_USER_INPUT, AWAITING_USER_INPUT → ANALYZING | FAILED. Все остальные переходы запрещены.
+- **ConfirmationStore interface**: 3 atomic метода: `SetAwaitingInput`, `ConfirmInput`, `TimeoutInput`. Определён в statustracker (consumer-side). Redis-реализация в том же пакете (паттерн аналогичен ratelimit/store.go).
+- **Redis Lua scripts**: 3 скрипта с `cjson.decode` (рекомендация code-architect). Используют `PX` (milliseconds) вместо `EX` (seconds) для точности TTL. Атомарные check-and-set операции.
+- **Tracker methods**: `SetAwaitingUserInput(ctx, orgID, docID, verID)`, `ConfirmType(ctx, orgID, docID, verID)`, `TimeoutAwaitingInput(ctx, orgID, docID, verID)`. Каждый метод делает atomic Redis op + SSE broadcast. `WithConfirmation(cs, timeout)` builder для optional deps.
+- **Sentinel errors**: `ErrNotAwaitingInput` (→ HTTP 409), `ErrInvalidTransition` (graceful skip для watchdog race). Маппинг через `mapLuaError` с `strings.Contains` + `errors.Is` для сравнения.
+- **Config**: `TypeConfirmationConfig.ConfirmationTimeout` (default 24h), env `ORCH_USER_CONFIRMATION_TIMEOUT`, validation > 0.
+- **Key schema**: `confirmation:wait:{verID}` (watchdog, TTL = timeout), `confirmation:meta:{verID}` (exported for ORCH-TASK-042).
+- **Тесты**: 30+ тестов. Transitions: 15 cases (valid/invalid). SetAwaitingUserInput: happy path, not analyzing, no status, missing IDs, no store, infra error. ConfirmType: happy path, not awaiting, no status, concurrent race (10 goroutines → exactly 1 success + 9 ErrNotAwaitingInput), missing IDs. TimeoutAwaitingInput: happy path, already confirmed, no status, missing IDs. RedisConfirmationStore: eval passthrough (3 scripts), error mapping (3 cases). Full cycle: set→confirm, set→timeout. Utilities: key helpers, sentinel errors, mapLuaError.
+- **Code review (code-reviewer)**: 0 critical. 2 high fixed: (1) PX instead of EX for sub-second TTL safety, (2) errors.Is instead of ==. 3 medium fixed: (1) strings.Contains instead of custom searchString, (2) clarifying comments for transition table linkage, (3) UUID uniqueness comment on confirmationKey.
+- **Результаты**: go test -race -count=1 ./... PASS (34 пакета, 0 failures), go vet clean, make build/test/lint OK.
+
+### Следующие задачи (unblocked by ORCH-TASK-039)
+- **ORCH-TASK-040** (depends on 039): Consumer для ClassificationUncertain event → SetAwaitingUserInput + SSE push
+- **ORCH-TASK-041** (depends on 039): HTTP POST /confirm-type handler → ConfirmType + command publish
+- **ORCH-TASK-042** (depends on 039): Watchdog для TimeoutAwaitingInput (Redis Keyspace Notifications)
+- **ORCH-TASK-043** (depends on 040+041+042): E2E integration test полного цикла
+- **ORCH-TASK-049** (depends on 048): Миграция handlers на VALIDATION_ERROR
+- **ORCH-TASK-050** (no deps): Permissions Resolver

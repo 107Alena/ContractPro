@@ -23,7 +23,8 @@ const (
 	EventDPComparisonFailed     EventType = "dp.comparison-failed"
 
 	// LIC events.
-	EventLICStatusChanged EventType = "lic.status-changed"
+	EventLICStatusChanged           EventType = "lic.status-changed"
+	EventLICClassificationUncertain EventType = "lic.classification-uncertain"
 
 	// RE events.
 	EventREStatusChanged EventType = "re.status-changed"
@@ -131,6 +132,28 @@ type LICStatusChangedEvent struct {
 	ErrorCode      string `json:"error_code,omitempty"`
 	ErrorMessage   string `json:"error_message,omitempty"`
 	IsRetryable    *bool  `json:"is_retryable,omitempty"`
+}
+
+// ClassificationAlternative represents an alternative contract type with its
+// confidence score, as suggested by LIC during classification.
+type ClassificationAlternative struct {
+	ContractType string  `json:"contract_type"`
+	Confidence   float64 `json:"confidence"`
+}
+
+// LICClassificationUncertainEvent is emitted by Legal Intelligence Core when
+// contract type classification confidence is below the threshold (FR-2.1.3).
+type LICClassificationUncertainEvent struct {
+	CorrelationID  string                       `json:"correlation_id"`
+	Timestamp      string                       `json:"timestamp"`
+	JobID          string                       `json:"job_id"`
+	DocumentID     string                       `json:"document_id"`
+	VersionID      string                       `json:"version_id"`
+	OrganizationID string                       `json:"organization_id"`
+	SuggestedType  string                       `json:"suggested_type"`
+	Confidence     float64                      `json:"confidence"`
+	Threshold      float64                      `json:"threshold"`
+	Alternatives   []ClassificationAlternative  `json:"alternatives,omitempty"`
 }
 
 // REStatusChangedEvent is emitted by Reporting Engine on status change.

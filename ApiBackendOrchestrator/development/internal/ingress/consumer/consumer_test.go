@@ -146,8 +146,9 @@ func testBrokerConfig() config.BrokerConfig {
 		TopicDPProcessingFailed:     "dp.events.processing-failed",
 		TopicDPComparisonCompleted:  "dp.events.comparison-completed",
 		TopicDPComparisonFailed:     "dp.events.comparison-failed",
-		TopicLICStatusChanged:       "lic.events.status-changed",
-		TopicREStatusChanged:        "re.events.status-changed",
+		TopicLICStatusChanged:           "lic.events.status-changed",
+		TopicLICClassificationUncertain: "lic.events.classification-uncertain",
+		TopicREStatusChanged:            "re.events.status-changed",
 		TopicDMVersionArtifactsReady: "dm.events.version-artifacts-ready",
 		TopicDMVersionAnalysisReady:  "dm.events.version-analysis-ready",
 		TopicDMVersionReportsReady:   "dm.events.version-reports-ready",
@@ -169,7 +170,7 @@ func mustMarshal(t *testing.T, v any) []byte {
 // Start tests
 // ---------------------------------------------------------------------------
 
-func TestStart_SubscribesTo12Topics(t *testing.T) {
+func TestStart_SubscribesTo13Topics(t *testing.T) {
 	mb := newMockBroker()
 	handler := &mockEventHandler{}
 	cfg := testBrokerConfig()
@@ -186,6 +187,7 @@ func TestStart_SubscribesTo12Topics(t *testing.T) {
 		"dp.events.comparison-completed",
 		"dp.events.comparison-failed",
 		"lic.events.status-changed",
+		"lic.events.classification-uncertain",
 		"re.events.status-changed",
 		"dm.events.version-artifacts-ready",
 		"dm.events.version-analysis-ready",
@@ -198,8 +200,8 @@ func TestStart_SubscribesTo12Topics(t *testing.T) {
 	count := len(mb.handlers)
 	mb.mu.Unlock()
 
-	if count != 12 {
-		t.Errorf("subscribed to %d topics, want 12", count)
+	if count != 13 {
+		t.Errorf("subscribed to %d topics, want 13", count)
 	}
 
 	for _, topic := range expectedTopics {
@@ -230,9 +232,9 @@ func TestStart_Idempotent(t *testing.T) {
 	count := len(mb.handlers)
 	mb.mu.Unlock()
 
-	// Should still be exactly 12, not 24.
-	if count != 12 {
-		t.Errorf("subscribed to %d topics after 2x Start, want 12", count)
+	// Should still be exactly 13, not 26.
+	if count != 13 {
+		t.Errorf("subscribed to %d topics after 2x Start, want 13", count)
 	}
 }
 
@@ -512,6 +514,58 @@ func TestLICStatusChangedEvent_DeserializeAndRoute(t *testing.T) {
 	}
 }
 
+func TestLICClassificationUncertainEvent_DeserializeAndRoute(t *testing.T) {
+	mb := newMockBroker()
+	handler := &mockEventHandler{}
+	cfg := testBrokerConfig()
+	c := NewConsumer(mb, handler, testLogger(), cfg)
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	event := LICClassificationUncertainEvent{
+		CorrelationID:  "corr-6b",
+		Timestamp:      "2026-04-09T10:05:30Z",
+		JobID:          "job-6b",
+		DocumentID:     "doc-6b",
+		VersionID:      "ver-6b",
+		OrganizationID: "org-6b",
+		SuggestedType:  "услуги",
+		Confidence:     0.62,
+		Threshold:      0.75,
+		Alternatives: []ClassificationAlternative{
+			{ContractType: "подряд", Confidence: 0.31},
+		},
+	}
+
+	err := mb.deliver(context.Background(), "lic.events.classification-uncertain", mustMarshal(t, event))
+	if err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+
+	call := handler.lastCall()
+	if call.eventType != EventLICClassificationUncertain {
+		t.Errorf("eventType = %s, want %s", call.eventType, EventLICClassificationUncertain)
+	}
+
+	got := call.event.(*LICClassificationUncertainEvent)
+	if got.SuggestedType != "услуги" {
+		t.Errorf("SuggestedType = %q, want %q", got.SuggestedType, "услуги")
+	}
+	if got.Confidence != 0.62 {
+		t.Errorf("Confidence = %v, want 0.62", got.Confidence)
+	}
+	if got.Threshold != 0.75 {
+		t.Errorf("Threshold = %v, want 0.75", got.Threshold)
+	}
+	if len(got.Alternatives) != 1 {
+		t.Fatalf("Alternatives len = %d, want 1", len(got.Alternatives))
+	}
+	if got.Alternatives[0].ContractType != "подряд" {
+		t.Errorf("Alternatives[0].ContractType = %q, want %q", got.Alternatives[0].ContractType, "подряд")
+	}
+}
+
 func TestREStatusChangedEvent_DeserializeAndRoute(t *testing.T) {
 	mb := newMockBroker()
 	handler := &mockEventHandler{}
@@ -730,7 +784,7 @@ func TestInvalidJSON_ACKsWithoutRequeue(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Deliver garbage bytes to each of the 12 topics.
+	// Deliver garbage bytes to each of the 13 topics.
 	topics := []string{
 		"dp.events.status-changed",
 		"dp.events.processing-completed",
@@ -738,6 +792,7 @@ func TestInvalidJSON_ACKsWithoutRequeue(t *testing.T) {
 		"dp.events.comparison-completed",
 		"dp.events.comparison-failed",
 		"lic.events.status-changed",
+		"lic.events.classification-uncertain",
 		"re.events.status-changed",
 		"dm.events.version-artifacts-ready",
 		"dm.events.version-analysis-ready",
@@ -1011,6 +1066,15 @@ func TestBuildRetryKey_DMEvent_UsesDocAndVersion(t *testing.T) {
 	event := &DMVersionCreatedEvent{DocumentID: "d1", VersionID: "v1"}
 	key := buildRetryKey(EventDMVersionCreated, event)
 	expected := "dm.version-created:d1:v1"
+	if key != expected {
+		t.Errorf("retryKey = %q, want %q", key, expected)
+	}
+}
+
+func TestBuildRetryKey_LICClassificationUncertain_UsesVersion(t *testing.T) {
+	event := &LICClassificationUncertainEvent{VersionID: "v1"}
+	key := buildRetryKey(EventLICClassificationUncertain, event)
+	expected := "lic.classification-uncertain:v1"
 	if key != expected {
 		t.Errorf("retryKey = %q, want %q", key, expected)
 	}

@@ -172,8 +172,9 @@ func (c *Consumer) buildBindings(cfg config.BrokerConfig) []topicBinding {
 		{topic: cfg.TopicDPProcessingFailed, eventType: EventDPProcessingFailed, newEvent: func() any { return new(DPProcessingFailedEvent) }},
 		{topic: cfg.TopicDPComparisonCompleted, eventType: EventDPComparisonCompleted, newEvent: func() any { return new(DPComparisonCompletedEvent) }},
 		{topic: cfg.TopicDPComparisonFailed, eventType: EventDPComparisonFailed, newEvent: func() any { return new(DPComparisonFailedEvent) }},
-		// LIC / RE events (2).
+		// LIC / RE events (3).
 		{topic: cfg.TopicLICStatusChanged, eventType: EventLICStatusChanged, newEvent: func() any { return new(LICStatusChangedEvent) }},
+		{topic: cfg.TopicLICClassificationUncertain, eventType: EventLICClassificationUncertain, newEvent: func() any { return new(LICClassificationUncertainEvent) }},
 		{topic: cfg.TopicREStatusChanged, eventType: EventREStatusChanged, newEvent: func() any { return new(REStatusChangedEvent) }},
 		// DM events (5).
 		{topic: cfg.TopicDMVersionArtifactsReady, eventType: EventDMVersionArtifactsReady, newEvent: func() any { return new(DMVersionArtifactsReadyEvent) }},
@@ -184,7 +185,7 @@ func (c *Consumer) buildBindings(cfg config.BrokerConfig) []topicBinding {
 	}
 }
 
-// Start subscribes to all 12 event topics. It is idempotent: repeated calls
+// Start subscribes to all 13 event topics. It is idempotent: repeated calls
 // return the result of the first attempt.
 //
 // On partial failure (some subscriptions succeed, others fail), the caller must
@@ -316,6 +317,12 @@ func enrichContext(ctx context.Context, eventType EventType, event any) context.
 		rc.DocumentID = e.DocumentID
 		rc.VersionID = e.VersionID
 		rc.JobID = e.JobID
+	case *LICClassificationUncertainEvent:
+		rc.CorrelationID = e.CorrelationID
+		rc.OrganizationID = e.OrganizationID
+		rc.DocumentID = e.DocumentID
+		rc.VersionID = e.VersionID
+		rc.JobID = e.JobID
 	case *REStatusChangedEvent:
 		rc.CorrelationID = e.CorrelationID
 		rc.OrganizationID = e.OrganizationID
@@ -372,6 +379,8 @@ func buildRetryKey(eventType EventType, event any) string {
 		return string(eventType) + ":" + e.JobID
 	case *LICStatusChangedEvent:
 		return string(eventType) + ":" + e.JobID + ":" + e.Status
+	case *LICClassificationUncertainEvent:
+		return string(eventType) + ":" + e.VersionID
 	case *REStatusChangedEvent:
 		return string(eventType) + ":" + e.JobID + ":" + e.Status
 	case *DMVersionArtifactsReadyEvent:

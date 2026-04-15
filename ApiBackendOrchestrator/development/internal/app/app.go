@@ -197,9 +197,19 @@ func NewApp(cfg *config.Config) (*App, error) {
 	broadcaster := ssebroadcast.NewBroadcaster(kvClient, log)
 
 	// 10. Status tracker — consumes events, broadcasts via SSE.
+	//     Configure type confirmation flow (FR-2.1.3): confirmation store for
+	//     atomic AWAITING_USER_INPUT transitions and watchdog TTL.
 	tracker := statustracker.NewTracker(kvClient, broadcaster, log)
+	rdb, ok := kvClient.RawRedis().(redis.Cmdable)
+	if !ok {
+		brokerClient.Close()
+		kvClient.Close()
+		return nil, fmt.Errorf("confirmation store: Redis client does not support Lua scripting")
+	}
+	confirmStore := statustracker.NewRedisConfirmationStore(rdb)
+	tracker.WithConfirmation(confirmStore, cfg.TypeConfirmation.ConfirmationTimeout)
 
-	// 11. Event consumer — subscribes to 12 RabbitMQ topics.
+	// 11. Event consumer — subscribes to 13 RabbitMQ topics.
 	//     Uses adapter because broker.Client.Subscribe takes the named type
 	//     broker.MessageHandler, while consumer.BrokerSubscriber expects an
 	//     unnamed func signature.

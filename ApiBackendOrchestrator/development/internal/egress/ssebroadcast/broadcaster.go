@@ -54,6 +54,19 @@ type Event struct {
 	ErrorMessage    string `json:"error_message,omitempty"`
 	BaseVersionID   string `json:"base_version_id,omitempty"`
 	TargetVersionID string `json:"target_version_id,omitempty"`
+
+	// Classification fields (event_type = "type_confirmation_required").
+	SuggestedType string                       `json:"suggested_type,omitempty"`
+	Confidence    float64                      `json:"confidence,omitempty"`
+	Threshold     float64                      `json:"threshold,omitempty"`
+	Alternatives  []ClassificationAlternative  `json:"alternatives,omitempty"`
+}
+
+// ClassificationAlternative represents an alternative contract type suggestion
+// with its confidence score. Used in type_confirmation_required SSE events.
+type ClassificationAlternative struct {
+	ContractType string  `json:"contract_type"`
+	Confidence   float64 `json:"confidence"`
 }
 
 // ---------------------------------------------------------------------------

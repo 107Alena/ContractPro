@@ -39,8 +39,9 @@ type BrokerConfig struct {
 	TopicDPComparisonFailed     string // ORCH_BROKER_TOPIC_DP_COMPARISON_FAILED
 
 	// Incoming events from LIC and RE.
-	TopicLICStatusChanged string // ORCH_BROKER_TOPIC_LIC_STATUS_CHANGED
-	TopicREStatusChanged  string // ORCH_BROKER_TOPIC_RE_STATUS_CHANGED
+	TopicLICStatusChanged           string // ORCH_BROKER_TOPIC_LIC_STATUS_CHANGED
+	TopicLICClassificationUncertain string // ORCH_BROKER_TOPIC_LIC_CLASSIFICATION_UNCERTAIN
+	TopicREStatusChanged            string // ORCH_BROKER_TOPIC_RE_STATUS_CHANGED
 
 	// Incoming events from DM.
 	TopicDMVersionArtifactsReady    string // ORCH_BROKER_TOPIC_DM_VERSION_ARTIFACTS_READY
@@ -65,8 +66,9 @@ func loadBrokerConfig() BrokerConfig {
 		TopicDPComparisonCompleted: envString("ORCH_BROKER_TOPIC_DP_COMPARISON_COMPLETED", "dp.events.comparison-completed"),
 		TopicDPComparisonFailed:    envString("ORCH_BROKER_TOPIC_DP_COMPARISON_FAILED", "dp.events.comparison-failed"),
 
-		TopicLICStatusChanged: envString("ORCH_BROKER_TOPIC_LIC_STATUS_CHANGED", "lic.events.status-changed"),
-		TopicREStatusChanged:  envString("ORCH_BROKER_TOPIC_RE_STATUS_CHANGED", "re.events.status-changed"),
+		TopicLICStatusChanged:           envString("ORCH_BROKER_TOPIC_LIC_STATUS_CHANGED", "lic.events.status-changed"),
+		TopicLICClassificationUncertain: envString("ORCH_BROKER_TOPIC_LIC_CLASSIFICATION_UNCERTAIN", "lic.events.classification-uncertain"),
+		TopicREStatusChanged:            envString("ORCH_BROKER_TOPIC_RE_STATUS_CHANGED", "re.events.status-changed"),
 
 		TopicDMVersionArtifactsReady: envString("ORCH_BROKER_TOPIC_DM_VERSION_ARTIFACTS_READY", "dm.events.version-artifacts-ready"),
 		TopicDMVersionAnalysisReady:  envString("ORCH_BROKER_TOPIC_DM_VERSION_ANALYSIS_READY", "dm.events.version-analysis-ready"),

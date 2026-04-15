@@ -108,6 +108,15 @@ func (t *Tracker) HandleEvent(ctx context.Context, eventType consumer.EventType,
 		}
 		return t.handleLICStatusChanged(ctx, e)
 
+	case consumer.EventLICClassificationUncertain:
+		e, ok := event.(*consumer.LICClassificationUncertainEvent)
+		if !ok {
+			t.log.Warn(ctx, "unexpected event type for lic.classification-uncertain",
+				"got_type", fmt.Sprintf("%T", event))
+			return nil
+		}
+		return t.handleLICClassificationUncertain(ctx, e)
+
 	case consumer.EventREStatusChanged:
 		e, ok := event.(*consumer.REStatusChangedEvent)
 		if !ok {

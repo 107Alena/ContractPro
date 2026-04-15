@@ -1544,9 +1544,82 @@ Integration: Middleware + Handler combined
 - **Результаты**: go test -race -count=1 ./... PASS (34 пакета, 0 failures), go vet clean, make build/test/lint OK.
 
 ### Следующие задачи (unblocked by ORCH-TASK-039)
-- **ORCH-TASK-040** (depends on 039): Consumer для ClassificationUncertain event → SetAwaitingUserInput + SSE push
+- **ORCH-TASK-040** (depends on 039): Consumer для ClassificationUncertain event → SetAwaitingUserInput + SSE push ✓
 - **ORCH-TASK-041** (depends on 039): HTTP POST /confirm-type handler → ConfirmType + command publish
 - **ORCH-TASK-042** (depends on 039): Watchdog для TimeoutAwaitingInput (Redis Keyspace Notifications)
 - **ORCH-TASK-043** (depends on 040+041+042): E2E integration test полного цикла
 - **ORCH-TASK-049** (depends on 048): Миграция handlers на VALIDATION_ERROR
 - **ORCH-TASK-050** (no deps): Permissions Resolver
+
+## ORCH-TASK-040: Consumer для lic.events.classification-uncertain (DONE, 2026-04-16)
+
+### План реализации
+1. Изучить существующий код consumer, statustracker, ssebroadcast, config, app.go (Explore subagent)
+2. Спроектировать: интеграция в существующий consumer+tracker фреймворк (13 топиков)
+3. Config: TopicLICClassificationUncertain в BrokerConfig
+4. SSE broadcast: расширить Event struct классификационными полями
+5. Consumer: event type/struct, binding, enrichContext, buildRetryKey
+6. Tracker: HandleEvent dispatch + handleLICClassificationUncertain handler
+7. App wiring: WithConfirmation (RedisConfirmationStore + TypeConfirmation timeout)
+8. Тесты: 16 новых тестов statustracker + 3 consumer
+9. Code review (code-reviewer) → исправления: S-1, M-1, N-1
+
+### Что реализовано
+- **config/sub_configs.go**: `TopicLICClassificationUncertain` в BrokerConfig, env `ORCH_BROKER_TOPIC_LIC_CLASSIFICATION_UNCERTAIN`, default `lic.events.classification-uncertain`
+- **ssebroadcast/broadcaster.go**: Event extended: `SuggestedType`, `Confidence`, `Threshold`, `Alternatives` (omitempty) + `ClassificationAlternative` struct — для event_type `type_confirmation_required`
+- **consumer/events.go**: `EventLICClassificationUncertain` constant, `LICClassificationUncertainEvent` struct (10 полей: envelope + suggested_type/confidence/threshold/alternatives), `ClassificationAlternative` struct
+- **consumer/consumer.go**: 13-й binding в buildBindings, enrichContext case, buildRetryKey (versionID only), Start doc comment 12→13
+- **statustracker/classification_uncertain.go**: NEW FILE — `handleLICClassificationUncertain` handler:
+  - Dual-layer deduplication: Redis idempotency key `lic-uncertain:{verID}` (fast-path) + Lua-atomic `SetAwaitingUserInput` (correctness guarantee)
+  - `confirmationMeta` storage (orgID+docID+verID) в `confirmation:meta:{verID}` для watchdog ORCH-TASK-042
+  - Idempotency key TTL synced with `confirmationTimeout` (не hardcoded 24h)
+  - `type_confirmation_required` SSE broadcast с full classification payload
+  - `convertAlternatives` helper (consumer → ssebroadcast type mapping)
+  - Error handling: Redis unavailable → return error (NACK), invalid transition → silent skip (nil), meta/idemp failures → WARN + continue
+- **statustracker/tracker.go**: HandleEvent dispatch case для `EventLICClassificationUncertain`
+- **app/app.go**: `RedisConfirmationStore` + `tracker.WithConfirmation(confirmStore, cfg.TypeConfirmation.ConfirmationTimeout)` — wiring FR-2.1.3 flow
+- **integration/testenv.go**: TopicLICClassificationUncertain added to brokerCfg (prevents regression)
+
+### Тесты
+**classification_uncertain_test.go** (16 тестов):
+- Happy path (status + watchdog + idempotency key + meta + 2 SSE events)
+- Idempotency (duplicate event → noop, no broadcasts)
+- Missing identity fields ×3 (orgID, docID, verID → skip)
+- Invalid transition (PROCESSING instead of ANALYZING → skip)
+- Redis GET error → NACK (error returned)
+- Confirmation store error → NACK
+- Meta write (stores org/doc/ver JSON)
+- HandleEvent dispatch (via EventHandler interface)
+- Wrong type assertion → warn + skip
+- Idempotency key TTL = confirmationTimeout
+- convertAlternatives (nil, empty, multiple)
+- No alternatives in event → empty alternatives in SSE
+- SSE event fields (DocumentID, VersionID, Status, Message, Timestamp)
+- idempotencyKey format
+
+**consumer_test.go** (3 новых теста):
+- Deserialization + routing LICClassificationUncertainEvent
+- BuildRetryKey (versionID only)
+- 13-topic subscription (12→13 updated)
+
+### Code review исправления
+- **S-1**: Integration testenv.go — TopicLICClassificationUncertain added (prevented regression on 5 integration tests)
+- **M-1**: Dual-layer deduplication documented in handler docstring
+- **N-1**: `idempotencyTTL` synced to `t.confirmationTimeout` instead of hardcoded 24h
+
+### Ключевые решения
+- **С��ществующий consumer+tracker фреймворк** — не создаём отдельный handler пакет; ClassificationUncertain обрабатывается как 13-й event type через тот же EventHandler interface
+- **Dual-layer deduplication** — Redis idempotency key as fast-path (skip deserialized event), Lua SetAwaitingUserInput as correctness guarantee (only transitions from ANALYZING)
+- **ClassificationAlternative struct дублирована** — consumer и ssebroadcast пакеты decoupled, convertAlternatives мост между ними
+- **confirmationMeta** — хранит orgID+docID для watchdog ORCH-TASK-042 (watchdog key содержит только verID)
+- **Два SSE события** — SetAwaitingUserInput broadcasts `status_update`, handler additionally broadcasts `type_confirmation_required` с classification payload
+
+### Резу��ьтаты
+- go test -race -count=1 ./... — 33 пакета PASS, 0 failures
+- go vet — clean
+- make build/test/lint — OK
+
+### Следующие задачи (unblocked by ORCH-TASK-040)
+- **ORCH-TASK-041** (high, depends on 039 ✓): HTTP POST /confirm-type handler
+- **ORCH-TASK-042** (medium, depends on 039 ✓): Watchdog (Redis Keyspace Notifications)
+- **ORCH-TASK-043** (high, depends on 040 ✓ + 041 + 042): E2E integration test

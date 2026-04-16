@@ -28,14 +28,20 @@ const (
 	// correlationIDHeader is the canonical correlation ID header name.
 	correlationIDHeader = "X-Correlation-Id"
 
+	// requestIDHeader is the canonical request ID header name.
+	requestIDHeader = "X-Request-Id"
+
 	// corsAllowMethods lists the HTTP methods allowed for cross-origin requests.
 	corsAllowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 
 	// corsAllowHeaders lists the request headers allowed for cross-origin requests.
-	corsAllowHeaders = "Authorization, Content-Type, X-Correlation-Id"
+	// traceparent / tracestate are included for W3C Trace Context propagation
+	// from frontend OpenTelemetry instrumentation (see security.md §5.1).
+	corsAllowHeaders = "Authorization, Content-Type, X-Correlation-Id, traceparent, tracestate"
 
 	// corsExposeHeaders lists the response headers exposed to cross-origin callers.
-	corsExposeHeaders = "X-Request-ID, X-Correlation-Id, Retry-After"
+	// traceparent is exposed so frontend can read the backend-assigned trace.
+	corsExposeHeaders = "X-Request-Id, Retry-After, traceparent"
 )
 
 // CORSMiddleware returns a chi-compatible middleware that handles
@@ -55,6 +61,8 @@ const (
 //     ensure correct HTTP cache behaviour.
 func CORSMiddleware(cfg config.CORSConfig, log *logger.Logger) func(http.Handler) http.Handler {
 	// Build allowed-origins set at construction time for O(1) lookup.
+	// Wildcard "*" is silently filtered here as defence-in-depth — config.Validate
+	// is the primary gate and will fail startup before we reach this code.
 	allowed := make(map[string]struct{}, len(cfg.AllowedOrigins))
 	for _, o := range cfg.AllowedOrigins {
 		if o == "*" {
@@ -65,6 +73,13 @@ func CORSMiddleware(cfg config.CORSConfig, log *logger.Logger) func(http.Handler
 		if o != "" {
 			allowed[o] = struct{}{}
 		}
+	}
+
+	// Same-origin deployment (ADR-6): when no origins are configured the
+	// middleware is a pass-through. OPTIONS is routed normally (to handler /
+	// 404 / 405) so the behaviour matches every other method.
+	if len(allowed) == 0 {
+		return func(next http.Handler) http.Handler { return next }
 	}
 
 	maxAge := strconv.Itoa(cfg.MaxAge)
@@ -124,7 +139,7 @@ func setCORSHeaders(w http.ResponseWriter, origin, maxAge string) {
 //   - X-Frame-Options: DENY            — prevents iframe embedding (clickjacking)
 //   - Strict-Transport-Security        — forces HTTPS (defense-in-depth)
 //   - Cache-Control: no-store          — prevents caching of sensitive data
-//   - X-Request-ID: {correlation_id}   — request identifier for log correlation
+//   - X-Request-Id: {correlation_id}   — request identifier for log correlation
 //   - X-Correlation-Id: {correlation_id} — same value for service-to-service tracing
 //
 // The middleware also generates a UUID v4 correlation ID when the client does
@@ -154,7 +169,7 @@ func SecurityHeadersMiddleware() func(http.Handler) http.Handler {
 			// These are set before WriteHeader so they survive even if a
 			// panic triggers the recovery middleware.
 			h := w.Header()
-			h.Set("X-Request-ID", cid)
+			h.Set(requestIDHeader, cid)
 			h.Set(correlationIDHeader, cid)
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("X-Frame-Options", "DENY")

@@ -27,7 +27,7 @@
 | `Authorization` | `Bearer <JWT>` | JWT-токен. С точки зрения DM — доверенный контекст от оркестратора |
 | `X-Organization-ID` | UUID | ID организации (tenant isolation). Извлекается из JWT claim `org` |
 | `X-User-ID` | UUID | ID пользователя. Извлекается из JWT claim `sub` |
-| `X-Correlation-ID` | UUID | Сквозной ID операции для трассировки. Генерируется оркестратором при приёме запроса от frontend |
+| `X-Correlation-Id` | UUID | Сквозной ID операции для трассировки. Генерируется оркестратором при приёме запроса от frontend. Канонический case mixed (см. security.md §5.1) |
 
 > DM валидирует `X-Organization-ID` и `X-User-ID` regex-паттерном `^[a-zA-Z0-9._-]{1,128}$` и фильтрует все данные по `organization_id` (tenant isolation).
 
@@ -383,7 +383,7 @@
 
 > **ASSUMPTION-ORCH-04:** OPM ещё не спроектирован. Описанный контракт — минимальный набор, необходимый оркестратору для проксирования административных запросов (UR-12, роль R-3).
 
-Оркестратор проксирует запросы `ORG_ADMIN` в OPM. Заголовки аналогичны DM: `Authorization`, `X-Organization-ID`, `X-User-ID`, `X-Correlation-ID`.
+Оркестратор проксирует запросы `ORG_ADMIN` в OPM. Заголовки аналогичны DM: `Authorization`, `X-Organization-ID`, `X-User-ID`, `X-Correlation-Id`.
 
 ### Эндпоинты
 
@@ -704,9 +704,9 @@ Frontend HTTP-запрос
     ▼ Оркестратор генерирует: correlation_id, job_id
     │ Извлекает из JWT: organization_id, requested_by_user_id
     │
-    ├── Sync (DM): X-Correlation-ID, X-Organization-ID, X-User-ID (заголовки)
-    ├── Sync (OPM): X-Correlation-ID, X-Organization-ID, X-User-ID (заголовки)
-    ├── Sync (UOM): X-Correlation-ID (заголовок)
+    ├── Sync (DM): X-Correlation-Id, X-Organization-ID, X-User-ID (заголовки)
+    ├── Sync (OPM): X-Correlation-Id, X-Organization-ID, X-User-ID (заголовки)
+    ├── Sync (UOM): X-Correlation-Id (заголовок)
     └── Async (DP): correlation_id, job_id, document_id, version_id,
                      organization_id, requested_by_user_id (поля сообщения)
 ```
@@ -722,10 +722,10 @@ Frontend HTTP-запрос
 1. Frontend → POST /api/v1/contracts/upload
    Оркестратор генерирует: correlation_id=COR-001, job_id=JOB-001
 
-2. Orchestrator → DM: POST /documents (X-Correlation-ID: COR-001)
+2. Orchestrator → DM: POST /documents (X-Correlation-Id: COR-001)
    DM возвращает: document_id=DOC-001
 
-3. Orchestrator → DM: POST /documents/DOC-001/versions (X-Correlation-ID: COR-001)
+3. Orchestrator → DM: POST /documents/DOC-001/versions (X-Correlation-Id: COR-001)
    DM возвращает: version_id=VER-001
 
 4. Orchestrator → RabbitMQ: ProcessDocumentRequested

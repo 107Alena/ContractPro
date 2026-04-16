@@ -170,6 +170,25 @@ func (c *Config) Validate() error {
 		problems = append(problems, "ORCH_LOG_LEVEL must be one of: debug, info, warn, error")
 	}
 
+	// CORS allowed origins: wildcard incompatible with credentials mode;
+	// duplicates indicate misconfiguration. Empty list is valid (same-origin).
+	if len(c.CORS.AllowedOrigins) > 0 {
+		seen := make(map[string]struct{}, len(c.CORS.AllowedOrigins))
+		for _, o := range c.CORS.AllowedOrigins {
+			if o == "*" {
+				problems = append(problems,
+					"ORCH_CORS_ALLOWED_ORIGINS: wildcard '*' is not permitted (incompatible with credentials mode)")
+				continue
+			}
+			if _, dup := seen[o]; dup {
+				problems = append(problems,
+					fmt.Sprintf("ORCH_CORS_ALLOWED_ORIGINS: duplicate origin %q", o))
+				continue
+			}
+			seen[o] = struct{}{}
+		}
+	}
+
 	// Permissions resolver.
 	if c.Permissions.CacheTTL <= 0 {
 		problems = append(problems, "ORCH_PERMISSIONS_CACHE_TTL must be > 0")

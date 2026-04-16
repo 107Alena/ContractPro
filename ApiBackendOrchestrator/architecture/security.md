@@ -619,7 +619,7 @@ Frontend ──(HTTPS/TLS 1.2+)──► Reverse Proxy ──(HTTP)──► Orc
 | `organization_id` | UUID | Из JWT claim `org`. Для публичных endpoints -- `null`. |
 | `resource_type` | string | Тип ресурса: `contract`, `version`, `policy`, `checklist`, `auth` |
 | `resource_id` | UUID / null | Идентификатор ресурса (если применимо) |
-| `correlation_id` | UUID | Из заголовка `X-Correlation-ID` или сгенерированный |
+| `correlation_id` | UUID | Из заголовка `X-Correlation-Id` или сгенерированный |
 | `ip_address` | string | IP-адрес клиента (из `X-Forwarded-For` или `RemoteAddr`) |
 | `user_agent` | string | Из заголовка `User-Agent` |
 | `details` | object / null | Дополнительные данные, специфичные для действия |
@@ -654,7 +654,7 @@ Frontend ──(HTTPS/TLS 1.2+)──► Reverse Proxy ──(HTTP)──► Orc
 | `X-Frame-Options` | `DENY` | Запрет встраивания в iframe. Защита от clickjacking. |
 | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | HSTS: браузер обращается только по HTTPS. Устанавливается reverse proxy, но оркестратор дублирует для defense in depth. |
 | `Cache-Control` | `no-store` | Для всех endpoints с чувствительными данными (результаты анализа, списки договоров, admin). Исключения: `/healthz`, `/readyz`, `/metrics`. |
-| `X-Request-ID` | `{correlation_id}` | Идентификатор запроса для корреляции с логами. Если клиент передал `X-Correlation-ID` -- используется он; иначе генерируется UUID v4. |
+| `X-Request-Id` | `{correlation_id}` | Идентификатор запроса для корреляции с логами. Если клиент передал `X-Correlation-Id` -- используется он; иначе генерируется UUID v4. |
 | `Content-Type` | `application/json; charset=utf-8` | Все ответы оркестратора -- JSON (кроме SSE: `text/event-stream` и metrics: `text/plain`). |
 
 **Заголовки, НЕ устанавливаемые оркестратором** (ответственность reverse proxy):

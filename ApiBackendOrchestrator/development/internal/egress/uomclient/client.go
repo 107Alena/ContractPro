@@ -31,7 +31,7 @@ const (
 	// maxResponseBodySize caps response body reads to prevent OOM.
 	maxResponseBodySize = 1 * 1024 * 1024 // 1 MB (auth responses are small)
 
-	headerCorrelationID = "X-Correlation-ID"
+	headerCorrelationID = "X-Correlation-Id"
 	headerContentType   = "Content-Type"
 	headerAuthorization = "Authorization"
 

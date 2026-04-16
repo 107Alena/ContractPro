@@ -285,7 +285,7 @@ func TestCORS_ExposeHeaders_ContainsRequired(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	expose := rec.Header().Get("Access-Control-Expose-Headers")
-	for _, want := range []string{"X-Request-ID", "X-Correlation-Id", "Retry-After"} {
+	for _, want := range []string{"X-Request-Id", "Retry-After", "traceparent"} {
 		if !strings.Contains(expose, want) {
 			t.Errorf("Expose-Headers should contain %q, got %q", want, expose)
 		}
@@ -306,7 +306,7 @@ func TestCORS_AllowHeaders_ContainsRequired(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	allow := rec.Header().Get("Access-Control-Allow-Headers")
-	for _, want := range []string{"Authorization", "Content-Type", "X-Correlation-Id"} {
+	for _, want := range []string{"Authorization", "Content-Type", "X-Correlation-Id", "traceparent", "tracestate"} {
 		if !strings.Contains(allow, want) {
 			t.Errorf("Allow-Headers should contain %q, got %q", want, allow)
 		}
@@ -381,18 +381,18 @@ func TestSecurityHeaders_XRequestID_Generated(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	handler.ServeHTTP(rec, req)
 
-	rid := rec.Header().Get("X-Request-ID")
+	rid := rec.Header().Get("X-Request-Id")
 	if rid == "" {
-		t.Fatal("X-Request-ID should be generated when not provided")
+		t.Fatal("X-Request-Id should be generated when not provided")
 	}
 	// Must also be set on X-Correlation-Id.
 	cid := rec.Header().Get("X-Correlation-Id")
 	if cid != rid {
-		t.Fatalf("X-Correlation-Id (%q) should equal X-Request-ID (%q)", cid, rid)
+		t.Fatalf("X-Correlation-Id (%q) should equal X-Request-Id (%q)", cid, rid)
 	}
 	// UUID v4 format: 8-4-4-4-12 hex digits.
 	if len(rid) != 36 {
-		t.Fatalf("X-Request-ID should be UUID, got %q (len=%d)", rid, len(rid))
+		t.Fatalf("X-Request-Id should be UUID, got %q (len=%d)", rid, len(rid))
 	}
 }
 
@@ -404,9 +404,9 @@ func TestSecurityHeaders_XRequestID_FromClient(t *testing.T) {
 	req.Header.Set("X-Correlation-Id", "client-provided-id")
 	handler.ServeHTTP(rec, req)
 
-	rid := rec.Header().Get("X-Request-ID")
+	rid := rec.Header().Get("X-Request-Id")
 	if rid != "client-provided-id" {
-		t.Fatalf("X-Request-ID should use client-provided correlation ID, got %q", rid)
+		t.Fatalf("X-Request-Id should use client-provided correlation ID, got %q", rid)
 	}
 	cid := rec.Header().Get("X-Correlation-Id")
 	if cid != "client-provided-id" {
@@ -430,9 +430,9 @@ func TestSecurityHeaders_PropagatesOnRequestHeader(t *testing.T) {
 	if propagated == "" {
 		t.Fatal("correlation ID should be propagated on request header")
 	}
-	if propagated != rec.Header().Get("X-Request-ID") {
-		t.Fatalf("propagated request header (%q) should match response X-Request-ID (%q)",
-			propagated, rec.Header().Get("X-Request-ID"))
+	if propagated != rec.Header().Get("X-Request-Id") {
+		t.Fatalf("propagated request header (%q) should match response X-Request-Id (%q)",
+			propagated, rec.Header().Get("X-Request-Id"))
 	}
 }
 
@@ -482,9 +482,9 @@ func TestSecurityHeaders_UniqueIDs_PerRequest(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		handler.ServeHTTP(rec, req)
-		id := rec.Header().Get("X-Request-ID")
+		id := rec.Header().Get("X-Request-Id")
 		if _, dup := ids[id]; dup {
-			t.Fatalf("duplicate X-Request-ID: %q", id)
+			t.Fatalf("duplicate X-Request-Id: %q", id)
 		}
 		ids[id] = struct{}{}
 	}
@@ -515,8 +515,8 @@ func TestCORSAndSecurityHeaders_Integration(t *testing.T) {
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("X-Content-Type-Options should be set")
 	}
-	if rec.Header().Get("X-Request-ID") == "" {
-		t.Fatal("X-Request-ID should be set")
+	if rec.Header().Get("X-Request-Id") == "" {
+		t.Fatal("X-Request-Id should be set")
 	}
 }
 
@@ -569,8 +569,8 @@ func TestServer_SecurityHeaders_OnEveryResponse(t *testing.T) {
 			if rec.Header().Get("X-Frame-Options") != "DENY" {
 				t.Errorf("%s %s: X-Frame-Options should be DENY", ep.method, ep.path)
 			}
-			if rec.Header().Get("X-Request-ID") == "" {
-				t.Errorf("%s %s: X-Request-ID should be set", ep.method, ep.path)
+			if rec.Header().Get("X-Request-Id") == "" {
+				t.Errorf("%s %s: X-Request-Id should be set", ep.method, ep.path)
 			}
 		})
 	}
@@ -662,9 +662,9 @@ func TestServer_XRequestID_PreservedFromClient(t *testing.T) {
 	req.Header.Set("X-Correlation-Id", "my-custom-id")
 	s.Router().ServeHTTP(rec, req)
 
-	if rec.Header().Get("X-Request-ID") != "my-custom-id" {
-		t.Fatalf("X-Request-ID should preserve client-provided ID, got %q",
-			rec.Header().Get("X-Request-ID"))
+	if rec.Header().Get("X-Request-Id") != "my-custom-id" {
+		t.Fatalf("X-Request-Id should preserve client-provided ID, got %q",
+			rec.Header().Get("X-Request-Id"))
 	}
 }
 
@@ -679,7 +679,7 @@ func TestSecurityHeaders_InvalidCID_TooLong(t *testing.T) {
 	req.Header.Set("X-Correlation-Id", strings.Repeat("a", 200))
 	handler.ServeHTTP(rec, req)
 
-	rid := rec.Header().Get("X-Request-ID")
+	rid := rec.Header().Get("X-Request-Id")
 	if len(rid) != 36 {
 		t.Fatalf("invalid CID should be replaced with UUID, got %q (len=%d)", rid, len(rid))
 	}
@@ -693,7 +693,7 @@ func TestSecurityHeaders_InvalidCID_ControlChars(t *testing.T) {
 	req.Header.Set("X-Correlation-Id", "id-with-\x00-null")
 	handler.ServeHTTP(rec, req)
 
-	rid := rec.Header().Get("X-Request-ID")
+	rid := rec.Header().Get("X-Request-Id")
 	if len(rid) != 36 {
 		t.Fatalf("CID with control chars should be replaced with UUID, got %q", rid)
 	}
@@ -708,8 +708,8 @@ func TestSecurityHeaders_ValidCID_MaxLength(t *testing.T) {
 	req.Header.Set("X-Correlation-Id", cid)
 	handler.ServeHTTP(rec, req)
 
-	if rec.Header().Get("X-Request-ID") != cid {
-		t.Fatalf("valid CID at max length should be preserved, got %q", rec.Header().Get("X-Request-ID"))
+	if rec.Header().Get("X-Request-Id") != cid {
+		t.Fatalf("valid CID at max length should be preserved, got %q", rec.Header().Get("X-Request-Id"))
 	}
 }
 
@@ -742,6 +742,87 @@ func TestIsValidCorrelationID(t *testing.T) {
 				t.Errorf("isValidCorrelationID(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// --- ORCH-TASK-051: CORS updates (W3C Trace Context + no-op default) ---
+
+// When ORCH_CORS_ALLOWED_ORIGINS is empty, the middleware must pass every
+// request (including OPTIONS) straight to the downstream handler with no
+// CORS headers — the same-origin deployment topology (ADR-6).
+func TestCORS_EmptyOrigins_OptionsReachesHandler(t *testing.T) {
+	mw := CORSMiddleware(config.CORSConfig{
+		AllowedOrigins: nil,
+		MaxAge:         3600,
+	}, testLogger())
+
+	called := false
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/contracts", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	handler.ServeHTTP(rec, req)
+
+	if !called {
+		t.Fatal("with empty AllowedOrigins, OPTIONS preflight must reach the downstream handler")
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatal("no CORS headers expected when AllowedOrigins is empty")
+	}
+	if rec.Header().Get("Vary") != "" {
+		t.Fatal("no Vary expected when AllowedOrigins is empty")
+	}
+}
+
+// Preflight request advertising the W3C traceparent header must succeed —
+// OpenTelemetry frontend instrumentation injects it on every request.
+func TestCORS_Preflight_AllowsTraceparentHeader(t *testing.T) {
+	mw := CORSMiddleware(config.CORSConfig{
+		AllowedOrigins: []string{"https://app.example.com"},
+		MaxAge:         3600,
+	}, testLogger())
+
+	handler := mw(failHandler(t))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/contracts", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "traceparent, tracestate, x-correlation-id")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight: want 204, got %d", rec.Code)
+	}
+	allow := rec.Header().Get("Access-Control-Allow-Headers")
+	for _, want := range []string{"traceparent", "tracestate"} {
+		if !strings.Contains(allow, want) {
+			t.Errorf("Allow-Headers must contain %q for W3C Trace Context, got %q", want, allow)
+		}
+	}
+}
+
+// Response Expose-Headers must advertise traceparent so that the frontend can
+// read the backend-assigned trace ID via fetch/XHR.
+func TestCORS_ExposeHeaders_IncludesTraceparent(t *testing.T) {
+	mw := CORSMiddleware(config.CORSConfig{
+		AllowedOrigins: []string{"https://app.example.com"},
+		MaxAge:         3600,
+	}, testLogger())
+
+	handler := mw(okHandler())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	handler.ServeHTTP(rec, req)
+
+	expose := rec.Header().Get("Access-Control-Expose-Headers")
+	if !strings.Contains(expose, "traceparent") {
+		t.Fatalf("Expose-Headers must include 'traceparent', got %q", expose)
 	}
 }
 

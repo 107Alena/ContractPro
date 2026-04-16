@@ -36,7 +36,7 @@ const (
 
 	headerOrganizationID = "X-Organization-ID"
 	headerUserID         = "X-User-ID"
-	headerCorrelationID  = "X-Correlation-ID"
+	headerCorrelationID  = "X-Correlation-Id"
 	headerContentType    = "Content-Type"
 
 	contentTypeJSON = "application/json"
@@ -244,7 +244,7 @@ func (c *Client) doRaw(
 
 // setHeaders sets organization, user, and correlation headers on the request.
 // OPM endpoints need X-Organization-ID for tenant isolation and
-// X-Correlation-ID for distributed tracing.
+// X-Correlation-Id for distributed tracing.
 func (c *Client) setHeaders(ctx context.Context, req *http.Request) {
 	ac, _ := auth.AuthContextFrom(ctx)
 	rc := logger.RequestContextFrom(ctx)

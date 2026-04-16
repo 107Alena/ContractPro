@@ -16,7 +16,7 @@ import (
 // When tracing is disabled, the global propagator is a no-op and this
 // function adds no headers (zero overhead).
 //
-// Note: X-Correlation-ID is already handled by dmclient.setHeaders and
+// Note: X-Correlation-Id is already handled by dmclient.setHeaders and
 // does not need to be injected here.
 func InjectHTTPHeaders(ctx context.Context, req *http.Request) {
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))

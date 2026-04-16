@@ -78,8 +78,8 @@ func assertHeaders(t *testing.T, r *http.Request) {
 	if got := r.Header.Get("X-User-ID"); got != "user-123" {
 		t.Errorf("X-User-ID = %q, want %q", got, "user-123")
 	}
-	if got := r.Header.Get("X-Correlation-ID"); got != "corr-789" {
-		t.Errorf("X-Correlation-ID = %q, want %q", got, "corr-789")
+	if got := r.Header.Get("X-Correlation-Id"); got != "corr-789" {
+		t.Errorf("X-Correlation-Id = %q, want %q", got, "corr-789")
 	}
 }
 
@@ -107,8 +107,8 @@ func TestHeaders_PropagatedOnEveryRequest(t *testing.T) {
 	if got := captured.Get("X-User-ID"); got != "user-123" {
 		t.Errorf("X-User-ID = %q, want %q", got, "user-123")
 	}
-	if got := captured.Get("X-Correlation-ID"); got != "corr-789" {
-		t.Errorf("X-Correlation-ID = %q, want %q", got, "corr-789")
+	if got := captured.Get("X-Correlation-Id"); got != "corr-789" {
+		t.Errorf("X-Correlation-Id = %q, want %q", got, "corr-789")
 	}
 }
 
@@ -1090,8 +1090,8 @@ func TestEmptyContext_NoPanic_NoEmptyHeaders(t *testing.T) {
 	if got := capturedHeaders.Get("X-User-ID"); got != "" {
 		t.Errorf("X-User-ID = %q, want empty (not set)", got)
 	}
-	if got := capturedHeaders.Get("X-Correlation-ID"); got != "" {
-		t.Errorf("X-Correlation-ID = %q, want empty (not set)", got)
+	if got := capturedHeaders.Get("X-Correlation-Id"); got != "" {
+		t.Errorf("X-Correlation-Id = %q, want empty (not set)", got)
 	}
 }
 

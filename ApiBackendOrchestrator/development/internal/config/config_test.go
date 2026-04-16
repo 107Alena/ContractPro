@@ -860,6 +860,75 @@ func TestValidate_PermissionsOPMTimeoutTooLarge(t *testing.T) {
 	}
 }
 
+// --- ORCH-TASK-051: CORS origin validation ---
+
+func TestValidate_CORSWildcardRejected(t *testing.T) {
+	keyPath := createTempKeyFile(t)
+	cfg := validFullConfig(keyPath)
+	cfg.CORS.AllowedOrigins = []string{"https://app.contractpro.ru", "*"}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for wildcard '*' in AllowedOrigins, got nil")
+	}
+	if !strings.Contains(err.Error(), "wildcard '*' is not permitted") {
+		t.Errorf("error should mention wildcard rejection, got: %v", err)
+	}
+}
+
+func TestValidate_CORSDuplicatesRejected(t *testing.T) {
+	keyPath := createTempKeyFile(t)
+	cfg := validFullConfig(keyPath)
+	cfg.CORS.AllowedOrigins = []string{
+		"https://app.contractpro.ru",
+		"https://app.contractpro.ru",
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for duplicate origin, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate origin") {
+		t.Errorf("error should mention duplicate origin, got: %v", err)
+	}
+}
+
+func TestValidate_CORSEmptyOriginsOK(t *testing.T) {
+	keyPath := createTempKeyFile(t)
+	cfg := validFullConfig(keyPath)
+	cfg.CORS.AllowedOrigins = nil
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty AllowedOrigins is the default same-origin setup and must validate, got: %v", err)
+	}
+}
+
+func TestValidate_CORSValidOriginsOK(t *testing.T) {
+	keyPath := createTempKeyFile(t)
+	cfg := validFullConfig(keyPath)
+	cfg.CORS.AllowedOrigins = []string{
+		"https://app.contractpro.ru",
+		"https://staging.contractpro.ru",
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unique non-wildcard origins must validate, got: %v", err)
+	}
+}
+
+func TestLoad_CORSWildcardRejectedFromEnv(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ORCH_CORS_ALLOWED_ORIGINS", "https://app.example.com,*")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load error when ORCH_CORS_ALLOWED_ORIGINS contains '*', got nil")
+	}
+	if !strings.Contains(err.Error(), "wildcard '*' is not permitted") {
+		t.Errorf("error should mention wildcard rejection, got: %v", err)
+	}
+}
+
 // validFullConfig is a helper that returns a fully-populated Config passing
 // all validation rules. Individual tests mutate a single field before calling
 // Validate to assert on a specific error path.

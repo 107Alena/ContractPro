@@ -504,8 +504,8 @@ func TestGetMe_UOMDown(t *testing.T) {
 
 func TestHeaders_CorrelationID(t *testing.T) {
 	c, _ := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-Correlation-ID"); got != "test-correlation-123" {
-			t.Errorf("expected X-Correlation-ID test-correlation-123, got %s", got)
+		if got := r.Header.Get("X-Correlation-Id"); got != "test-correlation-123" {
+			t.Errorf("expected X-Correlation-Id test-correlation-123, got %s", got)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -541,8 +541,8 @@ func TestHeaders_WithAuthContext(t *testing.T) {
 		if got := r.Header.Get("X-User-ID"); got != "user-abc-123" {
 			t.Errorf("expected X-User-ID user-abc-123, got %s", got)
 		}
-		if got := r.Header.Get("X-Correlation-ID"); got != "test-correlation-123" {
-			t.Errorf("expected X-Correlation-ID test-correlation-123, got %s", got)
+		if got := r.Header.Get("X-Correlation-Id"); got != "test-correlation-123" {
+			t.Errorf("expected X-Correlation-Id test-correlation-123, got %s", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(UserProfile{
@@ -799,8 +799,8 @@ func TestResponseBodyLimit(t *testing.T) {
 func TestEmptyContext(t *testing.T) {
 	c, _ := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Should not panic with empty context.
-		if got := r.Header.Get("X-Correlation-ID"); got != "" {
-			t.Errorf("expected no X-Correlation-ID, got %s", got)
+		if got := r.Header.Get("X-Correlation-Id"); got != "" {
+			t.Errorf("expected no X-Correlation-Id, got %s", got)
 		}
 		if got := r.Header.Get("X-User-ID"); got != "" {
 			t.Errorf("expected no X-User-ID, got %s", got)

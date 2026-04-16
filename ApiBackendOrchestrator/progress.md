@@ -1870,3 +1870,53 @@ happy path, no auth (401), invalid contract_id/version_id (400), invalid JSON (4
 ### Следующие задачи
 - ORCH-TASK-051 (medium): последняя оставшаяся задача в tasks.json
 - ORCH-TASK-051 (medium): CORS middleware config update
+---
+
+## [2026-04-16] ORCH-TASK-051 — CORS middleware config update (ADR-6 alignment)
+
+**Статус:** done
+
+**Цель:** Превентивно обновить CORS middleware под ADR-6 (Same-origin deployment) и security.md §5: расширить allow/expose headers для W3C Trace Context, унифицировать case X-Correlation-Id/X-Request-Id, реализовать no-op при пустом ORCH_CORS_ALLOWED_ORIGINS, жёстко запретить wildcard в config.
+
+### План и реализация
+
+1. **middleware.go (internal/ingress/api)**
+   - `corsAllowHeaders` → `"Authorization, Content-Type, X-Correlation-Id, traceparent, tracestate"` (было 3 → стало 5, добавлены traceparent/tracestate для OTel frontend).
+   - `corsExposeHeaders` → `"X-Request-Id, Retry-After, traceparent"` (было 3 с uppercase ID → стало 3 с canonical mixed case + traceparent; убран X-Correlation-Id из Expose, остался в Allow).
+   - Добавлена константа `requestIDHeader = "X-Request-Id"`, используется в SecurityHeadersMiddleware.
+   - `CORSMiddleware`: при `len(allowed)==0` возвращает `func(next http.Handler) http.Handler { return next }` — полный пропуск (OPTIONS идёт через chi-router к реальному handler/404/405). Совместимо с ADR-6 same-origin.
+   - Defence-in-depth: wildcard '*' по-прежнему silently ignored + warn-log в middleware, но основной gate — config.Validate.
+2. **config/config.go Validate()**
+   - Добавлена проверка: `"*"` в AllowedOrigins → `"ORCH_CORS_ALLOWED_ORIGINS: wildcard '*' is not permitted (incompatible with credentials mode)"`.
+   - Дубликаты origins → `"duplicate origin %q"`.
+3. **Rename (X-Correlation-ID → X-Correlation-Id, X-Request-ID → X-Request-Id)**
+   - `internal/egress/dmclient/client.go` + tests.
+   - `internal/egress/opmclient/client.go` + tests + комментарий в setHeaders.
+   - `internal/egress/uomclient/client.go` + tests.
+   - `internal/infra/observability/tracing/propagation.go` — комментарий.
+   - `internal/ingress/api/middleware_test.go` — все X-Request-ID → X-Request-Id; Expose-Headers assertion обновлён.
+   - Go `http.Header` case-insensitive через `textproto.CanonicalMIMEHeaderKey` — wire-совместимо.
+4. **Docs**
+   - `architecture/observability.md` §3.2, §6.3 — X-Correlation-ID → X-Correlation-Id.
+   - `architecture/integration-contracts.md` §1.1 (DM headers table), §1.2 (OPM headers), §3.2 (propagation pipeline), §3.3 (end-to-end trace example).
+   - `architecture/security.md` §10.3 (audit log), §11 (security headers table).
+
+### Тесты
+- **middleware_test.go (3 новых + 2 обновлённых):**
+  - `TestCORS_EmptyOrigins_OptionsReachesHandler` — OPTIONS c Origin+Access-Control-Request-Method при пустом AllowedOrigins проходит handler, без CORS-headers и без Vary.
+  - `TestCORS_Preflight_AllowsTraceparentHeader` — preflight с Access-Control-Request-Headers="traceparent, tracestate, x-correlation-id" → 204, Allow-Headers содержит traceparent/tracestate.
+  - `TestCORS_ExposeHeaders_IncludesTraceparent`.
+  - `TestCORS_ExposeHeaders_ContainsRequired` обновлён: проверяет X-Request-Id, Retry-After, traceparent.
+  - `TestCORS_AllowHeaders_ContainsRequired` обновлён: 5 значений.
+- **config_test.go (5 новых):** `TestValidate_CORSWildcardRejected`, `TestValidate_CORSDuplicatesRejected`, `TestValidate_CORSEmptyOriginsOK`, `TestValidate_CORSValidOriginsOK`, `TestLoad_CORSWildcardRejectedFromEnv`.
+- Результаты: `go test -count=1 ./...` → 35 пакетов PASS. `go vet` → clean. `make build`/`make test`/`make lint` → PASS.
+
+### Code review
+- code-reviewer: verdict approve — no critical findings. Double-defense wildcard rejection correct, no-op path safe (no bypass — browser SOP enforces), header rename wire-compatible (Go canonicalizes).
+
+### Субагенты
+- code-architect — валидация плана (no-op при empty, X-Request-Id rename, 3-значный Expose).
+- code-reviewer — security/quality review финальных изменений.
+
+### Следующие задачи
+- Все задачи в tasks.json завершены (ORCH-TASK-001..051, включая ORCH-TASK-048/049/050/051).

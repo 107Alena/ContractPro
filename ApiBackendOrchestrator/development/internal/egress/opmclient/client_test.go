@@ -432,8 +432,8 @@ func TestHeaders_OrganizationAndCorrelation(t *testing.T) {
 		if got := r.Header.Get("X-User-ID"); got != "user-abc-123" {
 			t.Errorf("X-User-ID = %q, want user-abc-123", got)
 		}
-		if got := r.Header.Get("X-Correlation-ID"); got != "test-correlation-123" {
-			t.Errorf("X-Correlation-ID = %q, want test-correlation-123", got)
+		if got := r.Header.Get("X-Correlation-Id"); got != "test-correlation-123" {
+			t.Errorf("X-Correlation-Id = %q, want test-correlation-123", got)
 		}
 		w.Write([]byte(`{}`))
 	}))
@@ -451,8 +451,8 @@ func TestHeaders_EmptyContext(t *testing.T) {
 		if got := r.Header.Get("X-Organization-ID"); got != "" {
 			t.Errorf("X-Organization-ID = %q, want empty", got)
 		}
-		if got := r.Header.Get("X-Correlation-ID"); got != "" {
-			t.Errorf("X-Correlation-ID = %q, want empty", got)
+		if got := r.Header.Get("X-Correlation-Id"); got != "" {
+			t.Errorf("X-Correlation-Id = %q, want empty", got)
 		}
 		w.Write([]byte(`{}`))
 	}))

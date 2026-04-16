@@ -41,7 +41,7 @@ const (
 
 	headerOrganizationID = "X-Organization-ID"
 	headerUserID         = "X-User-ID"
-	headerCorrelationID  = "X-Correlation-ID"
+	headerCorrelationID  = "X-Correlation-Id"
 	headerContentType    = "Content-Type"
 
 	contentTypeJSON = "application/json"

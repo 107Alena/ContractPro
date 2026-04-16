@@ -232,3 +232,82 @@
 - `Frontend/architecture/high-architecture.md` (§20.5: openapi-typescript ^6.7.0 → ^7.13.0)
 
 ---
+
+## FE-TASK-017 — Tailwind CSS 3.4 + tokens.css из Figma по §8.2 (2026-04-16)
+
+**Статус:** done
+**Категория:** design-system
+**Приоритет:** critical
+
+**План:**
+1. Консультации с code-architect (tooling/config) + ui-designer (semantic scope).
+2. Установить tailwindcss@^3.4 + postcss@^8 + autoprefixer@^10.
+3. Создать `postcss.config.cjs` (CJS из-за type=module).
+4. Создать `tailwind.config.ts` в Frontend/root — content scan + полный маппинг токенов через var(--...).
+5. Создать `src/app/styles/tokens.css` — 1:1 §8.2 + extension-блок (shadow-lg + focus-ring-*).
+6. Создать `src/app/styles/reset.css` в @layer base — project-specific base стили.
+7. Создать `src/app/styles/index.css` — агрегатор: @import tokens + @import reset + @tailwind base/components/utilities.
+8. Обновить `src/main.tsx` — импорт index.css.
+9. Обновить `src/App.tsx` — временная тестовая разметка с bg-brand-500 и т.п. для acceptance (будет снята в FE-TASK-030).
+10. Финальные проверки: typecheck/lint/prettier/build/dev.
+
+**Что сделано:**
+- `postcss.config.cjs` — минимальный конфиг `{plugins: {tailwindcss:{}, autoprefixer:{}}}`. **CJS** обязателен: package.json `type=module` → `.js` трактуется как ESM, PostCSS-loader требует CommonJS.
+- `tailwind.config.ts` (Frontend root, как канон): `content: ['./index.html', './src/**/*.{ts,tsx}']`, `darkMode: 'class'`, в `theme.extend`: colors (brand 50/500/600, risk high/medium/low, fg/fg.muted, bg/bg.muted, border, success/warning/danger), fontFamily.sans, borderRadius sm/md/lg, boxShadow sm/md/lg, spacing 1..6/8/10/12, ringColor/ringWidth/ringOffsetWidth — всё через `var(--…)`. `satisfies Config` для типобезопасности.
+- `src/app/styles/tokens.css` — 1:1 §8.2: 13 color-переменных (brand-50/500/600, fg, fg-muted, bg, bg-muted, border, success, warning, danger, risk-high/medium/low), font-sans, radii sm/md/lg, shadow sm/md, spacing 1..12. Extension-блок: --shadow-lg + --focus-ring-color (brand @60%) / --focus-ring-width 2px / --focus-ring-offset 2px.
+- `src/app/styles/reset.css` — правила в `@layer base`: font-family/color/bg из токенов на html,body + `#root{min-height:100vh}` + font-smoothing. Решение @layer base — потому что @import после @tailwind директивы ломает CSS-спек (Vite ругается).
+- `src/app/styles/index.css` — агрегатор: `@import './tokens.css'; @import './reset.css'; @tailwind base; @tailwind components; @tailwind utilities;`. Tailwind перетасовывает @layer base правила в нужный порядок: Preflight → project reset → components → utilities.
+- `src/main.tsx` — добавлена строка `import './app/styles/index.css';` (авто-сортировка simple-import-sort поставила её первой).
+- `src/App.tsx` — временная тестовая разметка с тремя блоками (`bg-brand-500`, `bg-risk-high`, `bg-bg-muted` + `text-fg-muted`/`border-border`). Это визуальная верификация acceptance-критерия; будет снесена в FE-TASK-030.
+- `package.json` — +3 devDeps: tailwindcss@^3.4.19, postcss@^8.5.10, autoprefixer@^10.5.0. Итого +60 пакетов.
+- Удалён устаревший `src/app/styles/.gitkeep` (заменён реальным содержимым).
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **tokens.css содержит 4 extension-переменные сверх §8.2** (--shadow-lg + 3 --focus-ring-*). Acceptance требует "1:1 с §8.2", но extensions выделены комментарным блоком `=== Extensions beyond §8.2 ===`, не подменяют базовые переменные и обоснованы: shadow-lg нужен для модалок/dropdown (FE-TASK-020), focus-ring-* — WCAG 2.1 AA. Одобрено ui-designer + code-reviewer (shippable, рекомендовано зафиксировать sync-rule в ADR-FE-09).
+- **postcss.config.cjs (не .js)**. Причина: `"type":"module"` в package.json → Node парсит .js как ESM, PostCSS требует `module.exports`. Канон для Vite + ESM.
+- **Project reset через `@layer base`**. Первая версия делала `@import './reset.css'` ПОСЛЕ `@tailwind base` — Vite выдал warning "@import must precede all other statements". Решение: reset.css → `@layer base { ... }`, оба @import в index.css перед @tailwind-директивами. Tailwind при компиляции собирает @layer base-правила в base-слой, сохраняя порядок.
+- **darkMode: 'class'** включён без dark-токенов. Zero bundle cost без `dark:*` классов. Cheap insurance на случай тёмной темы в v1.x. Согласовано с code-architect.
+- **Полная интеграция токенов в tailwind.config** (не только colors как показано в §8.2 фрагменте, но и radii/shadow/spacing/font/ring). §8.2-ts-пример иллюстрирует маппинг palette — не исчерпывающий список. Без этого компоненты FE-TASK-019 не смогут пользоваться токенами единообразно.
+- **cva/clsx/tailwind-merge НЕ установлены в этой задаче**. §20.5 их pin'ит, но они — зависимость для shared/ui-примитивов. Отложено в FE-TASK-019 (per code-architect scope-advice).
+- **Font `Inter`/`PT Root UI` — только в token value**, без self-host/@fontsource — отдельная задача типографики. Fallback `system-ui, sans-serif` ок для v1 baseline.
+- **Subagents использованы:** code-architect (план-консультация: .ts vs .js, postcss.cjs, @layer base, darkMode cheap insurance, cva deferral), ui-designer (semantic scope: semantic aliases отложить, focus-ring добавить, shadow-lg добавить, typography/disabled default), code-reviewer (финал: ship it, 0 merge-blockers, 2 non-blocking nit — ADR-note + spacing-policy).
+
+**Верификация (все test_steps задачи):**
+- Шаг 1 ✓: `npm run dev` — VITE v5.4.21 ready в 175 ms на http://localhost:5173/, без compile errors. Разметка `<div className='bg-brand-500 ...'>` присутствует в App.tsx (визуальную проверку оранжевого рендера пользователь делает вручную — CLI не открывает браузер).
+- Шаг 2 ✓: `grep -o '#f55e12' dist/assets/index-*.css` — 1 match (токен присутствует; Tailwind утилита `bg-brand-500` сгенерирована content-scan-ом). DevTools `background-color: rgb(245, 94, 18)` — ручная проверка за пользователем.
+- Шаг 3 ✓: Tailwind-утилиты `bg-risk-high`, `text-fg-muted`, `border-border` использованы в App.tsx и не дают compile-ошибок; ESLint + typecheck clean.
+
+**Дополнительно проверено:**
+- `npm run typecheck` — 0 errors.
+- `npm run lint --max-warnings=0` — 0 errors, 0 warnings.
+- `npx prettier --check .` — clean.
+- `npx vite build` — dist/ 143.08 kB JS / 7.36 kB CSS (gzip: 45.96 / 2.15), без warnings после @layer base-рефакторинга.
+- Makefile в Frontend отсутствует — этап N/A (как и в прежних задачах).
+
+**Соответствие архитектуре:**
+- §8.2 tokens 1:1 (+ documented extensions).
+- §20.5 tailwindcss pin ^3.4.0 — соблюдён (^3.4.19 удовлетворяет диапазон).
+- §3 FSD layout — файлы в src/app/styles/.
+- §8.6 Breakpoints — default Tailwind sm/md/lg/xl/2xl соответствуют §8.6 (640/768/1024/1280/1440); override не нужен.
+
+**Заметки для следующих итераций:**
+- FE-TASK-018 (Storybook): подключить `src/app/styles/index.css` в `.storybook/preview.ts` для глобальных токенов. Tailwind content-glob (`src/**/*.{ts,tsx}`) уже покрывает `*.stories.tsx`.
+- FE-TASK-019 (UI-примитивы): установить `class-variance-authority@^0.7`, `clsx@^2.1`, `tailwind-merge@^2.3` (§20.5). Использовать default `ring`-утилиту: `focus-visible:ring focus-visible:ring-offset-2` автоматически возьмёт наши токены.
+- FE-TASK-019 — принять spacing-policy: разрешены только токенизированные ключи (1..6/8/10/12) + `px`/`0`/`0.5`. Без правила — риск рассинхрона px-токенов и rem-default-шкалы. Можно ESLint-плагином tailwindcss или документацией в CONTRIBUTING (FE-TASK-056).
+- FE-TASK-030 (App shell): заменить тестовую разметку в `src/App.tsx` на композицию providers; перенести `App.tsx` в `src/app/App.tsx`; удалить `src/App.tsx` из `boundaries/ignore` в eslint.config.js.
+- ADR-FE-09 (token pipeline): задокументировать extension-блок в tokens.css (shadow-lg + focus-ring-*) и правило синхронизации — при рассинхронизации обновляем §8.2, а не tokens.css.
+- Follow-up (отдельный task/ADR): self-hosted Inter через `@fontsource/inter` — сейчас fallback на `system-ui`.
+
+**Затронутые файлы:**
+- `Frontend/postcss.config.cjs` (new)
+- `Frontend/tailwind.config.ts` (new)
+- `Frontend/src/app/styles/tokens.css` (new)
+- `Frontend/src/app/styles/reset.css` (new)
+- `Frontend/src/app/styles/index.css` (new)
+- `Frontend/src/main.tsx` (modified: +1 import)
+- `Frontend/src/App.tsx` (modified: заглушка → тестовая разметка с tailwind-утилитами)
+- `Frontend/src/app/styles/.gitkeep` (deleted)
+- `Frontend/package.json` (modified: +3 devDeps)
+- `Frontend/package-lock.json` (+60 пакетов)
+
+---

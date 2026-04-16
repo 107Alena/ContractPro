@@ -1,0 +1,48 @@
+/* shared/styles/tokens.css
+ * Source of truth: Figma file Lxhk7jQyXL3iuoTpiOHxcb (без Variables — hex'и сняты вручную).
+ * Любое изменение — синхронно с Figma. См. ADR-FE-09 (token pipeline).
+ * Спецификация: high-architecture.md §8.2.
+ */
+:root {
+  --color-brand-500: #f55e12; /* primary CTA */
+  --color-brand-600: #d14d0d; /* hover/active */
+  --color-brand-50: #fff3eb; /* light tint (производный) */
+  --color-fg: #11111c; /* ink */
+  --color-fg-muted: #666b78;
+  --color-bg: #ffffff;
+  --color-bg-muted: #f9fafb;
+  --color-border: #d9dee5;
+  --color-success: #21966b;
+  --color-warning: #fad133;
+  --color-danger: #db2626;
+  --color-risk-high: #db2626;
+  --color-risk-medium: #fad133;
+  --color-risk-low: #21966b;
+
+  --font-sans: 'Inter', 'PT Root UI', system-ui, sans-serif;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(15, 17, 21, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 17, 21, 0.08);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* === Extensions beyond §8.2 ===
+   * Дополнительные токены, не противоречащие §8.2. Обоснование в progress.md
+   * (FE-TASK-017). Целевое использование — FE-TASK-019+ (UI-примитивы, overlays,
+   * focus-кольца WCAG 2.1 AA). При рассинхронизации с §8.2 — обновить §8.2.
+   */
+  --shadow-lg: 0 12px 32px rgba(15, 17, 21, 0.12); /* modals, dropdowns */
+  --focus-ring-color: rgba(245, 94, 18, 0.6); /* brand-500 @ 60% */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+}

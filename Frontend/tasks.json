@@ -571,7 +571,56 @@
       "dependencies": [
         "FE-TASK-007"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-16",
+        "files_created": [
+          "Frontend/postcss.config.cjs — CJS-конфиг (type=module в package.json требует .cjs для PostCSS CommonJS)",
+          "Frontend/tailwind.config.ts — content scan, darkMode:'class', полный theme.extend (colors/fontFamily/borderRadius/boxShadow/spacing/ring*)",
+          "Frontend/src/app/styles/tokens.css — 1:1 §8.2 + extensions (--shadow-lg, --focus-ring-color/width/offset)",
+          "Frontend/src/app/styles/reset.css — project-specific base в @layer base",
+          "Frontend/src/app/styles/index.css — агрегатор: @import tokens + @import reset + @tailwind base/components/utilities"
+        ],
+        "files_modified": [
+          "Frontend/src/main.tsx — добавлен `import './app/styles/index.css';`",
+          "Frontend/src/App.tsx — временная тестовая страница с bg-brand-500/bg-risk-high/bg-bg-muted (будет заменена в FE-TASK-030)",
+          "Frontend/package.json — +3 devDeps (tailwindcss@^3.4.19, postcss@^8.5.10, autoprefixer@^10.5.0)",
+          "Frontend/package-lock.json — +60 пакетов"
+        ],
+        "files_removed": [
+          "Frontend/src/app/styles/.gitkeep — заменён реальным содержимым"
+        ],
+        "deviations": [
+          "tokens.css содержит 4 extension-переменные сверх §8.2: --shadow-lg (для модалок/дропдаунов) и --focus-ring-color/width/offset (WCAG 2.1 AA, одобрено ui-designer). Выделены комментарным блоком '=== Extensions beyond §8.2 ==='. Рекомендация code-reviewer: зафиксировать правило синхронизации в ADR-FE-09 (token pipeline).",
+          "postcss.config.cjs (не .js). Причина: package.json содержит type=module — .js трактуется как ESM, но PostCSS-loader Vite требует CommonJS module.exports. Это известный pitfall Vite + ESM-package.",
+          "index.css использует @layer base для project reset вместо прямого @import после @tailwind base. Причина: CSS-спек требует @import перед любыми другими statements; при прямом @import после @tailwind получим Vite warning 'must precede all other statements'. @layer base корректно встраивает правила в базовый слой Tailwind (после Preflight).",
+          "darkMode:'class' включен, но dark-токены не заведены. Cheap insurance — zero bundle cost без dark:* классов. Согласовано с code-architect.",
+          "spacing 1..12 в theme.extend мержится, а не перетирает default Tailwind-scale. p-0, p-0.5, p-px, p-16 продолжают работать; наши var(--space-N) переопределяют только ключи 1..6/8/10/12. Риск: смешение единиц (var-based px vs Tailwind-default rem). Follow-up — ввести spacing-policy в FE-TASK-019 (ESLint tailwindcss/no-arbitrary-value + whitelist)."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint — 0 errors, 0 warnings (с --max-warnings=0)",
+          "npx prettier --check . — All matched files use Prettier code style",
+          "npx vite build — dist/ 143.08 kB JS / 7.36 kB CSS (gzip: 45.96 / 2.15), без warnings после перестановки @import/reset на @layer base",
+          "grep #f55e12 dist/assets/index-*.css — присутствует (brand-500 утилита bg-brand-500 сгенерирована content-scan из App.tsx)",
+          "npm run dev — VITE v5.4.21 ready в 175 ms на http://localhost:5173/ без compile-errors. Визуальную проверку (rgb 245,94,18 в DevTools) пользователь делает вручную.",
+          "subagents: code-architect (.ts vs .js config, postcss.cjs, @layer base reset, darkMode insurance), ui-designer (semantic aliases scope, focus-ring + shadow-lg additions, typography/disabled defer), code-reviewer (финал: ship it; 2 non-blocking nit — ADR-note, spacing-policy follow-up)"
+        ],
+        "architecture_alignment": [
+          "§8.2 tokens.css — 1:1 соответствие (+ documented extensions)",
+          "§20.5 tailwindcss ^3.4.0 — pin соблюдён (^3.4.19 удовлетворяет ^3.4.0)",
+          "§3 FSD layout — tokens/reset/index в src/app/styles/ (app-layer)",
+          "Breakpoints Tailwind (§8.6) — default sm 640 / md 768 / lg 1024 / xl 1280 / 2xl 1440 уже покрыты без override"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-018 (Storybook): content-glob Tailwind уже включает src/**/*.{ts,tsx} — stories автоматически попадут в scan. При первом Storybook setup — подключить src/app/styles/index.css в .storybook/preview.ts для глобальных токенов.",
+          "FE-TASK-019 (UI примитивы): установить class-variance-authority@^0.7, clsx@^2.1, tailwind-merge@^2.3 (§20.5 pin). Использовать `ring` утилиту с default-токенами: `focus-visible:ring focus-visible:ring-offset-2` уже работает из коробки.",
+          "FE-TASK-019 (UI примитивы) — принять spacing-policy: разрешены только токенизированные ключи (1..6/8/10/12) + px/0/0.5. ESLint-плагин tailwindcss или документация в CONTRIBUTING.",
+          "FE-TASK-030 (App shell): заменить тестовую разметку в src/App.tsx на композицию providers; перенести App.tsx в src/app/App.tsx; убрать src/App.tsx из boundaries/ignore в eslint.config.js.",
+          "ADR-FE-09 (token pipeline): задокументировать extension-блок в tokens.css (shadow-lg + focus-ring-*) и правило синхронизации с §8.2 — при рассинхронизации обновляем §8.2, а не tokens.css.",
+          "Если появится Inter как основной шрифт — установить @fontsource/inter (отдельная задача, не блокирует FE-TASK-019)."
+        ]
+      }
     },
     {
       "id": "FE-TASK-018",

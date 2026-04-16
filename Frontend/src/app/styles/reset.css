@@ -1,0 +1,17 @@
+/* Project-specific reset. Правила обёрнуты в @layer base, чтобы Tailwind собрал их
+ * в base-слой ПОСЛЕ Preflight и utility/component-слои могли их переопределить.
+ */
+@layer base {
+  html,
+  body {
+    font-family: var(--font-sans);
+    color: var(--color-fg);
+    background-color: var(--color-bg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+}

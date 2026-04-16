@@ -1,0 +1,14 @@
+/* Единая точка подключения стилей приложения. Импортируется из src/main.tsx.
+ *   tokens.css   — CSS-переменные (§8.2) + extensions.
+ *   reset.css    — project-specific base-слой (в @layer base).
+ *   @tailwind... — директивы сборки.
+ * @import'ы обязаны предшествовать @tailwind-директивам (CSS @import spec),
+ * поэтому reset.css использует @layer base — Tailwind перетасует правила
+ * в нужный порядок сам: Preflight → project reset → components → utilities.
+ */
+@import './tokens.css';
+@import './reset.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

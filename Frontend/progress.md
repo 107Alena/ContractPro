@@ -168,3 +168,67 @@
 - `Frontend/eslint.config.js` (modified: boundaries/no-unknown-files warn → error)
 
 ---
+
+## FE-TASK-011 — openapi-typescript генерация типов + CI-gate (2026-04-16)
+
+**Статус:** done
+**Категория:** api-layer
+**Приоритет:** critical
+
+**План:**
+1. Консультация с code-architect: версия пакета, подход к CI-gate, политика reexport.
+2. Установить `openapi-typescript@^7`, добавить scripts `gen:api` + `gen:api:check` + `prepare`.
+3. Сгенерировать `src/shared/api/openapi.d.ts` из OpenAPI-спеки оркестратора.
+4. Добавить сгенерированный файл в `eslint.config.js` ignores.
+5. Smoke-тест импорта типов (components, paths).
+6. Финальные проверки: typecheck / lint / prettier / build.
+7. Обновить §20.5 архитектуры (версия пакета).
+
+**Что сделано:**
+- Установлен `openapi-typescript@^7.13.0` (актуальная major, не `^6.7.0` из §20.5 — подтверждено code-architect; обновил §20.5 одной строкой).
+- `Frontend/package.json` scripts:
+  - `gen:api` — `openapi-typescript ../ApiBackendOrchestrator/architecture/api-specification.yaml -o src/shared/api/openapi.d.ts`.
+  - `gen:api:check` — `npm run gen:api && git diff --exit-code -- src/shared/api/openapi.d.ts` (CI-gate: fail при расхождении committed-версии со свежей регенерацией).
+  - `prepare` — `npm run gen:api` (npm lifecycle hook — не husky; автоматическая регенерация при `npm install`/`npm ci`).
+- `src/shared/api/openapi.d.ts` — **1834 строки**, auto-generated из 1598-строчного OpenAPI 3.0.3 spec. Включает `paths`, `components.schemas` (ContractList, ContractSummary, VersionDetails, Risk, Recommendation, Summary, Diff, Report, Policy, Checklist, AuditRecord, Artifact, UserProfile, UserPermissions, ErrorResponse, ValidationFieldError и т.д.), `operations`, `webhooks`.
+- `eslint.config.js` — `src/shared/api/openapi.d.ts` добавлен в ignores-массив (strict-правила не применимы к auto-generated output).
+- `.prettierignore` уже содержал этот файл (с FE-TASK-005).
+- `src/shared/api/index.ts` **не тронут** — остаётся `export {};` под http-клиент в FE-TASK-012.
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **openapi-typescript 7.x вместо 6.x из §20.5.** Причина: v7 — актуальная major, активно поддерживается, лучшая обработка nullable/oneOf в OpenAPI 3.0.3, исправлены баги. CLI-опция `-o` совместима. Критерий «актуальная версия» приоритетнее pin. Обновил §20.5 `^6.7.0` → `^7.13.0`.
+- **CI-gate через `git diff --exit-code` вместо husky.** Причина: husky появится в FE-TASK-006. npm-lifecycle `prepare` — безопасный эквивалент для локальной разработки. В FE-TASK-006 husky переопределит `prepare` на `husky install` — тогда `gen:api` нужно переместить в `postinstall` или `.husky/post-merge`.
+- **Не реэкспортил типы в `src/shared/api/index.ts`.** Потребители импортируют напрямую: `import type { components, paths } from '@/shared/api/openapi'` (соответствует §20.4a строка 1565). Index.ts останется под http-клиент FE-TASK-012.
+- Subagents: **code-architect** (план-консультация: версия пакета, подход к CI-gate, политика reexport, eslint ignore).
+
+**Верификация (все test_steps задачи):**
+- Шаг 1 ✓: `npm run gen:api` — `openapi-typescript 7.13.0 🚀 api-specification.yaml → src/shared/api/openapi.d.ts [51.8ms]`, файл 1834 строки.
+- Шаг 2 ✓: `npx tsc --noEmit` — 0 errors (smoke-test файл с `components['schemas']['ContractList']`, `components['schemas']['ErrorResponse']`, `components['schemas']['UserProfile']`, `components['schemas']['UserPermissions']`, `paths['/auth/login']['post']`, `paths['/contracts']['get']` — все типы разрешаются).
+- Шаг 3 ✓: импорт `type ErrorResponse = components['schemas']['ErrorResponse']` работает — проверено в smoke-файле (удалён после проверки).
+
+**Дополнительно проверено:**
+- `npx eslint . --max-warnings=0` — 0 errors, 0 warnings.
+- `npx prettier --check .` — All matched files use Prettier code style.
+- `npx vite build` — dist/ 142.58 kB / 45.77 kB gzip, 30 modules, без ошибок.
+- Makefile в Frontend отсутствует — этап N/A (как и в FE-TASK-007).
+
+**CI-gate поведение:**
+- В CI: `npm ci` авто-триггерит `prepare` → регенерирует openapi.d.ts; отдельный job `npm run gen:api:check` падает, если committed-версия рассинхронизирована со свежей регенерацией (fail-fast).
+- Локально: `npm install` автоматически обновит файл при изменении спеки — разработчик не забудет регенерировать.
+
+**Заметки для следующих итераций:**
+- FE-TASK-012 (axios HTTP-клиент): `import type { components } from '@/shared/api/openapi'` — `ErrorResponse`, `UserProfile`, `UserPermissions`, `ValidationFieldError`. OrchestratorError оборачивает `components['schemas']['ErrorResponse']`.
+- FE-TASK-013 (TanStack Query + qk): query-keys ссылаются на схемы из openapi (ContractList, ContractDetails, VersionDetails и т.д.).
+- FE-TASK-014 (error catalog): `ErrorCode` enum извлекается из `components['schemas']['ErrorResponse']['error_code']`.
+- FE-TASK-006 (Husky + lint-staged): заменить `prepare: npm run gen:api` на `prepare: husky` + перенести `gen:api` в `postinstall` ИЛИ `.husky/post-merge` (auto-regen при pull с изменением спеки).
+- FE-TASK-010 (GitHub Actions CI): добавить отдельный job `schema-check` — `npm ci && npm run gen:api:check` (независим от lint/test).
+- FE-TASK-009 (Dockerfile): spec-источник `../ApiBackendOrchestrator/architecture/api-specification.yaml` лежит вне `Frontend/`. При build сгенерированный openapi.d.ts уже зафиксирован в VCS — docker build не нуждается в копировании спеки.
+
+**Затронутые файлы:**
+- `Frontend/src/shared/api/openapi.d.ts` (new, 1834 строки, auto-generated)
+- `Frontend/package.json` (modified: +3 scripts, +1 devDep openapi-typescript@^7.13.0)
+- `Frontend/package-lock.json` (+24 пакета)
+- `Frontend/eslint.config.js` (modified: +1 entry в ignores)
+- `Frontend/architecture/high-architecture.md` (§20.5: openapi-typescript ^6.7.0 → ^7.13.0)
+
+---

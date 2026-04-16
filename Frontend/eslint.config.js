@@ -39,6 +39,7 @@ export default tseslint.config(
       'storybook-static/**',
       'playwright-report/**',
       'test-results/**',
+      'src/shared/api/openapi.d.ts',
     ],
   },
 

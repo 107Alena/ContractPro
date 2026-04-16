@@ -392,7 +392,49 @@
       "dependencies": [
         "FE-TASK-007"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-16",
+        "files_created": [
+          "Frontend/src/shared/api/openapi.d.ts — 1834 строки, auto-generated из ApiBackendOrchestrator/architecture/api-specification.yaml (1598 строк OpenAPI 3.0.3)"
+        ],
+        "files_modified": [
+          "Frontend/package.json — +3 scripts (gen:api, gen:api:check, prepare), +1 devDep (openapi-typescript ^7.13.0)",
+          "Frontend/package-lock.json — +24 пакета",
+          "Frontend/eslint.config.js — добавлен 'src/shared/api/openapi.d.ts' в ignores (strict-правила не применимы к auto-generated output)",
+          "Frontend/architecture/high-architecture.md §20.5 — openapi-typescript ^6.7.0 → ^7.13.0"
+        ],
+        "scripts_added": {
+          "gen:api": "openapi-typescript ../ApiBackendOrchestrator/architecture/api-specification.yaml -o src/shared/api/openapi.d.ts",
+          "gen:api:check": "npm run gen:api && git diff --exit-code -- src/shared/api/openapi.d.ts — CI-gate: регенерирует и падает при расхождении с закоммиченным файлом",
+          "prepare": "npm run gen:api — npm lifecycle hook, выполняется при 'npm install' у разработчиков; также при 'npm ci' в CI"
+        },
+        "deviations": [
+          "openapi-typescript: ^7.13.0 вместо §20.5 pin ^6.7.0. Причина: v7 — актуальная major (активно поддерживается, лучшая обработка nullable/oneOf в OpenAPI 3.0.3, исправлены баги), CLI-опция '-o' совместима. Обновил §20.5 одной строкой. Подтверждено code-architect.",
+          "CI-gate реализован через 'npm run gen:api && git diff --exit-code' вместо husky-хука. Причина: husky появится в FE-TASK-006. npm-lifecycle 'prepare' (не путать с husky install) безопасен — выполнится при npm install у разработчиков. В FE-TASK-006 husky переопределит 'prepare' на 'husky install', и gen:api нужно будет переместить в 'postinstall' или pre-commit hook.",
+          "Не реэкспортил типы из src/shared/api/index.ts: index.ts остаётся 'export {};' под http-клиент FE-TASK-012. Потребители импортируют напрямую: import type { components } from '@/shared/api/openapi' (соответствует §20.4a high-architecture строка 1565)."
+        ],
+        "verification": [
+          "npm run gen:api — openapi-typescript 7.13.0, генерация 51.8ms, 1834 строки",
+          "npx tsc --noEmit — 0 errors (smoke-test файл с components['schemas']['ContractList'], components['schemas']['ErrorResponse'], components['schemas']['UserProfile'], components['schemas']['UserPermissions'], paths['/auth/login']['post'], paths['/contracts']['get'] — все типы разрешаются)",
+          "npm run lint — 0 errors, 0 warnings (--max-warnings=0; openapi.d.ts исключён из lint)",
+          "npx prettier --check . — All matched files use Prettier code style (openapi.d.ts уже был в .prettierignore)",
+          "npx vite build — dist/ 142.58 kB / 45.77 kB gzip, без ошибок",
+          "subagents: code-architect (решения по версии, CI-gate подходу, reexport-политике, eslint ignore)"
+        ],
+        "ci_gate_behavior": [
+          "При merge в CI: 'npm ci' → auto-triggers 'prepare' → regenerates openapi.d.ts; затем в отдельном job 'npm run gen:api:check' (или аналогичный) падает, если committed openapi.d.ts не совпадает со свежей регенерацией из spec (fail-fast на рассинхронизации)",
+          "При локальной разработке: 'npm install' автоматически регенерирует файл — разработчик не забудет, когда меняется api-specification.yaml"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-012 (axios HTTP-клиент): импортировать типы из '@/shared/api/openapi' — ErrorResponse, UserProfile, UserPermissions, ValidationFieldError и т.п. OrchestratorError оборачивает components['schemas']['ErrorResponse']",
+          "FE-TASK-013 (TanStack Query + qk): query-keys ссылаются на схемы из openapi (ContractList, ContractDetails и т.д.)",
+          "FE-TASK-014 (error catalog): ErrorCode enum получить из components['schemas']['ErrorResponse']['error_code'] (если spec его определяет как enum)",
+          "FE-TASK-006 (Husky): заменить 'prepare: npm run gen:api' на 'prepare: husky' + перенести gen:api в 'postinstall' ИЛИ в .husky/post-merge (auto-regen при pull с изменением spec)",
+          "FE-TASK-010 (GitHub Actions CI): добавить job 'schema-check' — 'npm ci && npm run gen:api:check' отдельным шагом, чтобы не зависеть от lint/test",
+          "Spec-источник находится вне Frontend/ (../ApiBackendOrchestrator/architecture/api-specification.yaml). Docker build (FE-TASK-009) должен копировать оба каталога в build-context ИЛИ коммитить сгенерированный openapi.d.ts (текущий подход — генерация зафиксирована в VCS, docker build не нуждается в spec)"
+        ]
+      }
     },
     {
       "id": "FE-TASK-012",

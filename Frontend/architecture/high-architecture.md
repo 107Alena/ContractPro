@@ -1696,7 +1696,7 @@ const mutation = useMutation({
     "msw": "^2.2.0",
     "storybook": "^8.1.0",
     "@storybook/react-vite": "^8.1.0",
-    "openapi-typescript": "^6.7.0",
+    "openapi-typescript": "^7.13.0",
     "eslint": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^7.8.0",
     "eslint-plugin-boundaries": "^4.2.0",

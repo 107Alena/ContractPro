@@ -120,7 +120,36 @@
         "Шаг 4: npm run build — dist/ создаётся, нет ошибок"
       ],
       "dependencies": [],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-16",
+        "files_created": [
+          "Frontend/package.json",
+          "Frontend/tsconfig.json",
+          "Frontend/tsconfig.node.json",
+          "Frontend/vite.config.ts",
+          "Frontend/index.html",
+          "Frontend/src/main.tsx",
+          "Frontend/src/App.tsx",
+          "Frontend/src/vite-env.d.ts",
+          "Frontend/.gitignore"
+        ],
+        "deviations": [
+          "Скрипт build: 'tsc --noEmit && vite build' вместо §20.5 'tsc -b && vite build'. Причина: project references на этой стадии не нужны — в проекте один эффективный tsconfig (app), tsconfig.node.json изолирует vite.config.ts для IDE. Переход на 'tsc -b' уместен, когда появятся несколько composite-проектов (например, типовой слой + storybook-типы)."
+        ],
+        "verification": [
+          "npm install: 31 packages, без ошибок",
+          "npm run typecheck: 0 errors",
+          "npm run build: dist/ создан, bundle 142.58 kB / 45.77 kB gzip",
+          "npm run dev: VITE v5.4.21 ready on http://localhost:5173/",
+          "subagents: typescript-pro (tsconfig review), react-specialist (main.tsx/vite.config review), code-reviewer (итоговый review, 'ship it')"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-005 (ESLint/Prettier/boundaries): при добавлении tsc -b — сделать tsconfig.json solution-файлом и добавить composite:true в tsconfig.app.json + tsconfig.node.json; также добавить *.tsbuildinfo в .gitignore",
+          "FE-TASK-007 (FSD скелет): пути @/* уже работают, останется только создать поддиректории app/processes/pages/widgets/features/entities/shared",
+          "FE-TASK-030 (App shell providers): App.tsx сейчас возвращает <h1>, будет заменён на композицию QueryClientProvider/RouterProvider/I18nProvider/ErrorBoundary"
+        ]
+      }
     },
     {
       "id": "FE-TASK-005",

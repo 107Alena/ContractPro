@@ -387,3 +387,85 @@
 - `Frontend/package-lock.json` (+57 пакетов)
 
 ---
+
+## FE-TASK-028 — RBAC на клиенте: PERMISSIONS + useCan + Can + RequireRole + useCanExport (2026-04-17)
+
+**Статус:** done
+**Категория:** auth
+**Приоритет:** critical
+
+**План:**
+1. Прочитать §5.5-5.6 + §20.3 high-architecture.md + session-store.
+2. Консультация с code-architect: структура файлов, типизация PERMISSIONS, стратегия тестирования при env=node.
+3. Реализовать `rbac.ts` (pure can + PERMISSIONS + useCan hook), `can.tsx`, `require-role.tsx`, `use-can-export.ts`.
+4. Обновить barrel `index.ts`.
+5. Установить jsdom + @testing-library/react — минимум для hook- и компонентных тестов.
+6. 4 тест-файла: pure в node, хуки/компоненты через docblock `// @vitest-environment jsdom`.
+7. Прогнать typecheck / lint / test / prettier / build.
+8. code-reviewer финальный.
+
+**Что сделано:**
+- `src/shared/auth/rbac.ts` — `PERMISSIONS` 1:1 с §5.5 (11 ключей: contract.upload, contract.archive, risks.view, summary.view, recommendations.view, comparison.run, version.recheck, admin.policies, admin.checklists, audit.view, export.download). Объявлен через `{...} as const satisfies Record<string, readonly UserRole[]>` — сохраняет узкие literal-keys для `Permission=keyof typeof PERMISSIONS` и валидирует роли (опечатка в роли — compile-error на таблице). Pure `can(role, permission)` + hook `useCan(permission)`.
+- `src/shared/auth/can.tsx` — `<Can I=permission fallback?>{children}</Can>`. `fallback?: ReactNode` без `| undefined` (exactOptionalPropertyTypes compat); default `null`. Pattern B §5.6.1 (Section hiding).
+- `src/shared/auth/require-role.tsx` — `<RequireRole roles readonly UserRole[]>{children}</RequireRole>`. Signature §20.3: `!role → <Navigate to='/login' replace />`, чужая роль → `<Navigate to='/403' replace />`, иначе — children. Pattern A §5.6.1 (Full route block).
+- `src/shared/auth/use-can-export.ts` — pure `canExport(role, exportEnabled)` + hook `useCanExport()`. §5.6: LAWYER/ORG_ADMIN → true безусловно; BUSINESS_USER → `exportEnabled === true` (undefined → false, совпадает с ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT default).
+- `src/shared/auth/index.ts` — barrel: добавлены `Can`/`CanProps`, `can`/`PERMISSIONS`/`Permission`/`useCan`, `RequireRole`/`RequireRoleProps`, `canExport`/`useCanExport`.
+- **Тесты — 25 новых (итого 35 в модуле):**
+  - `rbac.test.ts` (9 pure, node env): PERMISSIONS 1:1 с §5.5 (strictEqual snapshot), `can()` для undefined/LAWYER (7 permissions)/BUSINESS_USER (full denial matrix R-2)/ORG_ADMIN (all 11 allowed), `canExport()` матрица 4 роли × 3 export_enabled states.
+  - `rbac.hooks.test.tsx` (12, jsdom docblock): useCan per-role через `renderHook` + Zustand `setState`; useCanExport матрица; `<Can>` — allow/deny без fallback/deny с fallback.
+  - `require-role.test.tsx` (4, jsdom + MemoryRouter): unauth→/login, wrong-role→/403, allowed, multi-role whitelist.
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **Вынесены pure-функции `can()` и `canExport()`** (не требовалось явно в AC). Обоснование: non-React потребители (axios-интерсептор §7.2, SSE-wrapper §7.7, будущие query-guards) не могут использовать хуки. Pure = SSOT логики, хуки — тонкая обёртка `useSession(selector) + pure`. Согласовано с code-architect.
+- **`PERMISSIONS` с `satisfies Record<string, readonly UserRole[]>`** — strict-upgrade над §5.5 snippet. Opeчatка в роли даёт compile-error на таблице.
+- **`can()` требует widening cast** `const allowed: readonly UserRole[] = PERMISSIONS[permission]`. Причина: `as const` делает значения узкими tuples (например `readonly ['ORG_ADMIN']`), `.includes(role: UserRole)` не сходится по типам при TS strict. Документировано inline-комментарием.
+- **jsdom environment пофайлово через docblock** `// @vitest-environment jsdom`, а не глобально. Причина: FE-TASK-028 не должна расширять scope FE-TASK-053 (полный testing stack — jsdom + RTL + setupFiles + coverage thresholds). Глобальный vitest.config.ts остаётся node; session-store.test.ts и rbac.test.ts продолжают работать без DOM. FE-TASK-053 уберёт docblock'и, переключив env глобально.
+- **`<RequireRole roles: readonly UserRole[]>`** вместо §20.3 `Role[]`. Readonly расширяет принимаемые массивы: и `['ORG_ADMIN']`, и `['LAWYER','ORG_ADMIN'] as const`. `T[]` assignable to `readonly T[]` — backwards compatible.
+- **`<Can>` и `<RequireRole>` возвращают `ReactNode`, не `<>{...}</>`-фрагмент.** React 18+ типизирует custom components с return `ReactNode` корректно; фрагмент избыточен.
+- **Subagents:** **code-architect** (план-консультация: разделение pure/hook/component на файлы, Permission=keyof typeof, satisfies-widening, гибрид pure-функции+jsdom-docblock для покрытия AC «тесты для всех hooks»); **code-reviewer** (финальный review: `SHIP, zero merge-blockers, 2 non-blocking nits`).
+
+**Верификация (все test_steps задачи):**
+- Шаг 1 ✓: `npm run test` — 35/35 tests passed, 715ms (4 test files: session-store 10 + rbac.test.ts 9 + rbac.hooks.test.tsx 12 + require-role.test.tsx 4).
+- Шаг 2 ✓: `useCanExport` — матрица покрыта тестами rbac.test.ts (pure) + rbac.hooks.test.tsx (через useSession.setState): LAWYER → true при export_enabled=false (роль-приоритет); BUSINESS_USER + true → true; BUSINESS_USER + false → false.
+
+**Дополнительно проверено:**
+- `npm run typecheck` — 0 errors.
+- `npm run lint --max-warnings=0` — 0 errors, 0 warnings.
+- `npx prettier --check .` — clean.
+- `npm run build` — dist/ 143.08 kB / 45.96 kB gzip, без warnings. Bundle не вырос (RBAC-модуль пока не импортируется из main.tsx — runtime wiring в FE-TASK-030/031).
+- Makefile в Frontend/ отсутствует — этап N/A.
+- React Router v7 future-flag warnings в логах тестов (v7_startTransition, v7_relativeSplatPath) — не блокеры, включим флаги при миграции.
+
+**Соответствие архитектуре:**
+- §5.5 PERMISSIONS table — 1:1 (11 ключей, роли совпадают; подтверждено через strictEqual-snapshot тест).
+- §5.6 guards — `<RequireRole>` (Pattern A) + `<Can>` (Pattern B) + `useCanExport` (role + policy).
+- §5.6 server-truth — inline-комментарий в rbac.ts: «Клиентский RBAC — только UX-защита».
+- §5.6.1 Principles — `<Can>` возвращает `null`/fallback (не `display:none`); Pattern A использует Navigate→/403 (единственный fallback).
+- §20.3 RBAC guard snippet — сигнатура `RequireRole` полностью совпадает (Navigate + replace).
+- §20.5 — pin зависимостей не затронут. Новые devDeps jsdom@^24, @testing-library/react@^15 добавлены для scope FE-TASK-028 (согласовано с code-architect — минимум для hook-тестов).
+
+**Заметки для следующих итераций:**
+- **FE-TASK-001 (admin placeholder):** `<RequireRole roles={['ORG_ADMIN']}>AdminPoliciesPage</RequireRole>` и `<Can I='admin.policies'>` для sidebar-пункта. Все нужные экспорты готовы в `@/shared/auth`.
+- **FE-TASK-029 (LoginPage):** `useSession.getState().setUser(...)` после `/users/me` — `<RequireRole>` автоматически начнёт пропускать.
+- **FE-TASK-030 (App shell):** маршруты `/login` и `/403` должны существовать — иначе `<RequireRole>`-Navigate покажет «no match» в React Router; добавить `<Toaster>`, `<QueryClientProvider>`.
+- **FE-TASK-031 (routeTree):** подключить `<RequireRole>` для `/admin/*` и (будущее v1.1) `/audit`; импорт: `import { RequireRole } from '@/shared/auth'`.
+- **FE-TASK-039 (export-download):** `useCanExport()` решает видимость кнопки «Скачать PDF»; для BUSINESS_USER с export_enabled=false кнопка скрыта. Backend 403 PERMISSION_DENIED остаётся истиной.
+- **FE-TASK-045/046/048 (страницы с RBAC-фильтрацией секций):** `<Can I='risks.view'>` / `<Can I='recommendations.view'>` вокруг виджетов (Pattern B §5.6.1). Важно: скрытые секции НЕ должны грузить данные — `useQuery({ enabled: useCan('risks.view') })` или ранний return.
+- **FE-TASK-053 (Vitest full setup):** глобально включить `environment='jsdom'` — тогда docblock'и в rbac.hooks.test.tsx и require-role.test.tsx становятся избыточными (можно удалить). Добавить coverage thresholds lines ≥ 80% / branches ≥ 75%; текущее покрытие RBAC-модуля ~95%+.
+- **Code-reviewer nit #1:** в `rbac.hooks.test.tsx` `renderHook(...)` вызывается 3 раза внутри одного `it` для LAWYER — работает корректно, slightly unusual. При рефакторе можно разбить на 3 it-блока.
+- **Code-reviewer nit #2:** `useCanExport` использует 2 отдельных `useSession`-селектора (role и export_enabled). Zustand мемоизирует по референс-равенству — 2 подписки вместо 1. На текущем масштабе ignorable; при перф-аудите можно объединить в один селектор `{role, exportEnabled}` с shallow-compare.
+- **Pure `can`/`canExport` для non-React:** axios-interceptor (FE-TASK-012) и SSE-wrapper (FE-TASK-015) могут использовать их напрямую через `sessionStore.getState()` → `can(state.user?.role, 'risks.view')`.
+
+**Затронутые файлы:**
+- `Frontend/src/shared/auth/rbac.ts` (new)
+- `Frontend/src/shared/auth/can.tsx` (new)
+- `Frontend/src/shared/auth/require-role.tsx` (new)
+- `Frontend/src/shared/auth/use-can-export.ts` (new)
+- `Frontend/src/shared/auth/rbac.test.ts` (new)
+- `Frontend/src/shared/auth/rbac.hooks.test.tsx` (new)
+- `Frontend/src/shared/auth/require-role.test.tsx` (new)
+- `Frontend/src/shared/auth/index.ts` (modified: barrel расширен)
+- `Frontend/package.json` (modified: +2 devDeps — jsdom@^24, @testing-library/react@^15)
+- `Frontend/package-lock.json` (+56 пакетов)
+
+---

@@ -1,0 +1,21 @@
+dist
+node_modules
+coverage
+storybook-static
+playwright-report
+test-results
+package-lock.json
+*.min.js
+*.min.css
+src/shared/api/openapi.d.ts
+
+# Secrets — never stream through Prettier, не должно попадать в VCS
+.env
+.env.*
+*.log
+
+# Documentation and task backlogs — managed manually, not by Prettier
+architecture/
+progress.md
+tasks.json
+backlog-tasks.json

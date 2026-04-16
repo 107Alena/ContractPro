@@ -171,7 +171,47 @@
       "dependencies": [
         "FE-TASK-004"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-16",
+        "files_created": [
+          "Frontend/eslint.config.js",
+          "Frontend/.prettierrc.json",
+          "Frontend/.prettierignore"
+        ],
+        "files_modified": [
+          "Frontend/package.json — +scripts (lint, lint:fix, format, format:check), +14 devDeps (ESLint 9 + плагины + Prettier)",
+          "Frontend/package-lock.json"
+        ],
+        "deviations": [
+          "typescript-eslint обновлён до ^8.x вместо ^7.8 из §20.5 архитектуры: ESLint 9 flat требует tseslint@8 (tseslint@7 peer-deps eslint@^8.56). Критерий 'ESLint 9' приоритетнее пин-версии плагина.",
+          "boundaries/no-unknown-files установлен в warn (а не error): при постепенном scaffolding-е FSD-папок неклассифицированные файлы не должны валить lint. Перевод в error — в FE-TASK-007/030, когда структура src/ стабилизируется.",
+          "scripts.lint = 'eslint . --max-warnings=0' — жёстче, чем критерий acceptance ('eslint .'); CI не должен молча пропускать warnings (в т.ч. будущие boundaries/no-unknown-files).",
+          "src/main.tsx и src/App.tsx временно в boundaries/ignore + boundaries/element-types off — это placeholder-заглушка из FE-TASK-004, будет перенесена в src/app/ в FE-TASK-030 (App shell providers)."
+        ],
+        "verification": [
+          "npm run lint — 0 errors, 0 warnings (с --max-warnings=0)",
+          "npm run typecheck — 0 errors",
+          "npm run build — dist/ 142.58 kB / 45.77 kB gzip, без ошибок",
+          "npx prettier --check . — All matched files use Prettier code style",
+          "Smoke-test boundaries: временные файлы src/features/sample-feature/index.ts + src/entities/sample-entity/bad.ts (import upward) → eslint выдал 'boundaries/element-types: No rule allowing this dependency was found. File is of type entities with slice sample-entity. Dependency is of type features with slice sample-feature' → файлы удалены",
+          "subagents: code-architect (FSD-правила review), code-reviewer (финальный review, merge-ready с 3 мелкими замечаниями — все применены)"
+        ],
+        "fsd_enforcement": [
+          "Слои app→processes→pages→widgets→features→entities→shared с default:disallow для element-types",
+          "allow-списки строят нисходящую иерархию: каждый слой импортирует только себя (same-slice) + все нижние",
+          "shared рассматривается как flat segments (без slice-isolation между api/auth/ui/lib/config/i18n/observability) — FSD v2",
+          "boundaries/no-private: запрет импорта из внутренностей слайса (forces public API через index.ts)",
+          "boundaries/no-unknown: запрет импортов из неклассифицированных путей"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-006 (Husky + lint-staged + commitlint): скрипт lint теперь --max-warnings=0; lint-staged на *.{ts,tsx} должен вызывать 'eslint --fix' без --max-warnings (это для CI-gate)",
+          "FE-TASK-007 (FSD скелет): после создания всех 7 FSD-папок с index.ts — перевести boundaries/no-unknown-files обратно в error, удалить src/main.tsx и src/App.tsx из boundaries/ignore (они переедут в src/app/)",
+          "FE-TASK-030 (App shell): App.tsx переедет в src/app/App.tsx; убрать override 'boundaries/element-types': 'off' для main.tsx/App.tsx",
+          "При добавлении shared-сегментных правил (например, shared/ui не импортирует shared/api) — расширить FSD_ELEMENTS с capture: ['segment'] для shared/* и добавить separate rule в boundaries/element-types",
+          "package.json scripts ещё не включают 'test' (vitest), 'e2e' (playwright), 'storybook' — добавятся в FE-TASK-018/026/022 соответственно"
+        ]
+      }
     },
     {
       "id": "FE-TASK-006",

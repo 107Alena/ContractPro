@@ -60,3 +60,50 @@
 - `Frontend/.gitignore`
 
 ---
+
+## FE-TASK-005 — ESLint 9 flat + Prettier + eslint-plugin-boundaries (FSD) + import sorting (2026-04-16)
+
+**Статус:** done
+**Категория:** infrastructure
+**Приоритет:** critical
+
+**Что сделано:**
+- `Frontend/eslint.config.js` — ESLint 9 flat config: `@eslint/js` + `typescript-eslint` + `eslint-plugin-react` (+ jsx-runtime preset) + `eslint-plugin-react-hooks` + `eslint-plugin-jsx-a11y` + `eslint-plugin-import` (с `eslint-import-resolver-typescript`) + `eslint-plugin-boundaries` + `eslint-plugin-simple-import-sort`, в конце `eslint-config-prettier` для отключения конфликтующих style-правил.
+- FSD-enforcement по §2.1: 7 слоёв app→processes→pages→widgets→features→entities→shared с `default: disallow`. `allow`-списки строят нисходящую иерархию; для каждого слоя — только same-slice self-imports (через `capture: ['slice']` + шаблон `'${from.slice}'`). Shared трактуется как flat segments (FSD v2, подтверждено code-architect).
+- Дополнительные boundaries-правила: `no-private` (forced public API через index.ts; off для `src/app/**`), `no-unknown` (error), `no-unknown-files` (warn — чтобы не валил lint на промежуточных коммитах FE-TASK-007 scaffolding).
+- `Frontend/.prettierrc.json` — singleQuote, semi, printWidth=100, trailingComma=all, tabWidth=2, endOfLine=lf, arrowParens=always.
+- `Frontend/.prettierignore` — dist/node_modules/coverage/storybook-static/test-results, сгенерированные openapi.d.ts, архитектурные markdown (`architecture/`), tasks.json/progress.md (managed manually), секреты `.env*` + `*.log`.
+- `package.json` scripts: `lint` (`eslint . --max-warnings=0`), `lint:fix`, `format`, `format:check`.
+- devDeps (14 новых): eslint@^9.39, @eslint/js, @eslint/compat, typescript-eslint@^8.58 (↑ с архитектурного ^7.8 — требование ESLint 9), eslint-plugin-react@^7.37, eslint-plugin-react-hooks@^5.2, eslint-plugin-jsx-a11y@^6.10, eslint-plugin-import@^2.32, eslint-plugin-boundaries@^4.2, eslint-plugin-simple-import-sort@^12.1, eslint-config-prettier@^9.1, eslint-import-resolver-typescript@^3.10, globals@^15.15, prettier@^3.8.
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- `typescript-eslint` — ^8.58 вместо §20.5-pin ^7.8. Причина: ESLint 9 flat-config требует tseslint@8; tseslint@7 peer-deps с `eslint@^8.56`, что конфликтует с критерием "ESLint 9 flat config". Критерий ESLint 9 приоритетнее pin-версии плагина.
+- `boundaries/no-unknown-files` установлен в **warn**, а не error. Причина: FE-TASK-007 будет scaffolding-ить FSD-папки поэтапно, error ломал бы lint на промежуточных коммитах. Возврат в error — после стабилизации структуры (пометка в notes_for_next_tasks).
+- Script `lint = "eslint . --max-warnings=0"` — жёстче критерия `"eslint ."`. Обоснование: CI не должен молча пропускать warnings (включая будущие `no-unknown-files`), lint-staged работает с отдельным вызовом `eslint --fix` без флага.
+- `src/main.tsx` + `src/App.tsx` — временно в `boundaries/ignore` и с override `boundaries/element-types: off`. Причина: это placeholder-заглушка из FE-TASK-004 (находится в корне `src/`, а не в слое), переедет в `src/app/` в FE-TASK-030.
+- `.prettierignore` исключает `architecture/`, `tasks.json`, `progress.md`, `backlog-tasks.json` — это managed-документы, не исходный код.
+- Subagents: code-architect (review FSD-правил — подтвердил shared как flat segments, app без slice-isolation; посоветовал добавить `no-private`, `no-unknown`, `no-unknown-files` + `eslint-import-resolver-typescript`), code-reviewer (финальный review — "ready to merge", 3 nits применены: `no-unknown-files` → warn, `--max-warnings=0`, `.env*` в prettierignore).
+
+**Верификация (все test_steps из задачи):**
+- Шаг 1 ✓: `npm run lint` — 0 errors, 0 warnings (с `--max-warnings=0`).
+- Шаг 2 ✓: создал `src/features/sample-feature/index.ts` (exports `sampleFeature`) и `src/entities/sample-entity/bad.ts` (`import { sampleFeature } from '@/features/sample-feature'`) → `npx eslint src/entities/sample-entity/bad.ts` → `error  No rule allowing this dependency was found. File is of type 'entities' with slice 'sample-entity'. Dependency is of type 'features' with slice 'sample-feature'  boundaries/element-types` → файлы удалены, `ls src/` показывает только App.tsx, main.tsx, vite-env.d.ts.
+- Шаг 3 ✓: `npx prettier --check .` — "All matched files use Prettier code style!".
+
+**Дополнительно проверено:**
+- `npm run typecheck` — 0 errors.
+- `npm run build` — dist/ 142.58 kB / 45.77 kB gzip, без ошибок.
+
+**Заметки для следующих итераций:**
+- FE-TASK-006 (Husky + lint-staged + commitlint): в lint-staged вызывать `eslint --fix` без `--max-warnings=0` (этот флаг — для CI).
+- FE-TASK-007 (FSD-скелет): после создания всех 7 FSD-директорий с index.ts — перевести `boundaries/no-unknown-files` обратно в `error`; убрать `src/main.tsx` и `src/App.tsx` из `boundaries/ignore` (они переедут в `src/app/`).
+- FE-TASK-030 (App shell): убрать override `boundaries/element-types: off` для main.tsx/App.tsx; `App.tsx` станет `src/app/App.tsx`.
+- Будущий ADR / task: настроить segment-isolation внутри shared (shared/ui не импортирует shared/api и т.п.) через `capture: ['segment']` в `FSD_ELEMENTS`.
+
+**Затронутые файлы:**
+- `Frontend/eslint.config.js` (new)
+- `Frontend/.prettierrc.json` (new)
+- `Frontend/.prettierignore` (new)
+- `Frontend/package.json` — +4 scripts, +14 devDeps
+- `Frontend/package-lock.json` — +269 packages
+
+---

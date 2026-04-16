@@ -1708,6 +1708,31 @@ happy path, no auth (401), invalid contract_id/version_id (400), invalid JSON (4
 - **Race с ConfirmType**: StatusTracker.TimeoutAwaitingInput использует Lua-скрипт с атомарной проверкой AWAITING_USER_INPUT, watchdog получает ErrInvalidTransition и gracefully skips
 
 ### Следующие задачи (unblocked)
-- **ORCH-TASK-043** (high, depends on 040 ✓ + 041 ✓ + 042 ✓): E2E integration test — **теперь разблокирована!**
 - **ORCH-TASK-049** (high, depends on 048 ✓): Миграция handlers на structured validation errors
 - **ORCH-TASK-050** (high, no deps): Permissions Resolver
+- **ORCH-TASK-051** (medium, no deps): CORS middleware config update
+
+## ORCH-TASK-043: E2E integration тест полного цикла подтверждения типа (DONE, 2026-04-16)
+
+### План реализации
+1. Изучить существующую integration-инфраструктуру (fakes, testenv, sseclient, integration_test.go) (subagent: Explore)
+2. Изучить компоненты подтверждения типа (confirmtype, statustracker/confirmation, classification_uncertain, watchdog, commandpub, ssebroadcast) (subagent: Explore)
+3. Спроектировать fakeConfirmationStore + 4 E2E теста
+4. Реализовать fakes.go (fakeConfirmationStore), testenv.go (wiring), lowconfidence_test.go (4 теста)
+5. Code review (subagent: code-reviewer) → исправления: S-1 status unchanged, S-2 idempotency, M-1 TTL comment
+6. Полный регресс: 35 пакетов PASS, go vet clean, make build/test/lint OK
+
+### Что реализовано
+- **fakes.go**: `fakeConfirmationStore` реализует `statustracker.ConfirmationStore` через mutex-protected fakeKVStore (SetAwaitingInput, ConfirmInput, TimeoutInput — имитация Redis Lua-скриптов), compile-time interface check
+- **testenv.go**: DI wiring для confirm-type flow — fakeConfirmationStore, tracker.WithConfirmation(24h), TopicUserConfirmedType в BrokerConfig, confirmtype.Handler с whitelist ['услуги','поставка','подряд','аренда','NDA'] и 60s idempotency TTL, testConfirmTypeCmdPubAdapter, ConfirmTypeHandler в api.Deps
+- **lowconfidence_test.go**: 4 E2E теста:
+  - **TestLowConfidenceTypeConfirmation** (happy path): seed ANALYZING → inject classification-uncertain → SSE status_update AWAITING_USER_INPUT → SSE type_confirmation_required (suggested_type, confidence, threshold, alternatives) → Redis status+watchdog+meta verified → POST /confirm-type → 202 → command published (6 fields verified) → Redis ANALYZING + watchdog deleted → SSE ANALYZING → idempotency (second POST → 202, no duplicate command)
+  - **TestLowConfidenceWrongState**: seed ANALYZING + meta → POST /confirm-type → 409 VERSION_NOT_AWAITING_INPUT, no command, status unchanged
+  - **TestLowConfidenceTimeout**: inject classification-uncertain → AWAITING_USER_INPUT → TimeoutAwaitingInput() → SSE FAILED with USER_CONFIRMATION_TIMEOUT → Redis FAILED
+  - **TestLowConfidenceRBAC**: BUSINESS_USER → 403 PERMISSION_DENIED, no command
+
+### Ключевые решения
+- **fakeConfirmationStore** вместо miniredis: простой, не требует внешних зависимостей, атомарность через mutex
+- **TTL не эмулируется**: timeout тестируется через прямой вызов TimeoutAwaitingInput (watchdog unit-тесты покрывают key expiration)
+- **Idempotency verification** (S-2 code review): второй POST /confirm-type возвращает 202 без дублирования команды
+- **Status unchanged assertion** (S-1 code review): после 409 статус остаётся ANALYZING

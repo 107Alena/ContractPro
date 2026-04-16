@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"contractpro/api-orchestrator/internal/application/comparison"
+	"contractpro/api-orchestrator/internal/application/confirmtype"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/export"
 	"contractpro/api-orchestrator/internal/application/results"
@@ -65,6 +66,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	// 4. Status tracker — real implementation backed by fakeKVStore.
 	tracker := statustracker.NewTracker(kvFake, broadcaster, log)
 
+	// 4a. Confirmation store — fake backed by fakeKVStore (for type
+	// confirmation flow ORCH-TASK-039..042).
+	confirmStore := newFakeConfirmationStore(kvFake)
+	confirmTimeout := 24 * time.Hour
+	tracker.WithConfirmation(confirmStore, confirmTimeout)
+
 	// 5. Broker config with default test topic names.
 	brokerCfg := config.BrokerConfig{
 		TopicProcessDocument:        "dp.commands.process-document",
@@ -76,6 +83,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		TopicDPComparisonFailed:     "dp.events.comparison-failed",
 		TopicLICStatusChanged:           "lic.events.status-changed",
 		TopicLICClassificationUncertain: "lic.events.classification-uncertain",
+		TopicUserConfirmedType:          "orch.commands.user-confirmed-type",
 		TopicREStatusChanged:            "re.events.status-changed",
 		TopicDMVersionArtifactsReady: "dm.events.version-artifacts-ready",
 		TopicDMVersionAnalysisReady:  "dm.events.version-analysis-ready",
@@ -136,6 +144,17 @@ func newTestEnv(t *testing.T) *testEnv {
 	comparisonHandler := comparison.NewHandler(dmClient, cmdPub, log)
 	exportHandler := export.NewHandler(dmClient, log)
 
+	// 13a. Confirm-type handler (ORCH-TASK-041).
+	confirmTypeCmdPub := &testConfirmTypeCmdPubAdapter{pub: cmdPub}
+	confirmTypeHandler := confirmtype.NewHandler(
+		tracker,
+		confirmTypeCmdPub,
+		kvFake,
+		log,
+		[]string{"услуги", "поставка", "подряд", "аренда", "NDA"},
+		60*time.Second,
+	)
+
 	// 14. SSE handler — uses auth middleware as token validator and
 	//     fakeKVStore directly (fakeKVStore implements sse.KVStore).
 	sseCfg := config.SSEConfig{
@@ -169,6 +188,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		ResultsHandler:      resultsHandler,
 		ComparisonHandler:   comparisonHandler,
 		ExportHandler:       exportHandler,
+		ConfirmTypeHandler:  confirmTypeHandler,
 		SSEHandler:          sseHandler,
 	})
 
@@ -360,3 +380,26 @@ func (p *noopRedisPinger) Ping(_ context.Context) error { return nil }
 type noopBrokerPinger struct{}
 
 func (p *noopBrokerPinger) Ping() error { return nil }
+
+// ---------------------------------------------------------------------------
+// Adapter for the confirm-type handler
+// ---------------------------------------------------------------------------
+
+// testConfirmTypeCmdPubAdapter bridges *commandpub.Publisher to
+// confirmtype.CommandPublisher.
+type testConfirmTypeCmdPubAdapter struct {
+	pub *commandpub.Publisher
+}
+
+var _ confirmtype.CommandPublisher = (*testConfirmTypeCmdPubAdapter)(nil)
+
+func (a *testConfirmTypeCmdPubAdapter) PublishUserConfirmedType(ctx context.Context, cmd confirmtype.UserConfirmedTypeCommand) error {
+	return a.pub.PublishUserConfirmedType(ctx, commandpub.UserConfirmedTypeCommand{
+		JobID:             cmd.JobID,
+		DocumentID:        cmd.DocumentID,
+		VersionID:         cmd.VersionID,
+		OrganizationID:    cmd.OrganizationID,
+		ConfirmedByUserID: cmd.ConfirmedByUserID,
+		ContractType:      cmd.ContractType,
+	})
+}

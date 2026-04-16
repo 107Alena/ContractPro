@@ -24,6 +24,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	"contractpro/api-orchestrator/internal/application/statustracker"
 	"contractpro/api-orchestrator/internal/egress/dmclient"
 	"contractpro/api-orchestrator/internal/infra/kvstore"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -694,6 +695,117 @@ var (
 // Verify fakeBroker satisfies both broker interfaces. We cannot reference
 // the concrete interface types from consumer/commandpub packages here
 // because the Subscribe/Publish signatures match structurally.
+
+// ---------------------------------------------------------------------------
+// 6. fakeConfirmationStore — satisfies statustracker.ConfirmationStore
+//    using the in-memory fakeKVStore for atomic check-and-set operations.
+// ---------------------------------------------------------------------------
+
+// fakeConfirmationStore replicates the Redis Lua script atomicity of the
+// production RedisConfirmationStore using the fakeKVStore's mutex-protected
+// map. All operations hold the lock for the entire duration to guarantee
+// atomicity in tests.
+//
+// Limitation: TTL parameters (statusTTL, watchdogTTL) are accepted but
+// ignored — the fake store does not expire keys. Timeout behavior is tested
+// by calling TimeoutAwaitingInput directly (simulating what the watchdog does
+// when it detects an expired key).
+type fakeConfirmationStore struct {
+	kv *fakeKVStore
+}
+
+func newFakeConfirmationStore(kv *fakeKVStore) *fakeConfirmationStore {
+	return &fakeConfirmationStore{kv: kv}
+}
+
+func (s *fakeConfirmationStore) SetAwaitingInput(
+	_ context.Context,
+	statusKey, expectedStatus, newStatusJSON string,
+	_ time.Duration,
+	watchdogKey string,
+	_ time.Duration,
+) error {
+	s.kv.mu.Lock()
+	defer s.kv.mu.Unlock()
+
+	data, ok := s.kv.store[statusKey]
+	if !ok {
+		return statustracker.ErrInvalidTransition
+	}
+
+	var rec struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(data), &rec); err != nil {
+		return statustracker.ErrInvalidTransition
+	}
+	if rec.Status != expectedStatus {
+		return statustracker.ErrInvalidTransition
+	}
+
+	s.kv.store[statusKey] = newStatusJSON
+	s.kv.store[watchdogKey] = "1"
+	return nil
+}
+
+func (s *fakeConfirmationStore) ConfirmInput(
+	_ context.Context,
+	statusKey, newStatusJSON string,
+	_ time.Duration,
+	watchdogKey string,
+) error {
+	s.kv.mu.Lock()
+	defer s.kv.mu.Unlock()
+
+	data, ok := s.kv.store[statusKey]
+	if !ok {
+		return statustracker.ErrNotAwaitingInput
+	}
+
+	var rec struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(data), &rec); err != nil {
+		return statustracker.ErrNotAwaitingInput
+	}
+	if rec.Status != "AWAITING_USER_INPUT" {
+		return statustracker.ErrNotAwaitingInput
+	}
+
+	s.kv.store[statusKey] = newStatusJSON
+	delete(s.kv.store, watchdogKey)
+	return nil
+}
+
+func (s *fakeConfirmationStore) TimeoutInput(
+	_ context.Context,
+	statusKey, newStatusJSON string,
+	_ time.Duration,
+) error {
+	s.kv.mu.Lock()
+	defer s.kv.mu.Unlock()
+
+	data, ok := s.kv.store[statusKey]
+	if !ok {
+		return statustracker.ErrInvalidTransition
+	}
+
+	var rec struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(data), &rec); err != nil {
+		return statustracker.ErrInvalidTransition
+	}
+	if rec.Status != "AWAITING_USER_INPUT" {
+		return statustracker.ErrInvalidTransition
+	}
+
+	s.kv.store[statusKey] = newStatusJSON
+	return nil
+}
+
+// Compile-time interface check.
+var _ statustracker.ConfirmationStore = (*fakeConfirmationStore)(nil)
 
 // Helpers for DM diff key building used by test code.
 func diffKey(docID, baseVer, targetVer string) string {

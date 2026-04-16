@@ -107,3 +107,64 @@
 - `Frontend/package-lock.json` — +269 packages
 
 ---
+
+## FE-TASK-007 — FSD скелет src/{app,processes,pages,widgets,features,entities,shared}/ (2026-04-16)
+
+**Статус:** done
+**Категория:** infrastructure
+**Приоритет:** critical
+
+**План:**
+1. Прочитать §2 high-architecture.md, определить полный перечень слайсов.
+2. Создать директории по уровням FSD + `index.ts` c `export {};` для каждого слайса/сегмента shared.
+3. `src/app/` subdirs (providers/router/styles) — `.gitkeep` (не slice public API).
+4. `features/auth/` nested segments (login/refresh-session/logout) — `.gitkeep` внутри slice.
+5. Обновить `eslint.config.js`: `boundaries/no-unknown-files` warn → error (запланировано в FE-TASK-005).
+6. Прогнать typecheck / lint / prettier / build.
+
+**Что сделано:**
+- Слой `app`: 3 subdirs (providers, router, styles) c `.gitkeep`.
+- Слой `processes`: 2 slices (auth-flow, upload-and-analyze).
+- Слой `pages`: 14 slices (landing, auth, dashboard, new-check, contracts-list, contract-detail, result, comparison, reports, audit, admin-policies, admin-checklists, settings, errors).
+- Слой `widgets`: 14 slices (sidebar-navigation, topbar, risk-profile-card, mandatory-conditions-checklist, risks-list, recommendations-list, diff-viewer, versions-timeline, documents-table, audit-table, processing-progress, export-share-modal, feedback-block, legal-disclaimer).
+- Слой `features`: 16 slices (auth, contract-upload, contract-archive, contract-delete, version-upload, version-recheck, comparison-start, low-confidence-confirm, filters, search, pagination, export-download, share-link, feedback-submit, policy-edit, checklist-edit). `features/auth/{login,refresh-session,logout}/.gitkeep` — nested segments внутри slice auth.
+- Слой `entities`: 13 slices (user, contract, version, job, risk, recommendation, summary, diff, report, policy, checklist, audit-record, artifact).
+- Слой `shared`: 7 segments (api, auth, ui, lib, config, i18n, observability) — flat (без slice-isolation, FSD v2).
+- Итого: **66 index.ts** (`export {};`) + **6 .gitkeep**-файлов.
+- `eslint.config.js`: `boundaries/no-unknown-files` warn → error (комментарий обновлён; main.tsx/App.tsx остаются в `boundaries/ignore` до FE-TASK-030).
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- `src/app/` subdirs — `.gitkeep`, не `index.ts`. FSD не требует public-API-barrel у app-layer (композиция, не экспортируемый слайс). `export {};` создал бы ложный barrel-контракт, который придётся удалять в FE-TASK-030. Следуем FSD-идиоме.
+- `features/auth` — плоский slice с nested-segment-папками (`login/refresh-session/logout/`). FSD v2 не поддерживает вложенные слайсы; архитектурный `§2` tree изображает auth как parent с сегментами. Альтернатива — разбить на `auth-login`/`auth-refresh`/`auth-logout` как независимые features — оставлена на будущее решение команды (ADR при необходимости).
+- `boundaries/no-unknown-files` поднят в `error` — отклонение вверх от требований FE-TASK-007, но соответствует notes_for_next_tasks из FE-TASK-005. После scaffolding все файлы под `src/` классифицированы FSD_ELEMENTS, неклассифицированных остаться не должно (root-файлы main.tsx/App.tsx в `boundaries/ignore`).
+
+**Верификация:**
+- Шаг 1 ✓: `ls src/` — присутствуют все 7 FSD-папок (app, processes, pages, widgets, features, entities, shared).
+- Шаг 2 ✓: `npm run typecheck` — 0 errors (пустые `export {};` валидны при `isolatedModules: true`).
+- Шаг 3 ✓: `npm run lint` — 0 errors, 0 warnings (с `--max-warnings=0`; `boundaries/no-unknown-files=error` не сработал — все 66 index.ts попадают в FSD_ELEMENTS).
+- Дополнительно: `npx prettier --check .` — clean; `npm run build` — dist/ 142.58 kB / 45.77 kB gzip, без ошибок.
+- Makefile в Frontend отсутствует (проект на npm-скриптах) — этап неприменим.
+- Subagents: **code-architect** (проверка плана: 5-вопросная валидация slice granularity + безопасность promote `no-unknown-files`→error + enumeration §2; verdict plan-OK); **code-reviewer** (финал: "ship it", отметил §2-vs-features/auth как non-blocker для follow-up).
+
+**Соответствие архитектуре:**
+- §2 FSD tree — структура создана 1:1 (7 layers + все перечисленные slices/segments).
+- §2.1 правила зависимостей — не затронуты (FSD_ELEMENTS + boundaries/element-types уже были в FE-TASK-005).
+
+**Заметки для следующих итераций:**
+- FE-TASK-011 (openapi-typescript): скрипт `gen:api` будет писать в готовый `src/shared/api/openapi.d.ts` (директория создана).
+- FE-TASK-017 (Tailwind + tokens.css): файлы пойдут в `src/app/styles/` (директория готова, пока с `.gitkeep`).
+- FE-TASK-030 (App shell): наполнить `src/app/providers/*.tsx`, `src/app/router/routeTree.tsx`, `src/app/styles/*.css`; перенести `src/App.tsx` → `src/app/App.tsx`; из `eslint.config.js` убрать `src/main.tsx`/`src/App.tsx` из `boundaries/ignore` и override `element-types:off`.
+- При сегментной изоляции shared (shared/ui ≠ shared/api) — расширить FSD_ELEMENTS с `capture: ['segment']` для `src/shared/*` и добавить отдельное rule в `boundaries/element-types`.
+- Если команда решит плоскую структуру для auth-features — обновить §2 high-architecture.md + переименовать директории.
+
+**Затронутые файлы:**
+- `Frontend/src/app/{providers,router,styles}/.gitkeep` (3 new)
+- `Frontend/src/processes/*/index.ts` (2 new)
+- `Frontend/src/pages/*/index.ts` (14 new)
+- `Frontend/src/widgets/*/index.ts` (14 new)
+- `Frontend/src/features/*/index.ts` (16 new) + `Frontend/src/features/auth/{login,refresh-session,logout}/.gitkeep` (3 new)
+- `Frontend/src/entities/*/index.ts` (13 new)
+- `Frontend/src/shared/*/index.ts` (7 new)
+- `Frontend/eslint.config.js` (modified: boundaries/no-unknown-files warn → error)
+
+---

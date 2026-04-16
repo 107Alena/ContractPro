@@ -132,9 +132,10 @@ export default tseslint.config(
       ],
       'boundaries/no-private': ['error', { allowUncles: false }],
       'boundaries/no-unknown': 'error',
-      // warn, а не error: при постепенном скаффолдинге FSD-папок неклассифицированные
-      // файлы под src/ не должны валить lint; перевести в error, когда структура стабилизируется.
-      'boundaries/no-unknown-files': 'warn',
+      // FE-TASK-007: структура FSD-папок создана, неклассифицированных файлов под src/
+      // больше быть не должно (main.tsx/App.tsx/vite-env.d.ts — в boundaries/ignore
+      // до переезда в src/app/ в FE-TASK-030).
+      'boundaries/no-unknown-files': 'error',
     },
   },
 

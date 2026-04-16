@@ -254,7 +254,58 @@
       "dependencies": [
         "FE-TASK-005"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-16",
+        "files_created": [
+          "Frontend/src/app/{providers,router,styles}/.gitkeep — 3 пустые subdir-stubs (будут заполнены в FE-TASK-030)",
+          "Frontend/src/processes/{auth-flow,upload-and-analyze}/index.ts",
+          "Frontend/src/pages/{landing,auth,dashboard,new-check,contracts-list,contract-detail,result,comparison,reports,audit,admin-policies,admin-checklists,settings,errors}/index.ts — 14 slices",
+          "Frontend/src/widgets/{sidebar-navigation,topbar,risk-profile-card,mandatory-conditions-checklist,risks-list,recommendations-list,diff-viewer,versions-timeline,documents-table,audit-table,processing-progress,export-share-modal,feedback-block,legal-disclaimer}/index.ts — 14 slices",
+          "Frontend/src/features/{auth,contract-upload,contract-archive,contract-delete,version-upload,version-recheck,comparison-start,low-confidence-confirm,filters,search,pagination,export-download,share-link,feedback-submit,policy-edit,checklist-edit}/index.ts — 16 slices",
+          "Frontend/src/features/auth/{login,refresh-session,logout}/.gitkeep — 3 nested segments внутри slice auth (§2 line 121-123)",
+          "Frontend/src/entities/{user,contract,version,job,risk,recommendation,summary,diff,report,policy,checklist,audit-record,artifact}/index.ts — 13 slices",
+          "Frontend/src/shared/{api,auth,ui,lib,config,i18n,observability}/index.ts — 7 segments"
+        ],
+        "files_modified": [
+          "Frontend/eslint.config.js — boundaries/no-unknown-files: warn → error (по notes_for_next_tasks из FE-TASK-005; структура FSD теперь стабильна)"
+        ],
+        "totals": {
+          "slice_index_ts_created": 66,
+          "subdirs_with_gitkeep": 6,
+          "layers_scaffolded": 7
+        },
+        "deviations": [
+          "src/app/ subdirs (providers/router/styles) получили .gitkeep, не index.ts. Причина: app — композиция, не публичный API; index.ts с 'export {};' создал бы ложный barrel-контракт. Файлы в app/ получат реальное содержимое в FE-TASK-030 (App shell providers).",
+          "features/auth/{login,refresh-session,logout}/ созданы как сегменты внутри slice auth (с .gitkeep), а НЕ как отдельные slices. FSD v2 не поддерживает вложенные слайсы нативно; §2 tree изображает их как сегменты parent-слайса auth. Плоская альтернатива (auth-login/auth-refresh/auth-logout) — follow-up для ADR при необходимости.",
+          "boundaries/no-unknown-files переведён из warn в error (отклонение вверх от требования FE-TASK-007; было запланировано в FE-TASK-005 notes_for_next_tasks). src/main.tsx и src/App.tsx остаются в boundaries/ignore до переезда в src/app/ в FE-TASK-030."
+        ],
+        "verification": [
+          "ls src/ — все 7 FSD-папок (app, processes, pages, widgets, features, entities, shared) присутствуют",
+          "npm run typecheck — 0 errors (пустые 'export {};' проходят isolatedModules)",
+          "npm run lint — 0 errors, 0 warnings (с --max-warnings=0; boundaries/no-unknown-files=error не сработал, т.к. все 66 index.ts попадают в FSD_ELEMENTS-паттерны)",
+          "npx prettier --check . — All matched files use Prettier code style",
+          "npm run build — dist/ 142.58 kB / 45.77 kB gzip, без ошибок",
+          "tsconfig path-aliases '@/*' → 'src/*' работают (unchanged с FE-TASK-004)",
+          "subagents: code-architect (FSD scaffolding plan: verdict plan-OK; подтвердил что capture:['slice'] с mode:'folder' работает только на первом уровне, сегменты внутри slice остаются внутренними); code-reviewer (финальный review: 'ship it', отметил features/auth как non-blocker — 4 nested слайсов в §2 vs. плоский slice auth)"
+        ],
+        "fsd_structure_mapping": {
+          "app": "3 subdirs (providers/router/styles) с .gitkeep — наполнение в FE-TASK-030",
+          "processes": "2 slices",
+          "pages": "14 slices (включая audit — v1.1 placeholder, admin-policies/admin-checklists — FE-TASK-001 placeholder)",
+          "widgets": "14 slices",
+          "features": "16 slices (auth counted as 1 slice с 3 nested segments)",
+          "entities": "13 slices",
+          "shared": "7 segments (api/auth/ui/lib/config/i18n/observability) — flat (без slice-isolation per FSD v2)"
+        },
+        "notes_for_next_tasks": [
+          "FE-TASK-011 (openapi-typescript): src/shared/api/ уже существует, scripts.gen:api будет писать в src/shared/api/openapi.d.ts",
+          "FE-TASK-017 (Tailwind + tokens): tokens.css/reset.css/tailwind базы пойдут в src/app/styles/",
+          "FE-TASK-030 (App shell): providers/*.tsx, router/routeTree.tsx, styles/*.css — наполнение app-layer; App.tsx переедет из src/ в src/app/App.tsx; в eslint.config.js убрать src/main.tsx и src/App.tsx из boundaries/ignore + убрать override element-types:off.",
+          "При появлении сегментной изоляции внутри shared (shared/ui не импортирует shared/api) — расширить FSD_ELEMENTS с capture:['segment'] + отдельным rule в boundaries/element-types",
+          "Если команда решит перейти на плоскую структуру features/auth-login|auth-refresh|auth-logout — обновить §2 high-architecture.md и передвинуть nested .gitkeep-директории."
+        ]
+      }
     },
     {
       "id": "FE-TASK-008",

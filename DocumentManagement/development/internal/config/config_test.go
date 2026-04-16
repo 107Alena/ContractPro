@@ -170,6 +170,15 @@ func TestLoad_DefaultValues(t *testing.T) {
 		{"Timeout.BrokerPublish", cfg.Timeout.BrokerPublish, 10 * time.Second},
 		{"Timeout.StaleVersion", cfg.Timeout.StaleVersion, 30 * time.Minute},
 		{"Timeout.Shutdown", cfg.Timeout.Shutdown, 30 * time.Second},
+		// Watchdog per-stage timeouts (DM-TASK-053).
+		// Without DM_STALE_VERSION_TIMEOUT set, each stage uses its own built-in default.
+		{"Watchdog.ScanInterval", cfg.Watchdog.ScanInterval, 5 * time.Minute},
+		{"Watchdog.BatchSize", cfg.Watchdog.BatchSize, 100},
+		{"Watchdog.StaleTimeoutProcessing", cfg.Watchdog.StaleTimeoutProcessing, 5 * time.Minute},
+		{"Watchdog.StaleTimeoutAnalysis", cfg.Watchdog.StaleTimeoutAnalysis, 10 * time.Minute},
+		{"Watchdog.StaleTimeoutReports", cfg.Watchdog.StaleTimeoutReports, 5 * time.Minute},
+		{"Watchdog.StaleTimeoutFinalization", cfg.Watchdog.StaleTimeoutFinalization, 5 * time.Minute},
+		{"Watchdog.StaleVersionFallback", cfg.Watchdog.StaleVersionFallback, time.Duration(0)},
 	}
 
 	for _, tc := range tests {
@@ -414,6 +423,87 @@ func TestLoad_OverrideValues(t *testing.T) {
 	}
 	if cfg.Timeout.Shutdown != 60*time.Second {
 		t.Errorf("Timeout.Shutdown = %v, want 60s", cfg.Timeout.Shutdown)
+	}
+	// DM-TASK-053: when DM_STALE_VERSION_TIMEOUT is set but no per-stage override,
+	// all four per-stage timeouts fall back to the shared value.
+	if cfg.Watchdog.StaleVersionFallback != 1*time.Hour {
+		t.Errorf("Watchdog.StaleVersionFallback = %v, want 1h", cfg.Watchdog.StaleVersionFallback)
+	}
+	if cfg.Watchdog.StaleTimeoutProcessing != 1*time.Hour {
+		t.Errorf("Watchdog.StaleTimeoutProcessing = %v, want 1h (fallback)", cfg.Watchdog.StaleTimeoutProcessing)
+	}
+	if cfg.Watchdog.StaleTimeoutAnalysis != 1*time.Hour {
+		t.Errorf("Watchdog.StaleTimeoutAnalysis = %v, want 1h (fallback)", cfg.Watchdog.StaleTimeoutAnalysis)
+	}
+	if cfg.Watchdog.StaleTimeoutReports != 1*time.Hour {
+		t.Errorf("Watchdog.StaleTimeoutReports = %v, want 1h (fallback)", cfg.Watchdog.StaleTimeoutReports)
+	}
+	if cfg.Watchdog.StaleTimeoutFinalization != 1*time.Hour {
+		t.Errorf("Watchdog.StaleTimeoutFinalization = %v, want 1h (fallback)", cfg.Watchdog.StaleTimeoutFinalization)
+	}
+}
+
+// TestLoad_WatchdogPerStageExplicit covers the case where all four per-stage
+// timeouts are explicitly set and should be used as-is (DM-TASK-053).
+func TestLoad_WatchdogPerStageExplicit(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DM_STALE_TIMEOUT_PROCESSING", "3m")
+	t.Setenv("DM_STALE_TIMEOUT_ANALYSIS", "7m")
+	t.Setenv("DM_STALE_TIMEOUT_REPORTS", "4m")
+	t.Setenv("DM_STALE_TIMEOUT_FINALIZATION", "2m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Watchdog.StaleTimeoutProcessing != 3*time.Minute {
+		t.Errorf("StaleTimeoutProcessing = %v, want 3m", cfg.Watchdog.StaleTimeoutProcessing)
+	}
+	if cfg.Watchdog.StaleTimeoutAnalysis != 7*time.Minute {
+		t.Errorf("StaleTimeoutAnalysis = %v, want 7m", cfg.Watchdog.StaleTimeoutAnalysis)
+	}
+	if cfg.Watchdog.StaleTimeoutReports != 4*time.Minute {
+		t.Errorf("StaleTimeoutReports = %v, want 4m", cfg.Watchdog.StaleTimeoutReports)
+	}
+	if cfg.Watchdog.StaleTimeoutFinalization != 2*time.Minute {
+		t.Errorf("StaleTimeoutFinalization = %v, want 2m", cfg.Watchdog.StaleTimeoutFinalization)
+	}
+	if cfg.Watchdog.StaleVersionFallback != 0 {
+		t.Errorf("StaleVersionFallback should be zero without DM_STALE_VERSION_TIMEOUT, got %v", cfg.Watchdog.StaleVersionFallback)
+	}
+}
+
+// TestLoad_WatchdogMixedFallback covers the mixed case: some per-stage vars
+// set, DM_STALE_VERSION_TIMEOUT also set as legacy fallback. Per-variable
+// priority: explicit per-stage > fallback > built-in default (DM-TASK-053).
+func TestLoad_WatchdogMixedFallback(t *testing.T) {
+	setRequiredEnv(t)
+	// Legacy fallback: 2h.
+	t.Setenv("DM_STALE_VERSION_TIMEOUT", "2h")
+	// Override ANALYSIS stage explicitly.
+	t.Setenv("DM_STALE_TIMEOUT_ANALYSIS", "4m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Watchdog.StaleVersionFallback != 2*time.Hour {
+		t.Errorf("StaleVersionFallback = %v, want 2h", cfg.Watchdog.StaleVersionFallback)
+	}
+	if cfg.Watchdog.StaleTimeoutAnalysis != 4*time.Minute {
+		t.Errorf("StaleTimeoutAnalysis = %v, want 4m (explicit)", cfg.Watchdog.StaleTimeoutAnalysis)
+	}
+	// Unset per-stage vars fall back to the shared value, not the built-in default.
+	if cfg.Watchdog.StaleTimeoutProcessing != 2*time.Hour {
+		t.Errorf("StaleTimeoutProcessing = %v, want 2h (fallback)", cfg.Watchdog.StaleTimeoutProcessing)
+	}
+	if cfg.Watchdog.StaleTimeoutReports != 2*time.Hour {
+		t.Errorf("StaleTimeoutReports = %v, want 2h (fallback)", cfg.Watchdog.StaleTimeoutReports)
+	}
+	if cfg.Watchdog.StaleTimeoutFinalization != 2*time.Hour {
+		t.Errorf("StaleTimeoutFinalization = %v, want 2h (fallback)", cfg.Watchdog.StaleTimeoutFinalization)
 	}
 }
 

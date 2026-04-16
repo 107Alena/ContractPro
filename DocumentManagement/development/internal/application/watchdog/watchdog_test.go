@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -35,26 +36,32 @@ func (m *mockTransactor) WithTransaction(ctx context.Context, f func(ctx context
 }
 
 type mockVersionRepo struct {
-	mu                   sync.Mutex
-	findStaleResult      []*model.DocumentVersion
-	findStaleErr         error
-	findForUpdateResult  map[string]*model.DocumentVersion
-	findForUpdateErr     error
-	findForUpdateCalls   int
-	updateCalls          int
-	updateErr            error
-	nextVersionNumber    int
-	insertErr            error
-	findByIDResult       *model.DocumentVersion
-	findByIDErr          error
-	listResult           []*model.DocumentVersion
-	listTotal            int
-	listErr              error
+	mu                  sync.Mutex
+	findStaleResult     []*model.DocumentVersion
+	findStaleErr        error
+	findStaleCutoffs    map[model.ArtifactStatus]time.Time
+	findForUpdateResult map[string]*model.DocumentVersion
+	findForUpdateErr    error
+	findForUpdateCalls  int
+	updateCalls         int
+	updateErr           error
+	nextVersionNumber   int
+	insertErr           error
+	findByIDResult      *model.DocumentVersion
+	findByIDErr         error
+	listResult          []*model.DocumentVersion
+	listTotal           int
+	listErr             error
 }
 
-func (m *mockVersionRepo) FindStaleInIntermediateStatus(_ context.Context, _ time.Time, _ int) ([]*model.DocumentVersion, error) {
+func (m *mockVersionRepo) FindStaleInIntermediateStatus(_ context.Context, cutoffs map[model.ArtifactStatus]time.Time, _ int) ([]*model.DocumentVersion, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Snapshot the cutoffs the watchdog passed so tests can assert on them.
+	m.findStaleCutoffs = make(map[model.ArtifactStatus]time.Time, len(cutoffs))
+	for k, v := range cutoffs {
+		m.findStaleCutoffs[k] = v
+	}
 	return m.findStaleResult, m.findStaleErr
 }
 
@@ -117,10 +124,10 @@ func (m *mockVersionRepo) ListByDocument(_ context.Context, _ string) ([]*model.
 }
 
 type mockArtifactRepo struct {
-	mu          sync.Mutex
-	listResult  map[string][]*model.ArtifactDescriptor
-	listErr     error
-	listCalls   int
+	mu         sync.Mutex
+	listResult map[string][]*model.ArtifactDescriptor
+	listErr    error
+	listCalls  int
 }
 
 func (m *mockArtifactRepo) Insert(_ context.Context, _ *model.ArtifactDescriptor) error { return nil }
@@ -194,22 +201,60 @@ func (m *mockOutboxWriter) Write(_ context.Context, aggregateID, topic string, e
 	return nil
 }
 
+type stuckGaugeSample struct {
+	stage string
+	count float64
+}
+
+type stuckTotalInc struct {
+	stage string
+	count int
+}
+
 type mockMetrics struct {
 	mu               sync.Mutex
-	stuckTotal       int
-	stuckGaugeValues []float64
+	totalByStage     map[string]int
+	gaugeByStage     map[string]float64
+	totalIncs        []stuckTotalInc
+	gaugeSamples     []stuckGaugeSample
 }
 
-func (m *mockMetrics) IncStuckVersionsTotal(count int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.stuckTotal += count
+func newMockMetrics() *mockMetrics {
+	return &mockMetrics{
+		totalByStage: make(map[string]int),
+		gaugeByStage: make(map[string]float64),
+	}
 }
 
-func (m *mockMetrics) SetStuckVersionsCount(count float64) {
+func (m *mockMetrics) IncStuckVersionsTotal(stage string, count int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.stuckGaugeValues = append(m.stuckGaugeValues, count)
+	if m.totalByStage == nil {
+		m.totalByStage = make(map[string]int)
+	}
+	m.totalByStage[stage] += count
+	m.totalIncs = append(m.totalIncs, stuckTotalInc{stage: stage, count: count})
+}
+
+func (m *mockMetrics) SetStuckVersionsCount(stage string, count float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.gaugeByStage == nil {
+		m.gaugeByStage = make(map[string]float64)
+	}
+	m.gaugeByStage[stage] = count
+	m.gaugeSamples = append(m.gaugeSamples, stuckGaugeSample{stage: stage, count: count})
+}
+
+// totalAcrossStages sums total counter increments across all stages.
+func (m *mockMetrics) totalAcrossStages() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sum := 0
+	for _, v := range m.totalByStage {
+		sum += v
+	}
+	return sum
 }
 
 // ---------------------------------------------------------------------------
@@ -224,26 +269,32 @@ type discardWriter struct{}
 
 func (d *discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
+// defaultWatchdogCfg returns a WatchdogConfig with explicit per-stage timeouts
+// so tests exercise the DM-TASK-053 code path by default.
 func defaultWatchdogCfg() config.WatchdogConfig {
 	return config.WatchdogConfig{
-		ScanInterval: 100 * time.Millisecond,
-		BatchSize:    100,
+		ScanInterval:             100 * time.Millisecond,
+		BatchSize:                100,
+		StaleTimeoutProcessing:   5 * time.Minute,
+		StaleTimeoutAnalysis:     10 * time.Minute,
+		StaleTimeoutReports:      5 * time.Minute,
+		StaleTimeoutFinalization: 5 * time.Minute,
 	}
 }
 
 func makeVersion(id, docID, orgID string, status model.ArtifactStatus) *model.DocumentVersion {
 	return &model.DocumentVersion{
-		VersionID:      id,
-		DocumentID:     docID,
-		OrganizationID: orgID,
-		VersionNumber:  1,
-		OriginType:     model.OriginTypeUpload,
-		SourceFileKey:  "key",
-		SourceFileName: "file.pdf",
-		SourceFileSize: 100,
-		ArtifactStatus: status,
+		VersionID:       id,
+		DocumentID:      docID,
+		OrganizationID:  orgID,
+		VersionNumber:   1,
+		OriginType:      model.OriginTypeUpload,
+		SourceFileKey:   "key",
+		SourceFileName:  "file.pdf",
+		SourceFileSize:  100,
+		ArtifactStatus:  status,
 		CreatedByUserID: "user-1",
-		CreatedAt:      time.Now().UTC().Add(-1 * time.Hour),
+		CreatedAt:       time.Now().UTC().Add(-1 * time.Hour),
 	}
 }
 
@@ -260,7 +311,7 @@ func newTestWatchdog(
 	return NewStaleVersionWatchdog(
 		transactor, versionRepo, artifactRepo, auditRepo, outboxWriter,
 		metrics, testLogger(),
-		30*time.Minute, defaultWatchdogCfg(), testTopic,
+		defaultWatchdogCfg(), testTopic,
 	)
 }
 
@@ -274,20 +325,20 @@ func TestNewStaleVersionWatchdog_PanicsOnNilDeps(t *testing.T) {
 	ar := &mockArtifactRepo{}
 	audit := &mockAuditRepo{}
 	ow := &mockOutboxWriter{}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 	l := testLogger()
 
 	tests := []struct {
 		name string
 		fn   func()
 	}{
-		{"nil transactor", func() { NewStaleVersionWatchdog(nil, vr, ar, audit, ow, m, l, time.Minute, defaultWatchdogCfg(), testTopic) }},
-		{"nil versionRepo", func() { NewStaleVersionWatchdog(tr, nil, ar, audit, ow, m, l, time.Minute, defaultWatchdogCfg(), testTopic) }},
-		{"nil artifactRepo", func() { NewStaleVersionWatchdog(tr, vr, nil, audit, ow, m, l, time.Minute, defaultWatchdogCfg(), testTopic) }},
-		{"nil auditRepo", func() { NewStaleVersionWatchdog(tr, vr, ar, nil, ow, m, l, time.Minute, defaultWatchdogCfg(), testTopic) }},
-		{"nil outboxWriter", func() { NewStaleVersionWatchdog(tr, vr, ar, audit, nil, m, l, time.Minute, defaultWatchdogCfg(), testTopic) }},
-		{"nil metrics", func() { NewStaleVersionWatchdog(tr, vr, ar, audit, ow, nil, l, time.Minute, defaultWatchdogCfg(), testTopic) }},
-		{"nil logger", func() { NewStaleVersionWatchdog(tr, vr, ar, audit, ow, m, nil, time.Minute, defaultWatchdogCfg(), testTopic) }},
+		{"nil transactor", func() { NewStaleVersionWatchdog(nil, vr, ar, audit, ow, m, l, defaultWatchdogCfg(), testTopic) }},
+		{"nil versionRepo", func() { NewStaleVersionWatchdog(tr, nil, ar, audit, ow, m, l, defaultWatchdogCfg(), testTopic) }},
+		{"nil artifactRepo", func() { NewStaleVersionWatchdog(tr, vr, nil, audit, ow, m, l, defaultWatchdogCfg(), testTopic) }},
+		{"nil auditRepo", func() { NewStaleVersionWatchdog(tr, vr, ar, nil, ow, m, l, defaultWatchdogCfg(), testTopic) }},
+		{"nil outboxWriter", func() { NewStaleVersionWatchdog(tr, vr, ar, audit, nil, m, l, defaultWatchdogCfg(), testTopic) }},
+		{"nil metrics", func() { NewStaleVersionWatchdog(tr, vr, ar, audit, ow, nil, l, defaultWatchdogCfg(), testTopic) }},
+		{"nil logger", func() { NewStaleVersionWatchdog(tr, vr, ar, audit, ow, m, nil, defaultWatchdogCfg(), testTopic) }},
 	}
 
 	for _, tt := range tests {
@@ -303,7 +354,7 @@ func TestNewStaleVersionWatchdog_PanicsOnNilDeps(t *testing.T) {
 }
 
 func TestNewStaleVersionWatchdog_Success(t *testing.T) {
-	w := newTestWatchdog(&mockTransactor{}, &mockVersionRepo{}, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, &mockMetrics{})
+	w := newTestWatchdog(&mockTransactor{}, &mockVersionRepo{}, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, newMockMetrics())
 	if w == nil {
 		t.Fatal("expected non-nil watchdog")
 	}
@@ -317,7 +368,7 @@ func TestScan_NoStaleVersions(t *testing.T) {
 	vr := &mockVersionRepo{findStaleResult: []*model.DocumentVersion{}}
 	audit := &mockAuditRepo{}
 	ow := &mockOutboxWriter{}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, audit, ow, m)
 	w.scan()
@@ -328,8 +379,15 @@ func TestScan_NoStaleVersions(t *testing.T) {
 	if len(ow.writes) != 0 {
 		t.Errorf("expected no outbox writes, got %d", len(ow.writes))
 	}
-	if m.stuckTotal != 0 {
-		t.Errorf("expected stuckTotal=0, got %d", m.stuckTotal)
+	if m.totalAcrossStages() != 0 {
+		t.Errorf("expected stuckTotal=0, got %d", m.totalAcrossStages())
+	}
+
+	// All four stage gauges should be reset to zero even when no versions are stale.
+	for _, stage := range []string{"processing", "analysis", "reports", "finalization"} {
+		if got := m.gaugeByStage[stage]; got != 0 {
+			t.Errorf("expected gauge[%s]=0, got %v", stage, got)
+		}
 	}
 }
 
@@ -346,12 +404,11 @@ func TestScan_TransitionsStaleVersion_Pending(t *testing.T) {
 	}
 	audit := &mockAuditRepo{}
 	ow := &mockOutboxWriter{}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, audit, ow, m)
 	w.scan()
 
-	// Version should be transitioned.
 	if vr.findForUpdateCalls != 1 {
 		t.Errorf("expected 1 FindByIDForUpdate call, got %d", vr.findForUpdateCalls)
 	}
@@ -379,8 +436,8 @@ func TestScan_TransitionsStaleVersion_Pending(t *testing.T) {
 	if ow.writes[0].AggregateID != "v-1" {
 		t.Errorf("expected aggregate_id v-1, got %s", ow.writes[0].AggregateID)
 	}
-	if m.stuckTotal != 1 {
-		t.Errorf("expected stuckTotal=1, got %d", m.stuckTotal)
+	if m.totalByStage["processing"] != 1 {
+		t.Errorf("expected stuckTotal[processing]=1, got %d", m.totalByStage["processing"])
 	}
 }
 
@@ -389,13 +446,12 @@ func TestScan_SkipsAlreadyTerminal(t *testing.T) {
 	vr := &mockVersionRepo{
 		findStaleResult: []*model.DocumentVersion{v},
 		findForUpdateResult: map[string]*model.DocumentVersion{
-			// By the time we lock, it's already FULLY_READY.
 			"v-1": makeVersion("v-1", "doc-1", "org-1", model.ArtifactStatusFullyReady),
 		},
 	}
 	audit := &mockAuditRepo{}
 	ow := &mockOutboxWriter{}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, audit, ow, m)
 	w.scan()
@@ -412,17 +468,18 @@ func TestScan_SkipsAlreadyTerminal(t *testing.T) {
 }
 
 func TestScan_AllIntermediateStatuses(t *testing.T) {
-	statuses := []struct {
-		status      model.ArtifactStatus
-		failedStage string
+	cases := []struct {
+		status         model.ArtifactStatus
+		failedStage    string
+		metricStage    string
 	}{
-		{model.ArtifactStatusPending, "document_processing"},
-		{model.ArtifactStatusProcessingArtifactsReceived, "legal_analysis"},
-		{model.ArtifactStatusAnalysisArtifactsReceived, "report_generation"},
-		{model.ArtifactStatusReportsReady, "finalization"},
+		{model.ArtifactStatusPending, "document_processing", "processing"},
+		{model.ArtifactStatusProcessingArtifactsReceived, "legal_analysis", "analysis"},
+		{model.ArtifactStatusAnalysisArtifactsReceived, "report_generation", "reports"},
+		{model.ArtifactStatusReportsReady, "finalization", "finalization"},
 	}
 
-	for _, tc := range statuses {
+	for _, tc := range cases {
 		t.Run(string(tc.status), func(t *testing.T) {
 			id := fmt.Sprintf("v-%s", tc.status)
 			v := makeVersion(id, "doc-1", "org-1", tc.status)
@@ -434,8 +491,9 @@ func TestScan_AllIntermediateStatuses(t *testing.T) {
 			}
 			artRepo := &mockArtifactRepo{listResult: map[string][]*model.ArtifactDescriptor{}}
 			ow := &mockOutboxWriter{}
+			m := newMockMetrics()
 
-			w := newTestWatchdog(&mockTransactor{}, vr, artRepo, &mockAuditRepo{}, ow, &mockMetrics{})
+			w := newTestWatchdog(&mockTransactor{}, vr, artRepo, &mockAuditRepo{}, ow, m)
 			w.scan()
 
 			if len(ow.writes) != 1 {
@@ -452,6 +510,14 @@ func TestScan_AllIntermediateStatuses(t *testing.T) {
 			if evt.ArtifactStatus != tc.status {
 				t.Errorf("expected ArtifactStatus=%s, got %s", tc.status, evt.ArtifactStatus)
 			}
+
+			// Per-stage metric assertions.
+			if m.totalByStage[tc.metricStage] != 1 {
+				t.Errorf("expected stuckTotal[%s]=1, got %d", tc.metricStage, m.totalByStage[tc.metricStage])
+			}
+			if m.gaugeByStage[tc.metricStage] != 1 {
+				t.Errorf("expected gauge[%s]=1, got %v", tc.metricStage, m.gaugeByStage[tc.metricStage])
+			}
 		})
 	}
 }
@@ -460,7 +526,6 @@ func TestScan_PartialFailure_ContinuesProcessing(t *testing.T) {
 	v1 := makeVersion("v-1", "doc-1", "org-1", model.ArtifactStatusPending)
 	v2 := makeVersion("v-2", "doc-2", "org-1", model.ArtifactStatusPending)
 
-	// Audit repo that fails on the first call, succeeds on the second.
 	auditRepo := &conditionalAuditRepo{
 		failOnCall: 1,
 		failErr:    errors.New("audit insert failed"),
@@ -475,14 +540,13 @@ func TestScan_PartialFailure_ContinuesProcessing(t *testing.T) {
 	}
 	artRepo := &mockArtifactRepo{listResult: map[string][]*model.ArtifactDescriptor{}}
 	ow := &mockOutboxWriter{}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, auditRepo, ow, m)
 	w.scan()
 
-	// First version fails (audit), second succeeds.
-	if m.stuckTotal != 1 {
-		t.Errorf("expected stuckTotal=1 (partial), got %d", m.stuckTotal)
+	if m.totalAcrossStages() != 1 {
+		t.Errorf("expected stuckTotal=1 (partial), got %d", m.totalAcrossStages())
 	}
 	if len(ow.writes) != 1 {
 		t.Errorf("expected 1 outbox write (second version), got %d", len(ow.writes))
@@ -535,7 +599,7 @@ func TestScan_AvailableTypesPopulated(t *testing.T) {
 	}
 	ow := &mockOutboxWriter{}
 
-	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, &mockAuditRepo{}, ow, &mockMetrics{})
+	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, &mockAuditRepo{}, ow, newMockMetrics())
 	w.scan()
 
 	if len(ow.writes) != 1 {
@@ -549,40 +613,50 @@ func TestScan_AvailableTypesPopulated(t *testing.T) {
 
 func TestScan_GaugeUpdatedWithStaleCount(t *testing.T) {
 	v1 := makeVersion("v-1", "doc-1", "org-1", model.ArtifactStatusPending)
-	v2 := makeVersion("v-2", "doc-2", "org-1", model.ArtifactStatusPending)
+	v2 := makeVersion("v-2", "doc-2", "org-1", model.ArtifactStatusProcessingArtifactsReceived)
 	vr := &mockVersionRepo{
 		findStaleResult: []*model.DocumentVersion{v1, v2},
 		findForUpdateResult: map[string]*model.DocumentVersion{
 			"v-1": makeVersion("v-1", "doc-1", "org-1", model.ArtifactStatusPending),
-			"v-2": makeVersion("v-2", "doc-2", "org-1", model.ArtifactStatusPending),
+			"v-2": makeVersion("v-2", "doc-2", "org-1", model.ArtifactStatusProcessingArtifactsReceived),
 		},
 	}
 	artRepo := &mockArtifactRepo{listResult: map[string][]*model.ArtifactDescriptor{}}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, &mockAuditRepo{}, &mockOutboxWriter{}, m)
 	w.scan()
 
-	if len(m.stuckGaugeValues) == 0 {
-		t.Fatal("expected SetStuckVersionsCount to be called")
+	if m.gaugeByStage["processing"] != 1 {
+		t.Errorf("expected gauge[processing]=1, got %v", m.gaugeByStage["processing"])
 	}
-	if m.stuckGaugeValues[0] != 2 {
-		t.Errorf("expected gauge=2, got %v", m.stuckGaugeValues[0])
+	if m.gaugeByStage["analysis"] != 1 {
+		t.Errorf("expected gauge[analysis]=1, got %v", m.gaugeByStage["analysis"])
+	}
+	if m.gaugeByStage["reports"] != 0 {
+		t.Errorf("expected gauge[reports]=0, got %v", m.gaugeByStage["reports"])
+	}
+	if m.gaugeByStage["finalization"] != 0 {
+		t.Errorf("expected gauge[finalization]=0, got %v", m.gaugeByStage["finalization"])
 	}
 }
 
 func TestScan_GaugeZeroWhenNoStale(t *testing.T) {
 	vr := &mockVersionRepo{findStaleResult: []*model.DocumentVersion{}}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, m)
 	w.scan()
 
-	if len(m.stuckGaugeValues) == 0 {
-		t.Fatal("expected SetStuckVersionsCount to be called")
-	}
-	if m.stuckGaugeValues[0] != 0 {
-		t.Errorf("expected gauge=0, got %v", m.stuckGaugeValues[0])
+	// All four stage labels must have been set to zero.
+	expected := []string{"processing", "analysis", "reports", "finalization"}
+	for _, stage := range expected {
+		if _, ok := m.gaugeByStage[stage]; !ok {
+			t.Errorf("expected SetStuckVersionsCount called for stage %s", stage)
+		}
+		if m.gaugeByStage[stage] != 0 {
+			t.Errorf("expected gauge[%s]=0, got %v", stage, m.gaugeByStage[stage])
+		}
 	}
 }
 
@@ -590,14 +664,17 @@ func TestScan_DBErrorOnFind(t *testing.T) {
 	vr := &mockVersionRepo{
 		findStaleErr: errors.New("db connection lost"),
 	}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, m)
-	// Should not panic, should log error.
 	w.scan()
 
-	if m.stuckTotal != 0 {
-		t.Errorf("expected stuckTotal=0 on DB error, got %d", m.stuckTotal)
+	if m.totalAcrossStages() != 0 {
+		t.Errorf("expected stuckTotal=0 on DB error, got %d", m.totalAcrossStages())
+	}
+	// No gauges should have been set when the query itself failed early.
+	if len(m.gaugeSamples) != 0 {
+		t.Errorf("expected no gauge samples on DB error, got %d", len(m.gaugeSamples))
 	}
 }
 
@@ -612,7 +689,7 @@ func TestScan_AuditRecordFields(t *testing.T) {
 	artRepo := &mockArtifactRepo{listResult: map[string][]*model.ArtifactDescriptor{}}
 	audit := &mockAuditRepo{}
 
-	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, audit, &mockOutboxWriter{}, &mockMetrics{})
+	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, audit, &mockOutboxWriter{}, newMockMetrics())
 	w.scan()
 
 	if len(audit.records) != 1 {
@@ -639,7 +716,6 @@ func TestScan_AuditRecordFields(t *testing.T) {
 		t.Errorf("expected actor ID stale-version-watchdog, got %s", r.ActorID)
 	}
 
-	// Check details JSON.
 	var details map[string]string
 	if err := json.Unmarshal(r.Details, &details); err != nil {
 		t.Fatalf("failed to unmarshal details: %v", err)
@@ -652,6 +728,9 @@ func TestScan_AuditRecordFields(t *testing.T) {
 	}
 	if details["reason"] != "stale_version_timeout" {
 		t.Errorf("expected reason=stale_version_timeout, got %s", details["reason"])
+	}
+	if details["stage"] != "reports" {
+		t.Errorf("expected stage=reports, got %s", details["stage"])
 	}
 }
 
@@ -666,7 +745,7 @@ func TestScan_EventFields(t *testing.T) {
 	artRepo := &mockArtifactRepo{listResult: map[string][]*model.ArtifactDescriptor{}}
 	ow := &mockOutboxWriter{}
 
-	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, &mockAuditRepo{}, ow, &mockMetrics{})
+	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, &mockAuditRepo{}, ow, newMockMetrics())
 	w.scan()
 
 	if len(ow.writes) != 1 {
@@ -700,13 +779,13 @@ func TestScan_FindByIDForUpdateError(t *testing.T) {
 		findStaleResult:  []*model.DocumentVersion{v},
 		findForUpdateErr: errors.New("lock timeout"),
 	}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, m)
 	w.scan()
 
-	if m.stuckTotal != 0 {
-		t.Errorf("expected stuckTotal=0 on lock error, got %d", m.stuckTotal)
+	if m.totalAcrossStages() != 0 {
+		t.Errorf("expected stuckTotal=0 on lock error, got %d", m.totalAcrossStages())
 	}
 }
 
@@ -719,13 +798,13 @@ func TestScan_UpdateError(t *testing.T) {
 		},
 		updateErr: errors.New("update failed"),
 	}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, m)
 	w.scan()
 
-	if m.stuckTotal != 0 {
-		t.Errorf("expected stuckTotal=0 on update error, got %d", m.stuckTotal)
+	if m.totalAcrossStages() != 0 {
+		t.Errorf("expected stuckTotal=0 on update error, got %d", m.totalAcrossStages())
 	}
 }
 
@@ -739,13 +818,13 @@ func TestScan_OutboxWriteError(t *testing.T) {
 	}
 	artRepo := &mockArtifactRepo{listResult: map[string][]*model.ArtifactDescriptor{}}
 	ow := &mockOutboxWriter{err: errors.New("outbox insert failed")}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, &mockAuditRepo{}, ow, m)
 	w.scan()
 
-	if m.stuckTotal != 0 {
-		t.Errorf("expected stuckTotal=0 on outbox error, got %d", m.stuckTotal)
+	if m.totalAcrossStages() != 0 {
+		t.Errorf("expected stuckTotal=0 on outbox error, got %d", m.totalAcrossStages())
 	}
 }
 
@@ -758,13 +837,13 @@ func TestScan_ListArtifactsError(t *testing.T) {
 		},
 	}
 	artRepo := &mockArtifactRepo{listErr: errors.New("artifact list failed")}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, &mockAuditRepo{}, &mockOutboxWriter{}, m)
 	w.scan()
 
-	if m.stuckTotal != 0 {
-		t.Errorf("expected stuckTotal=0 on artifact list error, got %d", m.stuckTotal)
+	if m.totalAcrossStages() != 0 {
+		t.Errorf("expected stuckTotal=0 on artifact list error, got %d", m.totalAcrossStages())
 	}
 }
 
@@ -784,13 +863,13 @@ func TestScan_MultipleVersions_AllTransitioned(t *testing.T) {
 	artRepo := &mockArtifactRepo{listResult: map[string][]*model.ArtifactDescriptor{}}
 	audit := &mockAuditRepo{}
 	ow := &mockOutboxWriter{}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(&mockTransactor{}, vr, artRepo, audit, ow, m)
 	w.scan()
 
-	if m.stuckTotal != 3 {
-		t.Errorf("expected stuckTotal=3, got %d", m.stuckTotal)
+	if m.totalAcrossStages() != 3 {
+		t.Errorf("expected stuckTotal=3, got %d", m.totalAcrossStages())
 	}
 	if len(audit.records) != 3 {
 		t.Errorf("expected 3 audit records, got %d", len(audit.records))
@@ -798,6 +877,107 @@ func TestScan_MultipleVersions_AllTransitioned(t *testing.T) {
 	if len(ow.writes) != 3 {
 		t.Errorf("expected 3 outbox writes, got %d", len(ow.writes))
 	}
+
+	// Per-stage totals should reflect one each.
+	for _, stage := range []string{"processing", "analysis", "finalization"} {
+		if m.totalByStage[stage] != 1 {
+			t.Errorf("expected totalByStage[%s]=1, got %d", stage, m.totalByStage[stage])
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-stage cutoffs tests (DM-TASK-053)
+// ---------------------------------------------------------------------------
+
+func TestScan_PerStageCutoffsPassedToRepo(t *testing.T) {
+	vr := &mockVersionRepo{findStaleResult: []*model.DocumentVersion{}}
+	cfg := config.WatchdogConfig{
+		ScanInterval:             time.Second,
+		BatchSize:                100,
+		StaleTimeoutProcessing:   5 * time.Minute,
+		StaleTimeoutAnalysis:     10 * time.Minute,
+		StaleTimeoutReports:      5 * time.Minute,
+		StaleTimeoutFinalization: 5 * time.Minute,
+	}
+	w := NewStaleVersionWatchdog(
+		&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{},
+		newMockMetrics(), testLogger(), cfg, testTopic,
+	)
+
+	before := time.Now().UTC()
+	w.scan()
+	after := time.Now().UTC()
+
+	if len(vr.findStaleCutoffs) != 4 {
+		t.Fatalf("expected 4 per-stage cutoffs, got %d", len(vr.findStaleCutoffs))
+	}
+
+	// The watchdog subtracts the per-stage timeout from "now" to derive each
+	// cutoff; verify bounds per status.
+	checks := []struct {
+		status  model.ArtifactStatus
+		timeout time.Duration
+	}{
+		{model.ArtifactStatusPending, 5 * time.Minute},
+		{model.ArtifactStatusProcessingArtifactsReceived, 10 * time.Minute},
+		{model.ArtifactStatusAnalysisArtifactsReceived, 5 * time.Minute},
+		{model.ArtifactStatusReportsReady, 5 * time.Minute},
+	}
+	for _, c := range checks {
+		got, ok := vr.findStaleCutoffs[c.status]
+		if !ok {
+			t.Errorf("missing cutoff for status %s", c.status)
+			continue
+		}
+		minCutoff := before.Add(-c.timeout - time.Second)
+		maxCutoff := after.Add(-c.timeout + time.Second)
+		if got.Before(minCutoff) || got.After(maxCutoff) {
+			t.Errorf("cutoff for %s = %v, expected in [%v, %v]", c.status, got, minCutoff, maxCutoff)
+		}
+	}
+}
+
+func TestScan_ZeroTimeout_DisablesStage(t *testing.T) {
+	// Only PENDING has a positive timeout; other stages are disabled.
+	cfg := config.WatchdogConfig{
+		ScanInterval:           time.Second,
+		BatchSize:              100,
+		StaleTimeoutProcessing: 5 * time.Minute,
+	}
+
+	vr := &mockVersionRepo{findStaleResult: []*model.DocumentVersion{}}
+	w := NewStaleVersionWatchdog(
+		&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{},
+		newMockMetrics(), testLogger(), cfg, testTopic,
+	)
+
+	w.scan()
+
+	if len(vr.findStaleCutoffs) != 1 {
+		t.Errorf("expected only 1 cutoff (PENDING), got %d", len(vr.findStaleCutoffs))
+	}
+	if _, ok := vr.findStaleCutoffs[model.ArtifactStatusPending]; !ok {
+		t.Error("expected cutoff for PENDING status")
+	}
+}
+
+func TestScan_PerStageLogDiagnostics(t *testing.T) {
+	// Ensures that at least the transition log path is exercised — we do not
+	// snapshot log content here (slog output is mocked to discard), but the
+	// test verifies the happy path runs without panicking when a transition
+	// succeeds. The actual "stage" key is present in the watchdog code
+	// and is verified indirectly via the audit details (see
+	// TestScan_AuditRecordFields) and per-stage metric labels.
+	v := makeVersion("v-1", "doc-1", "org-1", model.ArtifactStatusReportsReady)
+	vr := &mockVersionRepo{
+		findStaleResult: []*model.DocumentVersion{v},
+		findForUpdateResult: map[string]*model.DocumentVersion{
+			"v-1": makeVersion("v-1", "doc-1", "org-1", model.ArtifactStatusReportsReady),
+		},
+	}
+	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, newMockMetrics())
+	w.scan()
 }
 
 // ---------------------------------------------------------------------------
@@ -806,18 +986,14 @@ func TestScan_MultipleVersions_AllTransitioned(t *testing.T) {
 
 func TestStartStop_GracefulShutdown(t *testing.T) {
 	vr := &mockVersionRepo{findStaleResult: []*model.DocumentVersion{}}
-	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, &mockMetrics{})
+	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, newMockMetrics())
 
 	w.Start()
-
-	// Let it run a cycle or two.
 	time.Sleep(150 * time.Millisecond)
-
 	w.Stop()
 
 	select {
 	case <-w.Done():
-		// OK — goroutine exited.
 	case <-time.After(2 * time.Second):
 		t.Fatal("watchdog goroutine did not exit within timeout")
 	}
@@ -825,11 +1001,11 @@ func TestStartStop_GracefulShutdown(t *testing.T) {
 
 func TestStop_SafeToCallMultipleTimes(t *testing.T) {
 	vr := &mockVersionRepo{findStaleResult: []*model.DocumentVersion{}}
-	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, &mockMetrics{})
+	w := newTestWatchdog(&mockTransactor{}, vr, &mockArtifactRepo{}, &mockAuditRepo{}, &mockOutboxWriter{}, newMockMetrics())
 
 	w.Start()
 	w.Stop()
-	w.Stop() // Should not panic.
+	w.Stop()
 	<-w.Done()
 }
 
@@ -856,6 +1032,43 @@ func TestFailedStageFromStatus(t *testing.T) {
 				t.Errorf("expected %s, got %s", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestStageFromStatus(t *testing.T) {
+	tests := []struct {
+		status model.ArtifactStatus
+		want   string
+		ok     bool
+	}{
+		{model.ArtifactStatusPending, "processing", true},
+		{model.ArtifactStatusProcessingArtifactsReceived, "analysis", true},
+		{model.ArtifactStatusAnalysisArtifactsReceived, "reports", true},
+		{model.ArtifactStatusReportsReady, "finalization", true},
+		{model.ArtifactStatusFullyReady, "unknown", false},
+		{model.ArtifactStatusPartiallyAvailable, "unknown", false},
+	}
+	for _, tc := range tests {
+		t.Run(string(tc.status), func(t *testing.T) {
+			got, ok := stageFromStatus(tc.status)
+			if got != tc.want || ok != tc.ok {
+				t.Errorf("stageFromStatus(%s) = (%s, %v), want (%s, %v)", tc.status, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestAllStagesCoversKnownStatuses(t *testing.T) {
+	want := []string{"analysis", "finalization", "processing", "reports"}
+	got := append([]string(nil), allStages...)
+	sort.Strings(got)
+	if len(got) != len(want) {
+		t.Fatalf("expected %d stages, got %d", len(want), len(got))
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("stage[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }
 
@@ -888,7 +1101,6 @@ func TestGenerateUUID(t *testing.T) {
 	if len(id) != 36 {
 		t.Errorf("expected UUID length 36, got %d", len(id))
 	}
-	// Should be unique.
 	id2 := generateUUID()
 	if id == id2 {
 		t.Error("expected unique UUIDs")
@@ -907,7 +1119,6 @@ func TestScan_TransactorErrorOnSecondVersion(t *testing.T) {
 		},
 	}
 
-	// Transactor that succeeds on first call and fails on second.
 	callCount := 0
 	failingTransactor := &mockTransactor{
 		fn: func(ctx context.Context, f func(ctx context.Context) error) error {
@@ -921,13 +1132,12 @@ func TestScan_TransactorErrorOnSecondVersion(t *testing.T) {
 
 	artRepo := &mockArtifactRepo{listResult: map[string][]*model.ArtifactDescriptor{}}
 	ow := &mockOutboxWriter{}
-	m := &mockMetrics{}
+	m := newMockMetrics()
 
 	w := newTestWatchdog(failingTransactor, vr, artRepo, &mockAuditRepo{}, ow, m)
 	w.scan()
 
-	// First version succeeds, second fails.
-	if m.stuckTotal != 1 {
-		t.Errorf("expected stuckTotal=1, got %d", m.stuckTotal)
+	if m.totalAcrossStages() != 1 {
+		t.Errorf("expected stuckTotal=1, got %d", m.totalAcrossStages())
 	}
 }

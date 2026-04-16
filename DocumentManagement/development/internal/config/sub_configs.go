@@ -273,20 +273,58 @@ type TimeoutConfig struct {
 	StorageGet      time.Duration // DM_TIMEOUT_STORAGE_GET (default: 15s)
 	EventProcessing time.Duration // DM_TIMEOUT_EVENT_PROCESSING (default: 60s)
 	BrokerPublish   time.Duration // DM_TIMEOUT_BROKER_PUBLISH (default: 10s)
-	StaleVersion    time.Duration // DM_STALE_VERSION_TIMEOUT (default: 30m)
-	Shutdown        time.Duration // DM_SHUTDOWN_TIMEOUT (default: 30s)
+	// StaleVersion is kept for backward compatibility. DM-TASK-053: the watchdog
+	// no longer consumes this field directly; per-stage timeouts in WatchdogConfig
+	// replace it. The DM_STALE_VERSION_TIMEOUT env var is still loaded here and
+	// re-read by loadWatchdogConfig() as the per-stage fallback value.
+	//
+	// Deprecated: use WatchdogConfig.StaleTimeoutProcessing/Analysis/Reports/Finalization.
+	StaleVersion time.Duration // DM_STALE_VERSION_TIMEOUT (default: 30m)
+	Shutdown     time.Duration // DM_SHUTDOWN_TIMEOUT (default: 30s)
 }
 
 // WatchdogConfig holds settings for the stale version watchdog background job.
+//
+// DM-TASK-053: per-stage timeouts replace the single DM_STALE_VERSION_TIMEOUT.
+// Each intermediate artifact_status has its own cutoff. If a per-stage variable
+// is not set, it falls back to DM_STALE_VERSION_TIMEOUT (StaleVersionFallback).
+// If that fallback is also not set, the per-stage built-in default is used.
+// This allows mixed configurations (e.g. override only one stage).
 type WatchdogConfig struct {
 	ScanInterval time.Duration // DM_WATCHDOG_SCAN_INTERVAL (default: 5m)
 	BatchSize    int           // DM_WATCHDOG_BATCH_SIZE (default: 100)
+
+	// StaleTimeoutProcessing — PENDING → PROCESSING_ARTIFACTS_RECEIVED.
+	// DM_STALE_TIMEOUT_PROCESSING (default: 5m, fallback: DM_STALE_VERSION_TIMEOUT).
+	StaleTimeoutProcessing time.Duration
+	// StaleTimeoutAnalysis — PROCESSING_ARTIFACTS_RECEIVED → ANALYSIS_ARTIFACTS_RECEIVED.
+	// DM_STALE_TIMEOUT_ANALYSIS (default: 10m, fallback: DM_STALE_VERSION_TIMEOUT).
+	StaleTimeoutAnalysis time.Duration
+	// StaleTimeoutReports — ANALYSIS_ARTIFACTS_RECEIVED → REPORTS_READY.
+	// DM_STALE_TIMEOUT_REPORTS (default: 5m, fallback: DM_STALE_VERSION_TIMEOUT).
+	StaleTimeoutReports time.Duration
+	// StaleTimeoutFinalization — REPORTS_READY → FULLY_READY.
+	// DM_STALE_TIMEOUT_FINALIZATION (default: 5m, fallback: DM_STALE_VERSION_TIMEOUT).
+	StaleTimeoutFinalization time.Duration
+	// StaleVersionFallback is the value of DM_STALE_VERSION_TIMEOUT, used as the
+	// per-variable fallback for any of the four per-stage timeouts that are not
+	// explicitly set in the environment. Zero if DM_STALE_VERSION_TIMEOUT is not set.
+	StaleVersionFallback time.Duration
 }
 
 func loadWatchdogConfig() WatchdogConfig {
+	// DM_STALE_VERSION_TIMEOUT acts as the per-variable fallback. It is also
+	// loaded by loadTimeoutConfig() for backward compatibility.
+	fallback := envDuration("DM_STALE_VERSION_TIMEOUT", 0)
+
 	return WatchdogConfig{
-		ScanInterval: envDuration("DM_WATCHDOG_SCAN_INTERVAL", 5*time.Minute),
-		BatchSize:    envInt("DM_WATCHDOG_BATCH_SIZE", 100),
+		ScanInterval:             envDuration("DM_WATCHDOG_SCAN_INTERVAL", 5*time.Minute),
+		BatchSize:                envInt("DM_WATCHDOG_BATCH_SIZE", 100),
+		StaleTimeoutProcessing:   envDurationWithFallback("DM_STALE_TIMEOUT_PROCESSING", fallback, 5*time.Minute),
+		StaleTimeoutAnalysis:     envDurationWithFallback("DM_STALE_TIMEOUT_ANALYSIS", fallback, 10*time.Minute),
+		StaleTimeoutReports:      envDurationWithFallback("DM_STALE_TIMEOUT_REPORTS", fallback, 5*time.Minute),
+		StaleTimeoutFinalization: envDurationWithFallback("DM_STALE_TIMEOUT_FINALIZATION", fallback, 5*time.Minute),
+		StaleVersionFallback:     fallback,
 	}
 }
 

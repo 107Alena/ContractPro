@@ -2601,3 +2601,64 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 **Все 52 задачи DM завершены.** Доменная область Document Management полностью реализована.
 
 ---
+
+## DM-TASK-053: Per-stage таймауты в Stale Version Watchdog (2026-04-16)
+
+**Статус:** done
+
+**Что сделано:**
+- **Config (`internal/config/`)**:
+  - `config.go`: добавлен хелпер `envDurationWithFallback(key, fallback, defaultVal)` — двухуровневый fallback (env → shared fallback → built-in default).
+  - `sub_configs.go`: `WatchdogConfig` расширен полями `StaleTimeoutProcessing/Analysis/Reports/Finalization` + `StaleVersionFallback`. `loadWatchdogConfig()` читает per-stage env-vars с fallback на `DM_STALE_VERSION_TIMEOUT`. Поле `TimeoutConfig.StaleVersion` помечено `Deprecated:` — остаётся для backward compatibility, но watchdog'ом больше не используется.
+- **Domain port (`internal/domain/port/outbound.go`)**: сигнатура `FindStaleInIntermediateStatus` изменена с `cutoff time.Time` на `cutoffs map[model.ArtifactStatus]time.Time`. Каскадно обновлено 7 мест: postgres repo, pool-wrapper в `cmd/dm-service/main.go`, `integration/testinfra.go` (in-memory fake), 4 мока в тестах пакетов `watchdog`, `version`, `diff`, `ingestion`.
+- **PostgreSQL (`internal/infra/postgres/version_repository.go`)**: SQL переписан на dynamic disjunction `(artifact_status=$1 AND created_at<$2) OR ...` с detерminированным порядком статусов по `knownOrder` slice. Только статусы, присутствующие в `cutoffs`, попадают в WHERE. Status values идут через параметризованные bind-переменные (нет SQL injection).
+- **Metrics (`internal/infra/observability/metrics.go`)**: `StuckVersionsCount` Gauge→GaugeVec{stage}; `StuckVersionsTotal` Counter→CounterVec{stage}. Bridge-методы теперь принимают stage: `IncStuckVersionsTotal(stage, count)`, `SetStuckVersionsCount(stage, count)`. Label-значения: processing/analysis/reports/finalization.
+- **Watchdog (`internal/application/watchdog/watchdog.go`)**:
+  - Конструктор: параметр `staleTimeout time.Duration` удалён (не нужен — per-stage значения лежат в `WatchdogConfig`).
+  - `buildCutoffs(now)` формирует map[status]cutoff только для статусов с положительным таймаутом (нулевой таймаут → стадия disabled).
+  - `scan()`: один SQL-запрос с per-stage cutoffs → группировка по stage → `SetStuckVersionsCount` для всех 4 канонических стадий (включая 0 — чтобы Prometheus сбросил предыдущее ненулевое значение) → per-version transition → `IncStuckVersionsTotal(stage, count)` только по успехам.
+  - Structured logs: `stage` добавлен в строки при успешном переводе и в итоговый log scan completed (`per_stage_found`, `per_stage_success`).
+  - Audit details: добавлено поле `stage`.
+  - Event `ErrorMessage`: использует per-stage таймаут.
+- **Wiring (`cmd/dm-service/main.go:294-301`)**: `watchdog.NewStaleVersionWatchdog` больше не получает `cfg.Timeout.StaleVersion` — per-stage значения проходят через `cfg.Watchdog`.
+- **Тесты**:
+  - `internal/config/config_test.go`: дефолты per-stage (5m/10m/5m/5m), `TestLoad_WatchdogPerStageExplicit` (все 4 заданы), `TestLoad_WatchdogMixedFallback` (часть per-stage + fallback — правильный приоритет per-variable), сохранена проверка `DM_STALE_VERSION_TIMEOUT=1h` → все 4 per-stage = 1h.
+  - `internal/application/watchdog/watchdog_test.go`: переделан `mockMetrics` (map по stage), обновлены все существующие тесты под новый стиль per-stage assertions; новые тесты — `TestScan_PerStageCutoffsPassedToRepo`, `TestScan_ZeroTimeout_DisablesStage`, `TestStageFromStatus`, `TestAllStagesCoversKnownStatuses`.
+  - `internal/infra/observability/metrics_test.go`: `dm_stuck_versions_total` добавлен в список counters; GaugeVec/CounterVec сидируются через новые bridge-методы.
+- **Документация**:
+  - `DocumentManagement/architecture/configuration.md` — 4 новых env var в таблице Watchdog, `DM_STALE_VERSION_TIMEOUT` помечен fallback в секции Timeouts и в примере .env.
+  - `DocumentManagement/architecture/state-machine.md` — секция «Stale Version Watchdog» полностью переписана: таблица переходов, worst-case lag formula, per-stage метрики, новые алерт-выражения.
+  - `DocumentManagement/architecture/deployment.md` — label stage в `dm_stuck_versions_count` + добавлен `dm_stuck_versions_total`; прод-пример env обновлён.
+  - `DocumentManagement/development/.env.example` — блок Watchdog per-stage + комментарий к legacy fallback.
+  - `DocumentManagement/development/internal/infra/CLAUDE.md` — `dm_stuck_versions_count{stage}` / `dm_stuck_versions_total{stage}` в описании метрик.
+  - `DocumentManagement/development/internal/application/CLAUDE.md` — расширенное описание watchdog (per-stage, SQL disjunction, metrics).
+  - `ApiBackendOrchestrator/architecture/high-architecture.md` — ASSUMPTION-ORCH-14: «Требует доработки DM» → «Реализовано в DM-TASK-053»; добавлен 4-й таймаут FINALIZATION с обоснованием (DM расширил ORCH-формулировку на основе version.go). ASSUMPTION-ORCH-13: «30-минутного DM Watchdog» → «per-stage DM Watchdog».
+
+**План реализации:**
+1. Изучить текущий watchdog, port, metrics, wiring, моки, тесты.
+2. Расширить `WatchdogConfig` + хелпер с fallback.
+3. Обновить port `FindStaleInIntermediateStatus` + каскадно все 7 реализаций/моков.
+4. PostgreSQL SQL с disjunction (postgres-pro подтвердил adequacy).
+5. Metrics Gauge/Counter → GaugeVec/CounterVec с label `stage`.
+6. Переписать `watchdog.scan()` — per-stage cutoffs, grouping, reset gauges, structured stage log.
+7. Wiring в `main.go`.
+8. Новые тесты config + watchdog + metrics; обновить существующие.
+9. 7 файлов документации.
+10. Прогоны: `go build`, `go vet`, `go test -race -count=1`, `make build build-migrate test lint`.
+
+**Консультации:**
+- postgres-pro: проверка SQL disjunction формы — одобрена как оптимальная для данного workload (<100k rows, scan каждые 5m). Index `(artifact_status, created_at)` рекомендован, но не обязателен при текущем размере таблицы.
+- code-architect (через Agent-делегирование): план валидирован по acceptance criteria.
+- documentation-engineer: ревью 7 файлов → 3 несоответствия (stale "30-минутного" в ORCH-13, imprecise "ко всем 4 стадиям" в .env.example и deployment.md) → все исправлены.
+- code-reviewer: clean code review. Замечания [LOW] либо соответствуют существующим паттернам проекта (missing log on parse fail — как во всех `env*` хелперах), либо явно зафиксированы в acceptance criteria (StaleVersionFallback field, TimeoutConfig.StaleVersion остаётся).
+
+**Тесты:**
+- `go build ./...` — OK
+- `go vet ./...` — OK
+- `go test -count=1 ./...` — ALL PASS (30 пакетов)
+- `go test -count=1 -race ./...` — ALL PASS (30 пакетов)
+- `make build build-migrate test lint` — ALL OK
+
+**Итог:** ASSUMPTION-ORCH-14 полностью закрыто. Per-stage detection даёт lag 5–15 минут вместо прежних 30+ мин. Обратная совместимость сохранена через per-variable fallback на `DM_STALE_VERSION_TIMEOUT`. Мониторинг получил 4-стадийный прицел: `sum(dm_stuck_versions_count) > 0` (any-stage алерт) или `dm_stuck_versions_count{stage="<X>"} > 0` (точечный).
+
+---

@@ -110,7 +110,7 @@ func (m *mockVersionRepo) List(ctx context.Context, orgID, docID string, page, p
 func (m *mockVersionRepo) Update(context.Context, *model.DocumentVersion) error {
 	panic("not used in version management")
 }
-func (m *mockVersionRepo) FindStaleInIntermediateStatus(_ context.Context, _ time.Time, _ int) ([]*model.DocumentVersion, error) {
+func (m *mockVersionRepo) FindStaleInIntermediateStatus(_ context.Context, _ map[model.ArtifactStatus]time.Time, _ int) ([]*model.DocumentVersion, error) {
 	return nil, nil
 }
 func (m *mockVersionRepo) NextVersionNumber(ctx context.Context, orgID, docID string) (int, error) {

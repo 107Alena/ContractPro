@@ -411,13 +411,18 @@ func (r *memoryVersionRepository) NextVersionNumber(ctx context.Context, orgID, 
 	return maxNum + 1, nil
 }
 
-func (r *memoryVersionRepository) FindStaleInIntermediateStatus(_ context.Context, cutoff time.Time, limit int) ([]*model.DocumentVersion, error) {
+func (r *memoryVersionRepository) FindStaleInIntermediateStatus(_ context.Context, cutoffs map[model.ArtifactStatus]time.Time, limit int) ([]*model.DocumentVersion, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	if len(cutoffs) == 0 {
+		return []*model.DocumentVersion{}, nil
+	}
+
 	var result []*model.DocumentVersion
 	for _, ver := range r.versions {
-		if ver.ArtifactStatus.IsTerminal() {
+		cutoff, ok := cutoffs[ver.ArtifactStatus]
+		if !ok {
 			continue
 		}
 		if ver.CreatedAt.Before(cutoff) {

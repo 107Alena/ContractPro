@@ -20,17 +20,50 @@ type OutboxWriter interface {
 }
 
 // WatchdogMetrics is the consumer-side interface for watchdog-specific metrics.
-// Implemented by observability.Metrics.
+// Implemented by observability.Metrics. DM-TASK-053: each method takes a stage
+// label so the underlying Prometheus gauge/counter is partitioned by pipeline
+// stage (processing/analysis/reports/finalization).
 type WatchdogMetrics interface {
-	IncStuckVersionsTotal(count int)
-	SetStuckVersionsCount(count float64)
+	IncStuckVersionsTotal(stage string, count int)
+	SetStuckVersionsCount(stage string, count float64)
+}
+
+// Stage labels used for metrics and logs. Each value corresponds to one
+// intermediate ArtifactStatus (DM-TASK-053).
+const (
+	stageProcessing   = "processing"
+	stageAnalysis     = "analysis"
+	stageReports      = "reports"
+	stageFinalization = "finalization"
+)
+
+// allStages is the canonical list of stage labels. Used to reset per-stage
+// gauges to zero before each scan so a resolved backlog does not leave a
+// stale non-zero value on one of the labels.
+var allStages = []string{stageProcessing, stageAnalysis, stageReports, stageFinalization}
+
+// stageFromStatus maps an intermediate ArtifactStatus to its stage label.
+// Returns ("unknown", false) for terminal or unexpected statuses.
+func stageFromStatus(status model.ArtifactStatus) (string, bool) {
+	switch status {
+	case model.ArtifactStatusPending:
+		return stageProcessing, true
+	case model.ArtifactStatusProcessingArtifactsReceived:
+		return stageAnalysis, true
+	case model.ArtifactStatusAnalysisArtifactsReceived:
+		return stageReports, true
+	case model.ArtifactStatusReportsReady:
+		return stageFinalization, true
+	default:
+		return "unknown", false
+	}
 }
 
 // StaleVersionWatchdog is a background job that periodically scans for
 // document versions stuck in intermediate artifact_status states beyond
-// the configured timeout, transitions them to PARTIALLY_AVAILABLE,
+// the configured per-stage timeout, transitions them to PARTIALLY_AVAILABLE,
 // records an audit trail, and publishes a notification event via the
-// transactional outbox (REV-008/BRE-010).
+// transactional outbox (REV-008/BRE-010/DM-TASK-053).
 type StaleVersionWatchdog struct {
 	transactor   port.Transactor
 	versionRepo  port.VersionRepository
@@ -40,7 +73,6 @@ type StaleVersionWatchdog struct {
 	metrics      WatchdogMetrics
 	logger       *slog.Logger
 
-	staleTimeout time.Duration
 	watchdogCfg  config.WatchdogConfig
 	partialTopic string
 
@@ -50,6 +82,11 @@ type StaleVersionWatchdog struct {
 
 // NewStaleVersionWatchdog creates a watchdog with the given dependencies.
 // Panics if any required dependency is nil (programmer error at startup).
+//
+// DM-TASK-053: per-stage timeouts are read from watchdogCfg (StaleTimeoutProcessing,
+// StaleTimeoutAnalysis, StaleTimeoutReports, StaleTimeoutFinalization). The
+// previous single staleTimeout parameter is removed — callers must pre-resolve
+// any fallback behaviour into the WatchdogConfig fields.
 func NewStaleVersionWatchdog(
 	transactor port.Transactor,
 	versionRepo port.VersionRepository,
@@ -58,7 +95,6 @@ func NewStaleVersionWatchdog(
 	outboxWriter OutboxWriter,
 	metrics WatchdogMetrics,
 	logger *slog.Logger,
-	staleTimeout time.Duration,
 	watchdogCfg config.WatchdogConfig,
 	partialTopic string,
 ) *StaleVersionWatchdog {
@@ -92,7 +128,6 @@ func NewStaleVersionWatchdog(
 		outboxWriter: outboxWriter,
 		metrics:      metrics,
 		logger:       logger,
-		staleTimeout: staleTimeout,
 		watchdogCfg:  watchdogCfg,
 		partialTopic: partialTopic,
 		stop:         make(chan struct{}),
@@ -137,26 +172,76 @@ func (w *StaleVersionWatchdog) run() {
 	}
 }
 
-// scan performs one sweep: finds stale versions, transitions each one.
+// buildCutoffs returns the per-status cutoff timestamps based on now() and
+// the per-stage timeouts from WatchdogConfig. Only statuses with a positive
+// timeout are included — a zero timeout effectively disables the stage.
+func (w *StaleVersionWatchdog) buildCutoffs(now time.Time) map[model.ArtifactStatus]time.Time {
+	cutoffs := make(map[model.ArtifactStatus]time.Time, 4)
+	addIfPositive := func(status model.ArtifactStatus, d time.Duration) {
+		if d > 0 {
+			cutoffs[status] = now.Add(-d)
+		}
+	}
+	addIfPositive(model.ArtifactStatusPending, w.watchdogCfg.StaleTimeoutProcessing)
+	addIfPositive(model.ArtifactStatusProcessingArtifactsReceived, w.watchdogCfg.StaleTimeoutAnalysis)
+	addIfPositive(model.ArtifactStatusAnalysisArtifactsReceived, w.watchdogCfg.StaleTimeoutReports)
+	addIfPositive(model.ArtifactStatusReportsReady, w.watchdogCfg.StaleTimeoutFinalization)
+	return cutoffs
+}
+
+// timeoutForStatus returns the configured timeout for the given intermediate
+// status (used for audit/event payload annotation).
+func (w *StaleVersionWatchdog) timeoutForStatus(status model.ArtifactStatus) time.Duration {
+	switch status {
+	case model.ArtifactStatusPending:
+		return w.watchdogCfg.StaleTimeoutProcessing
+	case model.ArtifactStatusProcessingArtifactsReceived:
+		return w.watchdogCfg.StaleTimeoutAnalysis
+	case model.ArtifactStatusAnalysisArtifactsReceived:
+		return w.watchdogCfg.StaleTimeoutReports
+	case model.ArtifactStatusReportsReady:
+		return w.watchdogCfg.StaleTimeoutFinalization
+	default:
+		return 0
+	}
+}
+
+// scan performs one sweep: finds stale versions per-stage, transitions each one.
 func (w *StaleVersionWatchdog) scan() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	cutoff := time.Now().UTC().Add(-w.staleTimeout)
+	cutoffs := w.buildCutoffs(time.Now().UTC())
 
-	staleVersions, err := w.versionRepo.FindStaleInIntermediateStatus(ctx, cutoff, w.watchdogCfg.BatchSize)
+	staleVersions, err := w.versionRepo.FindStaleInIntermediateStatus(ctx, cutoffs, w.watchdogCfg.BatchSize)
 	if err != nil {
 		w.logger.Error("stale version watchdog: find stale versions failed", "error", err)
 		return
 	}
 
-	// Update gauge with the number of stale versions found before transitioning.
-	w.metrics.SetStuckVersionsCount(float64(len(staleVersions)))
+	// Group found versions by stage so the gauge reflects the per-stage
+	// backlog in this scan. Stages with no stale versions get a zero value
+	// so Prometheus clears a previous non-zero reading on the next scrape.
+	perStageFound := make(map[string]int, len(allStages))
+	for _, stage := range allStages {
+		perStageFound[stage] = 0
+	}
+	for _, v := range staleVersions {
+		stage, ok := stageFromStatus(v.ArtifactStatus)
+		if !ok {
+			continue
+		}
+		perStageFound[stage]++
+	}
+	for stage, count := range perStageFound {
+		w.metrics.SetStuckVersionsCount(stage, float64(count))
+	}
 
 	if len(staleVersions) == 0 {
 		return
 	}
 
+	perStageSuccess := make(map[string]int, len(allStages))
 	var successCount, failCount int
 
 	for _, v := range staleVersions {
@@ -165,27 +250,41 @@ func (w *StaleVersionWatchdog) scan() {
 			break
 		}
 
+		stage, _ := stageFromStatus(v.ArtifactStatus)
+
 		if err := w.transitionVersion(ctx, v); err != nil {
 			w.logger.Warn("stale version watchdog: failed to transition version",
 				"version_id", v.VersionID,
 				"document_id", v.DocumentID,
 				"artifact_status", v.ArtifactStatus,
+				"stage", stage,
 				"error", err,
 			)
 			failCount++
 		} else {
+			w.logger.Info("stale version watchdog: transitioned to PARTIALLY_AVAILABLE",
+				"version_id", v.VersionID,
+				"document_id", v.DocumentID,
+				"artifact_status", v.ArtifactStatus,
+				"stage", stage,
+			)
+			perStageSuccess[stage]++
 			successCount++
 		}
 	}
 
-	if successCount > 0 {
-		w.metrics.IncStuckVersionsTotal(successCount)
+	for stage, count := range perStageSuccess {
+		if count > 0 {
+			w.metrics.IncStuckVersionsTotal(stage, count)
+		}
 	}
 
 	w.logger.Info("stale version watchdog: scan completed",
 		"found", len(staleVersions),
 		"transitioned", successCount,
 		"failed", failCount,
+		"per_stage_found", perStageFound,
+		"per_stage_success", perStageSuccess,
 	)
 }
 
@@ -212,6 +311,8 @@ func (w *StaleVersionWatchdog) transitionVersion(ctx context.Context, version *m
 		}
 
 		oldStatus := fresh.ArtifactStatus
+		stageTimeout := w.timeoutForStatus(oldStatus)
+
 		if err := fresh.TransitionArtifactStatus(model.ArtifactStatusPartiallyAvailable); err != nil {
 			return err
 		}
@@ -230,11 +331,13 @@ func (w *StaleVersionWatchdog) transitionVersion(ctx context.Context, version *m
 		availableTypes := extractArtifactTypes(artifacts)
 
 		// Audit record.
+		stage, _ := stageFromStatus(oldStatus)
 		details, _ := json.Marshal(map[string]any{
 			"from":    string(oldStatus),
 			"to":      string(model.ArtifactStatusPartiallyAvailable),
 			"reason":  "stale_version_timeout",
-			"timeout": w.staleTimeout.String(),
+			"stage":   stage,
+			"timeout": stageTimeout.String(),
 		})
 		auditRecord := model.NewAuditRecord(
 			generateUUID(), fresh.OrganizationID,
@@ -260,7 +363,7 @@ func (w *StaleVersionWatchdog) transitionVersion(ctx context.Context, version *m
 			ArtifactStatus: oldStatus,
 			AvailableTypes: availableTypes,
 			FailedStage:    failedStageFromStatus(oldStatus),
-			ErrorMessage:   "version timed out in " + string(oldStatus) + " after " + w.staleTimeout.String(),
+			ErrorMessage:   "version timed out in " + string(oldStatus) + " after " + stageTimeout.String(),
 		}
 
 		return w.outboxWriter.Write(txCtx, fresh.VersionID, w.partialTopic, event)
@@ -277,7 +380,9 @@ func extractArtifactTypes(artifacts []*model.ArtifactDescriptor) []model.Artifac
 }
 
 // failedStageFromStatus maps the intermediate status to the pipeline stage
-// that failed to complete.
+// that failed to complete. The label set here is the human-readable pipeline
+// name published in the outbox event (different from the short metric label
+// returned by stageFromStatus).
 func failedStageFromStatus(status model.ArtifactStatus) string {
 	switch status {
 	case model.ArtifactStatusPending:

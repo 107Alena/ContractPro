@@ -295,7 +295,10 @@ func run() int {
 		transactor, poolVersionRepo, poolArtifactRepo, poolAuditRepo, outboxWriter,
 		obs.Metrics,
 		obs.Logger.Slog().With("component", "stale-watchdog"),
-		cfg.Timeout.StaleVersion,
+		// DM-TASK-053: per-stage timeouts live entirely inside WatchdogConfig;
+		// cfg.Timeout.StaleVersion is no longer passed (it is still read via
+		// loadWatchdogConfig as the per-variable fallback and exposed through
+		// WatchdogConfig.StaleVersionFallback).
 		cfg.Watchdog,
 		cfg.Broker.TopicDMEventsVersionPartiallyAvailable,
 	)
@@ -820,8 +823,8 @@ func (r *poolVersionRepository) ListByDocument(ctx context.Context, documentID s
 	return r.inner.ListByDocument(postgres.InjectPool(ctx, r.pool), documentID)
 }
 
-func (r *poolVersionRepository) FindStaleInIntermediateStatus(ctx context.Context, cutoff time.Time, limit int) ([]*model.DocumentVersion, error) {
-	return r.inner.FindStaleInIntermediateStatus(postgres.InjectPool(ctx, r.pool), cutoff, limit)
+func (r *poolVersionRepository) FindStaleInIntermediateStatus(ctx context.Context, cutoffs map[model.ArtifactStatus]time.Time, limit int) ([]*model.DocumentVersion, error) {
+	return r.inner.FindStaleInIntermediateStatus(postgres.InjectPool(ctx, r.pool), cutoffs, limit)
 }
 
 // poolArtifactRepository wraps port.ArtifactRepository to inject the pgxpool.Pool.

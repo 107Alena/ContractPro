@@ -152,7 +152,7 @@
 | `DM_TIMEOUT_STORAGE_GET` | Таймаут GetObject | `15s` | |
 | `DM_TIMEOUT_EVENT_PROCESSING` | Общий таймаут обработки одного события | `60s` | |
 | `DM_TIMEOUT_BROKER_PUBLISH` | Таймаут публикации в broker | `10s` | |
-| `DM_STALE_VERSION_TIMEOUT` | Версия считается stale после этого периода | `30m` | REV-008: watchdog переводит в PARTIALLY_AVAILABLE |
+| `DM_STALE_VERSION_TIMEOUT` | Legacy fallback для per-stage таймаутов watchdog (см. ниже) | `—` (если не задан — каждый per-stage берёт собственный default) | DM-TASK-053: больше не используется напрямую watchdog'ом; сохранён как per-variable fallback для 4 новых переменных. См. секцию «Stale Version Watchdog». |
 | `DM_SHUTDOWN_TIMEOUT` | Таймаут graceful shutdown | `30s` | BRE-019: ordered teardown 8 фаз |
 
 ---
@@ -217,8 +217,13 @@
 
 | Переменная | Описание | По умолчанию | Заметки |
 |-----------|----------|-------------|---------|
-| `DM_WATCHDOG_SCAN_INTERVAL` | Интервал сканирования stale версий | `5m` | REV-008: переводит в PARTIALLY_AVAILABLE |
+| `DM_WATCHDOG_SCAN_INTERVAL` | Интервал сканирования stale версий | `5m` | REV-008: переводит в PARTIALLY_AVAILABLE. Worst-case lag детекции = `timeout + scan interval`. |
 | `DM_WATCHDOG_BATCH_SIZE` | Макс. версий за один scan | `100` | |
+| `DM_STALE_TIMEOUT_PROCESSING` | Таймаут для перехода `PENDING → PROCESSING_ARTIFACTS_RECEIVED` | `5m` | DM-TASK-053 / ASSUMPTION-ORCH-14. Fallback: `DM_STALE_VERSION_TIMEOUT` → per-stage default. |
+| `DM_STALE_TIMEOUT_ANALYSIS` | Таймаут для перехода `PROCESSING_ARTIFACTS_RECEIVED → ANALYSIS_ARTIFACTS_RECEIVED` | `10m` | DM-TASK-053 / ASSUMPTION-ORCH-14. Fallback: `DM_STALE_VERSION_TIMEOUT` → per-stage default. |
+| `DM_STALE_TIMEOUT_REPORTS` | Таймаут для перехода `ANALYSIS_ARTIFACTS_RECEIVED → REPORTS_READY` | `5m` | DM-TASK-053 / ASSUMPTION-ORCH-14. Fallback: `DM_STALE_VERSION_TIMEOUT` → per-stage default. |
+| `DM_STALE_TIMEOUT_FINALIZATION` | Таймаут для перехода `REPORTS_READY → FULLY_READY` | `5m` | DM-TASK-053. Fallback: `DM_STALE_VERSION_TIMEOUT` → per-stage default. |
+| `DM_STALE_VERSION_TIMEOUT` | Legacy: общий fallback для 4 таймаутов выше | `—` | DM-TASK-053: применяется per-variable — если per-stage переменная не задана, берётся этот fallback; если и он не задан — собственный default стадии. Смешанные конфигурации поддерживаются. |
 
 ### Orphan Cleanup
 
@@ -369,7 +374,7 @@ DM_KVSTORE_ADDRESS=localhost:6380
 # DM_TIMEOUT_STORAGE_GET=15s
 # DM_TIMEOUT_EVENT_PROCESSING=60s
 # DM_TIMEOUT_BROKER_PUBLISH=10s
-# DM_STALE_VERSION_TIMEOUT=30m
+# DM_STALE_VERSION_TIMEOUT=  # legacy fallback для per-stage watchdog таймаутов (см. раздел Watchdog)
 # DM_SHUTDOWN_TIMEOUT=30s
 
 # Observability
@@ -396,6 +401,12 @@ DM_KVSTORE_ADDRESS=localhost:6380
 # Watchdog
 # DM_WATCHDOG_SCAN_INTERVAL=5m
 # DM_WATCHDOG_BATCH_SIZE=100
+# DM-TASK-053: per-stage таймауты. Если не заданы — используется DM_STALE_VERSION_TIMEOUT
+# как per-variable fallback; если и он не задан — встроенный per-stage default.
+# DM_STALE_TIMEOUT_PROCESSING=5m
+# DM_STALE_TIMEOUT_ANALYSIS=10m
+# DM_STALE_TIMEOUT_REPORTS=5m
+# DM_STALE_TIMEOUT_FINALIZATION=5m
 
 # Orphan Cleanup
 # DM_ORPHAN_SCAN_INTERVAL=1h

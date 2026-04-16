@@ -3,6 +3,9 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -210,27 +213,56 @@ func (r *VersionRepository) NextVersionNumber(ctx context.Context, organizationI
 }
 
 // FindStaleInIntermediateStatus returns versions stuck in non-terminal states
-// whose created_at is older than cutoff. No row locking — the caller handles
-// locking per-version via FindByIDForUpdate in separate transactions.
-func (r *VersionRepository) FindStaleInIntermediateStatus(ctx context.Context, cutoff time.Time, limit int) ([]*model.DocumentVersion, error) {
-	conn := ConnFromCtx(ctx)
+// whose created_at is older than the per-stage cutoff for their status
+// (DM-TASK-053). No row locking — the caller handles locking per-version via
+// FindByIDForUpdate in separate transactions.
+//
+// Only statuses present in cutoffs are scanned. Missing keys (e.g. an operator
+// disabled a stage) are silently skipped. If the map is empty, no query is run
+// and an empty slice is returned.
+func (r *VersionRepository) FindStaleInIntermediateStatus(ctx context.Context, cutoffs map[model.ArtifactStatus]time.Time, limit int) ([]*model.DocumentVersion, error) {
+	if len(cutoffs) == 0 {
+		return []*model.DocumentVersion{}, nil
+	}
 
-	rows, err := conn.Query(ctx,
-		`SELECT version_id, document_id, organization_id, version_number, parent_version_id,
-				origin_type, origin_description, source_file_key, source_file_name,
-				source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at
-		FROM document_versions
-		WHERE artifact_status IN ($1, $2, $3, $4)
-		  AND created_at < $5
-		ORDER BY created_at ASC
-		LIMIT $6`,
-		string(model.ArtifactStatusPending),
-		string(model.ArtifactStatusProcessingArtifactsReceived),
-		string(model.ArtifactStatusAnalysisArtifactsReceived),
-		string(model.ArtifactStatusReportsReady),
-		cutoff,
-		limit,
+	// Build disjunction: (status = $i AND created_at < $i+1) OR ...
+	// Deterministic order — iterate over the 4 known intermediate statuses
+	// so args line up with placeholders reproducibly across calls.
+	knownOrder := []model.ArtifactStatus{
+		model.ArtifactStatusPending,
+		model.ArtifactStatusProcessingArtifactsReceived,
+		model.ArtifactStatusAnalysisArtifactsReceived,
+		model.ArtifactStatusReportsReady,
+	}
+
+	var (
+		conditions []string
+		args       []any
 	)
+	for _, status := range knownOrder {
+		cutoff, ok := cutoffs[status]
+		if !ok {
+			continue
+		}
+		args = append(args, string(status), cutoff)
+		conditions = append(conditions,
+			fmt.Sprintf("(artifact_status = $%d AND created_at < $%d)", len(args)-1, len(args)))
+	}
+	if len(conditions) == 0 {
+		return []*model.DocumentVersion{}, nil
+	}
+	args = append(args, limit)
+
+	query := `SELECT version_id, document_id, organization_id, version_number, parent_version_id,
+			origin_type, origin_description, source_file_key, source_file_name,
+			source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at
+		FROM document_versions
+		WHERE ` + strings.Join(conditions, " OR ") + `
+		ORDER BY created_at ASC
+		LIMIT $` + strconv.Itoa(len(args))
+
+	conn := ConnFromCtx(ctx)
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, port.NewDatabaseError("find stale versions", err)
 	}

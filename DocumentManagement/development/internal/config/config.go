@@ -206,6 +206,23 @@ func envDuration(key string, defaultVal time.Duration) time.Duration {
 	return parsed
 }
 
+// envDurationWithFallback reads a duration env var with a two-tier fallback:
+// (1) parse key, (2) fallback if > 0, (3) built-in defaultVal. Used by
+// DM-TASK-053 per-stage watchdog timeouts with DM_STALE_VERSION_TIMEOUT
+// as the per-variable legacy fallback.
+func envDurationWithFallback(key string, fallback, defaultVal time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			return parsed
+		}
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return defaultVal
+}
+
 func envInt64(key string, defaultVal int64) int64 {
 	v := os.Getenv(key)
 	if v == "" {

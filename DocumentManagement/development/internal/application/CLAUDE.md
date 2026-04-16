@@ -41,9 +41,11 @@ Application services implementing inbound port handlers. Coordinates domain logi
 
 ## Background Jobs
 
-**watchdog/** — StaleVersionWatchdog (REV-008/BRE-010)
-- Ticker-based (5 min default), finds versions stuck in intermediate status beyond timeout
-- Transitions to PARTIALLY_AVAILABLE with FOR UPDATE lock + audit + outbox notification
+**watchdog/** — StaleVersionWatchdog (REV-008/BRE-010/DM-TASK-053)
+- Ticker-based (`DM_WATCHDOG_SCAN_INTERVAL`, default 5 min), finds versions stuck in intermediate status beyond **per-stage** timeouts (`DM_STALE_TIMEOUT_PROCESSING=5m`, `ANALYSIS=10m`, `REPORTS=5m`, `FINALIZATION=5m`). `DM_STALE_VERSION_TIMEOUT` is retained as a per-variable legacy fallback.
+- Single SQL query with disjunction over `(artifact_status, created_at)` pairs, one per-stage cutoff
+- Transitions to PARTIALLY_AVAILABLE with FOR UPDATE lock + audit (with `stage` field) + outbox notification
+- Per-stage metrics: `dm_stuck_versions_count{stage}` (gauge, reset every scan) and `dm_stuck_versions_total{stage}` (counter)
 - Cross-tenant system query
 
 **orphancleanup/** — OrphanCleanupJob (BRE-008)

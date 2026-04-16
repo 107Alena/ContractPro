@@ -75,12 +75,14 @@ type Metrics struct {
 	// --- Version health ---
 
 	// StuckVersionsCount is the current number of versions stuck in an
-	// intermediate artifact_status.
-	StuckVersionsCount prometheus.Gauge
+	// intermediate artifact_status, partitioned by pipeline stage
+	// (processing/analysis/reports/finalization) — DM-TASK-053.
+	StuckVersionsCount *prometheus.GaugeVec
 
 	// StuckVersionsTotal counts the total number of versions transitioned
-	// to PARTIALLY_AVAILABLE by the stale version watchdog (DM-TASK-041).
-	StuckVersionsTotal prometheus.Counter
+	// to PARTIALLY_AVAILABLE by the stale version watchdog (DM-TASK-041),
+	// partitioned by pipeline stage (DM-TASK-053).
+	StuckVersionsTotal *prometheus.CounterVec
 
 	// --- Data integrity ---
 
@@ -221,15 +223,15 @@ func NewMetrics() *Metrics {
 			Help: "Total number of idempotency check outcomes by result.",
 		}, []string{"result"}),
 
-		StuckVersionsCount: prometheus.NewGauge(prometheus.GaugeOpts{
+		StuckVersionsCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "dm_stuck_versions_count",
-			Help: "Current number of versions stuck in an intermediate artifact status.",
-		}),
+			Help: "Current number of versions stuck in an intermediate artifact status, by pipeline stage.",
+		}, []string{"stage"}),
 
-		StuckVersionsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+		StuckVersionsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "dm_stuck_versions_total",
-			Help: "Total number of versions transitioned to PARTIALLY_AVAILABLE by the stale version watchdog.",
-		}),
+			Help: "Total number of versions transitioned to PARTIALLY_AVAILABLE by the stale version watchdog, by pipeline stage.",
+		}, []string{"stage"}),
 
 		IntegrityCheckFailures: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "dm_integrity_check_failures_total",
@@ -423,17 +425,19 @@ func (m *Metrics) IncDLQMessages(reason string) {
 // watchdog.WatchdogMetrics interface (DM-TASK-041)
 // ---------------------------------------------------------------------------
 
-// IncStuckVersionsTotal increments dm_stuck_versions_total by count.
+// IncStuckVersionsTotal increments dm_stuck_versions_total{stage} by count.
 // Non-positive values are ignored (prometheus.Counter.Add panics on negative).
-func (m *Metrics) IncStuckVersionsTotal(count int) {
+// DM-TASK-053: stage is one of processing/analysis/reports/finalization.
+func (m *Metrics) IncStuckVersionsTotal(stage string, count int) {
 	if count > 0 {
-		m.StuckVersionsTotal.Add(float64(count))
+		m.StuckVersionsTotal.WithLabelValues(stage).Add(float64(count))
 	}
 }
 
-// SetStuckVersionsCount sets the dm_stuck_versions_count gauge.
-func (m *Metrics) SetStuckVersionsCount(count float64) {
-	m.StuckVersionsCount.Set(count)
+// SetStuckVersionsCount sets the dm_stuck_versions_count{stage} gauge.
+// DM-TASK-053: stage is one of processing/analysis/reports/finalization.
+func (m *Metrics) SetStuckVersionsCount(stage string, count float64) {
+	m.StuckVersionsCount.WithLabelValues(stage).Set(count)
 }
 
 // ---------------------------------------------------------------------------

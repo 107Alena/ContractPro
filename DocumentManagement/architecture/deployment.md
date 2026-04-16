@@ -411,7 +411,8 @@ curl http://localhost:9090/metrics
 | `dm_outbox_pending_count` | gauge | Количество неопубликованных событий в outbox |
 | `dm_outbox_oldest_pending_age_seconds` | gauge | Возраст старейшего pending события (REV-022) |
 | `dm_dlq_messages_total` | counter | Сообщения в DLQ (label: reason) |
-| `dm_stuck_versions_count` | gauge | Версии в промежуточных состояниях |
+| `dm_stuck_versions_count` | gauge | Версии в промежуточных состояниях (label: `stage` — processing/analysis/reports/finalization) |
+| `dm_stuck_versions_total` | counter | Версии, переведённые watchdog в PARTIALLY_AVAILABLE (label: `stage`) |
 | `dm_circuit_breaker_state` | gauge | Состояние circuit breaker (0=closed, 1=half-open, 2=open) |
 | `dm_api_rate_limited_total` | counter | Запросы, заблокированные rate limiter |
 | `dm_tenant_mismatch_total` | counter | Несовпадения tenant (BRE-015) |
@@ -1365,7 +1366,13 @@ DM_DB_MAX_CONNS=25
 DM_IDEMPOTENCY_TTL=24h
 DM_OUTBOX_POLL_INTERVAL=200ms
 DM_SHUTDOWN_TIMEOUT=30s
-DM_STALE_VERSION_TIMEOUT=30m
+# Watchdog per-stage таймауты (DM-TASK-053). DM_STALE_VERSION_TIMEOUT — legacy
+# per-variable fallback: применяется только к тем стадиям, чья переменная не
+# задана в окружении (смешанные конфигурации поддерживаются).
+DM_STALE_TIMEOUT_PROCESSING=5m
+DM_STALE_TIMEOUT_ANALYSIS=10m
+DM_STALE_TIMEOUT_REPORTS=5m
+DM_STALE_TIMEOUT_FINALIZATION=5m
 DM_RATELIMIT_READ_RPS=100
 DM_RATELIMIT_WRITE_RPS=20
 ```

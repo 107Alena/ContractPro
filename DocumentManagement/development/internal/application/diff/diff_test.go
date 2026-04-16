@@ -65,7 +65,7 @@ func (m *mockVersionRepo) Update(context.Context, *model.DocumentVersion) error 
 func (m *mockVersionRepo) NextVersionNumber(context.Context, string, string) (int, error) {
 	panic("not used in diff")
 }
-func (m *mockVersionRepo) FindStaleInIntermediateStatus(context.Context, time.Time, int) ([]*model.DocumentVersion, error) {
+func (m *mockVersionRepo) FindStaleInIntermediateStatus(context.Context, map[model.ArtifactStatus]time.Time, int) ([]*model.DocumentVersion, error) {
 	panic("not used in diff")
 }
 func (m *mockVersionRepo) DeleteByDocument(context.Context, string) error {

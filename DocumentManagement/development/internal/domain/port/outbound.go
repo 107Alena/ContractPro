@@ -118,16 +118,22 @@ type VersionRepository interface {
 	ListByDocument(ctx context.Context, documentID string) ([]*model.DocumentVersion, error)
 
 	// FindStaleInIntermediateStatus returns versions whose artifact_status is
-	// in a non-terminal state (PENDING, PROCESSING_ARTIFACTS_RECEIVED,
-	// ANALYSIS_ARTIFACTS_RECEIVED, REPORTS_READY) and whose created_at is
-	// older than cutoff. Returns up to limit results ordered by created_at ASC.
-	// Does NOT lock rows — the caller should use FindByIDForUpdate in a
+	// in a non-terminal state and whose created_at is older than the per-stage
+	// cutoff for that status. Returns up to limit results ordered by created_at
+	// ASC. Does NOT lock rows — the caller should use FindByIDForUpdate in a
 	// separate per-version transaction for safe transition (DM-TASK-041).
+	//
+	// cutoffs maps each intermediate ArtifactStatus to its cutoff timestamp;
+	// only statuses present in the map are considered. Expected keys (DM-TASK-053):
+	// ArtifactStatusPending, ArtifactStatusProcessingArtifactsReceived,
+	// ArtifactStatusAnalysisArtifactsReceived, ArtifactStatusReportsReady.
+	// A version in status S is returned only if cutoffs[S] is present and
+	// version.created_at < cutoffs[S].
 	//
 	// Cross-tenant: this is a system-level query used by the stale version
 	// watchdog. No organization_id filter is applied. RLS permits cross-tenant
 	// reads when app.organization_id GUC is not set.
-	FindStaleInIntermediateStatus(ctx context.Context, cutoff time.Time, limit int) ([]*model.DocumentVersion, error)
+	FindStaleInIntermediateStatus(ctx context.Context, cutoffs map[model.ArtifactStatus]time.Time, limit int) ([]*model.DocumentVersion, error)
 }
 
 // ArtifactRepository provides CRUD for ArtifactDescriptor entities.

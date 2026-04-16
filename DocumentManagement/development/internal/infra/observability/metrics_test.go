@@ -36,6 +36,7 @@ func TestNewMetrics_AllRegistered(t *testing.T) {
 		"dm_idempotency_fallback_total",
 		"dm_idempotency_check_total",
 		"dm_stuck_versions_count",
+		"dm_stuck_versions_total",
 		"dm_integrity_check_failures_total",
 		"dm_circuit_breaker_state",
 	}
@@ -57,7 +58,8 @@ func TestNewMetrics_AllRegistered(t *testing.T) {
 	m.MissingVersionIDTotal.Inc()
 	m.IncFallbackTotal("test-topic")
 	m.IncCheckTotal("process")
-	m.StuckVersionsCount.Set(2)
+	m.SetStuckVersionsCount("processing", 2)
+	m.IncStuckVersionsTotal("processing", 1)
 	m.IntegrityCheckFailures.Inc()
 	m.CircuitBreakerState.WithLabelValues("objectstorage").Set(0)
 
@@ -92,6 +94,8 @@ func TestNewMetrics_MetricTypes(t *testing.T) {
 	m.IncCheckTotal("process")
 	m.IncPublished("t")
 	m.IncPublishFailed("t")
+	m.SetStuckVersionsCount("processing", 0)
+	m.IncStuckVersionsTotal("processing", 1)
 	m.CircuitBreakerState.WithLabelValues("s3").Set(0)
 
 	families, _ := m.Registry().Gather()
@@ -112,6 +116,7 @@ func TestNewMetrics_MetricTypes(t *testing.T) {
 		"dm_missing_version_id_total",
 		"dm_idempotency_fallback_total",
 		"dm_idempotency_check_total",
+		"dm_stuck_versions_total",
 		"dm_integrity_check_failures_total",
 	}
 

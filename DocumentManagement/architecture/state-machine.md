@@ -113,15 +113,26 @@ stateDiagram-v2
 
 ---
 
-## Stale Version Watchdog (REV-008, BRE-010)
+## Stale Version Watchdog (REV-008, BRE-010, DM-TASK-053)
 
-Фоновый процесс, отслеживающий версии в промежуточных состояниях дольше допустимого таймаута.
+Фоновый процесс, отслеживающий версии в промежуточных состояниях дольше допустимого **per-stage** таймаута (ASSUMPTION-ORCH-14). Watchdog выступает safety net на случай тихого сбоя LIC/RE (crash без публикации status-changed события).
 
-**Конфигурация:** `DM_STALE_VERSION_TIMEOUT` (default 30 мин).
+**Конфигурация (DM-TASK-053):** per-stage таймауты вместо единого глобального.
+
+| Переход                                                   | Env var                          | Default |
+|-----------------------------------------------------------|----------------------------------|---------|
+| `PENDING → PROCESSING_ARTIFACTS_RECEIVED`                 | `DM_STALE_TIMEOUT_PROCESSING`    | `5m`    |
+| `PROCESSING_ARTIFACTS_RECEIVED → ANALYSIS_ARTIFACTS_RECEIVED` | `DM_STALE_TIMEOUT_ANALYSIS`  | `10m`   |
+| `ANALYSIS_ARTIFACTS_RECEIVED → REPORTS_READY`             | `DM_STALE_TIMEOUT_REPORTS`       | `5m`    |
+| `REPORTS_READY → FULLY_READY`                             | `DM_STALE_TIMEOUT_FINALIZATION`  | `5m`    |
+
+Legacy `DM_STALE_VERSION_TIMEOUT` сохранён как per-variable fallback: если per-stage переменная не задана — берётся значение этого параметра; если и он не задан — используется собственный default стадии. Смешанные конфигурации поддерживаются.
+
+**Sampling lag.** Scan interval `DM_WATCHDOG_SCAN_INTERVAL` (default `5m`) + per-stage timeout = worst-case задержка перехода в PARTIALLY_AVAILABLE (например, `5m` timeout + `5m` scan = `10m`).
 
 **Логика:**
-1. Периодически (каждые 5 мин) `SELECT version_id, artifact_status, updated_at FROM document_versions WHERE artifact_status NOT IN ('FULLY_READY', 'PARTIALLY_AVAILABLE') AND updated_at < now() - interval`.
-2. Для каждой найденной версии: `UPDATE artifact_status = 'PARTIALLY_AVAILABLE'` + audit record.
+1. Периодически (каждые `DM_WATCHDOG_SCAN_INTERVAL`) один SQL-запрос с disjunction: `WHERE (artifact_status = 'PENDING' AND created_at < $cutoffProcessing) OR (artifact_status = 'PROCESSING_ARTIFACTS_RECEIVED' AND created_at < $cutoffAnalysis) OR (artifact_status = 'ANALYSIS_ARTIFACTS_RECEIVED' AND created_at < $cutoffReports) OR (artifact_status = 'REPORTS_READY' AND created_at < $cutoffFinalization)`.
+2. Для каждой найденной версии: `SELECT FOR UPDATE` → `UPDATE artifact_status = 'PARTIALLY_AVAILABLE'` + audit record с полем `stage` (`processing`/`analysis`/`reports`/`finalization`).
 3. Публикация `dm.events.version-partially-available` через outbox.
-4. Метрика `dm_stuck_versions_total` (counter) + `dm_stuck_versions_count` (gauge).
-5. Алерт при `dm_stuck_versions_count > 0`.
+4. Метрики `dm_stuck_versions_total{stage}` (counter) + `dm_stuck_versions_count{stage}` (gauge). Label `stage` — один из `processing`/`analysis`/`reports`/`finalization`.
+5. Алерт: `sum(dm_stuck_versions_count) > 0` (any-stage) или `dm_stuck_versions_count{stage="<X>"} > 0` для точечного мониторинга.

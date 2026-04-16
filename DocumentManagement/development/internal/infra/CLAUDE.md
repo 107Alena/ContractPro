@@ -60,7 +60,7 @@ Unified observability stack.
 
 - **context.go** — EventContext (CorrelationID, JobID, DocumentID, VersionID, OrganizationID, Stage). WithEventContext/EventContextFrom for ctx enrichment
 - **logger.go** — Logger: slog.Logger wrapper with JSON output, auto-enrichment from EventContext, With() for component-scoped child loggers
-- **metrics.go** — Metrics: 30+ Prometheus metrics in dedicated registry. Key metrics: dm_events_received/processed_total, dm_event_processing_duration_seconds, dm_artifacts_stored_total, dm_api_requests_total, dm_outbox_pending_count, dm_dlq_messages_total, dm_stuck_versions_count, dm_circuit_breaker_state. Bridge methods for consumer-side interfaces
+- **metrics.go** — Metrics: 30+ Prometheus metrics in dedicated registry. Key metrics: dm_events_received/processed_total, dm_event_processing_duration_seconds, dm_artifacts_stored_total, dm_api_requests_total, dm_outbox_pending_count, dm_dlq_messages_total, dm_stuck_versions_count{stage}, dm_stuck_versions_total{stage} (label `stage` ∈ processing/analysis/reports/finalization — DM-TASK-053), dm_circuit_breaker_state. Bridge methods for consumer-side interfaces
 - **tracer.go** — Tracer: OpenTelemetry OTLP/HTTP exporter, noop fallback when disabled
 - **handler.go** — MetricsHandler: /metrics endpoint via promhttp
 - **observability.go** — SDK composite: Logger + Metrics + Tracer. New(ctx, cfg), Shutdown()

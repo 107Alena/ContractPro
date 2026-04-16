@@ -72,6 +72,12 @@ type Metrics struct {
 	// --- Validation ---
 	ValidationErrorsTotal *prometheus.CounterVec
 
+	// --- Permissions Resolver (ORCH-TASK-050) ---
+	PermissionsCacheHitTotal     *prometheus.CounterVec
+	PermissionsCacheMissTotal    *prometheus.CounterVec
+	PermissionsOPMFallbackTotal  *prometheus.CounterVec
+	PermissionsResolveDuration   prometheus.Histogram
+
 	registry *prometheus.Registry
 }
 
@@ -217,6 +223,28 @@ func NewMetrics() *Metrics {
 			Help: "Total validation errors by endpoint and validation code.",
 		}, []string{"endpoint", "code"}),
 
+		// --- Permissions Resolver (ORCH-TASK-050) ---
+		PermissionsCacheHitTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "orch_permissions_cache_hit_total",
+			Help: "Total Redis cache hits when resolving computed user permissions.",
+		}, []string{"flag", "org_id_hash"}),
+
+		PermissionsCacheMissTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "orch_permissions_cache_miss_total",
+			Help: "Total Redis cache misses when resolving computed user permissions.",
+		}, []string{"flag"}),
+
+		PermissionsOPMFallbackTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "orch_permissions_opm_fallback_total",
+			Help: "Total OPM fallbacks when resolving permissions (reason ∈ timeout, opm_unavailable, circuit_open, no_policy, malformed_response).",
+		}, []string{"flag", "reason"}),
+
+		PermissionsResolveDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "orch_permissions_resolve_duration_seconds",
+			Help:    "Duration of Permissions Resolver ResolveForUser calls in seconds.",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2},
+		}),
+
 		registry: reg,
 	}
 
@@ -243,6 +271,10 @@ func NewMetrics() *Metrics {
 		m.RedisOperationDuration,
 		m.UserConfirmationTimeoutsTotal,
 		m.ValidationErrorsTotal,
+		m.PermissionsCacheHitTotal,
+		m.PermissionsCacheMissTotal,
+		m.PermissionsOPMFallbackTotal,
+		m.PermissionsResolveDuration,
 	)
 
 	return m

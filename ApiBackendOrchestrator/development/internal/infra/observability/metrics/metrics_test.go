@@ -143,6 +143,10 @@ func TestNewMetrics_AllCollectorsRegistered(t *testing.T) {
 		"orch_auth_failures_total",
 		"orch_redis_operations_total",
 		"orch_redis_operation_duration_seconds",
+		"orch_permissions_cache_hit_total",
+		"orch_permissions_cache_miss_total",
+		"orch_permissions_opm_fallback_total",
+		"orch_permissions_resolve_duration_seconds",
 	}
 
 	// Touch all metrics so they appear in Gather().
@@ -166,6 +170,10 @@ func TestNewMetrics_AllCollectorsRegistered(t *testing.T) {
 	m.AuthFailuresTotal.WithLabelValues("expired").Inc()
 	m.RedisOperationsTotal.WithLabelValues("get", "success").Inc()
 	m.RedisOperationDuration.WithLabelValues("get").Observe(0.001)
+	m.PermissionsCacheHitTotal.WithLabelValues("export_enabled", "abcdef12").Inc()
+	m.PermissionsCacheMissTotal.WithLabelValues("export_enabled").Inc()
+	m.PermissionsOPMFallbackTotal.WithLabelValues("export_enabled", "timeout").Inc()
+	m.PermissionsResolveDuration.Observe(0.01)
 
 	// Re-gather after touching all metrics.
 	mfs, err = m.Registry().Gather()
@@ -1004,6 +1012,10 @@ func TestMetricCount(t *testing.T) {
 	m.RedisOperationsTotal.WithLabelValues("get", "success").Inc()
 	m.RedisOperationDuration.WithLabelValues("get").Observe(0.001)
 	m.UserConfirmationTimeoutsTotal.Inc()
+	m.PermissionsCacheHitTotal.WithLabelValues("export_enabled", "abcdef12").Inc()
+	m.PermissionsCacheMissTotal.WithLabelValues("export_enabled").Inc()
+	m.PermissionsOPMFallbackTotal.WithLabelValues("export_enabled", "timeout").Inc()
+	m.PermissionsResolveDuration.Observe(0.01)
 
 	mfs, err := m.Registry().Gather()
 	if err != nil {
@@ -1017,9 +1029,9 @@ func TestMetricCount(t *testing.T) {
 		}
 	}
 
-	// 21 orch_* metrics (20 from architecture spec + 1 watchdog counter).
-	if orchCount != 21 {
-		t.Errorf("expected 21 orch_* metrics, got %d", orchCount)
+	// 25 orch_* metrics (20 architecture spec + 1 watchdog + 4 permissions resolver).
+	if orchCount != 25 {
+		t.Errorf("expected 25 orch_* metrics, got %d", orchCount)
 	}
 }
 

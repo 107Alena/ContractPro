@@ -767,8 +767,147 @@ func TestValidate_FullConfig(t *testing.T) {
 		},
 		Observability:    ObservabilityConfig{LogLevel: "info"},
 		TypeConfirmation: TypeConfirmationConfig{ConfirmationTimeout: 24 * time.Hour, IdempotencyTTL: 60 * time.Second, WatchdogScanInterval: 1 * time.Minute},
+		Permissions:      PermissionsConfig{CacheTTL: 5 * time.Minute, OPMTimeout: 2 * time.Second},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+// --- Permissions (ORCH-TASK-050) ---
+
+func TestLoad_PermissionsDefaults(t *testing.T) {
+	setRequiredEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Permissions.CacheTTL != 5*time.Minute {
+		t.Errorf("Permissions.CacheTTL = %v, want 5m", cfg.Permissions.CacheTTL)
+	}
+	if cfg.Permissions.OPMFallbackBusinessUserExport != false {
+		t.Errorf("Permissions.OPMFallbackBusinessUserExport = %v, want false",
+			cfg.Permissions.OPMFallbackBusinessUserExport)
+	}
+	if cfg.Permissions.OPMTimeout != 2*time.Second {
+		t.Errorf("Permissions.OPMTimeout = %v, want 2s", cfg.Permissions.OPMTimeout)
+	}
+}
+
+func TestLoad_PermissionsOverride(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ORCH_PERMISSIONS_CACHE_TTL", "10m")
+	t.Setenv("ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT", "true")
+	t.Setenv("ORCH_OPM_PERMISSIONS_TIMEOUT", "3s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Permissions.CacheTTL != 10*time.Minute {
+		t.Errorf("Permissions.CacheTTL = %v, want 10m", cfg.Permissions.CacheTTL)
+	}
+	if !cfg.Permissions.OPMFallbackBusinessUserExport {
+		t.Error("Permissions.OPMFallbackBusinessUserExport should be true")
+	}
+	if cfg.Permissions.OPMTimeout != 3*time.Second {
+		t.Errorf("Permissions.OPMTimeout = %v, want 3s", cfg.Permissions.OPMTimeout)
+	}
+}
+
+func TestValidate_PermissionsCacheTTLZero(t *testing.T) {
+	keyPath := createTempKeyFile(t)
+	cfg := validFullConfig(keyPath)
+	cfg.Permissions.CacheTTL = 0
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ORCH_PERMISSIONS_CACHE_TTL") {
+		t.Errorf("error should mention ORCH_PERMISSIONS_CACHE_TTL, got: %v", err)
+	}
+}
+
+func TestValidate_PermissionsOPMTimeoutZero(t *testing.T) {
+	keyPath := createTempKeyFile(t)
+	cfg := validFullConfig(keyPath)
+	cfg.Permissions.OPMTimeout = 0
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ORCH_OPM_PERMISSIONS_TIMEOUT must be > 0") {
+		t.Errorf("error should mention ORCH_OPM_PERMISSIONS_TIMEOUT > 0, got: %v", err)
+	}
+}
+
+func TestValidate_PermissionsOPMTimeoutTooLarge(t *testing.T) {
+	keyPath := createTempKeyFile(t)
+	cfg := validFullConfig(keyPath)
+	cfg.Permissions.OPMTimeout = 15 * time.Second
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ORCH_OPM_PERMISSIONS_TIMEOUT must be <= 10s") {
+		t.Errorf("error should mention ORCH_OPM_PERMISSIONS_TIMEOUT <= 10s, got: %v", err)
+	}
+}
+
+// validFullConfig is a helper that returns a fully-populated Config passing
+// all validation rules. Individual tests mutate a single field before calling
+// Validate to assert on a specific error path.
+func validFullConfig(keyPath string) *Config {
+	return &Config{
+		HTTP: HTTPConfig{
+			Port:            8080,
+			MetricsPort:     9090,
+			RequestTimeout:  30 * time.Second,
+			UploadTimeout:   60 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+		},
+		Broker: BrokerConfig{
+			Address:  "amqp://localhost:5672/",
+			Prefetch: 10,
+		},
+		Storage: StorageConfig{
+			Endpoint:      "http://localhost:9000",
+			Bucket:        "uploads",
+			AccessKey:     "ak",
+			SecretKey:     "sk",
+			UploadTimeout: 30 * time.Second,
+		},
+		Redis: RedisConfig{
+			Address:  "localhost:6379",
+			Timeout:  2 * time.Second,
+			PoolSize: 20,
+		},
+		Upload: UploadConfig{MaxSize: 20971520},
+		DMClient: DMClientConfig{
+			BaseURL:      "http://dm:8080",
+			TimeoutRead:  5 * time.Second,
+			TimeoutWrite: 10 * time.Second,
+			RetryBackoff: 200 * time.Millisecond,
+		},
+		JWT: JWTConfig{PublicKeyPath: keyPath},
+		SSE: SSEConfig{
+			HeartbeatInterval: 15 * time.Second,
+			MaxConnectionAge:  24 * time.Hour,
+		},
+		RateLimit: RateLimitConfig{Enabled: false},
+		CircuitBreaker: CircuitBreakerConfig{
+			FailureThreshold: 5,
+			Timeout:          30 * time.Second,
+			MaxRequests:      3,
+		},
+		Observability:    ObservabilityConfig{LogLevel: "info"},
+		TypeConfirmation: TypeConfirmationConfig{ConfirmationTimeout: 24 * time.Hour, IdempotencyTTL: 60 * time.Second, WatchdogScanInterval: 1 * time.Minute},
+		Permissions:      PermissionsConfig{CacheTTL: 5 * time.Minute, OPMTimeout: 2 * time.Second},
 	}
 }

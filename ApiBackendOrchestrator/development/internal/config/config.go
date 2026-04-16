@@ -28,6 +28,7 @@ type Config struct {
 	CORS             CORSConfig
 	Observability    ObservabilityConfig
 	TypeConfirmation TypeConfirmationConfig
+	Permissions      PermissionsConfig
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -55,6 +56,7 @@ func Load() (*Config, error) {
 		CORS:             loadCORSConfig(),
 		Observability:    loadObservabilityConfig(),
 		TypeConfirmation: loadTypeConfirmationConfig(),
+		Permissions:      loadPermissionsConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -166,6 +168,17 @@ func (c *Config) Validate() error {
 		// valid
 	default:
 		problems = append(problems, "ORCH_LOG_LEVEL must be one of: debug, info, warn, error")
+	}
+
+	// Permissions resolver.
+	if c.Permissions.CacheTTL <= 0 {
+		problems = append(problems, "ORCH_PERMISSIONS_CACHE_TTL must be > 0")
+	}
+	if c.Permissions.OPMTimeout <= 0 {
+		problems = append(problems, "ORCH_OPM_PERMISSIONS_TIMEOUT must be > 0")
+	}
+	if c.Permissions.OPMTimeout > 10*time.Second {
+		problems = append(problems, "ORCH_OPM_PERMISSIONS_TIMEOUT must be <= 10s")
 	}
 
 	// Type confirmation.

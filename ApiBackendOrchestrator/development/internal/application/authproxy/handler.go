@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strings"
 
+	"contractpro/api-orchestrator/internal/application/permissions"
 	"contractpro/api-orchestrator/internal/domain/model"
 	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/uomclient"
@@ -46,6 +47,15 @@ type UOMClient interface {
 // Compile-time check that *uomclient.Client satisfies UOMClient.
 var _ UOMClient = (*uomclient.Client)(nil)
 
+// PermissionsResolver computes user permission flags for GET /users/me.
+// Implementations must never return an error — graceful degradation by design.
+type PermissionsResolver interface {
+	ResolveForUser(ctx context.Context, role auth.Role, orgID string) permissions.UserPermissions
+}
+
+// Compile-time check that *permissions.Resolver satisfies PermissionsResolver.
+var _ PermissionsResolver = (*permissions.Resolver)(nil)
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -62,15 +72,19 @@ const (
 
 // Handler handles auth proxy requests by forwarding them to the UOM service.
 type Handler struct {
-	uom UOMClient
-	log *logger.Logger
+	uom      UOMClient
+	resolver PermissionsResolver
+	log      *logger.Logger
 }
 
-// NewHandler creates a new auth proxy handler.
-func NewHandler(uom UOMClient, log *logger.Logger) *Handler {
+// NewHandler creates a new auth proxy handler. The resolver may be nil — in
+// that case GET /users/me omits the computed permissions field, useful for
+// tests that don't exercise the permissions flow.
+func NewHandler(uom UOMClient, resolver PermissionsResolver, log *logger.Logger) *Handler {
 	return &Handler{
-		uom: uom,
-		log: log.With("component", "auth-handler"),
+		uom:      uom,
+		resolver: resolver,
+		log:      log.With("component", "auth-handler"),
 	}
 }
 
@@ -212,9 +226,19 @@ func (h *Handler) HandleLogout() http.HandlerFunc {
 // HandleGetMe — GET /api/v1/users/me
 // ---------------------------------------------------------------------------
 
+// userProfileWithPermissions embeds the UOM UserProfile DTO and adds the
+// orchestrator-computed permissions field. Embedding flattens all UserProfile
+// fields into the top-level JSON object, matching the api-specification.yaml
+// UserProfile schema (which requires `permissions`).
+type userProfileWithPermissions struct {
+	*uomclient.UserProfile
+	Permissions permissions.UserPermissions `json:"permissions"`
+}
+
 // HandleGetMe returns a handler that retrieves the current user's profile
-// from UOM. This endpoint requires JWT authentication (AuthContext must be
-// present in the request context).
+// from UOM and enriches it with computed permissions (UR-10). This endpoint
+// requires JWT authentication (AuthContext must be present in the request
+// context).
 //
 // Note: ensureCorrelationID is not called here because this endpoint sits
 // behind the auth middleware, which always generates or preserves the
@@ -223,7 +247,8 @@ func (h *Handler) HandleGetMe() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		if _, ok := auth.AuthContextFrom(ctx); !ok {
+		ac, ok := auth.AuthContextFrom(ctx)
+		if !ok {
 			model.WriteError(w, r, model.ErrAuthTokenMissing, nil)
 			return
 		}
@@ -236,7 +261,16 @@ func (h *Handler) HandleGetMe() http.HandlerFunc {
 			return
 		}
 
-		h.writeJSON(ctx, w, http.StatusOK, profile)
+		if h.resolver == nil {
+			h.writeJSON(ctx, w, http.StatusOK, profile)
+			return
+		}
+
+		perms := h.resolver.ResolveForUser(ctx, ac.Role, ac.OrganizationID)
+		h.writeJSON(ctx, w, http.StatusOK, userProfileWithPermissions{
+			UserProfile: profile,
+			Permissions: perms,
+		})
 	}
 }
 

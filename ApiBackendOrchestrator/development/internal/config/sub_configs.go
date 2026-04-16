@@ -280,6 +280,23 @@ func loadTypeConfirmationConfig() TypeConfirmationConfig {
 	}
 }
 
+// PermissionsConfig holds settings for the Permissions Resolver (UR-10).
+// Computes user permissions (e.g. export_enabled) from role, OPM policies,
+// and environment fallbacks for the GET /users/me endpoint.
+type PermissionsConfig struct {
+	CacheTTL                      time.Duration // ORCH_PERMISSIONS_CACHE_TTL (default: 5m)
+	OPMFallbackBusinessUserExport bool          // ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT (default: false)
+	OPMTimeout                    time.Duration // ORCH_OPM_PERMISSIONS_TIMEOUT (default: 2s, <= 10s)
+}
+
+func loadPermissionsConfig() PermissionsConfig {
+	return PermissionsConfig{
+		CacheTTL:                      envDuration("ORCH_PERMISSIONS_CACHE_TTL", 5*time.Minute),
+		OPMFallbackBusinessUserExport: envBool("ORCH_OPM_FALLBACK_BUSINESS_USER_EXPORT", false),
+		OPMTimeout:                    envDuration("ORCH_OPM_PERMISSIONS_TIMEOUT", 2*time.Second),
+	}
+}
+
 // ObservabilityConfig holds logging, metrics, and tracing settings.
 type ObservabilityConfig struct {
 	LogLevel        string // ORCH_LOG_LEVEL (default: "info")

@@ -46,6 +46,14 @@ type OPMClient interface {
 // Compile-time check that *opmclient.Client satisfies OPMClient.
 var _ OPMClient = (*opmclient.Client)(nil)
 
+// PermissionsInvalidator invalidates cached permissions for an organization
+// after its policies change. The concrete transport (Redis Pub/Sub, Kafka,
+// etc.) lives in the permissions package — this handler only signals intent.
+// See ORCH-TASK-050.
+type PermissionsInvalidator interface {
+	InvalidateOrg(ctx context.Context, orgID string) error
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -62,15 +70,18 @@ const (
 
 // Handler handles admin proxy requests by forwarding them to the OPM service.
 type Handler struct {
-	opm OPMClient
-	log *logger.Logger
+	opm         OPMClient
+	invalidator PermissionsInvalidator
+	log         *logger.Logger
 }
 
-// NewHandler creates a new admin proxy handler.
-func NewHandler(opm OPMClient, log *logger.Logger) *Handler {
+// NewHandler creates a new admin proxy handler. The invalidator may be nil —
+// in that case permissions cache invalidation is skipped (useful for tests).
+func NewHandler(opm OPMClient, invalidator PermissionsInvalidator, log *logger.Logger) *Handler {
 	return &Handler{
-		opm: opm,
-		log: log.With("component", "admin-handler"),
+		opm:         opm,
+		invalidator: invalidator,
+		log:         log.With("component", "admin-handler"),
 	}
 }
 
@@ -139,6 +150,18 @@ func (h *Handler) HandleUpdatePolicy() http.HandlerFunc {
 		if err != nil {
 			h.handleOPMError(ctx, w, r, err, "UpdatePolicy", "policy")
 			return
+		}
+
+		// Best-effort: invalidate cached permissions for the org on policy change.
+		// Errors never surface to the admin — stale cache resolves itself at TTL.
+		if h.invalidator != nil {
+			if invErr := h.invalidator.InvalidateOrg(ctx, ac.OrganizationID); invErr != nil {
+				h.log.Warn(ctx, "permissions invalidation publish failed",
+					"organization_id", ac.OrganizationID,
+					"policy_id", policyID,
+					logger.ErrorAttr(invErr),
+				)
+			}
 		}
 
 		h.writeRawJSON(ctx, w, http.StatusOK, data)

@@ -1787,4 +1787,86 @@ happy path, no auth (401), invalid contract_id/version_id (400), invalid JSON (4
 
 ### Следующие задачи
 - ORCH-TASK-050 (high): Permissions Resolver для GET /users/me
+
+## ORCH-TASK-050: Permissions Resolver — computed-флаги permissions в GET /users/me (UR-10)
+**Дата:** 2026-04-16
+**Статус:** done
+
+### План реализации
+1. Проектирование (subagent: code-architect): структура пакета, размещение UserPermissions, композиция UserProfile, circuit breaker, инвалидация без KEYS/SCAN, сигнатура Resolver, errgroup, lifecycle, cardinality метрик, парсинг OPM
+2. Config: PermissionsConfig (3 env vars) + Validate rules
+3. Metrics: 4 Prometheus коллектора, зарегистрированы в NewMetrics()
+4. Permissions package: types, opmlookup, resolver, cache, invalidator + 4 файла unit-тестов
+5. Authproxy: PermissionsResolver interface + userProfileWithPermissions embedding в HandleGetMe
+6. Adminproxy: PermissionsInvalidator interface + вызов InvalidateOrg в HandleUpdatePolicy
+7. app.go: wiring permCache/permResolver/permInvalidator + Start/Shutdown фазы
+8. Code review (subagent: code-reviewer) → правки: изменение интерфейса с `Publish(channel, message)` на `InvalidateOrg(orgID)` (скрытие Pub/Sub деталей в permissions package), добавление FallbackReasonCacheCorrupt, документация context.Canceled
+
+### Что реализовано
+
+**internal/application/permissions/** (новый пакет):
+- `types.go` — UserPermissions DTO (`export_enabled bool`), CacheKey/InvalidateChannel/InvalidatePattern helpers, KnownRoles=[LAWYER,BUSINESS_USER,ORG_ADMIN], 6 FallbackReason констант
+- `opmlookup.go` — `parseBusinessUserExportFlag(raw) (enabled, found, err)`: массив `[{name,enabled}]`, policy `business_user_export`, strict case-sensitive, extra fields ignored
+- `resolver.go`:
+  - `Resolver` с 5 интерфейсами (CacheStore, OPMLookup, Metrics) для тестируемости
+  - `ResolveForUser(ctx, role, orgID) UserPermissions` — БЕЗ error (graceful degradation)
+  - LAWYER/ORG_ADMIN → {ExportEnabled: true}, минуя OPM и cache
+  - BUSINESS_USER: cache → breaker.Execute(OPM 2s timeout) → parse → кеш success; env fallback path НЕ пишет в кеш
+  - gobreaker.CircuitBreaker[json.RawMessage]: MaxRequests=3, Timeout=30s, FailureThreshold=5 (из CircuitBreakerConfig)
+  - `classifyOPMError`: circuit_open / timeout / opm_unavailable; учитывает wrapped context.DeadlineExceeded в OPMError.Cause
+  - `hashOrgID`: SHA-256 первые 8 hex-символов (32 bits cardinality)
+  - `PrometheusMetrics` — adapter реализует Metrics interface
+- `cache.go` — `RedisCache` реализует CacheStore через kvstore.Client (Get/Set с JSON + TTL); ErrKeyNotFound → (zero, false, nil)
+- `invalidator.go`:
+  - `CacheInvalidator` с PSUBSCRIBE permissions:invalidate:* + reconnect loop (2s backoff)
+  - `handleMessage` парсит orgID из channel, вызывает invalidateOrg
+  - `invalidateOrg` делает N DEL (по числу KnownRoles) с 5s timeout; ошибки → WARN, loop продолжается
+  - Lifecycle: startOnce.Do (идемпотентный Start), wg.Wait в Shutdown
+  - `InvalidationPublisher` (struct) с методом `InvalidateOrg(ctx, orgID) error` — скрывает Redis Pub/Sub транспорт
+- Тесты: 18+9+3+4+5 тестов (resolver, opmlookup table, hashOrgID, cache, invalidator) — все 8 требуемых acceptance-сценариев
+
+**internal/config/sub_configs.go**: PermissionsConfig (CacheTTL=5m, OPMFallbackBusinessUserExport=false, OPMTimeout=2s) + loadPermissionsConfig
+**internal/config/config.go**: root Config.Permissions + Validate (CacheTTL>0, OPMTimeout>0, OPMTimeout<=10s)
+**internal/config/config_test.go**: 5 новых тестов (defaults, override, CacheTTLZero, TimeoutZero, TimeoutTooLarge) + validFullConfig helper
+
+**internal/infra/observability/metrics/metrics.go**: 4 новых коллектора (PermissionsCacheHitTotal {flag,org_id_hash}, CacheMissTotal {flag}, OPMFallbackTotal {flag,reason}, ResolveDuration histogram)
+**metrics_test.go**: expected array расширен до 24 имён, TestMetricCount обновлён с 21 → 25
+
+**internal/application/authproxy/handler.go**:
+- `PermissionsResolver` интерфейс (`ResolveForUser(ctx, role, orgID) UserPermissions`)
+- `NewHandler(uom, resolver, log)` — resolver может быть nil (тесты)
+- `userProfileWithPermissions` с embedded `*uomclient.UserProfile` + `Permissions UserPermissions`
+- `HandleGetMe`: после UOM GetMe → resolver.ResolveForUser(ac.Role, ac.OrganizationID) → serialize
+- handler_test.go: 3 новых теста (TestHandleGetMe_PermissionsEnriched, TestHandleGetMe_NilResolver_NoPermissionsField, TestHandleGetMe_PermissionsForAllRoles)
+
+**internal/application/adminproxy/handler.go**:
+- `PermissionsInvalidator` интерфейс с `InvalidateOrg(ctx, orgID) error` (без Pub/Sub deta-ils)
+- `NewHandler(opm, invalidator, log)` — invalidator может быть nil
+- HandleUpdatePolicy: после успешного OPM-вызова → best-effort `h.invalidator.InvalidateOrg(ctx, ac.OrganizationID)`; ошибки только логируются
+- handler_test.go: 3 новых теста (publish on success, publish failure не ломает request, OPM error → no publish) + fakePublisher
+
+**internal/app/app.go**: wiring permCache/permResolver/permInvalidator; обновлены вызовы adminproxy.NewHandler/authproxy.NewHandler; Start фаза после watchdog; Shutdown фаза 3c после фазы 3b watchdog
+
+### Ключевые решения
+- **UserPermissions в application/permissions/**: не в domain/model/ — это computed projection, не cross-cutting concern. Type живёт рядом с единственным consumer (authproxy)
+- **Embedding UserProfile**: Вариант B — UOM DTO остаётся неизменным, обёртка userProfileWithPermissions добавляет поле permissions. JSON-encode даёт плоский объект, совместимый с api-specification.yaml
+- **Нет errgroup**: Resolver не может стартовать до UOM GetMe (нужны role + orgID). Последовательный UOM → Resolver читается проще; комментарий в handler оставлен для будущего расширения
+- **Circuit breaker отдельный от admin OPM**: Resolver использует 2s per-call timeout (агрессивнее чем 5s admin timeout) и свою gobreaker state. Shares cfg.CircuitBreaker thresholds
+- **Инвалидация = N DEL, не KEYS/SCAN**: роли захардкожены в KnownRoles (3 штуки). DEL по массиву ключей атомарен в Redis single-node, детерминирован, O(1) по ролям
+- **PSUBSCRIBE для invalidator**: одна подписка ловит все orgID (не нужно знать orgID заранее). orgID извлекается из channel name
+- **Cardinality hash**: SHA-256[:8] = 32 bits, пригодно для <100k orgs. Only CacheHit использует org_id_hash (интересен для отладки hotspot-orgs)
+- **PermissionsInvalidator interface не утекает Pub/Sub**: после code review интерфейс изменён с `Publish(channel, message)` на `InvalidateOrg(orgID)`. Redis Pub/Sub транспорт теперь инкапсулирован в permissions.InvalidationPublisher
+- **Resolver не возвращает error**: graceful degradation by design — всегда возвращает UserPermissions (cache / OPM / env fallback). Handler становится тривиальным
+
+### Результаты тестирования
+- `go test -race -count=1 ./internal/application/permissions/...`: 31 тест, PASS
+- `go test -count=1 ./...`: все 35 пакетов PASS (включая 3 новых authproxy-теста, 3 новых adminproxy-теста, 5 новых config-тестов)
+- `go vet ./...`: 0 warnings
+- `make build / test / lint`: PASS
+
+### Зависимости добавлены
+- Нет новых зависимостей. Переиспользуются: sony/gobreaker/v2, redis/go-redis/v9, prometheus/client_golang
+
+### Следующие задачи
+- ORCH-TASK-051 (medium): последняя оставшаяся задача в tasks.json
 - ORCH-TASK-051 (medium): CORS middleware config update

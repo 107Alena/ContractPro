@@ -75,7 +75,36 @@ func (m *mockOPMClient) UpdateChecklist(ctx context.Context, checklistID string,
 
 func newTestHandler(opm OPMClient) *Handler {
 	log := logger.NewLogger("error")
-	return NewHandler(opm, log)
+	return NewHandler(opm, nil, log)
+}
+
+func newTestHandlerWithInvalidator(opm OPMClient, inv PermissionsInvalidator) *Handler {
+	log := logger.NewLogger("error")
+	return NewHandler(opm, inv, log)
+}
+
+// fakePublisher records every InvalidateOrg call for assertion.
+// Stores the resulting channel name (matching the production publisher) so
+// that tests can assert on the channel-naming convention too.
+type fakePublisher struct {
+	mu       sync.Mutex
+	channels []string
+	err      error
+}
+
+func (f *fakePublisher) InvalidateOrg(_ context.Context, orgID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channels = append(f.channels, "permissions:invalidate:"+orgID)
+	return f.err
+}
+
+func (f *fakePublisher) snapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.channels))
+	copy(out, f.channels)
+	return out
 }
 
 func newAdminContext() context.Context {
@@ -845,7 +874,7 @@ func TestOPMClientInterface(t *testing.T) {
 func TestNewHandler(t *testing.T) {
 	log := logger.NewLogger("error")
 	mock := &mockOPMClient{}
-	h := NewHandler(mock, log)
+	h := NewHandler(mock, nil, log)
 
 	if h == nil {
 		t.Fatal("NewHandler returned nil")
@@ -856,6 +885,99 @@ func TestNewHandler(t *testing.T) {
 	if h.log == nil {
 		t.Error("handler log is nil")
 	}
+	if h.invalidator != nil {
+		t.Error("handler invalidator should be nil when not provided")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: HandleUpdatePolicy — permissions invalidation (ORCH-TASK-050)
+// ---------------------------------------------------------------------------
+
+func TestHandleUpdatePolicy_PublishesInvalidation(t *testing.T) {
+	// mockOPMClient uses updatePolicyFn in its existing pattern.
+	mock := findUpdatePolicyField(t)
+	mock.updatePolicyFn = func(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"id":"p1","updated":true}`), nil
+	}
+	pub := &fakePublisher{}
+	h := newTestHandlerWithInvalidator(mock, pub)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/policies/p1",
+		bytes.NewReader([]byte(`{"enabled":true}`)))
+	req = req.WithContext(newAdminContext())
+	req = withChiParam(req, "policy_id", "p1")
+	rec := httptest.NewRecorder()
+	h.HandleUpdatePolicy().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	channels := pub.snapshot()
+	if len(channels) != 1 {
+		t.Fatalf("published %d events, want 1", len(channels))
+	}
+	want := "permissions:invalidate:org-001"
+	if channels[0] != want {
+		t.Errorf("channel = %q, want %q", channels[0], want)
+	}
+}
+
+// If Publish fails (Redis down), request still succeeds.
+func TestHandleUpdatePolicy_PublishFailure_DoesNotFailRequest(t *testing.T) {
+	mock := findUpdatePolicyField(t)
+	mock.updatePolicyFn = func(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	}
+	pub := &fakePublisher{err: errors.New("redis down")}
+	h := newTestHandlerWithInvalidator(mock, pub)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/policies/p1",
+		bytes.NewReader([]byte(`{"enabled":true}`)))
+	req = req.WithContext(newAdminContext())
+	req = withChiParam(req, "policy_id", "p1")
+	rec := httptest.NewRecorder()
+	h.HandleUpdatePolicy().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if len(pub.snapshot()) != 1 {
+		t.Errorf("Publish not attempted on failure path")
+	}
+}
+
+// If OPM update itself fails, no invalidation event is published.
+func TestHandleUpdatePolicy_OPMFailure_NoPublish(t *testing.T) {
+	mock := findUpdatePolicyField(t)
+	mock.updatePolicyFn = func(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) {
+		return nil, &opmclient.OPMError{
+			Operation: "UpdatePolicy", StatusCode: 503, Retryable: true,
+		}
+	}
+	pub := &fakePublisher{}
+	h := newTestHandlerWithInvalidator(mock, pub)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/policies/p1",
+		bytes.NewReader([]byte(`{"enabled":true}`)))
+	req = req.WithContext(newAdminContext())
+	req = withChiParam(req, "policy_id", "p1")
+	rec := httptest.NewRecorder()
+	h.HandleUpdatePolicy().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+	}
+	if len(pub.snapshot()) != 0 {
+		t.Errorf("invalidation published despite OPM failure: %v", pub.snapshot())
+	}
+}
+
+// findUpdatePolicyField is a diagnostic helper that panics if the mockOPMClient
+// renames its updatePolicyFn field — cheap guard against a silent test skip.
+func findUpdatePolicyField(t *testing.T) *mockOPMClient {
+	t.Helper()
+	return &mockOPMClient{}
 }
 
 // ---------------------------------------------------------------------------

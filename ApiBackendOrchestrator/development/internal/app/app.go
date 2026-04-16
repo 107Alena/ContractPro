@@ -21,6 +21,7 @@ import (
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/export"
 	"contractpro/api-orchestrator/internal/application/feedback"
+	"contractpro/api-orchestrator/internal/application/permissions"
 	"contractpro/api-orchestrator/internal/application/results"
 	"contractpro/api-orchestrator/internal/application/statustracker"
 	"contractpro/api-orchestrator/internal/application/upload"
@@ -98,6 +99,9 @@ type App struct {
 
 	// Confirmation watchdog (monitors expired AWAITING_USER_INPUT keys).
 	watchdog *confirmwatchdog.Watchdog
+
+	// Permissions cache invalidator (subscribes to permissions:invalidate:*).
+	permInvalidator *permissions.CacheInvalidator
 
 	// Observability shutdown (flush traces/metrics/logs).
 	// Composites Prometheus metrics (ORCH-TASK-032) and OpenTelemetry tracing (ORCH-TASK-033).
@@ -235,6 +239,22 @@ func NewApp(cfg *config.Config) (*App, error) {
 		cfg.TypeConfirmation.WatchdogScanInterval,
 	)
 
+	// 10c. Permissions Resolver + cache invalidator (ORCH-TASK-050).
+	//      Shares the OPM client with Admin Proxy but applies its own aggressive
+	//      per-call timeout (cfg.Permissions.OPMTimeout, default 2s) and a
+	//      dedicated circuit breaker state.
+	permCache := permissions.NewRedisCache(kvClient, cfg.Permissions.CacheTTL)
+	permMetrics := &permissions.PrometheusMetrics{
+		CacheHit:        appMetrics.PermissionsCacheHitTotal,
+		CacheMiss:       appMetrics.PermissionsCacheMissTotal,
+		OPMFallback:     appMetrics.PermissionsOPMFallbackTotal,
+		ResolveDuration: appMetrics.PermissionsResolveDuration,
+	}
+	permResolver := permissions.NewResolver(
+		permCache, opmClient, cfg.Permissions, cfg.CircuitBreaker, permMetrics, log,
+	)
+	permInvalidator := permissions.NewCacheInvalidator(kvClient, redisClient, log, nil)
+
 	// 11. Event consumer — subscribes to 13 RabbitMQ topics.
 	//     Uses adapter because broker.Client.Subscribe takes the named type
 	//     broker.MessageHandler, while consumer.BrokerSubscriber expects an
@@ -254,8 +274,8 @@ func NewApp(cfg *config.Config) (*App, error) {
 	comparisonHandler := comparison.NewHandler(dmClient, cmdPub, log)
 	exportHandler := export.NewHandler(dmClient, log)
 	feedbackHandler := feedback.NewHandler(dmClient, kvClient, log)
-	adminProxyHandler := adminproxy.NewHandler(opmClient, log)
-	authProxyHandler := authproxy.NewHandler(uomClient, log)
+	adminProxyHandler := adminproxy.NewHandler(opmClient, permissions.NewInvalidationPublisher(kvClient), log)
+	authProxyHandler := authproxy.NewHandler(uomClient, permResolver, log)
 	confirmTypeCmdPub := &confirmTypeCmdPubAdapter{pub: cmdPub}
 	confirmTypeHandler := confirmtype.NewHandler(
 		tracker,
@@ -298,15 +318,16 @@ func NewApp(cfg *config.Config) (*App, error) {
 	log.Info(context.Background(), "application initialized successfully")
 
 	return &App{
-		log:           log,
-		health:        healthHandler,
-		kvClient:      kvClient,
-		brokerClient:  brokerClient,
-		server:        server,
-		consumer:      eventConsumer,
-		sseHandler:    sseHandler,
-		watchdog:      watchdog,
-		observability: &compositeObservability{tracer: appTracer, metrics: appMetrics},
+		log:             log,
+		health:          healthHandler,
+		kvClient:        kvClient,
+		brokerClient:    brokerClient,
+		server:          server,
+		consumer:        eventConsumer,
+		sseHandler:      sseHandler,
+		watchdog:        watchdog,
+		permInvalidator: permInvalidator,
+		observability:   &compositeObservability{tracer: appTracer, metrics: appMetrics},
 	}, nil
 }
 
@@ -325,6 +346,11 @@ func (a *App) Start() error {
 	a.log.Info(context.Background(), "starting confirmation watchdog")
 	if err := a.watchdog.Start(); err != nil {
 		return fmt.Errorf("confirmation watchdog: %w", err)
+	}
+
+	a.log.Info(context.Background(), "starting permissions cache invalidator")
+	if err := a.permInvalidator.Start(); err != nil {
+		return fmt.Errorf("permissions cache invalidator: %w", err)
 	}
 
 	a.log.Info(context.Background(), "starting HTTP server")
@@ -377,6 +403,12 @@ func (a *App) Shutdown(ctx context.Context) error {
 	a.log.Info(ctx, "shutdown phase 3b: stopping confirmation watchdog")
 	if a.watchdog != nil {
 		a.watchdog.Shutdown()
+	}
+
+	// Phase 3c: Stop permissions cache invalidator (cancel PSUBSCRIBE, wait for goroutine).
+	a.log.Info(ctx, "shutdown phase 3c: stopping permissions invalidator")
+	if a.permInvalidator != nil {
+		a.permInvalidator.Shutdown()
 	}
 
 	// Phase 4: Close broker (stops consumer subscriptions, disconnects AMQP).

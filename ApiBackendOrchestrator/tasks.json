@@ -62,7 +62,9 @@
         "Шаг 3: тест без обязательных env → Load() возвращает ошибку с перечнем",
         "Шаг 4: тест без optional → дефолты применены корректно"
       ],
-      "dependencies": ["ORCH-TASK-001"],
+      "dependencies": [
+        "ORCH-TASK-001"
+      ],
       "status": "done",
       "completed_at": "2026-04-08",
       "summary": "Пакет internal/config: Config struct с 14 sub-configs, Load() с godotenv, Validate() с агрегированными ошибками. 50+ переменных ORCH_* покрыты. Валидация: 8 required fields, port collision, prefetch >= 1, positive durations, upload size > 0, rate limit conditional, JWT file exists, log level enum, CB/Redis pool >= 1. 24 теста: happy path, missing required (single + multiple), defaults (36 полей + 14 топиков), overrides, validation edge cases, env helper fallbacks."
@@ -84,7 +86,9 @@
         "Шаг 1: go test ./internal/infra/observability/... — все тесты проходят",
         "Шаг 2: лог-запись содержит все обязательные поля в формате JSON"
       ],
-      "dependencies": ["ORCH-TASK-002"],
+      "dependencies": [
+        "ORCH-TASK-002"
+      ],
       "status": "done",
       "completed_at": "2026-04-08",
       "summary": "Пакет internal/infra/observability/logger: Logger (slog JSON на stdout, service=api-orchestrator baked in), RequestContext (CorrelationID, OrganizationID, UserID, DocumentID, VersionID, JobID) с auto-extraction из context.Context, ErrorAttr(err) helper (null для nil), With() для component-scoped child loggers, parseLevel (debug/info/warn/error). 28 тестов: context round-trip, mandatory fields, empty field omission, level filtering, With+context combo, ErrorAttr nil/non-nil/in-output, JSON validity, extra args passthrough."
@@ -106,7 +110,9 @@
         "Шаг 1: go test ./internal/infra/kvstore/... — все тесты проходят",
         "Шаг 2: Ping() на заведомо недоступный адрес → ошибка"
       ],
-      "dependencies": ["ORCH-TASK-002"],
+      "dependencies": [
+        "ORCH-TASK-002"
+      ],
       "status": "done",
       "completed_at": "2026-04-08",
       "summary": "Пакет internal/infra/kvstore: Client с RedisAPI (consumer-side interface), NewClient(cfg) с Ping на старте, Get/Set/Delete/Publish/Subscribe/Ping/Close. Subscription тип с goroutine lifecycle (sync.Once, blocking Close, context cancellation). Error mapping: context passthrough, ErrKeyNotFound sentinel, ErrClientClosed sentinel, fmt.Errorf wrapping (без зависимости на domain port). 41 тест: mock + in-memory fake, error paths, context forwarding, concurrent access, subscription delivery/close/idempotent. Зависимость: github.com/redis/go-redis/v9 v9.18.0."
@@ -131,7 +137,9 @@
         "Шаг 1: go test ./internal/infra/broker/... — все тесты проходят",
         "Шаг 2: publish → confirm → message в очереди (in-memory fake)"
       ],
-      "dependencies": ["ORCH-TASK-002"],
+      "dependencies": [
+        "ORCH-TASK-002"
+      ],
       "status": "done",
       "completed_at": "2026-04-08",
       "summary": "Пакет internal/infra/broker: Client с AMQPAPI/AMQPChannelAPI интерфейсами, NewClient(address, useTLS, prefetch, log) с Ping на старте и auto-reconnect loop. Publish с publisher confirms (Confirm mode + NotifyPublish) и retry (3 попытки, exponential backoff 100ms/200ms). Subscribe с manual ACK/NACK, QoS prefetch, queue prefix orch.sub.{topic}. Auto-reconnect с exponential backoff (1s-30s) + 25% jitter, re-subscribe. Ping() health check, graceful Close() с idempotency. BrokerError тип с retryable classification. Sentinel errors: ErrClientClosed, ErrNotConnected, ErrPublishConfirmFailed, ErrPublishNacked, ErrPublishMaxRetriesExhausted. pubMu сериализует publish+confirm цикл для предотвращения confirm misattribution. 35 тестов: publish (success, confirm nack, confirm channel closed, retry transient, no retry non-retryable, max retries exhausted, context cancelled/deadline, not connected, after close, concurrent safety), subscribe (success, queue declare error, qos error, not connected, handler ack, handler nack, manual ack, queue prefix), ping (connected, disconnected, nil conn), close (graceful, idempotent, cancels context), error mapping (AMQP retryable/non-retryable, context passthrough, unknown), isRetryable, backoff delay, reconnect (confirm mode, re-subscribe, stops on done, dial fail retries), broker error formatting. Зависимость: github.com/rabbitmq/amqp091-go v1.10.0."
@@ -156,7 +164,9 @@
         "Шаг 2: PutObject streaming → storage_key возвращён",
         "Шаг 3: circuit breaker opens after 5 consecutive errors"
       ],
-      "dependencies": ["ORCH-TASK-002"],
+      "dependencies": [
+        "ORCH-TASK-002"
+      ],
       "status": "done",
       "completed_at": "2026-04-08",
       "summary": "Пакет internal/infra/objectstorage: Client с S3API consumer-side interface (PutObject, DeleteObject, HeadObject), NewClient(StorageConfig, CircuitBreakerConfig, Logger). PutObject принимает io.ReadSeeker для streaming upload с retry (seek перед каждой повторной попыткой). Retry: 3 попытки (1+2), exponential backoff 500ms/1s + 25% jitter. Circuit breaker (gobreaker/v2): configurable threshold/timeout/maxRequests, 4xx и NotFound не считаются failures, ErrCircuitOpen прерывает retry немедленно. Per-attempt timeouts: 30s upload, 15s HEAD/DELETE. Error classification: ErrCircuitOpen, ErrObjectNotFound sentinels, StorageError struct с Retryable flag, mapError (context passthrough, smithy.APIError classification, net.Error), isRetryable, isCBFailure. 45 тестов: PutObject (success, retry 5xx, retry timeout, retry network, no retry 403, all retries exhausted, context canceled, seek before retry, seek error), DeleteObject (success, retry, all retries, no retry 403, context canceled), HeadObject (success, NotFound, NoSuchKey, retry, no retry 403), CB (opens after threshold, 4xx doesn't trip, NotFound doesn't trip, half-open recovery, ErrCircuitOpen not retried, trips during retry), mapError (8 cases), isRetryable (6 cases), isCBFailure (5 cases), backoff delay, StorageError formatting/unwrap, context cancelled during backoff. Зависимости: aws-sdk-go-v2 v1.41.5, aws-sdk-go-v2/service/s3 v1.99.0, aws-sdk-go-v2/credentials v1.19.14, smithy-go v1.24.3, gobreaker/v2 v2.4.0."
@@ -180,7 +190,10 @@
         "Шаг 3: /readyz с доступными зависимостями → 200",
         "Шаг 4: /readyz с недоступной зависимостью → 503"
       ],
-      "dependencies": ["ORCH-TASK-004", "ORCH-TASK-005"],
+      "dependencies": [
+        "ORCH-TASK-004",
+        "ORCH-TASK-005"
+      ],
       "status": "done",
       "completed_at": "2026-04-08",
       "summary": "Пакет internal/infra/health: Handler с RedisPinger/BrokerPinger consumer-side интерфейсами и DM HTTP probe. GET /healthz — всегда 200 OK (liveness). GET /readyz — параллельные проверки Redis (Ping(ctx)), RabbitMQ (Ping()), DM (HTTP GET /healthz) с 3s timeout. Возвращает 200 {status:ready, checks:{redis:ok, rabbitmq:ok, dm:ok}} или 503 {status:not_ready, checks:{...unavailable...}}. SetNotReady() — atomic.Bool для graceful shutdown, 503 без проверок. Безопасность: ошибки не раскрываются (status: unavailable). GET-only (405 на другие методы). URL нормализация (trailing slash). DM response body drain для переиспользования TCP. 20 тестов: liveness (3), readiness healthy (2), individual/all failures (4), SetNotReady (2), error format (1), timeout Redis/DM (2), DM path (1), trailing slash (1), method restriction (2), concurrent access (1). Только stdlib зависимости."
@@ -204,7 +217,9 @@
         "Шаг 2: сервер стартует на ORCH_HTTP_PORT",
         "Шаг 3: GET /healthz → 200"
       ],
-      "dependencies": ["ORCH-TASK-007"],
+      "dependencies": [
+        "ORCH-TASK-007"
+      ],
       "status": "done",
       "completed_at": "2026-04-08",
       "summary": "Пакет internal/ingress/api: Server struct (main + metrics http.Server), Deps injection (Config, Health, Logger). Chi router с route groups: public (/auth/login, /auth/refresh, /auth/logout), protected (auth→RBAC→rateLimit middleware chain: contracts CRUD, versions, results, comparison, export, feedback, admin, users/me), SSE (/events/stream вне auth group). Health handler mount через Mount(\"/\") для корректной передачи путей /healthz и /readyz. Metrics server на отдельном порту (9090) со stub /metrics endpoint. 4 middleware stubs (CORS, Auth, RBAC, RateLimit — pass-through). Все route handlers возвращают 501 Not Implemented. SSE stub с проверкой Flusher до WriteHeader. Таймауты: ReadTimeout=RequestTimeout, WriteTimeout=RequestTimeout+5s, IdleTimeout=2*RequestTimeout. StartWithListeners для тестов с ephemeral ports. Graceful Shutdown обоих серверов параллельно. 42 теста: constructor (5), health integration (2), public auth (3), protected contracts (5), versions (5), results (4), comparison (2), export (1), feedback (1), admin (4), user (1), SSE (1), routing (2), response format (2), lifecycle (2), concurrent access (1), route registration (1), middleware chain (1), accessor (1). Зависимость: github.com/go-chi/chi/v5 v5.2.5."
@@ -227,7 +242,9 @@
         "Шаг 2: WriteError → корректный JSON с error_code, message на русском, correlation_id",
         "Шаг 3: panic в handler → recovery middleware → 500 INTERNAL_ERROR"
       ],
-      "dependencies": ["ORCH-TASK-008"],
+      "dependencies": [
+        "ORCH-TASK-008"
+      ],
       "status": "done",
       "completed_at": "2026-04-08",
       "summary": "Пакет internal/domain/model: ErrorCode тип (22 константы), ErrorEntry struct (HTTPStatus, Message, Suggestion), errorCatalog (22 записи с русскими сообщениями), ErrorResponse struct (error_code, message, details, correlation_id, suggestion), WriteError(w, r, code, details) с auto-fill из каталога и RequestContext, WriteErrorWithMessage для кастомных сообщений, LookupError (unknown → INTERNAL_ERROR fallback), StatusCode хелпер. MapDMError(statusCode, body, resourceHint) → маппинг DM 404/409/5xx в коды оркестратора (resourceHint: version/artifact/diff/document). RecoveryMiddleware(logger) с http.ErrAbortHandler re-panic, structured logging (panic value + stack trace), 500 INTERNAL_ERROR без утечки деталей. Wired в server.go первым в chain (перед CORS). json.Encode ошибки логируются через slog.Error. notImplemented stub обновлён на unified error_code формат. 55 новых тестов: error_response (21), dm_errors (23), recovery (11)."
@@ -255,7 +272,9 @@
         "Шаг 4: без JWT → 401 AUTH_TOKEN_MISSING",
         "Шаг 5: JWT в ?token= → claims в context"
       ],
-      "dependencies": ["ORCH-TASK-009"],
+      "dependencies": [
+        "ORCH-TASK-009"
+      ],
       "status": "done",
       "completed_at": "2026-04-08",
       "summary": "Пакет internal/ingress/middleware/auth: Middleware struct (publicKey, log), NewMiddleware(crypto.PublicKey, *Logger) с валидацией типа ключа и ECDSA P-256 curve check. Handler() возвращает chi-compatible middleware: извлечение Bearer токена (case-insensitive per RFC 6750), JWT валидация (RS256/ES256, 30s clock skew, exp required, iat check), Claims.Validate() (sub UUID, org UUID, role enum, jti UUID), AuthContext injection (UserID, OrganizationID, Role, TokenID), RequestContext injection (CorrelationID, OrganizationID, UserID). Correlation ID генерируется/сохраняется до error paths — все ответы (включая auth errors) содержат correlation_id. ValidateToken() экспортирован для SSE handler (ORCH-TASK-029). LoadPublicKey(path) поддерживает RSA PKIX, ECDSA PKIX, RSA PKCS1. Algorithm confusion attack prevention через type assertion в keyFunc. Wiring: Deps.AuthMiddleware в server.go, registerRoutes(r, authMW) в routes.go, noopMiddleware fallback. 54 теста: claims validation (12), key loading (10), context (8), middleware integration (24 — RS256/ES256 valid, missing/empty/non-Bearer header, expired/clock-skew, wrong key, algorithm mismatch, invalid claims, future iat, correlation ID generation/preservation/on-error, all roles, malformed, none algorithm, case-insensitive Bearer, ValidateToken). Зависимости: github.com/golang-jwt/jwt/v5, github.com/google/uuid."
@@ -279,7 +298,9 @@
         "Шаг 3: BUSINESS_USER → 403 на /admin/policies",
         "Шаг 4: ORG_ADMIN → доступ к /admin/policies"
       ],
-      "dependencies": ["ORCH-TASK-010"],
+      "dependencies": [
+        "ORCH-TASK-010"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/ingress/middleware/rbac: Middleware struct (policy map[string]roleSet, matcher *chi.Mux, log), NewMiddleware(log) строит access policy (23 правила) и companion chi.Mux для pattern matching. Handler() → chi-compatible middleware: extractBearerToken → AuthContextFrom → matcher.Match → policy lookup → role check. Fail-open для неизвестных routes (с DEBUG логом). Missing AuthContext → 500 INTERNAL_ERROR. Role not permitted → 403 PERMISSION_DENIED (WARN лог с user_id, role, method, path, route_pattern). 3 roleSet: allRoles (LAWYER+BUSINESS_USER+ORG_ADMIN), lawyerAndAdmin (LAWYER+ORG_ADMIN), adminOnly (ORG_ADMIN). Companion chi.Mux обходит ограничение chi sub-router RoutePattern(). Export endpoint: allRoles at RBAC, BUSINESS_USER проверяется handler через OPM policy. Wiring: Deps.RBACMiddleware в server.go, registerRoutes(r, authMW, rbacMW), removed rbacMiddleware stub. 44 теста (131 с sub-tests): constructor (3), missing AuthContext (1), fail-open unknown route (1), permission denied (13 BUSINESS_USER + LAWYER на restricted), allowed access (14 all roles), error response format (2), roleSet (2), policy completeness (1), full access matrix (69 sub-tests covering 23 endpoints × 3 roles), handler call verification (2), unknown/empty role denied (2). Зависимости: нет новых (chi, auth, model уже есть)."
@@ -302,7 +323,9 @@
         "Шаг 2: OPTIONS → правильные CORS заголовки",
         "Шаг 3: запрос с disallowed origin → без CORS заголовков"
       ],
-      "dependencies": ["ORCH-TASK-008"],
+      "dependencies": [
+        "ORCH-TASK-008"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Пакет internal/ingress/api: CORSMiddleware (factory function, replaces stub) с config.CORSConfig (AllowedOrigins, MaxAge). Allowed origins O(1) lookup (map), wildcard '*' silently ignored (incompatible with credentials). Preflight (OPTIONS + Access-Control-Request-Method): 204 No Content, CORS headers set only for allowed origins, Vary: Origin, Access-Control-Request-Method, Access-Control-Request-Headers. Actual request: CORS headers (Allow-Origin, Allow-Credentials: true, Expose-Headers: X-Request-ID, X-Correlation-Id, Retry-After) for allowed origins only, Vary: Origin always. Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS. Allow-Headers: Authorization, Content-Type, X-Correlation-Id. SecurityHeadersMiddleware (global, after CORS): generates/validates correlation ID (X-Correlation-Id), sets X-Request-ID + X-Correlation-Id response headers, injects RequestContext into ctx, sets X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Strict-Transport-Security: max-age=31536000; includeSubDomains, Cache-Control: no-store (overridable by handlers). isValidCorrelationID: max 128 bytes, printable ASCII only (0x20-0x7E), invalid → generate UUID v4. Propagates correlation ID on request header for downstream middleware (auth). Wiring: Deps.CORSConfig added, server.go chain Recovery→CORS→SecurityHeaders, app.go passes cfg.CORS. 35 новых тестов (+ 23 sub-tests): CORS (15 — no origin, allowed/disallowed actual, preflight allowed/disallowed, empty origins, wildcard, multiple origins ×3, case sensitive, OPTIONS without request-method, no-call-handler, expose/allow/methods headers, empty string origin), SecurityHeaders (7 — all present, generated/client ID, request header propagation, context injection, cache-control override, unique IDs ×100), CID validation (4 — too long, control chars, max length, isValidCorrelationID ×16 subtests), integration (2 — CORS+SecurityHeaders combo, preflight short-circuit), server-level (7 — headers on every response ×4 endpoints, CORS allowed/disallowed, preflight 204, default same-origin, X-Request-ID preserved). Code review: S-1 isValidCorrelationID validation added, M-1 X-Correlation-Id casing standardized, N-1 PATCH added to Allow-Methods, N-3 test name clarified. Нет новых зависимостей (uuid, config, logger уже в go.mod)."
@@ -327,7 +350,10 @@
         "Шаг 3: запросы сверх лимита → 429 с Retry-After",
         "Шаг 4: Redis недоступен → запросы пропускаются"
       ],
-      "dependencies": ["ORCH-TASK-004", "ORCH-TASK-010"],
+      "dependencies": [
+        "ORCH-TASK-004",
+        "ORCH-TASK-010"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Пакет internal/ingress/middleware/ratelimit: Middleware struct (store, readRPS, writeRPS, enabled, log), NewMiddleware(cfg, store, log) с валидацией (nil store при enabled, RPS > 0). Handler() → chi-compatible middleware: disabled → no-op pass-through (zero overhead), enabled → AuthContext extraction → operationClass(method) → rateLimitKey(orgID, class) → store.Allow(ctx, key, limit, 1s window) → allowed/rejected/error. Method classification: GET/HEAD → read (ReadRPS), POST/PUT/DELETE/PATCH → write (WriteRPS). Redis failure → degrade (allow request + WARN log). Missing AuthContext → 500 INTERNAL_ERROR. Rate exceeded → 429 + Retry-After: 1 + JSON RATE_LIMIT_EXCEEDED (Russian messages from error catalog). RateLimiterStore consumer-side interface (Allow(ctx, key, limit, window) → (bool, error)). RedisStore: Lua script (INCR + PEXPIRE atomically, PEXPIRE set only on first request in window), evalFunc indirection for testability. NewRedisStore(redis.Cmdable) wraps Eval→Int64. Redis key format: rl:{org_id}:{read|write}, TTL 1s. kvstore.Client.RawRedis() → any (expose underlying *redis.Client for Lua script access). Wiring: Deps.RateLimitMiddleware injected into server.go, registerRoutes uses injected middleware (stub removed from middleware.go), app.go creates RedisStore via kvClient.RawRedis()→redis.Cmdable type assertion. Code review (code-reviewer): M-1 ReadRPS/WriteRPS > 0 validation added in NewMiddleware (defense-in-depth beyond config.Validate), M-2 zero/negative RPS tests added. 34 тестов (+ 10 sub-tests): constructor (6 — nil store enabled/disabled, success, zero read/write RPS, negative RPS), disabled (2 — pass-through, no store call), allowed (2 — GET read, POST write), exceeded (2 — GET 429, POST 429), Redis unavailable (2 — GET/POST degraded), missing AuthContext (1 — 500), method classification (4 — HEAD read, PUT/DELETE/PATCH write), key format (1 — UUID org), context cancelled (1 — degraded), response format (2 — content-type, Russian message+suggestion), per-org isolation (1), operationClass table (7 sub-tests), rateLimitKey table (3 sub-tests), concurrent safety (1), store tests (7 — allow true/false, Redis error, correct args, context forwarded, window ms, interface check). Нет новых зависимостей (redis/go-redis уже в go.mod)."
@@ -352,7 +378,9 @@
         "Шаг 3: DM 500 → retry 3 раза → DM_UNAVAILABLE",
         "Шаг 4: circuit breaker → OPEN после 5 ошибок → fast fail"
       ],
-      "dependencies": ["ORCH-TASK-009"],
+      "dependencies": [
+        "ORCH-TASK-009"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/egress/dmclient: DMClient интерфейс (12 методов), Client struct с http.Client, gobreaker CB, retry logic. Методы: CreateDocument, ListDocuments, GetDocument, DeleteDocument, ArchiveDocument, CreateVersion, ListVersions, GetVersion, ListArtifacts, GetArtifact (200 JSON + 302 redirect), GetDiff, ListAuditRecords. Headers: X-Organization-ID, X-User-ID, X-Correlation-ID из auth.AuthContext и logger.RequestContext. Retry: retryMax (default 3) total attempts, exponential backoff 200ms×2^(n-1) + 25% jitter. Per-attempt timeout (read 5s, write 10s). CB: gobreaker/v2, FailureThreshold/Timeout/MaxRequests configurable, 4xx/context.Canceled не считаются failures. Error types: ErrCircuitOpen, ErrDMUnavailable sentinels, DMError struct (Operation, StatusCode, Body, Retryable, Cause). Response body limit 10MB (io.LimitReader). URL path escaping (url.PathEscape). Error log on retry exhaustion. CheckRedirect disabled для GetArtifact 302. setHeaders из original ctx (не per-attempt). 47 тестов: headers (1), CreateDocument success/400 (2), GetDocument success/404/409 (3), retry 5xx-then-success/exhausted (2), DeleteDocument (1), ArchiveDocument (1), CreateVersion (1), ListVersions (1), GetVersion (1), ListArtifacts (1), GetArtifact JSON/302/302-no-location/404 (4), GetDiff (1), ListAuditRecords (1), context cancel/during-backoff (2), CB open/4xx-no-trip/half-open/not-retried/trips-mid-retry (5), backoff (1), DMError formatting/unwrap (3), isRetryable (5), isCBFailure (4), mapHTTPError (3), mapTransportError (4), empty context (1), query params (1), interface check (1). Нет новых зависимостей (gobreaker, chi, jwt, uuid уже в go.mod)."
@@ -374,7 +402,9 @@
         "Шаг 2: Login → access_token + refresh_token",
         "Шаг 3: UOM недоступен → 503"
       ],
-      "dependencies": ["ORCH-TASK-009"],
+      "dependencies": [
+        "ORCH-TASK-009"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Пакет internal/egress/uomclient: UOMClient интерфейс (4 метода), Client struct с http.Client, retry logic (2 total attempts, fixed 200ms backoff, NO circuit breaker — fast fail для auth UX). Методы: Login (POST /api/v1/auth/login → LoginResponse с access_token, refresh_token, token_type, expires_in, user profile), Refresh (POST /api/v1/auth/refresh → RefreshResponse), Logout (POST /api/v1/auth/logout → 204 No Content), GetMe (GET /api/v1/users/me → UserProfile). Headers: X-Correlation-ID из RequestContext, X-User-ID из AuthContext (для service-to-service). Per-attempt timeout 5s. Response body limit 1MB. Error types: UOMError struct (Operation, StatusCode, Body, Retryable, Cause), mapHTTPError (4xx non-retryable, 5xx retryable), mapTransportError (context passthrough, net.Error retryable). Error catalog расширен: ErrAuthServiceUnavailable (502), ErrInvalidCredentials (401), ErrTokenRevoked (401), ErrRefreshTokenExpired (401) с русскими сообщениями. MapUOMError: 5xx→AUTH_SERVICE_UNAVAILABLE, 401→credential errors (INVALID_CREDENTIALS/TOKEN_EXPIRED/TOKEN_REVOKED), 4xx→VALIDATION_ERROR. 36 тестов UOM client: Login (success, invalid credentials, UOM down retry 2x, retry-then-success, no retry on 401, bad JSON response, bad request 400, empty body 200), Refresh (success, token expired, token revoked, UOM down 503), Logout (success 204, UOM down 502), GetMe (success with auth headers, 404, UOM down, without auth context), headers (correlation ID, no auth context, with auth context), context (canceled, canceled during backoff), transport error (connection refused), UOMError (formatting 3 cases, unwrap), isRetryable (5 subtests), mapHTTPError (7 subtests), mapTransportError (4 cases), response body limit, empty context, concurrent safety, constructor. 17 тестов UOM error mapping: MapUOMError (13 cases covering 5xx/401/4xx), catalog completeness (4 new codes). Code review: S-5 unused ErrUOMUnavailable removed, S-9 GetMe without AuthContext test added, S-10 empty body 200 test added. Нет новых зависимостей."
@@ -397,7 +427,9 @@
         "Шаг 2: OPM_BASE_URL пустой → admin endpoints → 502",
         "Шаг 3: OPM доступен → ListPolicies → данные"
       ],
-      "dependencies": ["ORCH-TASK-009"],
+      "dependencies": [
+        "ORCH-TASK-009"
+      ],
       "status": "done",
       "completed_at": "2026-04-11",
       "summary": "Пакет internal/egress/opmclient: OPMClient интерфейс (4 метода: ListPolicies, UpdatePolicy, ListChecklists, UpdateChecklist) с json.RawMessage pass-through (ASSUMPTION-ORCH-04, OPM не спроектирован, оркестратор — прозрачный прокси). Client struct с retry logic (2 total attempts, fixed 200ms backoff, 5s per-attempt timeout, NO circuit breaker). DisabledClient для пустого ORCH_OPM_BASE_URL (все методы → OPMError wrapping ErrOPMDisabled sentinel). NewOPMClient(cfg, log) → OPMClient interface (Client или DisabledClient в зависимости от cfg.BaseURL). Headers: X-Organization-ID, X-User-ID, X-Correlation-ID из auth.AuthContext и logger.RequestContext (DM client pattern). GET: organization_id как query param. PUT: policyID/checklistID через url.PathEscape в path. Response body limit 1MB. OPMError struct (Operation, StatusCode, Body, Retryable, Cause) с Error()/Unwrap(). mapHTTPError (4xx non-retryable, 5xx retryable), mapTransportError (context passthrough, net.Error retryable), isRetryable. Пакет internal/domain/model: MapOPMError (5xx→OPM_UNAVAILABLE, 404→POLICY_NOT_FOUND/CHECKLIST_NOT_FOUND по resourceHint, 400→VALIDATION_ERROR, other 4xx→INTERNAL_ERROR). 2 новых error code: ErrPolicyNotFound (404, «Политика не найдена.»), ErrChecklistNotFound (404, «Чек-лист не найден.»). 35 тестов client_test.go: interface compliance (2), constructor (2), ListPolicies (4 — success, retry 2x, retry-then-success, no retry 400), UpdatePolicy (3 — success, 404, path escaping), ListChecklists (1), UpdateChecklist (1), DisabledClient (4 — all methods), headers (4 — org+user+correlation, empty context, PUT content-type, GET no content-type), context (2 — canceled, canceled during backoff), transport (1 — connection refused), response body limit (1), empty response (1), OPMError formatting (3), OPMError unwrap (1), isRetryable (5 subtests), mapHTTPError (6 subtests), mapTransportError (4), concurrent (1), buildURL (2), sentinel (1). 12 тестов opm_errors_test.go: MapOPMError (10 subtests), catalog (2). Code review: N-01 path escaping assertion added, N-05 429 test case added, N-06 exact body limit boundary check. Нет новых зависимостей."
@@ -421,7 +453,9 @@
         "Шаг 2: PublishProcessDocument → сообщение в dp.commands.process-document",
         "Шаг 3: broker недоступен → retry 3 раза → ошибка"
       ],
-      "dependencies": ["ORCH-TASK-005"],
+      "dependencies": [
+        "ORCH-TASK-005"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/egress/commandpub: CommandPublisher интерфейс (2 метода), Publisher struct с BrokerPublisher (consumer-side interface), topic routing, component logger. Методы: PublishProcessDocument (12 полей JSON: correlation_id, timestamp, job_id, document_id, version_id, organization_id, requested_by_user_id, source_file_key/name/size/checksum/mime_type → dp.commands.process-document), PublishCompareVersions (8 полей JSON: correlation_id, timestamp, job_id, document_id, organization_id, requested_by_user_id, base_version_id, target_version_id → dp.commands.compare-versions). EventMeta envelope: correlation_id из RequestContext, timestamp как time.Now().UTC().Format(RFC3339). Команды (ProcessDocumentCommand, CompareVersionsCommand) содержат только бизнес-поля. Broker retry/confirms делегированы infra/broker. WARN лог при ошибке publish (operation, topic, job_id, error). Broker errors обёрнуты fmt.Errorf с commandpub: prefix. 12 тестов: interface check, correct topic+JSON (process/compare), timestamp RFC3339 (process/compare), broker error propagation (process/compare), empty correlation_id (process/compare), all JSON fields exact match (process/compare), mock interface check. Code review: S-1 duplicate correlation_id fixed (→ job_id), S-2 broker error wrapping added. Нет новых зависимостей."
@@ -453,7 +487,12 @@
         "Шаг 4: upload .docx → 415 UNSUPPORTED_FORMAT",
         "Шаг 5: DM недоступен → 502, файл из S3 удалён"
       ],
-      "dependencies": ["ORCH-TASK-006", "ORCH-TASK-014", "ORCH-TASK-017", "ORCH-TASK-011"],
+      "dependencies": [
+        "ORCH-TASK-006",
+        "ORCH-TASK-014",
+        "ORCH-TASK-017",
+        "ORCH-TASK-011"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/application/upload: Handler struct с consumer-side интерфейсами (ObjectStorage, DMClient, CommandPublisher, KVStore). Handle() → http.HandlerFunc: auth context extraction → correlation_id/job_id generation → MaxBytesReader body limit → multipart parsing → title validation (trim, length ≤500 runes, control char rejection) → file validation (size ≤ maxSize, MIME=application/pdf, magic bytes %PDF-) → filename sanitization (path traversal, control chars, UTF-8-aware truncation to 255 bytes, fallback upload.pdf) → streaming S3 upload с checksumReadSeeker (SHA-256 via io.TeeReader, hash reset on Seek(0) for retry) → DM CreateDocument → DM CreateVersion (origin_type=UPLOAD) → PublishProcessDocument command → Redis tracking (upload:{org}:{job}, TTL 1h) → 202 Accepted {contract_id, version_id, version_number, job_id, status:UPLOADED, message}. Compensating cleanup: S3 delete on DM failure, orphan document logging on CreateVersion failure, CRITICAL log on broker failure (no rollback — version exists), WARN on Redis failure (non-critical). Wiring: UploadHandler в Deps struct, uploadH parameter в registerRoutes, POST /contracts/upload mapped. 34 теста: happy path (1), auth (1), title validation (7 — empty, whitespace, too long, boundary 500, unicode 500/501, control chars/tab/null), file validation (5 — missing, too large, unsupported MIME, invalid magic, too short, empty), infrastructure failures+cleanup (5 — S3 failure, DM CreateDoc+cleanup, DM CreateVer+cleanup, broker no-cleanup, Redis non-critical), data integrity (4 — checksum, S3 key format, Redis tracking, published command fields), non-multipart (1), sanitizeFilename (16 subtests — normal, path traversal fwd/bwd/embedded, null/control/DEL chars, empty/dot/dotdot fallback, long truncation, unicode, spaces, absolute/windows path, UTF-8 truncation), checksumReadSeeker (1), body size limit (1), containsControlChars (8 subtests). Code review: S-1 MaxBytesReader fixed, M-2 orphan doc logging added, M-3 title control chars rejection, M-4 UTF-8-aware truncation, M-1 retry contract documented. Нет новых зависимостей."
@@ -479,7 +518,10 @@
         "Шаг 3: GET /contracts/{id} → детали с processing_status",
         "Шаг 4: DELETE с ролью BUSINESS_USER → 403"
       ],
-      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-011"],
+      "dependencies": [
+        "ORCH-TASK-014",
+        "ORCH-TASK-011"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/application/contracts: Handler struct с DMClient consumer-side интерфейсом (4 метода), NewHandler с component logger. HandleList() — пагинация (page 1-∞, size 1-100), status filter (ACTIVE/ARCHIVED/DELETED), search validation (≤200 runes, not forwarded to DM yet). HandleGet() — UUID validation, DocumentWithCurrentVersion → ContractDetails с processing_status mapping (11 DM artifact_status → user-facing status). HandleArchive/HandleDelete() — UUID validation, DM proxy, ContractSummary response. Response DTOs: ContractSummary, ContractDetails, ContractVersion, ContractListResponse — document→contract field mapping, source_file_key/artifact_status not exposed. Processing status map: PENDING_UPLOAD→UPLOADED, PENDING_PROCESSING→QUEUED, etc. DM error handling: handleDMError shared method (ErrCircuitOpen→502, DMError.StatusCode→MapDMError, transport→502, unknown→500). Wiring: Deps.ContractHandler в server.go, registerRoutes с nil-guard fallback. 44 теста (+ 11 sub-tests): HandleList (15 — success, empty, custom page/size, status filter, invalid page/size/status, search too long/accepted, DM 5xx/circuit open, no auth), HandleGet (10 — with/without version, invalid/empty UUID, DM 404/5xx/400, all 11 processing status mappings, source_file_key not exposed, no auth), HandleArchive (7 — success, invalid UUID, DM 404/409 archived/409 deleted/5xx, no auth), HandleDelete (7 — success, invalid UUID, DM 404/409 deleted/409 archived/5xx, no auth), mapping (5 — all values/unknown/summary/details with+without version), handleDMError (2 — transport/unknown), interface check (1), format (2 — content-type, RFC3339 time). Code review: M-1 search doc comment, M-2 nil fields doc, N-3 writeJSON structured logger, N-6 DM 400 test added. Нет новых зависимостей."
@@ -502,7 +544,10 @@
         "Шаг 3: GET /versions/{vid}/status → {status, message} на русском",
         "Шаг 4: POST /versions/upload → 202"
       ],
-      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-018"],
+      "dependencies": [
+        "ORCH-TASK-014",
+        "ORCH-TASK-018"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/application/versions: Handler struct с DMClient (4 метода), ObjectStorage, CommandPublisher (commandpub types), KVStore consumer-side интерфейсами. HandleList() — пагинация (page 1-∞, size 1-100), DM ListVersions proxy, VersionResponse DTO с processing_status + processing_status_message mapping. HandleGet() — UUID validation, DM GetVersion proxy, single VersionResponse. HandleStatus() — lightweight polling endpoint, returns version_id/status/message/updated_at (server time.Now() as observation timestamp). HandleUpload() — multipart parsing (MaxBytesReader DoS protection) → file validation (PDF MIME, %PDF- magic, size ≤ maxSize) → DM GetDocument (existence + status check: ARCHIVED→409, DELETED→409, PENDING/PROCESSING→409 VERSION_STILL_PROCESSING) → sanitizeFilename → S3 streaming upload with SHA-256 checksumReadSeeker → DM CreateVersion (origin_type=RE_UPLOAD, parent_version_id from current version) → PublishProcessDocument (commandpub types) → Redis tracking (non-critical) → 202 Accepted. Response DTOs: VersionResponse (list+get), VersionListResponse, VersionStatusResponse, VersionUploadResponse. Processing status map: 11 DM artifact_status → user-facing status + Russian messages (NFR-5.2). DM error handling: ErrCircuitOpen→502, DMError→MapDMError, transport→502, unknown→500. Resource hints: 'document' for list/GetDocument, 'version' for GetVersion/CreateVersion. Compensating cleanup: S3 delete on DM CreateVersion failure, CRITICAL log on broker failure (no rollback), WARN on Redis failure (non-critical). Wiring: Deps.VersionHandler в server.go, registerRoutes с nil-guard fallback. 47 тестов (+ 14 sub-tests): HandleList (10 — success, empty, custom page/size, invalid page/size/contract_id, DM 5xx/circuit open/404, no auth, source_file_key not exposed), HandleGet (7 — success, invalid contract_id/version_id, DM 404/5xx, no auth, source_file_key not exposed), HandleStatus (4 — success with server time, invalid version_id, DM 404, no auth), processing status mapping (12 — all 11 values + unknown), HandleUpload (16 — success, no auth, invalid contract_id, missing file, too large, unsupported MIME, invalid magic, empty file, document 404/archived/deleted, version still processing ×3, S3 failure, DM CreateVersion failure+cleanup, broker failure no-cleanup, Redis non-critical, no versions, published command fields, S3 key format), sanitizeFilename (14 subtests), checksumReadSeeker (1), response format (2), handleDMError (2), interface compliance (1). Code review: M-5 concurrent processing guard added. Нет новых зависимостей."
@@ -528,7 +573,10 @@
         "Шаг 3: GET /results (PENDING) → {status: PROCESSING}",
         "Шаг 4: GET /results (BUSINESS_USER) → только summary + score"
       ],
-      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-011"],
+      "dependencies": [
+        "ORCH-TASK-014",
+        "ORCH-TASK-011"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/application/results: Handler struct с DMClient consumer-side интерфейсом (GetVersion, GetArtifact), NewHandler с component logger. HandleResults() — 7 artifact types (RISK_ANALYSIS, RISK_PROFILE, SUMMARY, RECOMMENDATIONS, KEY_PARAMETERS, CLASSIFICATION_RESULT, AGGREGATE_SCORE) параллельный fetch через sync.WaitGroup+Mutex, LAWYER/ORG_ADMIN only (defense-in-depth). HandleRisks() — 2 artifacts sequential, LAWYER/ORG_ADMIN only. HandleSummary() — 3 artifacts sequential, all roles. HandleRecommendations() — 1 artifact sequential, LAWYER/ORG_ADMIN only. Version status check: non-data statuses (9 of 11) → 200 with mapped status + null artifact fields. Data-available statuses: FULLY_READY, PARTIALLY_AVAILABLE → fetch artifacts. Per-artifact error handling: 404 → null (silent skip), transport/other → null (warn log, graceful degradation), redirect → null (warn log). Response DTOs: AnalysisResultsResponse, RiskListResponse, SummaryResponse, RecommendationsResponse — all use json.RawMessage for zero-copy pass-through. Processing status map (11 entries) + Russian status messages (10 entries). Wiring: Deps.ResultsHandler в server.go, registerRoutes с nil-guard. 28 тестов (+ 30 sub-tests): HandleResults (12 — BUSINESS_USER 403, no auth 401, invalid contract_id/version_id, processing returns 200+nulls, fully_ready fetches 7 artifacts, partially_available fetches, artifact 404 returns null, transport error returns null, GetVersion circuit open 502, GetVersion DM 404, OrgAdmin allowed, redirect returns null, context cancelled), HandleRisks (3 — BUSINESS_USER 403, fully_ready 2 artifacts, processing nulls), HandleSummary (3 — all roles allowed × 3 subtests, fully_ready 3 artifacts, pending nulls), HandleRecommendations (3 — BUSINESS_USER 403, fully_ready 1 artifact, failed nulls), status mapping (12 subtests), data available (18 subtests), isDMNotFound (3), mapProcessingStatusMessage (3), all non-data statuses skip fetch (9 subtests). Code review: S-2 presigned URL removed from logs, S-4 context cancellation test added, N-2 redirect test added, N-3 status message test added, N-4 contract_type mapping comment. Нет новых зависимостей."
@@ -552,7 +600,10 @@
         "Шаг 2: recheck FULLY_READY версии → 202 с новым version_id",
         "Шаг 3: recheck PENDING версии → 409"
       ],
-      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-017"],
+      "dependencies": [
+        "ORCH-TASK-014",
+        "ORCH-TASK-017"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Метод HandleRecheck() добавлен в пакет internal/application/versions (versions.Handler). POST /api/v1/contracts/{id}/versions/{vid}/recheck: auth validation → extract contract_id/version_id (UUID) → generate correlationID/jobID → DM GetVersion (source file metadata + artifact_status) → isStillProcessing guard (whitelist: FULLY_READY/PARTIALLY_AVAILABLE/PROCESSING_FAILED/REJECTED — all others blocked) → empty SourceFileKey guard (500 INTERNAL_ERROR) → DM CreateVersion (origin_type=RE_CHECK, same source_file_key/name/size/checksum, parent_version_id=vid) → PublishProcessDocument (commandpub, MIME=application/pdf) → Redis tracking (non-critical, TTL 1h) → 202 Accepted {contract_id, version_id, version_number, job_id, status:UPLOADED, message}. Broker failure: CRITICAL log, no rollback (version exists in DM). Error handling: handleDMError shared method (ErrCircuitOpen→502, DMError→MapDMError, transport→502). Wiring: routes.go updated, recheck inside versionH nil-guard block. 16 тестов (+ 23 sub-tests): success (1), no auth (1), invalid contract_id/version_id (2), version not found (1), version still processing ×7 subtests (1), terminal statuses allowed ×4 subtests (1), CreateVersion request fields + published command fields (1), DM 5xx (1), DM circuit open (1), CreateVersion failure (1), broker failure + orphan assertion (1), Redis non-critical (1), Redis tracking key/TTL (1), empty SourceFileKey guard (1), no S3 operations (1), isStillProcessing 12 subtests (1). Code review: M-1 empty SourceFileKey guard added, N-1 broker failure comment added. Нет новых зависимостей."
@@ -576,7 +627,10 @@
         "Шаг 3: GET /diff → результат сравнения",
         "Шаг 4: GET /diff (не существует) → 404"
       ],
-      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-017"],
+      "dependencies": [
+        "ORCH-TASK-014",
+        "ORCH-TASK-017"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Пакет internal/application/comparison: Handler struct с DMClient (GetVersion, GetDiff) и CommandPublisher (PublishCompareVersions) consumer-side интерфейсами. HandleCompare() — POST /contracts/{id}/compare: auth validation → extract contract_id (UUID) → parse JSON body (base_version_id, target_version_id) → validate() (non-empty, valid UUID, not equal) → generate correlationID/jobID → DM GetVersion(base) → isStillProcessing guard (whitelist: FULLY_READY/PARTIALLY_AVAILABLE/PROCESSING_FAILED/REJECTED) → DM GetVersion(target) → same guard → PublishCompareVersions → 202 Accepted {contract_id, job_id, base_version_id, target_version_id, status:COMPARISON_QUEUED, message}. HandleGetDiff() — GET /contracts/{id}/versions/{base_vid}/diff/{target_vid}: auth validation → extract 3 UUID params → DM GetDiff → 200 pass-through VersionDiff. Sequential version validation (deterministic errors). DM error handling: handleDMError shared (ErrCircuitOpen→502, DMError→MapDMError, transport→502, unknown→500). Broker failure: CRITICAL log, 502 BROKER_UNAVAILABLE. Wiring: Deps.ComparisonHandler в server.go, registerRoutes с nil-guard fallback. 28 тестов (+ 23 sub-tests): HandleCompare (17 — success, no auth, invalid contract_id, malformed JSON, empty base/target, invalid UUID base, same IDs, base 404, target 404, base processing ×7 subtests, target processing, terminal allowed ×4 subtests, DM 5xx, DM circuit open, broker failure, published command fields, content-type), HandleGetDiff (10 — success, no auth, invalid contract_id/base_vid/target_vid, 404, DM 5xx, circuit open, transport error, content-type), isStillProcessing (12 subtests), validate (6 subtests), handleDMError (2), interface compliance (1). Нет новых зависимостей."
@@ -599,7 +653,9 @@
         "Шаг 2: export/pdf (FULLY_READY) → 302 с Location",
         "Шаг 3: export/pdf (PENDING) → 404"
       ],
-      "dependencies": ["ORCH-TASK-014"],
+      "dependencies": [
+        "ORCH-TASK-014"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Пакет internal/application/export: Handler struct с DMClient consumer-side интерфейсом (GetArtifact), NewHandler с component logger. HandleExport() — GET /contracts/{contract_id}/versions/{version_id}/export/{format}: defense-in-depth auth check (no auth → 401 AUTH_TOKEN_MISSING, BUSINESS_USER → 403 PERMISSION_DENIED) → UUID validation (contract_id, version_id) → format validation (pdf→EXPORT_PDF, docx→EXPORT_DOCX, other → 400 VALIDATION_ERROR) → logger context enrichment (WithDocumentID, WithVersionID) → DM GetArtifact → redirect URL validation (isValidRedirectURL: http/https scheme, non-empty host — предотвращение open redirect с javascript:/data: схемами) → 302 Found с Location header + X-Correlation-Id. Empty response guard (nil Content + empty RedirectURL → 500 INTERNAL_ERROR). Fallback: DM returns 200 content → 200 JSON pass-through (unexpected for export, logged as WARN). handleDMError: context.Canceled/DeadlineExceeded → 502 DM_UNAVAILABLE (не 500), ErrCircuitOpen → 502, DMError.StatusCode → MapDMError с resourceHint='artifact', transport → 502, unknown → 500. Wiring: Deps.ExportHandler в server.go, registerRoutes с nil-guard fallback, app.go: export.NewHandler(dmClient, log). 30 тестов (+ 33 sub-tests): happy path pdf/docx (2), correlation_id (1), auth (2 — no auth 401, BUSINESS_USER 403), format validation (7 subtests), UUID validation (4 — invalid/empty contract_id/version_id), DM errors (7 — 404→ARTIFACT_NOT_FOUND, 5xx→502, circuit open→502, transport→502, unknown→500, 400→500, 403→500), context cancellation (3 — raw Canceled, raw DeadlineExceeded, wrapped Canceled → all 502), response edge cases (2 — content 200, empty→500), redirect URL validation (7 — invalid URLs 5 subtests, valid URLs 2 subtests), allowed roles (2 subtests), error format (1), interface compliance (1), format mapping (7 subtests), isValidRedirectURL (9 subtests), concurrent safety -race (1). Code review: S-1 isValidRedirectURL (open redirect prevention), M-2 context.Canceled/DeadlineExceeded → 502, M-3 defense-in-depth auth, M-4 empty response guard, M-5 data race fix (sync.Mutex on mock). Нет новых зависимостей."
@@ -621,7 +677,10 @@
         "Шаг 2: POST feedback → 201",
         "Шаг 3: POST feedback для несуществующей версии → 404"
       ],
-      "dependencies": ["ORCH-TASK-014", "ORCH-TASK-004"],
+      "dependencies": [
+        "ORCH-TASK-014",
+        "ORCH-TASK-004"
+      ],
       "status": "done",
       "completed_at": "2026-04-11",
       "summary": "Пакет internal/application/feedback: Handler struct с DMClient (GetVersion) и KVStore (Set) consumer-side интерфейсами, NewHandler с component logger. HandleSubmit() — POST /contracts/{contract_id}/versions/{version_id}/feedback: auth context extraction → UUID validation (contract_id, version_id) → MaxBytesReader 1MB + DisallowUnknownFields → validate (is_useful *bool required, comment optional ≤2000 runes Unicode, trimmed) → DM GetVersion (version existence check) → generate feedback_id UUID v4 → feedbackRecord JSON (feedback_id, contract_id, version_id, organization_id, user_id, is_useful, comment, created_at RFC3339) → Redis Set (key feedback:{org}:{version}:{feedback}, TTL 30 days ASSUMPTION-ORCH-08) → 201 Created {feedback_id, created_at}. Redis failure is non-critical (WARN log, still 201 — fallback storage per ASSUMPTION-ORCH-08). DM error handling: context.Canceled/DeadlineExceeded→502, ErrCircuitOpen→502, DMError.StatusCode→MapDMError(version), transport→502, unknown→500. RBAC: all roles (LAWYER, BUSINESS_USER, ORG_ADMIN). Security: control chars via DisallowUnknownFields, MaxBytesReader DoS protection, comment rune-counted (not byte-counted). Wiring: Deps.FeedbackHandler в server.go, registerRoutes с nil-guard fallback, app.go: feedback.NewHandler(dmClient, kvClient, log). 34 теста (+ 11 sub-tests): happy path (3 — success, is_useful false, without comment), auth (1 — no auth 401), all roles (3 sub-tests), UUID validation (4 — invalid/empty contract_id/version_id), body validation (8 — invalid JSON, empty body, missing is_useful, comment too long, comment exactly 2000, unknown fields, comment trimmed, whitespace-only comment), DM errors (6 — 404 VERSION_NOT_FOUND, 5xx 502, circuit open 502, transport 502, unknown 500, context canceled/deadline 502), Redis failure non-critical (1 — still 201), data integrity (5 — stored record fields, TTL 30d, key format, DM args, response matches stored), response format (1), feedbackKey (3 sub-tests), validate (8 sub-tests), interface compliance (1), constructor (1), concurrent safety (1), no DM call on validation failure (1), no KV call when DM fails (1). Code review: ожидается. Нет новых зависимостей."
@@ -644,7 +703,10 @@
         "Шаг 2: GET /admin/policies (ORG_ADMIN) → данные",
         "Шаг 3: GET /admin/policies (LAWYER) → 403"
       ],
-      "dependencies": ["ORCH-TASK-016", "ORCH-TASK-011"],
+      "dependencies": [
+        "ORCH-TASK-016",
+        "ORCH-TASK-011"
+      ],
       "status": "done",
       "completed_at": "2026-04-11",
       "summary": "Пакет internal/application/adminproxy: Handler struct с OPMClient consumer-side интерфейсом (4 метода: ListPolicies, UpdatePolicy, ListChecklists, UpdateChecklist), NewHandler с component logger. HandleListPolicies() — GET /admin/policies: defense-in-depth auth check → OPM ListPolicies(orgID) → 200 json.RawMessage pass-through. HandleUpdatePolicy() — PUT /admin/policies/{policy_id}: auth check → policyID validation (non-empty) → readBody (MaxBytesReader 1MB, json.Valid) → OPM UpdatePolicy → 200. HandleListChecklists() — GET /admin/checklists: auth check → OPM ListChecklists(orgID) → 200. HandleUpdateChecklist() — PUT /admin/checklists/{checklist_id}: auth check → checklistID validation → readBody → OPM UpdateChecklist → 200. readBody: MaxBytesReader DoS protection 1MB, empty body guard, json.Valid validation. handleOPMError: context.Canceled/DeadlineExceeded → 502 OPM_UNAVAILABLE, ErrOPMDisabled → 502 OPM_UNAVAILABLE, OPMError.StatusCode > 0 → MapOPMError(resourceHint: policy/checklist), OPMError transport → 502, unknown → 500 INTERNAL_ERROR. writeRawJSON: nil data → {} fallback. Update handlers log organization_id + user_id for audit. RBAC enforced by middleware (adminOnly), handler performs defense-in-depth auth check. Wiring: Deps.AdminProxyHandler в server.go, registerRoutes с nil-guard fallback, app.go: opmclient.NewOPMClient + adminproxy.NewHandler. 40 тестов: HandleListPolicies (7 — success, no auth, OPM down 503, OPM disabled, context canceled, deadline exceeded, nil response → {}), HandleUpdatePolicy (11 — success, no auth, empty policy_id, empty body, invalid JSON, body too large, OPM 404→POLICY_NOT_FOUND, OPM 400→VALIDATION_ERROR, OPM 500→502, transport error→502, unknown error→500), HandleListChecklists (4 — success, no auth, OPM down, OPM disabled), HandleUpdateChecklist (6 — success, no auth, empty checklist_id, OPM 404→CHECKLIST_NOT_FOUND, empty body, invalid JSON), response format (2 — content-type, correlation_id), handleOPMError (2 — context.Canceled, DeadlineExceeded), interface compliance (1), constructor (1), readBody (5 — valid, empty, invalid JSON, too large, read error), writeRawJSON (3 — nil, data, error writer), concurrent safety (1), proxy pass-through (2 — policy+checklist body), wrapped context.Canceled (1), no-call guards (2 — no OPM on auth/validation failure), nil body (1). Code review (code-reviewer): S1 update handlers log org_id+user_id для аудита (applied), N5 resource_hint в лог handleOPMError (applied). Нет новых зависимостей."
@@ -669,7 +731,9 @@
         "Шаг 2: StatusChangedEvent → десериализация + маршрутизация",
         "Шаг 3: невалидный JSON → WARN + ACK, очередь не блокируется"
       ],
-      "dependencies": ["ORCH-TASK-005"],
+      "dependencies": [
+        "ORCH-TASK-005"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/ingress/consumer: Consumer struct с BrokerSubscriber, EventHandler, RetryTracker consumer-side интерфейсами. 12 event structs в events.go (5 DP: StatusChanged/ProcessingCompleted/ProcessingFailed/ComparisonCompleted/ComparisonFailed, 2 LIC/RE: StatusChanged с *bool IsRetryable, 5 DM: VersionArtifactsReady/VersionAnalysisReady/VersionReportsReady/VersionPartiallyAvailable/VersionCreated). EventType constants (12). topicBinding struct с topic+eventType+newEvent factory (single source of truth). Start() idempotent (sync.Once), subscribes to all 12 topics. makeHandler closure: JSON unmarshal → enrichContext (RequestContext из envelope) → buildRetryKey → EventHandler.HandleEvent → retry tracking. Poison pill: invalid JSON → WARN + ACK. Retry: maxAttempts=3, NACK+requeue до порога, затем ACK + ERROR log. inMemoryRetryTracker (sync.Mutex map). rawPreview UTF-8-safe truncation (200 bytes). 39 тестов: Start (4: 12 topics, idempotent, broker error, empty topic), deserialization+routing (12: all event types), invalid JSON (2: garbage+empty), retry (2: NACK→ACK cycle, success resets), context enrichment (2: DP all fields, DM no job_id), rawPreview (2: short, truncated), buildRetryKey (3: status, completion, DM), constructor panics (3), interface checks (4), optional fields (4: omitted, *bool nil, unknown fields, tracker). Code review: M1 maxRetries→maxAttempts (naming), M2 topic stored in topicBinding (eliminated topicForBinding), S1 UTF-8-safe rawPreview, S4 cfg param removed from Start, N5 compile-time interface check. Нет новых зависимостей."
@@ -694,7 +758,9 @@
         "Шаг 3: LICStatusChanged(FAILED) → SSE push ANALYSIS_FAILED (мгновенно)",
         "Шаг 4: попытка перехода назад (ANALYZING → PROCESSING) → игнорируется"
       ],
-      "dependencies": ["ORCH-TASK-027"],
+      "dependencies": [
+        "ORCH-TASK-027"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/application/statustracker: Tracker struct реализует consumer.EventHandler с KVStore consumer-side интерфейсом (Get/Set/Publish). 11 UserStatus констант (UPLOADED, QUEUED, PROCESSING, ANALYZING, GENERATING_REPORTS, READY, FAILED, ANALYSIS_FAILED, REPORTS_FAILED, PARTIALLY_FAILED, REJECTED). Monotonic ordering: statusOrder map (6 happy-path), terminalStatuses set (6 terminal), canTransition (forward-only + failure-override). tryTransition: Redis GET-check-SET с orgID/docID/verID validation, 24h TTL, corrupt record recovery. broadcast: Redis Pub/Sub sse:broadcast:{org_id}, error swallowed (status already persisted). HandleEvent: 12-way dispatch по EventType + type assertion. Per-event handlers: DP StatusChanged (IN_PROGRESS→PROCESSING, REJECTED→REJECTED, TIMED_OUT→FAILED), DP ProcessingCompleted (informational), DP ProcessingFailed (→FAILED), LIC StatusChanged (IN_PROGRESS→ANALYZING, FAILED→ANALYSIS_FAILED immediate), RE StatusChanged (IN_PROGRESS→GENERATING_REPORTS, FAILED→REPORTS_FAILED immediate), DM ArtifactsReady (→ANALYZING), DM AnalysisReady (→GENERATING_REPORTS), DM ReportsReady (→READY), DM PartiallyAvailable (→PARTIALLY_FAILED), DM VersionCreated (RE_CHECK→version_created SSE), DP ComparisonCompleted/Failed (→comparison_update SSE). SSEEvent struct с event_type, status, message (Russian NFR-5.2), error fields, comparison fields. TOCTOU documented (single-consumer-per-queue). 63 теста: status ordering (9), tryTransition (10 incl. corrupt/TTL), broadcast (3), dispatch (2), DP handlers (9), LIC handlers (5), RE handlers (3), DM handlers (8), comparison handlers (3), missing orgID (7), Redis NACK (1), warnings (1), full happy path (1), out-of-order (1), failure mid-pipeline (1), duplicate (1), timestamp (1), messages (1), interface (1), derefBool (1), key/channel (2). Code review: S-1.1 orgID guard in tryTransition, S-1.2 orgID in handleDMVersionCreated, S-2.1 TOCTOU documented, S-6.1 missing orgID tests added, N-3.2 new_status in corrupt log, N-5.3 jobID param removed from handleDMStatusEvent. Нет новых зависимостей."
@@ -721,7 +787,10 @@
         "Шаг 3: событие в Redis Pub/Sub → push через SSE",
         "Шаг 4: heartbeat каждые 15 секунд"
       ],
-      "dependencies": ["ORCH-TASK-004", "ORCH-TASK-010"],
+      "dependencies": [
+        "ORCH-TASK-004",
+        "ORCH-TASK-010"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/ingress/sse: Handler struct с TokenValidator/KVStore/Subscription consumer-side интерфейсами, NewHandler с component logger. Handle() → http.HandlerFunc: JWT extraction из ?token= query param → ValidateToken → http.Flusher check → http.ResponseController.SetWriteDeadline(time.Time{}) (disable server WriteTimeout для long-lived SSE) → SSE headers (Content-Type: text/event-stream, Cache-Control: no-cache, Connection: keep-alive, X-Accel-Buffering: no) → 200 OK → generate connID (UUID v4) → registerConnection в Redis (key sse:conn:{org}:{user}:{conn}, TTL=heartbeat×3, JSON record) → Subscribe на Redis Pub/Sub channel sse:broadcast:{org_id} с buffered events channel (cap 64, non-blocking send, drop on full + WARN log) → writeComment(\"connected\") → eventLoop. eventLoop select: events→extractEventType+writeSSEEvent, heartbeat→writeHeartbeat+refreshConnection, maxAge→connection_expired event+return, ctx.Done()→return. SSE wire format: writeSSEEvent с multiline data support (strings.Split на \\n, каждая строка с data: prefix — SSE spec compliance), writeHeartbeat (:ping\\n\\n), writeComment (: text\\n\\n). extractEventType с sanitizeEventType (strip \\n/\\r — SSE injection prevention). isExpiredError (jwt.ErrTokenExpired). Connection lifecycle: registerConnection/refreshConnection (kv.Set с TTL), unregisterConnection (detached 2s context для cleanup после ctx cancel). Adapter: KVStoreAdapter bridges *kvstore.Client → sse.KVStore interface (Subscribe returns Subscription interface vs concrete type). Wiring: Deps.SSEHandler в server.go, registerRoutes с nil-guard fallback на sseStub. Code review fixes: M-01 http.ResponseController.SetWriteDeadline (WriteTimeout не убивает SSE), M-02 multiline data (strings.Split), M-03 sanitizeEventType (injection prevention). 35 тестов (+ 14 sub-tests): auth (3 — missing/invalid/expired token), flusher (1), SSE headers (1), connected comment (1), connection lifecycle (2 — register/unregister), event delivery (4 — status_update/comparison/missing type/invalid JSON), heartbeat (2 — ping + refresh TTL), max connection age (1), client disconnect (1), write error (1), backpressure (1), subscribe failure (1), Redis failures (2 — register/unregister), channel (1), subscription close (1), extractEventType (10 subtests), sanitizeEventType (6 subtests), multiline data (1), isExpiredError (4 subtests), key/channel format (2), constructor (1), interface checks (3). Нет новых зависимостей (jwt, uuid, chi уже в go.mod)."
@@ -743,7 +812,10 @@
         "Шаг 2: Broadcast → сообщение в Redis channel",
         "Шаг 3: Redis message → доставка в SSE Connection Manager"
       ],
-      "dependencies": ["ORCH-TASK-029", "ORCH-TASK-028"],
+      "dependencies": [
+        "ORCH-TASK-029",
+        "ORCH-TASK-028"
+      ],
       "status": "done",
       "completed_at": "2026-04-09",
       "summary": "Пакет internal/egress/ssebroadcast: Event struct (canonical SSE event payload, moved from statustracker.SSEEvent), Broadcaster interface (Broadcast(ctx, orgID, event) error), Publisher consumer-side interface (Publish(ctx, channel, message) error), Channel(orgID) exported function (single source of truth for sse:broadcast:{org_id} channel naming), NewBroadcaster(pub, log) constructor с component logger. broadcaster.Broadcast: empty orgID guard → skip, JSON marshal → Publish to Channel(orgID), error returned to caller (callers decide policy). Refactored statustracker: SSEEvent → ssebroadcast.Event, Publish removed from KVStore interface (only Get/Set remain), broadcaster dependency added to Tracker via NewTracker(kv, bc, log), private broadcast() method removed → _ = t.broadcaster.Broadcast() (error intentionally ignored — status already persisted, SSE is best-effort). Refactored SSE handler: ssebroadcast.Channel(orgID) replaces duplicated sseChannelPrefix constant and sseChannel() function, doc comment updated. 11 тестов: interface compliance (2), success (1), publish error (1), all event fields (1), omitempty (1), per-org channel (1), context cancelled (1), empty orgID guard (1), Channel() function (3 subtests), concurrent safety (1). Code review: M-1 stale doc comment fixed, N-1 empty orgID guard added. Нет новых зависимостей."
@@ -766,7 +838,9 @@
         "Шаг 2: POST /auth/login → tokens",
         "Шаг 3: UOM недоступен → 503"
       ],
-      "dependencies": ["ORCH-TASK-015"],
+      "dependencies": [
+        "ORCH-TASK-015"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Пакет internal/application/authproxy: Handler struct с UOMClient consumer-side интерфейсом (4 метода: Login, Refresh, Logout, GetMe), NewHandler с component logger. HandleLogin() — POST /auth/login: ensureCorrelationID → decodeBody (MaxBytesReader 4KB, DisallowUnknownFields) → validate email (TrimSpace, non-empty) + password (TrimSpace, non-empty) → uom.Login → 200 {access_token, refresh_token, token_type, expires_in, user}. HandleRefresh() — POST /auth/refresh: ensureCorrelationID → decodeBody → validate refresh_token (TrimSpace, non-empty) → uom.Refresh → 200 {access_token, refresh_token, token_type, expires_in}. HandleLogout() — POST /auth/logout: ensureCorrelationID → decodeBody → validate refresh_token → uom.Logout → 204 No Content. HandleGetMe() — GET /users/me: AuthContext required (401 AUTH_TOKEN_MISSING if missing) → uom.GetMe → 200 {user_id, organization_id, email, name, role, created_at}. ensureCorrelationID: generates UUID v4 correlation_id for public endpoints that bypass auth middleware (login/refresh/logout). handleUOMError: context.Canceled/DeadlineExceeded → 502 AUTH_SERVICE_UNAVAILABLE, UOMError.StatusCode > 0 → MapUOMError, UOMError.StatusCode == 0 → transport → 502, unknown → 500 INTERNAL_ERROR. Security: passwords/tokens NEVER logged, MaxBytesReader 4KB, DisallowUnknownFields, error catalog messages only (no internal details). Wiring: Deps.AuthHandler в server.go, registerRoutes с authH nil-guard fallback для public routes (login/refresh/logout) и protected route (/users/me). 41 тестов (+ 3 sub-tests): HandleLogin (16 — success, empty email, whitespace email, empty password, invalid JSON, invalid credentials, UOM down 503, transport error, context canceled, deadline exceeded, unknown error, email trimmed, correlation_id generated, body too large, unknown fields, UOM 400, empty JSON object, deadline wrapped in UOMError), HandleRefresh (7 — success, empty token, whitespace token, token expired, token revoked, UOM down, invalid JSON, context canceled), HandleLogout (5 — success 204, empty token, UOM down, invalid JSON, context canceled), HandleGetMe (6 — success, no auth 401, UOM down, UOM 404, all 3 roles), handleUOMError (1 — UOM 500), ensureCorrelationID (2 — preserves/generates), decodeBody (1 — empty body), interface compliance (1), constructor (1). Code review: M-1 HandleGetMe doc comment (ensureCorrelationID skipped intentionally — auth middleware sets it), M-2 DeadlineExceeded wrapped in UOMError test added, N-1 empty JSON object test added, N-2 context.Canceled tests for logout/refresh added. Нет новых зависимостей."
@@ -791,7 +865,9 @@
         "Шаг 1: go test — все тесты проходят",
         "Шаг 2: GET /metrics → Prometheus-формат, все метрики зарегистрированы"
       ],
-      "dependencies": ["ORCH-TASK-003"],
+      "dependencies": [
+        "ORCH-TASK-003"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Пакет internal/infra/observability/metrics: Metrics struct с 20 Prometheus collectors (8 категорий: HTTP, Upload, DM, S3, Broker, SSE, Security, Redis), dedicated prometheus.Registry (не global), Go/Process collectors. NewMetrics() — регистрация всех 20 метрик + GoCollector + ProcessCollector. Handler() → http.Handler для /metrics endpoint (promhttp.HandlerFor с OpenMetrics). Shutdown() → no-op (pull-based Prometheus), satisfies app.ObservabilityShutdown interface. HTTPMiddleware() → chi-compatible middleware: responseWriter wrapper (WriteHeader idempotent, Write tracks implicit 200, Flush delegation для SSE, Unwrap для http.ResponseController), route pattern extraction через chi.RouteContext (normalized templates, NOT actual UUIDs), safeFallback с allowlist (/healthz, /readyz, /metrics) для non-chi routes + '__unmatched__' sentinel для unknown paths (предотвращение cardinality explosion). Wiring: Deps.MetricsHandler + Deps.HTTPMetricsMiddleware в server.go, middleware placement: HTTPMetrics → Recovery → CORS → SecurityHeaders (captures full lifecycle). app.go: NewMetrics early (step 1b), MetricsHandler + HTTPMetricsMiddleware в api.Deps, appMetrics как ObservabilityShutdown. handleMetricsStub сохранён как fallback для тестов. Code review (code-reviewer): S-1 safeFallback allowlist (cardinality protection), M-1 WriteHeader idempotent delegation, M-2 Write() override (implicit 200 tracking). 49 тестов (+ 13 sub-tests): constructor (3 — all collectors, GoCollectors, isolated registry), handler (4 — format, content-type, all categories, no global leak, scrapable), shutdown (2 — nil, interface), HTTP metrics (3 — counter, duration, duration buckets), request size (1), upload (3 — total, size, duration), DM (2 — requests, CB gauge ×3 states), S3 (2 — operations, duration), broker (3 — publish, duration, events received), SSE (2 — active gauge, pushed), security (2 — rate limit, auth failures ×3 reasons), Redis (2 — operations ×5 types, duration), middleware (9 — total+duration, cardinality prevention ×3 UUIDs, request size, skip unknown size, status codes ×5, default 200, fallback safe path, unmatched cardinality, deep nested, not found → __unmatched__, flush delegation, large body 10MB), responseWriter (5 — flush, flush no-flusher, unwrap, writeHeader once, write then writeHeader), routePattern (3 — chi context, safe path, unsafe path), safeFallback (6 sub-tests), concurrent (1 — 10 goroutines × 100 ops), integration (1 — middleware + handler). Зависимость: github.com/prometheus/client_golang v1.23.2."
@@ -813,7 +889,9 @@
         "Шаг 1: go test — все тесты проходят",
         "Шаг 2: ORCH_TRACING_ENABLED=false → tracing не инициализируется"
       ],
-      "dependencies": ["ORCH-TASK-003"],
+      "dependencies": [
+        "ORCH-TASK-003"
+      ],
       "status": "done",
       "completed_at": "2026-04-11",
       "summary": "Пакет internal/infra/observability/tracing: Tracer struct с OTel TracerProvider, NewTracer(ctx, ObservabilityConfig) — OTLP/HTTP exporter при TracingEnabled+TracingEndpoint, noop.TracerProvider при отключении (zero-cost, zero allocations). StartSpan/SpanFromContext/Shutdown(sync.Once идемпотентный)/Enabled/Provider. NewOrchSampler: ParentBased(TraceIDRatioBased(0.10)) — 10% head-based sampling в SDK, tail-based (errors/slow) делегируется collector. HTTPMiddleware: chi-compatible middleware создающий orch.http.request parent span с SpanKindServer, responseCapture wrapper (WriteHeader idempotent, Flush delegation для SSE, Unwrap для ResponseController), post-handler attributes (http.method, http.route chi pattern, http.status_code, orch.correlation_id, orch.organization_id, orch.user_id), 5xx → codes.Error. InjectHTTPHeaders: W3C traceparent/tracestate injection через global propagator для DM sync calls. ExtractHTTPHeaders: W3C extraction для входящих запросов. CorrelationAttribute: span attribute для async event correlation_id. 10 span name констант (orch.http.request, orch.dm.request, orch.broker.publish, orch.upload.s3, orch.redis.operation, orch.event.process, orch.opm.request, orch.auth.validate, orch.rbac.check, orch.ratelimit.check). 15 attribute key констант. 4 attribute builder functions (HTTPRequestAttrs, DMRequestAttrs, BrokerPublishAttrs, S3UploadAttrs). Wiring: app.go — NewTracer (step 1c), compositeObservability (tracer+metrics shutdown), TracingMiddleware в api.Deps. server.go — TracingMiddleware в middleware chain после SecurityHeaders. Middleware chain: HTTPMetrics → Recovery → CORS → SecurityHeaders → Tracing → Auth → RBAC → RateLimit. 49 тестов: tracing (19 — noop disabled/empty/both, enabled, StartSpan noop/enabled, SpanFromContext enriched/background/valid, Shutdown noop/multiple/enabled-multiple, Enabled table ×3, Provider, noop type, interface, noop direct, insecure), sampler (4 — non-nil, description, ParentBased, TraceIDRatio), middleware (16 — noop passthrough, span in context, attributes, correlation ID, auth context, 5xx error, success no error, default 200, chi route pattern, SpanKindServer, parent propagation, 4xx no error, flush, unwrap, writeHeader idempotent, concurrent, no auth no panic), propagation (5 — noop no headers, traceparent added, extract, correlation attribute, empty correlation), attributes (7 — HTTP all/empty, DM all, broker all, S3 all, span names, attribute keys). Code review (code-reviewer): M-5 global OTel state cleanup in tests (resetGlobalOTel applied), M-6 sync.Once idempotent Shutdown (applied), M-7 enabled double-shutdown test (added), N-3 unused hasAttribute removed, N-4 sampler test strings.Contains. Результаты: go test -race -count=1 ./... PASS (32 пакета, 0 failures), go vet clean, make build/test/lint OK. Зависимости: go.opentelemetry.io/otel v1.43.0, go.opentelemetry.io/otel/trace v1.43.0, go.opentelemetry.io/otel/sdk v1.43.0, go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0."
@@ -833,7 +911,11 @@
         "Шаг 1: go test — все тесты проходят",
         "Шаг 2: SIGTERM → ordered shutdown → exit 0"
       ],
-      "dependencies": ["ORCH-TASK-008", "ORCH-TASK-029", "ORCH-TASK-027"],
+      "dependencies": [
+        "ORCH-TASK-008",
+        "ORCH-TASK-029",
+        "ORCH-TASK-027"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Graceful shutdown реализован как 7-фазный упорядоченный процесс. SSE Handler: добавлен connection tracking (sync.Mutex + map[string]connEntry + done channel), Shutdown() метод (idempotent, signals event loops via per-connection closeCh — race-free), Done() метод, отклонение новых подключений после shutdown. App.Shutdown(): Phase 1 — SetNotReady (readiness 503), Phase 2 — SSE close (send event:close с reason:server_shutdown через closeCh, до HTTP drain чтобы SSE handlers вернулись), Phase 3 — HTTP drain (server.Shutdown ждёт in-flight requests), Phase 4 — Broker close (stops consumers), Phase 5 — Redis close (connection pool), Phase 6 — Observability flush (ObservabilityShutdown interface, nil=no-op до ORCH-TASK-032/033), Phase 7 — Done. Nil guards для broker/redis/sse/observability. Errors collected via errors.Join. main.go: timeout-based force exit (ctx.Err()==DeadlineExceeded → os.Exit(1)), double-signal force exit сохранён. Code review (code-reviewer): M-1 phase ordering fix (SSE before HTTP — http.Server.Shutdown блокирует на long-lived SSE если не отменить сначала), M-2 race condition fix (closeCh pattern вместо прямой записи в ResponseWriter из Shutdown), M-3 nil guards added. go test -race PASS. 5 SSE shutdown тестов: ClosesActiveConnections (2 conns, close event verified), Idempotent (3x safe), RejectsNewConnections, ConnectionsRemovedFromTrackingOnExit, NoConnectionsIsNoop. 4 App shutdown тестов: SSEHandlerCalled, ObservabilityError, NilSSEHandler, NilObservability. Updated existing OrderedTeardown test (4-step verify: sse→broker→redis→observability). Нет новых зависимостей."
@@ -857,7 +939,9 @@
         "Шаг 2: docker compose up --build — все сервисы стартуют",
         "Шаг 3: curl http://localhost:8080/healthz → 200"
       ],
-      "dependencies": ["ORCH-TASK-034"],
+      "dependencies": [
+        "ORCH-TASK-034"
+      ],
       "status": "done",
       "completed_at": "2026-04-11",
       "summary": "Dockerfile обновлён: ARG VERSION=dev с -X main.version=${VERSION} в ldflags (встраивание версии), go.sum без glob, HEALTHCHECK /healthz (liveness, не readyz — корректная семантика для Docker). docker-compose.yaml: 5 сервисов — rabbitmq:3-management-alpine (cp-orch-rabbitmq, AMQP 5672 + Management 15672, guest/guest), redis:7-alpine (cp-orch-redis, 6379), minio/minio:latest (cp-orch-minio, S3 9000 + Console 9001, minioadmin/minioadmin), minio-init (minio/mc, auto-create bucket contractpro-uploads с --ignore-existing), orch-api (build from context, ports 8080+9090). Health checks: rabbitmq (diagnostics ping), redis (redis-cli ping), minio (mc ready local), orch-api (wget /healthz). depends_on: orch-api → rabbitmq/redis/minio (service_healthy) + minio-init (service_completed_successfully). Volumes: rabbitmq-data, redis-data, minio-data (named). keys/ mounted read-only (/keys). Environment overrides: ORCH_BROKER_ADDRESS, ORCH_REDIS_ADDRESS, ORCH_STORAGE_*, ORCH_JWT_PUBLIC_KEY_PATH, ORCH_LOG_LEVEL=debug, ORCH_RATELIMIT_ENABLED=false, ORCH_CORS_ALLOWED_ORIGINS (localhost:3000/5173). stop_grace_period: 35s (> 30s shutdown timeout). .dockerignore: исключает *_test.go, docs, keys, .env*, Docker meta, IDE. .env.example: все переменные с комментариями, COMPOSE OVERRIDE метки. scripts/generate-dev-jwt.sh: RSA-2048 генерация (idempotent, chmod 600/644). keys/.gitignore: *.pem. .gitignore: keys/*.pem. Makefile: 7 новых целей (generate-jwt, compose-up/down/clean/logs/ps/restart), docker-build с --build-arg VERSION. cmd/orch-api/main.go: var version = \"dev\" (linker target). Container names: cp-orch-* prefix (isolation от DP compose). Все тесты (27 пакетов) проходят, go vet clean, make build/test/lint OK."
@@ -879,7 +963,14 @@
         "Шаг 2: make build — бинарник собирается",
         "Шаг 3: запуск с mock-зависимостями → сервер стартует, /healthz → 200"
       ],
-      "dependencies": ["ORCH-TASK-018", "ORCH-TASK-019", "ORCH-TASK-020", "ORCH-TASK-021", "ORCH-TASK-030", "ORCH-TASK-031"],
+      "dependencies": [
+        "ORCH-TASK-018",
+        "ORCH-TASK-019",
+        "ORCH-TASK-020",
+        "ORCH-TASK-021",
+        "ORCH-TASK-030",
+        "ORCH-TASK-031"
+      ],
       "status": "done",
       "completed_at": "2026-04-10",
       "summary": "Пакет internal/app: App struct (log, health, kvClient, brokerClient, server, consumer). NewApp(cfg) — 14-step DI wiring в dependency order: Logger → Redis (connect+ping) → RabbitMQ (connect+ping) → S3 (lazy) → Health handler → JWT LoadPublicKey + auth.NewMiddleware → RBAC middleware → DM client + UOM client + Command publisher → SSE broadcaster (before tracker) → Status tracker → Event consumer → Upload/Contract/Version/Results/Comparison/AuthProxy handlers → SSE handler (authMW as TokenValidator) → HTTP Server (api.Deps). Partial init cleanup: Redis/broker closed on later step failure. Start(): consumer.Start() → server.Start() (blocking). Shutdown(ctx): SetNotReady → HTTP Shutdown → broker.Close → redis.Close, errors aggregated via errors.Join. cmd/orch-api/main.go: config.Load → NewApp → signal listener (SIGTERM/SIGINT) with double-signal forced exit → Start (blocking). adapters.go: 3 thin adapters bridging type mismatches: brokerSubscriberAdapter (named broker.MessageHandler vs unnamed func), uploadDMAdapter (upload-local DTOs vs dmclient types, field-by-field mapping), uploadCmdPubAdapter (upload.ProcessDocumentCommand vs commandpub.ProcessDocumentCommand). Compile-time interface checks (var _ interface = impl). 10 тестов: adapter interface shapes (1), DM adapter CreateDocument success/error (2), DM adapter CreateVersion success/error/all-fields (3), CmdPub adapter all-fields/error (2), Shutdown ordered teardown (1), SetNotReady before HTTP shutdown (1). waitForServer helper replaces flaky time.Sleep. Code review: M-1 errors.Join in Shutdown, M-2/3 main.go graceful exit + Shutdown err logged, M-4 double-signal forced exit, N-8 compile-time checks in adapters.go, N-9 test helper extracted, N-13 net.Listen errors handled. Нет новых зависимостей."
@@ -903,7 +994,9 @@
         "Шаг 1: go test -race -count=1 ./internal/integration/... — все тесты проходят",
         "Шаг 2: тесты не зависят от внешних сервисов (полностью in-memory)"
       ],
-      "dependencies": ["ORCH-TASK-036"],
+      "dependencies": [
+        "ORCH-TASK-036"
+      ],
       "status": "done",
       "completed_at": "2026-04-11",
       "summary": "Пакет internal/integration: end-to-end integration tests с in-memory fakes. 4 файла: fakes.go (fakeBroker для consumer.BrokerSubscriber + commandpub.BrokerPublisher с InjectEvent/PublishedMessages, fakeObjectStorage для upload/versions ObjectStorage с PutObject/DeleteObject/HasObject, fakeKVStore — единый in-memory KV + Pub/Sub для statustracker.KVStore/ssebroadcast.Publisher/sse.KVStore/upload.KVStore с Subscribe → fakeSubscription, fakeDMServer — httptest.Server с chi router имитирующий DM REST API (POST documents/versions, GET documents/versions/artifacts/diffs, DELETE/archive), testJWTSigner — ECDSA P-256 ES256 генерация и подпись JWT), testenv.go (testEnv struct с 18-step DI wiring зеркалирующий app.go NewApp: logger → fakeKVStore → fakeBroker → fakeObjectStorage → fakeDMServer → real ssebroadcast.Broadcaster → real statustracker.Tracker → real consumer.Consumer → testJWTSigner → real auth.Middleware → real rbac.Middleware → dmclient.Client → commandpub.Publisher → upload/contracts/versions/results/comparison/export handlers → sse.Handler → api.Server → httptest.Server. Adapters: testUploadDMAdapter, testUploadCmdPubAdapter, noopRedisPinger, noopBrokerPinger. Helpers: DoRequest, UploadContract, InjectEvent, SeedStatus), sseclient.go (sseClient с single background reader goroutine, connectSSE, WaitForConnected, NextEvent, Close), integration_test.go (5 тестов). Тест 1 TestUploadToSSEPipeline: multipart upload PDF → 202 Accepted → ProcessDocumentRequested published → S3 object created → inject DP IN_PROGRESS → SSE status_update PROCESSING → Redis status verified. Тест 2 TestRecheckPipeline: seed document+version (FULLY_READY) → POST recheck → 202 → new version created → ProcessDocumentRequested published. Тест 3 TestComparePipeline: seed document + 2 versions → POST compare → 202 COMPARISON_QUEUED → CompareDocumentVersionsRequested published with correct base/target. Тест 4 TestLICFailureToSSE: seed status ANALYZING → SSE connect → inject LIC FAILED → SSE status_update ANALYSIS_FAILED with error_code/is_retryable → Redis status ANALYSIS_FAILED. Тест 5 TestReportsReadyToResults: seed status GENERATING_REPORTS + DM version/artifacts → SSE connect → inject DM version-reports-ready → SSE status_update READY → GET /results → 200 with aggregated artifacts (risks, summary, aggregate_score from DM). go test -race -count=1 ./internal/integration/... PASS. go test -race -count=1 ./... — 28 пакетов, 0 failures. go vet clean. make build/test/lint OK. Нет новых зависимостей."
@@ -935,7 +1028,9 @@
         "Шаг 2: grep AWAITING_USER_INPUT по 10 файлам ApiBackendOrchestrator/architecture/ — присутствует во всех релевантных",
         "Шаг 3: ручная вычитка sequence-diagrams.md §8.15 — happy path соответствует event-catalog.md и high-architecture.md §8.11"
       ],
-      "dependencies": ["ORCH-TASK-037"],
+      "dependencies": [
+        "ORCH-TASK-037"
+      ],
       "status": "done",
       "completed_at": "2026-04-15",
       "summary": "Контракт зафиксирован в 10 файлах ApiBackendOrchestrator/architecture/ + Frontend/architecture/high-architecture.md. Ключевые сущности: статус AWAITING_USER_INPUT (10-й в UserProcessingStatus enum), endpoint POST /confirm-type с ConfirmTypeRequest, исходящая команда UserConfirmedType (orch.commands.user-confirmed-type → LIC), входящее событие ClassificationUncertain (lic.events.classification-uncertain), 2 новых error_code (VERSION_NOT_AWAITING_INPUT, USER_CONFIRMATION_TIMEOUT), 4 новые env-переменные, новый компонент §6.15a Type Confirmation Handler, сценарий §8.11, sequence §8.15 (3 mermaid-диаграммы). Implementation вынесена в ORCH-TASK-039..043."
@@ -959,7 +1054,9 @@
         "Шаг 2: go test -race ./internal/config/... — валидация ORCH_USER_CONFIRMATION_TIMEOUT (positive duration, default 24h) проходит",
         "Шаг 3: тест с miniredis — после SetAwaitingUserInput оба ключа (status и confirmation:wait) присутствуют, TTL второго = заданному значению"
       ],
-      "dependencies": ["ORCH-TASK-038"],
+      "dependencies": [
+        "ORCH-TASK-038"
+      ],
       "status": "done",
       "completed_at": "2026-04-15",
       "implementation_notes": "Extended statustracker with AWAITING_USER_INPUT support. Changes: (1) status.go: added StatusAwaitingUserInput enum, awaitingUserInputTransitions table (ANALYZING↔AWAITING_USER_INPUT, AWAITING_USER_INPUT→FAILED), ErrNotAwaitingInput/ErrInvalidTransition sentinel errors, confirmationKey/ConfirmationMetaKey helpers. (2) confirmation.go: ConfirmationStore interface with 3 atomic methods, RedisConfirmationStore with cjson.decode Lua scripts (PX millisecond TTLs), Tracker.SetAwaitingUserInput/ConfirmType/TimeoutAwaitingInput methods with SSE broadcast, WithConfirmation builder. (3) config: TypeConfirmationConfig with ORCH_USER_CONFIRMATION_TIMEOUT (default 24h, positive duration validation). (4) confirmation_test.go: 30+ tests covering transitions, happy paths, error cases, concurrent race (10 goroutines, exactly 1 winner), full cycle (set→confirm, set→timeout), Redis store eval passthrough, sentinel error mapping. Code review: 2 high fixed (PX→ms, errors.Is), 3 medium fixed (strings.Contains, comments). All 34 packages pass with -race."
@@ -984,7 +1081,9 @@
         "Шаг 2: тест с fake broker — публикация события приводит к (а) status:{vid} = AWAITING_USER_INPUT в Redis, (б) сообщению в SSE Pub/Sub channel с правильным event_type",
         "Шаг 3: повторное событие с тем же version_id → status и SSE-канал не изменяются (идемпотентность)"
       ],
-      "dependencies": ["ORCH-TASK-039"],
+      "dependencies": [
+        "ORCH-TASK-039"
+      ],
       "status": "done",
       "completed_at": "2026-04-16",
       "implementation_notes": "Integrated lic.events.classification-uncertain into existing consumer+tracker framework (13 topics total). Changes: (1) config/sub_configs.go: TopicLICClassificationUncertain in BrokerConfig with default 'lic.events.classification-uncertain'. (2) ssebroadcast/broadcaster.go: Extended Event struct with SuggestedType, Confidence, Threshold, Alternatives fields + ClassificationAlternative struct for type_confirmation_required events. (3) consumer/events.go: EventLICClassificationUncertain constant, LICClassificationUncertainEvent struct (10 fields: envelope + suggested_type/confidence/threshold/alternatives), ClassificationAlternative struct. (4) consumer/consumer.go: 13th binding in buildBindings, enrichContext case, buildRetryKey using versionID. (5) statustracker/classification_uncertain.go: handleLICClassificationUncertain — dual-layer deduplication (Redis idempotency key fast-path + Lua-atomic SetAwaitingUserInput), confirmationMeta storage for watchdog (ORCH-TASK-042), type_confirmation_required SSE broadcast with full payload, convertAlternatives helper. idempotencyTTL synced with confirmationTimeout. (6) statustracker/tracker.go: HandleEvent dispatch case for EventLICClassificationUncertain. (7) app.go: Wired WithConfirmation (RedisConfirmationStore + TypeConfirmation.ConfirmationTimeout). (8) integration/testenv.go: Added TopicLICClassificationUncertain to brokerCfg. Tests: 16 new tests in classification_uncertain_test.go (happy path, idempotency, missing fields ×3, invalid transition, Redis error, confirm store error, meta storage, HandleEvent dispatch, wrong type assertion, TTL, convertAlternatives ×3, no alternatives, SSE fields, idempotencyKey), 3 new consumer tests (deserialization+routing, retryKey, 13-topic subscription). Code review (code-reviewer): S-1 integration testenv.go fix applied, M-1 dual-layer dedup comment added, N-1 idempotencyTTL synced to confirmationTimeout. All 33 packages pass with -race, go vet clean, make build/test/lint OK."
@@ -1013,7 +1112,9 @@
         "Шаг 3: повторный curl в окне 60с → 202 + команда НЕ публикуется повторно",
         "Шаг 4: curl с ролью BUSINESS_USER → 403 FORBIDDEN"
       ],
-      "dependencies": ["ORCH-TASK-039"],
+      "dependencies": [
+        "ORCH-TASK-039"
+      ],
       "status": "done",
       "completed_at": "2026-04-16",
       "implementation_notes": "New package internal/application/confirmtype with Handler struct. Changes: (1) error_response.go: added ErrVersionNotAwaitingInput (409, Russian messages per error-handling.md). (2) config/sub_configs.go: TypeConfirmationConfig extended with IdempotencyTTL (ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL, default 60s) and ContractTypeWhitelist (ORCH_CONTRACT_TYPE_WHITELIST, default ['услуги','поставка','подряд','аренда','NDA']); BrokerConfig extended with TopicUserConfirmedType (default orch.commands.user-confirmed-type). (3) commandpub: UserConfirmedTypeCommand struct, userConfirmedTypeEvent envelope, PublishUserConfirmedType method on Publisher (interface + implementation), NewPublisher updated to 5 params (breaking: 4th topic added). (4) statustracker/classification_uncertain.go: confirmationMeta extended with JobID field. (5) confirmtype/handler.go: Handler with consumer-side interfaces (StatusTracker, CommandPublisher, KVStore), Handle() http.HandlerFunc with 9-step flow: auth→UUID validation→body decode/validate→idempotency check (Redis GET)→confirmation meta read→StatusTracker.ConfirmType (atomic AWAITING_USER_INPUT→ANALYZING)→PublishUserConfirmedType→set idempotency key→202 Accepted. Contract type validated against O(1) map whitelist. (6) rbac: added confirm-type route (lawyerAndAdmin). (7) routes.go: added confirmTypeH parameter + POST confirm-type route with nil guard. (8) server.go: ConfirmTypeHandler in Deps. (9) app.go: confirmTypeCmdPubAdapter + confirmtype.NewHandler wiring. (10) adapters.go: confirmTypeCmdPubAdapter bridging commandpub.Publisher to confirmtype.CommandPublisher. 28 unit tests: happy path, no auth, invalid contract_id/version_id, invalid JSON, empty contract_type, confirmed_by_user=false, contract_type not in whitelist, idempotency hit (202 without publish), meta not found (404), not awaiting input (409), tracker internal error, broker failure (502), Redis idempotency GET error, Redis SET failure non-critical, OrgAdmin allowed, contract_type trimmed, all 5 whitelist values, published command fields, correlation_id in response, idempotency key format/TTL, meta corrupt JSON, content-type, whitelist values, isValidUUID, key format helpers, no command on broker failure, empty body, interface compliance. All 34 packages pass with -race, go vet clean, make build/test/lint OK."
@@ -1038,7 +1139,9 @@
         "Шаг 2: integration с miniredis: SET confirmation:wait:VID-1 TTL 1s, ждать 2s → status:VID-1 = FAILED, SSE Pub/Sub channel получил status_update с error_code USER_CONFIRMATION_TIMEOUT",
         "Шаг 3: метрика orch_user_confirmation_timeouts_total инкрементировалась на 1"
       ],
-      "dependencies": ["ORCH-TASK-039"],
+      "dependencies": [
+        "ORCH-TASK-039"
+      ],
       "status": "done",
       "completed_at": "2026-04-16",
       "implementation_notes": "New package internal/application/confirmwatchdog with Watchdog struct. Changes: (1) config/sub_configs.go: TypeConfirmationConfig extended with WatchdogScanInterval (ORCH_WATCHDOG_SCAN_INTERVAL, default 1m), validation added in config.go. (2) metrics/metrics.go: UserConfirmationTimeoutsTotal counter (orch_user_confirmation_timeouts_total) added to Metrics struct and registered. (3) confirmwatchdog/watchdog.go: Watchdog struct with consumer-side interfaces (StatusTracker, KVStore, RedisSubscriber), dual strategy — Redis Keyspace Notifications (preferred, CONFIG SET notify-keyspace-events Ex) with auto-reconnect loop OR periodic SCAN fallback (ORCH_WATCHDOG_SCAN_INTERVAL). handleExpiredKey: filter confirmation:wait:* prefix → extract verID → read confirmation:meta from KV → call StatusTracker.TimeoutAwaitingInput → increment Prometheus counter. ErrInvalidTransition handled gracefully (INFO log, no metric increment — user confirmed in time). Corrupt/missing meta logged and skipped. Start() idempotent (sync.Once). Shutdown() cancels context and waits for WaitGroup. (4) app.go: Watchdog created after tracker.WithConfirmation (step 10b), uses *redis.Client (type-asserted from RawRedis for PSubscribe), started in Start() after consumer, shutdown in phase 3b (after HTTP drain, before broker close). 22 unit tests: handleExpiredKey (happy path, non-confirmation keys, empty version_id, meta not found, meta read error, corrupt meta, missing identity fields, invalid transition graceful skip, tracker error, metrics incremented ×2, metrics not incremented on error/invalid transition), ConfigSet (success, failure), SCAN (finds keys, scan error, empty results), lifecycle (graceful shutdown, idempotent start, scan loop processes keys), concurrent safety (10 goroutines), component logger, interface compliance. All 35 packages pass with -race, go vet clean, make build/test/lint OK."
@@ -1061,7 +1164,11 @@
         "Шаг 2: go test -race -count=1 ./... — полный регресс passing (все пакеты)",
         "Шаг 3: make build/test/lint — все цели OK"
       ],
-      "dependencies": ["ORCH-TASK-040", "ORCH-TASK-041", "ORCH-TASK-042"],
+      "dependencies": [
+        "ORCH-TASK-040",
+        "ORCH-TASK-041",
+        "ORCH-TASK-042"
+      ],
       "status": "done",
       "completed_at": "2026-04-16",
       "implementation_notes": "New file internal/integration/lowconfidence_test.go with 4 E2E tests covering the full low-confidence type confirmation flow. Changes: (1) fakes.go: added fakeConfirmationStore implementing statustracker.ConfirmationStore with atomic check-and-set operations backed by fakeKVStore's mutex-protected map (SetAwaitingInput, ConfirmInput, TimeoutInput matching production Lua script semantics). TTL parameters accepted but not enforced (documented limitation). Compile-time interface check. (2) testenv.go: extended DI wiring — fakeConfirmationStore creation, tracker.WithConfirmation(confirmStore, 24h), TopicUserConfirmedType added to BrokerConfig, confirmtype.Handler created with default whitelist ['услуги','поставка','подряд','аренда','NDA'] and 60s idempotency TTL, testConfirmTypeCmdPubAdapter bridging commandpub.Publisher to confirmtype.CommandPublisher, ConfirmTypeHandler added to api.Deps. (3) lowconfidence_test.go: Test 1 TestLowConfidenceTypeConfirmation — happy path: seed ANALYZING → inject lic.events.classification-uncertain → verify SSE status_update AWAITING_USER_INPUT → verify SSE type_confirmation_required with payload (suggested_type, confidence, threshold, alternatives) → verify Redis status+confirmation:wait+confirmation:meta → POST /confirm-type → 202 → verify orch.commands.user-confirmed-type published (document_id, version_id, contract_type, confirmed_by_user_id, organization_id) → verify Redis status=ANALYZING + watchdog deleted → verify SSE status_update ANALYZING → verify idempotency (second POST returns 202 without duplicate command). Test 2 TestLowConfidenceWrongState — seed ANALYZING + confirmation:meta → POST /confirm-type → 409 VERSION_NOT_AWAITING_INPUT, no command published, status unchanged. Test 3 TestLowConfidenceTimeout — seed ANALYZING → inject classification-uncertain → verify AWAITING_USER_INPUT → SSE connect → tracker.TimeoutAwaitingInput (simulates watchdog) → verify SSE status_update FAILED with error_code USER_CONFIRMATION_TIMEOUT → verify Redis status=FAILED. Test 4 TestLowConfidenceRBAC — BUSINESS_USER POST /confirm-type → 403 PERMISSION_DENIED, no command published. Code review (code-reviewer): 0 high issues, applied S-1 (status unchanged assertion in Test 2), S-2 (idempotency verification in Test 1), M-1 (TTL limitation comment on fakeConfirmationStore). All 35 packages pass with -race -count=1, go vet clean, make build/test/lint OK."
@@ -1112,7 +1219,9 @@
         "Шаг 4: openapi-generator validate api-specification.yaml — все примеры VALIDATION_ERROR соответствуют schema ValidationErrorDetails",
         "Шаг 5: метрика orch_validation_errors_total появляется в /metrics"
       ],
-      "dependencies": ["ORCH-TASK-048"],
+      "dependencies": [
+        "ORCH-TASK-048"
+      ],
       "status": "done",
       "completed_at": "2026-04-16",
       "implementation_notes": "Migrated all 10 handler packages (upload, versions, comparison, confirmtype, feedback, adminproxy, contracts, export, results, authproxy) from ad-hoc VALIDATION_ERROR string messages to structured ValidationErrorBuilder pattern. Created internal/domain/model/validation_response.go with WriteValidationError (DEBUG logging per field, Prometheus orch_validation_errors_total{endpoint,code} counter, chi RouteContext endpoint resolution). Added ValidationErrorsTotal to metrics.Metrics. Wired via model.SetValidationCounter in app.go. Body field validation now accumulates ALL errors (e.g., title+file missing returned simultaneously). URL param validation keeps early-return with single structured error. Refactored CompareRequest.validate() and FeedbackRequest.validate() from (string,bool) to *ValidationError. Changed adminproxy readBody non-MaxBytesError from 400 to 500 (server error, not validation). Integration test TestUpload_ValidationError_StructuredFields verifies multi-field structured error response. Code review: 0 critical, 0 high, 2 medium (M1: package-level counter init-once pattern, M2: label cardinality monitoring). All 35 packages PASS, go vet clean, make build/test/lint OK."
@@ -1143,7 +1252,10 @@
         "Шаг 6: ручная проверка: BUSINESS_USER login → GET /users/me → permissions.export_enabled = false (default); ORG_ADMIN PUT /admin/policies/{id} с {enabled: true} → BUSINESS_USER login снова → permissions.export_enabled = true"
       ],
       "dependencies": [],
-      "status": "pending"
+      "status": "done",
+      "completion_date": "2026-04-16",
+      "implementation_summary": "Реализован пакет internal/application/permissions: types.go (UserPermissions DTO, cacheKeyPrefix, invalidateChanPref, KnownRoles, FlagExportEnabled, 6 FallbackReason констант), opmlookup.go (парсер OPM-ответа — массив {name,enabled}, policy business_user_export), resolver.go (Resolver+NewResolver, ResolveForUser: LAWYER/ORG_ADMIN→true без OPM, BUSINESS_USER→cache→OPM(2s timeout+gobreaker)→env fallback; PrometheusMetrics adapter), cache.go (RedisCache реализует CacheStore, JSON serialize, TTL 5m), invalidator.go (CacheInvalidator с PSUBSCRIBE permissions:invalidate:* + reconnect loop, InvalidationPublisher с методом InvalidateOrg). Config: PermissionsConfig в sub_configs.go (3 env vars) + Validate (CacheTTL>0, OPMTimeout 0<x<=10s). Metrics: 4 новых коллектора (orch_permissions_cache_hit_total, _cache_miss_total, _opm_fallback_total, _resolve_duration_seconds) — зарегистрированы в NewMetrics(). Authproxy: NewHandler принимает PermissionsResolver; HandleGetMe обогащает ответ через userProfileWithPermissions embedding (UOM UserProfile + computed permissions). Adminproxy: NewHandler принимает PermissionsInvalidator (интерфейс InvalidateOrg), HandleUpdatePolicy после успешного OPM-вызова best-effort публикует инвалидацию; Redis Pub/Sub транспорт скрыт в permissions.InvalidationPublisher (нет утечки pub/sub в admin handler). app.go: wiring permCache → permResolver → permInvalidator; Start фаза после watchdog, Shutdown фаза 3c после watchdog.",
+      "test_results": "Unit-тесты permissions package: 18 тестов — все 8 acceptance сценариев покрыты (privileged roles, cache hit, cache miss+OPM success, OPM timeout fallback, OPM 5xx fallback, policy not found, malformed response, cache backend error, duration observed, unknown role). opmlookup парсер: 9 табличных сценариев. hashOrgID stable + коллизии. Cache: 4 теста (set+get, miss, backend error, corrupted JSON). Invalidator: 5 тестов (DEL всех ролей, channel parsing, malformed channel, continue on error, InvalidationPublisher). Authproxy: 3 новых теста (permissions enriched, nil resolver, all roles). Adminproxy: 3 новых теста (publish on success, publish failure не роняет request, no publish на OPM error). Config: 5 новых тестов (defaults, override, validation 3 edge cases). Metrics: зарегистрированные 25 orch_* метрик — expected 25 (было 21 + 4 новых). Результаты: go test -count=1 ./... → все 35 пакетов PASS. go vet ./... → 0 warnings. make build / make test / make lint → PASS."
     },
     {
       "id": "ORCH-TASK-051",

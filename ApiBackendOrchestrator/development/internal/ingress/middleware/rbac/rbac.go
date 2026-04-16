@@ -94,6 +94,7 @@ var accessRules = []policyRule{
 	{http.MethodGet, "/api/v1/contracts/{contract_id}/versions/{version_id}", allRoles},
 	{http.MethodGet, "/api/v1/contracts/{contract_id}/versions/{version_id}/status", allRoles},
 	{http.MethodPost, "/api/v1/contracts/{contract_id}/versions/{version_id}/recheck", lawyerAndAdmin},
+	{http.MethodPost, "/api/v1/contracts/{contract_id}/versions/{version_id}/confirm-type", lawyerAndAdmin},
 
 	// Results.
 	{http.MethodGet, "/api/v1/contracts/{contract_id}/versions/{version_id}/results", lawyerAndAdmin},

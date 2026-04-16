@@ -59,7 +59,7 @@ func testContext(correlationID string) context.Context {
 
 func TestPublishProcessDocument_CorrectTopicAndJSON(t *testing.T) {
 	mb := &mockBroker{}
-	pub := NewPublisher(mb, "dp.commands.process-document", "dp.commands.compare-versions", testLogger())
+	pub := NewPublisher(mb, "dp.commands.process-document", "dp.commands.compare-versions", "orch.commands.user-confirmed-type", testLogger())
 
 	ctx := testContext("corr-aaa")
 	cmd := ProcessDocumentCommand{
@@ -127,7 +127,7 @@ func TestPublishProcessDocument_CorrectTopicAndJSON(t *testing.T) {
 
 func TestPublishProcessDocument_TimestampIsValidRFC3339(t *testing.T) {
 	mb := &mockBroker{}
-	pub := NewPublisher(mb, "topic.process", "topic.compare", testLogger())
+	pub := NewPublisher(mb, "topic.process", "topic.compare", "topic.user-confirmed", testLogger())
 
 	before := time.Now().UTC().Add(-time.Second)
 	err := pub.PublishProcessDocument(testContext("corr-ts"), ProcessDocumentCommand{
@@ -158,7 +158,7 @@ func TestPublishProcessDocument_TimestampIsValidRFC3339(t *testing.T) {
 func TestPublishProcessDocument_BrokerErrorPropagated(t *testing.T) {
 	brokerErr := errors.New("connection lost")
 	mb := &mockBroker{err: brokerErr}
-	pub := NewPublisher(mb, "topic.process", "topic.compare", testLogger())
+	pub := NewPublisher(mb, "topic.process", "topic.compare", "topic.user-confirmed", testLogger())
 
 	err := pub.PublishProcessDocument(testContext("corr-err"), ProcessDocumentCommand{
 		JobID:      "job-err",
@@ -173,7 +173,7 @@ func TestPublishProcessDocument_BrokerErrorPropagated(t *testing.T) {
 
 func TestPublishProcessDocument_EmptyCorrelationID(t *testing.T) {
 	mb := &mockBroker{}
-	pub := NewPublisher(mb, "topic.process", "topic.compare", testLogger())
+	pub := NewPublisher(mb, "topic.process", "topic.compare", "topic.user-confirmed", testLogger())
 
 	// Context with no RequestContext — correlation_id will be empty.
 	err := pub.PublishProcessDocument(context.Background(), ProcessDocumentCommand{
@@ -200,7 +200,7 @@ func TestPublishProcessDocument_EmptyCorrelationID(t *testing.T) {
 
 func TestPublishCompareVersions_CorrectTopicAndJSON(t *testing.T) {
 	mb := &mockBroker{}
-	pub := NewPublisher(mb, "dp.commands.process-document", "dp.commands.compare-versions", testLogger())
+	pub := NewPublisher(mb, "dp.commands.process-document", "dp.commands.compare-versions", "orch.commands.user-confirmed-type", testLogger())
 
 	ctx := testContext("corr-bbb")
 	cmd := CompareVersionsCommand{
@@ -252,7 +252,7 @@ func TestPublishCompareVersions_CorrectTopicAndJSON(t *testing.T) {
 
 func TestPublishCompareVersions_TimestampIsValidRFC3339(t *testing.T) {
 	mb := &mockBroker{}
-	pub := NewPublisher(mb, "topic.process", "topic.compare", testLogger())
+	pub := NewPublisher(mb, "topic.process", "topic.compare", "topic.user-confirmed", testLogger())
 
 	before := time.Now().UTC().Add(-time.Second)
 	err := pub.PublishCompareVersions(testContext("corr-ts2"), CompareVersionsCommand{
@@ -282,7 +282,7 @@ func TestPublishCompareVersions_TimestampIsValidRFC3339(t *testing.T) {
 func TestPublishCompareVersions_BrokerErrorPropagated(t *testing.T) {
 	brokerErr := errors.New("broker timeout")
 	mb := &mockBroker{err: brokerErr}
-	pub := NewPublisher(mb, "topic.process", "topic.compare", testLogger())
+	pub := NewPublisher(mb, "topic.process", "topic.compare", "topic.user-confirmed", testLogger())
 
 	err := pub.PublishCompareVersions(testContext("corr-err2"), CompareVersionsCommand{
 		JobID:      "job-err2",
@@ -296,7 +296,7 @@ func TestPublishCompareVersions_BrokerErrorPropagated(t *testing.T) {
 
 func TestPublishCompareVersions_EmptyCorrelationID(t *testing.T) {
 	mb := &mockBroker{}
-	pub := NewPublisher(mb, "topic.process", "topic.compare", testLogger())
+	pub := NewPublisher(mb, "topic.process", "topic.compare", "topic.user-confirmed", testLogger())
 
 	err := pub.PublishCompareVersions(context.Background(), CompareVersionsCommand{
 		JobID:      "job-empty2",
@@ -321,7 +321,7 @@ func TestPublishCompareVersions_EmptyCorrelationID(t *testing.T) {
 
 func TestPublishProcessDocument_AllFieldsPresentInJSON(t *testing.T) {
 	mb := &mockBroker{}
-	pub := NewPublisher(mb, "topic.process", "topic.compare", testLogger())
+	pub := NewPublisher(mb, "topic.process", "topic.compare", "topic.user-confirmed", testLogger())
 
 	err := pub.PublishProcessDocument(testContext("corr-full"), ProcessDocumentCommand{
 		JobID:              "j",
@@ -365,7 +365,7 @@ func TestPublishProcessDocument_AllFieldsPresentInJSON(t *testing.T) {
 
 func TestPublishCompareVersions_AllFieldsPresentInJSON(t *testing.T) {
 	mb := &mockBroker{}
-	pub := NewPublisher(mb, "topic.process", "topic.compare", testLogger())
+	pub := NewPublisher(mb, "topic.process", "topic.compare", "topic.user-confirmed", testLogger())
 
 	err := pub.PublishCompareVersions(testContext("corr-full2"), CompareVersionsCommand{
 		JobID:             "j",

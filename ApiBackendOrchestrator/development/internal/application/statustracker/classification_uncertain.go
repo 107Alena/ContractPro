@@ -25,6 +25,7 @@ type confirmationMeta struct {
 	OrganizationID string `json:"organization_id"`
 	DocumentID     string `json:"document_id"`
 	VersionID      string `json:"version_id"`
+	JobID          string `json:"job_id"`
 }
 
 // handleLICClassificationUncertain processes lic.events.classification-uncertain.
@@ -73,6 +74,7 @@ func (t *Tracker) handleLICClassificationUncertain(ctx context.Context, e *consu
 		OrganizationID: e.OrganizationID,
 		DocumentID:     e.DocumentID,
 		VersionID:      e.VersionID,
+		JobID:          e.JobID,
 	}
 	metaJSON, _ := json.Marshal(meta)
 	if err := t.kv.Set(ctx, ConfirmationMetaKey(e.VersionID), string(metaJSON), t.confirmationTimeout); err != nil {

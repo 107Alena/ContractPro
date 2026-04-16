@@ -6,6 +6,7 @@ import (
 	"contractpro/api-orchestrator/internal/application/adminproxy"
 	"contractpro/api-orchestrator/internal/application/authproxy"
 	"contractpro/api-orchestrator/internal/application/comparison"
+	"contractpro/api-orchestrator/internal/application/confirmtype"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/export"
 	"contractpro/api-orchestrator/internal/application/feedback"
@@ -32,7 +33,7 @@ import (
 //   - uploadH: contract upload handler (nil → 501 Not Implemented)
 //   - contractH: contract CRUD handler (nil → 501 Not Implemented stubs)
 //   - versionH: version management handler (nil → 501 Not Implemented stubs)
-func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, authH *authproxy.Handler, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, exportH *export.Handler, feedbackH *feedback.Handler, adminH *adminproxy.Handler, sseH *sse.Handler) {
+func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler) http.Handler, uploadH http.HandlerFunc, authH *authproxy.Handler, contractH *contracts.Handler, versionH *versions.Handler, resultsH *results.Handler, comparisonH *comparison.Handler, exportH *export.Handler, feedbackH *feedback.Handler, adminH *adminproxy.Handler, confirmTypeH *confirmtype.Handler, sseH *sse.Handler) {
 	r.Route("/api/v1", func(r chi.Router) {
 		// --- Public routes (no auth required) ---
 		r.Group(func(r chi.Router) {
@@ -89,6 +90,13 @@ func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler)
 				r.Get("/contracts/{contract_id}/versions/{version_id}", notImplemented)
 				r.Get("/contracts/{contract_id}/versions/{version_id}/status", notImplemented)
 				r.Post("/contracts/{contract_id}/versions/{version_id}/recheck", notImplemented)
+			}
+
+			// Type confirmation (FR-2.1.3).
+			if confirmTypeH != nil {
+				r.Post("/contracts/{contract_id}/versions/{version_id}/confirm-type", confirmTypeH.Handle())
+			} else {
+				r.Post("/contracts/{contract_id}/versions/{version_id}/confirm-type", notImplemented)
 			}
 
 			// Results.

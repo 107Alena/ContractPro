@@ -168,9 +168,12 @@ func (c *Config) Validate() error {
 		problems = append(problems, "ORCH_LOG_LEVEL must be one of: debug, info, warn, error")
 	}
 
-	// Type confirmation timeout.
+	// Type confirmation.
 	if c.TypeConfirmation.ConfirmationTimeout <= 0 {
 		problems = append(problems, "ORCH_USER_CONFIRMATION_TIMEOUT must be > 0")
+	}
+	if c.TypeConfirmation.IdempotencyTTL <= 0 {
+		problems = append(problems, "ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL must be > 0")
 	}
 
 	// Rate limiting conditional validation.

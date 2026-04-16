@@ -27,9 +27,10 @@ type BrokerConfig struct {
 	TLS      bool   // ORCH_BROKER_TLS (default: false)
 	Prefetch int    // ORCH_BROKER_PREFETCH (default: 10)
 
-	// Outgoing commands (Orchestrator → DP).
-	TopicProcessDocument string // ORCH_BROKER_TOPIC_PROCESS_DOCUMENT
-	TopicCompareVersions string // ORCH_BROKER_TOPIC_COMPARE_VERSIONS
+	// Outgoing commands (Orchestrator → DP / LIC).
+	TopicProcessDocument   string // ORCH_BROKER_TOPIC_PROCESS_DOCUMENT
+	TopicCompareVersions   string // ORCH_BROKER_TOPIC_COMPARE_VERSIONS
+	TopicUserConfirmedType string // ORCH_BROKER_TOPIC_USER_CONFIRMED_TYPE
 
 	// Incoming events from DP.
 	TopicDPStatusChanged        string // ORCH_BROKER_TOPIC_DP_STATUS_CHANGED
@@ -57,8 +58,9 @@ func loadBrokerConfig() BrokerConfig {
 		TLS:      envBool("ORCH_BROKER_TLS", false),
 		Prefetch: envInt("ORCH_BROKER_PREFETCH", 10),
 
-		TopicProcessDocument: envString("ORCH_BROKER_TOPIC_PROCESS_DOCUMENT", "dp.commands.process-document"),
-		TopicCompareVersions: envString("ORCH_BROKER_TOPIC_COMPARE_VERSIONS", "dp.commands.compare-versions"),
+		TopicProcessDocument:   envString("ORCH_BROKER_TOPIC_PROCESS_DOCUMENT", "dp.commands.process-document"),
+		TopicCompareVersions:   envString("ORCH_BROKER_TOPIC_COMPARE_VERSIONS", "dp.commands.compare-versions"),
+		TopicUserConfirmedType: envString("ORCH_BROKER_TOPIC_USER_CONFIRMED_TYPE", "orch.commands.user-confirmed-type"),
 
 		TopicDPStatusChanged:       envString("ORCH_BROKER_TOPIC_DP_STATUS_CHANGED", "dp.events.status-changed"),
 		TopicDPProcessingCompleted: envString("ORCH_BROKER_TOPIC_DP_PROCESSING_COMPLETED", "dp.events.processing-completed"),
@@ -256,12 +258,23 @@ func loadCORSConfig() CORSConfig {
 // to confirm the contract type. If no confirmation arrives within the timeout,
 // the version is moved to FAILED with error_code USER_CONFIRMATION_TIMEOUT.
 type TypeConfirmationConfig struct {
-	ConfirmationTimeout time.Duration // ORCH_USER_CONFIRMATION_TIMEOUT (default: 24h)
+	ConfirmationTimeout   time.Duration // ORCH_USER_CONFIRMATION_TIMEOUT (default: 24h)
+	IdempotencyTTL        time.Duration // ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL (default: 60s)
+	ContractTypeWhitelist []string      // ORCH_CONTRACT_TYPE_WHITELIST (default: static v1 list)
 }
 
+// defaultContractTypeWhitelist is the v1 static whitelist of contract types.
+var defaultContractTypeWhitelist = []string{"услуги", "поставка", "подряд", "аренда", "NDA"}
+
 func loadTypeConfirmationConfig() TypeConfirmationConfig {
+	whitelist := envStringSlice("ORCH_CONTRACT_TYPE_WHITELIST")
+	if len(whitelist) == 0 {
+		whitelist = defaultContractTypeWhitelist
+	}
 	return TypeConfirmationConfig{
-		ConfirmationTimeout: envDuration("ORCH_USER_CONFIRMATION_TIMEOUT", 24*time.Hour),
+		ConfirmationTimeout:   envDuration("ORCH_USER_CONFIRMATION_TIMEOUT", 24*time.Hour),
+		IdempotencyTTL:        envDuration("ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL", 60*time.Second),
+		ContractTypeWhitelist: whitelist,
 	}
 }
 

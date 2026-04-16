@@ -43,10 +43,11 @@ const (
 
 // Conflict / state errors (409).
 const (
-	ErrDocumentArchived       ErrorCode = "DOCUMENT_ARCHIVED"
-	ErrDocumentDeleted        ErrorCode = "DOCUMENT_DELETED"
-	ErrVersionStillProcessing ErrorCode = "VERSION_STILL_PROCESSING"
-	ErrResultsNotReady        ErrorCode = "RESULTS_NOT_READY"
+	ErrDocumentArchived        ErrorCode = "DOCUMENT_ARCHIVED"
+	ErrDocumentDeleted         ErrorCode = "DOCUMENT_DELETED"
+	ErrVersionStillProcessing  ErrorCode = "VERSION_STILL_PROCESSING"
+	ErrResultsNotReady         ErrorCode = "RESULTS_NOT_READY"
+	ErrVersionNotAwaitingInput ErrorCode = "VERSION_NOT_AWAITING_INPUT"
 )
 
 // Rate limiting (429).
@@ -175,6 +176,11 @@ var errorCatalog = map[ErrorCode]ErrorEntry{
 		HTTPStatus: http.StatusConflict,
 		Message:    "Результаты анализа ещё не готовы.",
 		Suggestion: "Дождитесь завершения обработки. Текущий статус можно отслеживать в реальном времени.",
+	},
+	ErrVersionNotAwaitingInput: {
+		HTTPStatus: http.StatusConflict,
+		Message:    "Подтверждение типа уже не требуется или ещё рано.",
+		Suggestion: "Обновите страницу — актуальный статус доступен в реальном времени.",
 	},
 	ErrRateLimitExceeded: {
 		HTTPStatus: http.StatusTooManyRequests,

@@ -16,6 +16,7 @@ import (
 	"contractpro/api-orchestrator/internal/application/adminproxy"
 	"contractpro/api-orchestrator/internal/application/authproxy"
 	"contractpro/api-orchestrator/internal/application/comparison"
+	"contractpro/api-orchestrator/internal/application/confirmtype"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/export"
 	"contractpro/api-orchestrator/internal/application/feedback"
@@ -190,6 +191,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 		brokerClient,
 		cfg.Broker.TopicProcessDocument,
 		cfg.Broker.TopicCompareVersions,
+		cfg.Broker.TopicUserConfirmedType,
 		log,
 	)
 
@@ -230,6 +232,15 @@ func NewApp(cfg *config.Config) (*App, error) {
 	feedbackHandler := feedback.NewHandler(dmClient, kvClient, log)
 	adminProxyHandler := adminproxy.NewHandler(opmClient, log)
 	authProxyHandler := authproxy.NewHandler(uomClient, log)
+	confirmTypeCmdPub := &confirmTypeCmdPubAdapter{pub: cmdPub}
+	confirmTypeHandler := confirmtype.NewHandler(
+		tracker,
+		confirmTypeCmdPub,
+		kvClient,
+		log,
+		cfg.TypeConfirmation.ContractTypeWhitelist,
+		cfg.TypeConfirmation.IdempotencyTTL,
+	)
 
 	// 13. SSE handler — uses auth middleware as token validator.
 	sseAdapter := sse.NewKVStoreAdapter(kvClient)
@@ -256,6 +267,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 		ExportHandler:         exportHandler,
 		FeedbackHandler:       feedbackHandler,
 		AdminProxyHandler:     adminProxyHandler,
+		ConfirmTypeHandler:    confirmTypeHandler,
 		SSEHandler:            sseHandler,
 	})
 

@@ -37,6 +37,18 @@ type CompareVersionsCommand struct {
 	TargetVersionID   string `json:"target_version_id"`
 }
 
+// UserConfirmedTypeCommand contains the business fields for notifying LIC that
+// the user has confirmed the contract type (FR-2.1.3). Envelope fields
+// (correlation_id, timestamp) are added by the publisher at publish time.
+type UserConfirmedTypeCommand struct {
+	JobID             string `json:"job_id"`
+	DocumentID        string `json:"document_id"`
+	VersionID         string `json:"version_id"`
+	OrganizationID    string `json:"organization_id"`
+	ConfirmedByUserID string `json:"confirmed_by_user_id"`
+	ContractType      string `json:"contract_type"`
+}
+
 // ---------------------------------------------------------------------------
 // Event envelopes (internal, for JSON serialization)
 // ---------------------------------------------------------------------------
@@ -67,4 +79,16 @@ type compareVersionsEvent struct {
 	RequestedByUserID string `json:"requested_by_user_id"`
 	BaseVersionID     string `json:"base_version_id"`
 	TargetVersionID   string `json:"target_version_id"`
+}
+
+// userConfirmedTypeEvent is the full JSON envelope published to the broker.
+type userConfirmedTypeEvent struct {
+	CorrelationID     string `json:"correlation_id"`
+	Timestamp         string `json:"timestamp"`
+	JobID             string `json:"job_id"`
+	DocumentID        string `json:"document_id"`
+	VersionID         string `json:"version_id"`
+	OrganizationID    string `json:"organization_id"`
+	ConfirmedByUserID string `json:"confirmed_by_user_id"`
+	ContractType      string `json:"contract_type"`
 }

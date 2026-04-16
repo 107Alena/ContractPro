@@ -1620,6 +1620,52 @@ Integration: Middleware + Handler combined
 - make build/test/lint — OK
 
 ### Следующие задачи (unblocked by ORCH-TASK-040)
-- **ORCH-TASK-041** (high, depends on 039 ✓): HTTP POST /confirm-type handler
+- **ORCH-TASK-041** (high, depends on 039 ✓): HTTP POST /confirm-type handler ← DONE
 - **ORCH-TASK-042** (medium, depends on 039 ✓): Watchdog (Redis Keyspace Notifications)
-- **ORCH-TASK-043** (high, depends on 040 ✓ + 041 + 042): E2E integration test
+- **ORCH-TASK-043** (high, depends on 040 ✓ + 041 ✓ + 042): E2E integration test
+
+## ORCH-TASK-041: HTTP-handler POST /confirm-type (DONE, 2026-04-16)
+
+### План реализации
+1. Изучить существующий код: паттерны handlers, statustracker, commandpub, routes, app.go (Explore subagent)
+2. Спроектировать реализацию (code-architect subagent)
+3. Добавить error code ErrVersionNotAwaitingInput (409) в error_response.go
+4. Расширить config: IdempotencyTTL, TopicUserConfirmedType, ContractTypeWhitelist
+5. Добавить UserConfirmedTypeCommand + PublishUserConfirmedType в commandpub
+6. Расширить confirmationMeta на JobID (для команды UserConfirmedType)
+7. Создать пакет internal/application/confirmtype с handler.go
+8. Wiring: rbac (24-я запись lawyerAndAdmin), routes, server Deps, app.go + adapters
+9. Написать unit-тесты (28 тестов)
+10. Полный прогон: go test -race -count=1 ./..., go vet, make build/test/lint
+
+### Что реализовано
+- **error_response.go**: ErrVersionNotAwaitingInput (409, «Подтверждение типа уже не требуется или ещё рано.»)
+- **config/sub_configs.go**: TypeConfirmationConfig расширен IdempotencyTTL (ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL, 60s), ContractTypeWhitelist (ORCH_CONTRACT_TYPE_WHITELIST, default: услуги/поставка/подряд/аренда/NDA). BrokerConfig расширен TopicUserConfirmedType (orch.commands.user-confirmed-type)
+- **commandpub**: UserConfirmedTypeCommand struct (6 полей), userConfirmedTypeEvent envelope (8 полей), PublishUserConfirmedType на interface + Publisher, NewPublisher теперь принимает 4 топика
+- **statustracker/classification_uncertain.go**: confirmationMeta теперь хранит JobID
+- **confirmtype/handler.go**: Handler struct с consumer-side интерфейсами (StatusTracker, CommandPublisher, KVStore), Handle() → http.HandlerFunc, 9-шаговый flow: auth→UUID validate→body decode+validate→idempotency (Redis GET)→confirmation meta read→StatusTracker.ConfirmType (atomic AWAITING_USER_INPUT→ANALYZING)→PublishUserConfirmedType→set idempotency key→202 Accepted
+- **rbac**: 24-я запись confirm-type (POST, lawyerAndAdmin)
+- **routes.go**: confirmTypeH параметр + POST confirm-type route с nil guard
+- **server.go**: ConfirmTypeHandler в Deps
+- **app.go**: confirmTypeCmdPubAdapter + confirmtype.NewHandler wiring
+- **adapters.go**: confirmTypeCmdPubAdapter
+
+### Тесты (28 шт.)
+happy path, no auth (401), invalid contract_id/version_id (400), invalid JSON (400), empty contract_type (400), confirmed_by_user=false (400), contract_type not in whitelist (400), idempotency hit (202 без publish), meta not found (404), not awaiting input (409), tracker internal error (500), broker failure (502), Redis GET error (500), Redis SET failure non-critical (202), OrgAdmin allowed (202), contract_type trimmed, all 5 whitelist values, published command fields, correlation_id header, idempotency key format/TTL, meta corrupt JSON, content-type, WhitelistValues, isValidUUID, key helpers, no command on broker failure, empty body, interface compliance
+
+### Результаты
+- go test -race -count=1 ./... — 34 пакета PASS, 0 failures
+- go vet — clean
+- make build/test/lint — OK
+
+### Ключевые решения
+- **Confirmation metadata** (set by ORCH-TASK-040) используется как авторитетный источник org_id/doc_id/job_id — избегаем DM round-trip
+- **StatusTracker.ConfirmType** уже транслирует SSE status_update (ANALYZING), handler не дублирует broadcast
+- **Порядок**: ConfirmType → Publish (не наоборот) — атомарный guard предотвращает spurious команды при race с watchdog
+- **Broker failure после ConfirmType**: CRITICAL лог, 502 — версия в ANALYZING без команды LIC (аналогично upload pattern)
+- **Contract type whitelist**: static v1 (5 типов) с возможностью override через env ORCH_CONTRACT_TYPE_WHITELIST
+
+### Следующие задачи (unblocked)
+- **ORCH-TASK-042** (medium, depends on 039 ✓): Watchdog (Redis Keyspace Notifications)
+- **ORCH-TASK-043** (high, depends on 040 ✓ + 041 ✓ + 042): E2E integration test (blocked by 042)
+- **ORCH-TASK-049** (high, depends on 048 ✓): Миграция handlers на structured validation errors

@@ -119,6 +119,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		brokerFk,
 		brokerCfg.TopicProcessDocument,
 		brokerCfg.TopicCompareVersions,
+		brokerCfg.TopicUserConfirmedType,
 		log,
 	)
 

@@ -213,7 +213,7 @@ func (m *mockBrokerPublisher) Publish(ctx context.Context, topic string, payload
 
 func TestUploadCmdPubAdapter_PublishProcessDocument_AllFields(t *testing.T) {
 	mock := &mockBrokerPublisher{}
-	pub := commandpub.NewPublisher(mock, "dp.commands.process-document", "dp.commands.compare-versions", logger.NewLogger("error"))
+	pub := commandpub.NewPublisher(mock, "dp.commands.process-document", "dp.commands.compare-versions", "orch.commands.user-confirmed-type", logger.NewLogger("error"))
 	adapter := &uploadCmdPubAdapter{pub: pub}
 
 	cmd := upload.ProcessDocumentCommand{
@@ -266,7 +266,7 @@ func TestUploadCmdPubAdapter_PublishProcessDocument_AllFields(t *testing.T) {
 
 func TestUploadCmdPubAdapter_PublishProcessDocument_BrokerError(t *testing.T) {
 	mock := &mockBrokerPublisher{err: errors.New("broker down")}
-	pub := commandpub.NewPublisher(mock, "dp.commands.process-document", "dp.commands.compare-versions", logger.NewLogger("error"))
+	pub := commandpub.NewPublisher(mock, "dp.commands.process-document", "dp.commands.compare-versions", "orch.commands.user-confirmed-type", logger.NewLogger("error"))
 	adapter := &uploadCmdPubAdapter{pub: pub}
 
 	err := adapter.PublishProcessDocument(context.Background(), upload.ProcessDocumentCommand{})

@@ -526,6 +526,7 @@ func TestAccessPolicy_AllRoutesCovered(t *testing.T) {
 		"GET /api/v1/contracts/{contract_id}/versions/{version_id}",
 		"GET /api/v1/contracts/{contract_id}/versions/{version_id}/status",
 		"POST /api/v1/contracts/{contract_id}/versions/{version_id}/recheck",
+		"POST /api/v1/contracts/{contract_id}/versions/{version_id}/confirm-type",
 		"GET /api/v1/contracts/{contract_id}/versions/{version_id}/results",
 		"GET /api/v1/contracts/{contract_id}/versions/{version_id}/risks",
 		"GET /api/v1/contracts/{contract_id}/versions/{version_id}/summary",

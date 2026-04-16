@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"contractpro/api-orchestrator/internal/application/confirmtype"
 	"contractpro/api-orchestrator/internal/application/upload"
 	"contractpro/api-orchestrator/internal/egress/commandpub"
 	"contractpro/api-orchestrator/internal/egress/dmclient"
@@ -12,9 +13,10 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ consumer.BrokerSubscriber = (*brokerSubscriberAdapter)(nil)
-	_ upload.DMClient           = (*uploadDMAdapter)(nil)
-	_ upload.CommandPublisher   = (*uploadCmdPubAdapter)(nil)
+	_ consumer.BrokerSubscriber       = (*brokerSubscriberAdapter)(nil)
+	_ upload.DMClient                 = (*uploadDMAdapter)(nil)
+	_ upload.CommandPublisher         = (*uploadCmdPubAdapter)(nil)
+	_ confirmtype.CommandPublisher    = (*confirmTypeCmdPubAdapter)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -97,5 +99,25 @@ func (a *uploadCmdPubAdapter) PublishProcessDocument(ctx context.Context, cmd up
 		SourceFileSize:     cmd.SourceFileSize,
 		SourceFileChecksum: cmd.SourceFileChecksum,
 		SourceFileMIMEType: cmd.SourceFileMIMEType,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// confirmTypeCmdPubAdapter bridges *commandpub.Publisher to
+// confirmtype.CommandPublisher.
+// ---------------------------------------------------------------------------
+
+type confirmTypeCmdPubAdapter struct {
+	pub *commandpub.Publisher
+}
+
+func (a *confirmTypeCmdPubAdapter) PublishUserConfirmedType(ctx context.Context, cmd confirmtype.UserConfirmedTypeCommand) error {
+	return a.pub.PublishUserConfirmedType(ctx, commandpub.UserConfirmedTypeCommand{
+		JobID:             cmd.JobID,
+		DocumentID:        cmd.DocumentID,
+		VersionID:         cmd.VersionID,
+		OrganizationID:    cmd.OrganizationID,
+		ConfirmedByUserID: cmd.ConfirmedByUserID,
+		ContractType:      cmd.ContractType,
 	})
 }

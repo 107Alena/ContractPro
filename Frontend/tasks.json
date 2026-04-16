@@ -828,7 +828,51 @@
       "dependencies": [
         "FE-TASK-007"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-17",
+        "files_created": [
+          "Frontend/src/shared/auth/session-store.ts — Zustand store с accessToken/user/tokenExpiry, actions setAccess(token,expiresIn)/setUser(user)/clear(), именованные селекторы useAccessToken/useRole/useIsAuthenticated, alias sessionStore для non-React (§7.2)",
+          "Frontend/src/shared/auth/session-store.test.ts — 10 unit-тестов через vanilla API (getState/setState/subscribe); без RTL/jsdom",
+          "Frontend/vitest.config.ts — минимальный config (environment:'node', alias @→src, include src/**/*.{test,spec}.{ts,tsx})"
+        ],
+        "files_modified": [
+          "Frontend/src/shared/auth/index.ts — public-API барель: re-export sessionStore, useSession, useAccessToken, useRole, useIsAuthenticated + типы SessionState/User/UserRole",
+          "Frontend/package.json — +zustand@^4.5.7 (runtime), +vitest@^1.6.1 (dev), +script \"test\": \"vitest run\"",
+          "Frontend/package-lock.json — +57 пакетов (zustand + vitest + transitive)"
+        ],
+        "deviations": [
+          "Минимальный vitest setup вместо полного FE-TASK-053 scope: environment='node' (без jsdom), без RTL, без @vitest/coverage-*, без setupFiles. Причина: FE-TASK-053 (pending, high) — отдельная задача, покрывающая полный testing stack (jsdom + RTL + coverage thresholds ≥80%). Acceptance FE-TASK-026 требует 'Unit-тесты' и тест vanilla API store'а; это достигается без DOM. В progress.md и notes_for_next_tasks зафиксирована миграция script 'test': 'vitest run' → 'vitest' + 'test:ci' при имплементации 053. Подтверждено code-architect.",
+          "test-script временный 'vitest run' (one-shot), не 'vitest' (watch) как в §20.5. FE-TASK-053 переключит на watch и добавит test:ci с --coverage.",
+          "Добавлены именованные селекторы-хуки useAccessToken/useRole/useIsAuthenticated (не требовались явно в AC, но рекомендованы react-specialist). Inline-селекторы из §5.6 ('useSession((s) => s.user?.role)') тоже работают — именованные хуки устраняют дубли в будущих RBAC-потребителях (FE-TASK-027, 028)."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint — 0 errors, 0 warnings (--max-warnings=0)",
+          "npx prettier --check . — clean (после auto-format index.ts и session-store.test.ts)",
+          "npm run test — 10/10 tests passed (260ms, все assertions green): initial state, setAccess с vi.useFakeTimers, setUser, independent updates, clear, sessionStore alias, subscribe (3 вызова), селектор role, селектор export_enabled, edge-case expiresIn=0",
+          "npm run build — dist/ 143.08 kB JS / 7.36 kB CSS (gzip 45.96 / 2.15), без warnings. Bundle не вырос т.к. store пока не импортируется из main.tsx — runtime wiring в FE-TASK-030.",
+          "Makefile в Frontend/ отсутствует — этап N/A (как в FE-TASK-007/011/017)",
+          "subagents: react-specialist (дизайн API: hook/alias split ок, абсолютный tokenExpiry-ms, строгий User, добавить именованные селекторы); code-architect (scope-choice: minimal vitest сейчас ок, отдельный vitest.config.ts, explicit vitest imports vs. globals); code-reviewer (финал: 'ship it', 0 blockers, 3 non-blocking nits)"
+        ],
+        "architecture_alignment": [
+          "§5.2 tokens storage table — access в Zustand memory, без persist: ✓",
+          "§5.3 silent-refresh — tokenExpiry как абсолютный epoch-ms упрощает 'setTimeout(refresh, tokenExpiry - Date.now() - 60_000)' (тест #2 покрывает корректность формулы)",
+          "§5.6 RBAC selectors — inline из архитектуры и именованные useRole экспортированы",
+          "§7.2 axios interceptor — sessionStore.getState().accessToken работает (тест #6)",
+          "ADR-FE-03 — access in-memory, не сериализуется; refresh-token хранилище не входит в эту задачу (FE-TASK-027 sessionStorage fallback, целевой Secure cookie)",
+          "§20.5 pin zustand ^4.5.0 — соблюдён (^4.5.7); vitest ^1.6.0 — соблюдён (^1.6.1)"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-027 (auth-flow login/refresh/logout): импортировать { sessionStore, useSession } из '@/shared/auth'. setAccess(access, expires_in) после POST /auth/login; setUser(me) после GET /users/me; shared-promise refresh — sessionStore.subscribe() можно использовать для реактивного таймера (§5.3), либо напрямую setTimeout по (tokenExpiry - Date.now() - 60_000). clear() + queryClient.clear() на logout.",
+          "FE-TASK-012 (axios HTTP-client): request-interceptor берёт sessionStore.getState().accessToken (§7.2, тест #6 подтверждает работу через alias).",
+          "FE-TASK-028 (RBAC): useCan/Can/RequireRole читают role через useSession((s) => s.user?.role) или готовый useRole(); useCanExport — role + user?.permissions?.export_enabled (тест #9 подтверждает селектор).",
+          "FE-TASK-053 (Vitest full setup): заменить test='vitest run' → test='vitest' (watch) + добавить test:ci='vitest run --coverage' + jsdom environment + setupFiles для @testing-library/jest-dom + coverage thresholds lines ≥ 80% / branches ≥ 75% для shared/* и entities/*. vitest.config.ts станет полным; либо переписать, либо смёржить с текущим минимальным.",
+          "FE-TASK-030 (App shell providers): QueryClientProvider — при logout вызывать queryClient.clear() (не только sessionStore.getState().clear()); главный entry-point App.tsx импортирует useSession для показа Layout'а аутентифицированному пользователю.",
+          "Code-reviewer nit #1: useIsAuthenticated проверяет только accessToken !== null, не tokenExpiry > Date.now(). Истёкший токен читается как authenticated до срабатывания axios-401 → refresh-flow. Для v1 ок (§5.4 shared-promise перехватывает все 401), но при появлении pure-UI проверок авторизации (feature-флаги) стоит тайтить до !!accessToken && (tokenExpiry ?? 0) > Date.now().",
+          "Code-reviewer nit #3: UserRole можно переключить на OpenAPI-enum если spec выделит отдельную схему ContractType-style. Сейчас — indexed access User['role'] (ок, устойчиво к расширению)."
+        ]
+      }
     },
     {
       "id": "FE-TASK-027",

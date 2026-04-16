@@ -12,6 +12,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "test": "vitest run",
     "gen:api": "openapi-typescript ../ApiBackendOrchestrator/architecture/api-specification.yaml -o src/shared/api/openapi.d.ts",
     "gen:api:check": "npm run gen:api && git diff --exit-code -- src/shared/api/openapi.d.ts",
     "prepare": "npm run gen:api"
@@ -19,7 +20,8 @@
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.22.3"
+    "react-router-dom": "^6.22.3",
+    "zustand": "^4.5.7"
   },
   "devDependencies": {
     "@eslint/compat": "^1.4.1",
@@ -45,6 +47,7 @@
     "tailwindcss": "^3.4.19",
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.58.2",
-    "vite": "^5.2.11"
+    "vite": "^5.2.11",
+    "vitest": "^1.6.1"
   }
 }

@@ -311,3 +311,79 @@
 - `Frontend/package-lock.json` (+60 пакетов)
 
 ---
+
+## FE-TASK-026 — Session store на Zustand (ADR-FE-03 + §5.2) (2026-04-17)
+
+**Статус:** done
+**Категория:** auth
+**Приоритет:** critical
+
+**План:**
+1. Прочитать §5.2, §5.3, §5.6, §7.2, ADR-FE-03 + §20.5 pin версий.
+2. Консультации: react-specialist (API shape) + code-architect (scope vitest).
+3. Установить zustand@^4.5 + vitest@^1.6 (минимальный setup, без RTL/jsdom).
+4. Реализовать `src/shared/auth/session-store.ts` — Zustand store + именованные селекторы.
+5. Unit-тесты через vanilla API (`.getState/.setState/.subscribe`).
+6. `vitest.config.ts` (minimal, environment='node', alias @→src).
+7. Финальные проверки: typecheck / lint / test / prettier / build.
+
+**Что сделано:**
+- `src/shared/auth/session-store.ts`: `create<SessionState>()` — state `{ accessToken, user, tokenExpiry }` + actions `setAccess(token, expiresIn)` / `setUser(user)` / `clear()`. Тип `User = components['schemas']['UserProfile']` из openapi.d.ts; `UserRole = User['role']`. Именованные селекторы-хуки: `useAccessToken()`, `useRole()`, `useIsAuthenticated()`. Alias `sessionStore = useSession` для non-React потребителей — axios (§7.2), SSE (§7.7), refresh-таймер (§5.3) обращаются через `.getState()`.
+- `tokenExpiry` — абсолютный epoch-ms: `Date.now() + expiresIn * 1000`. Упрощает §5.3-таймер: `setTimeout(refresh, tokenExpiry - Date.now() - 60_000)`. Подтверждено react-specialist.
+- Без `persist`-middleware — access-токен **только** в памяти (ADR-FE-03). Перезагрузка обнуляет; refresh-flow (FE-TASK-027) восстановит.
+- `src/shared/auth/session-store.test.ts` — **10 unit-тестов** через vanilla API: initial state, setAccess с `vi.useFakeTimers`, setUser, независимость setAccess/setUser, clear, sessionStore alias, subscribe (3 вызова), селектор role (undefined→значение), селектор export_enabled (false→true), edge-case expiresIn=0.
+- `src/shared/auth/index.ts` — public-API барель: re-export `sessionStore, useSession, useAccessToken, useRole, useIsAuthenticated` + типы `SessionState, User, UserRole`.
+- `vitest.config.ts` — минимальный: `environment:'node'`, alias `@ → src/`, `include: src/**/*.{test,spec}.{ts,tsx}`.
+- `package.json`: +zustand@^4.5.7 (runtime), +vitest@^1.6.1 (dev), +script `"test": "vitest run"`.
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **Минимальный vitest (environment=node, без jsdom/RTL/coverage) вместо полного FE-TASK-053 scope.** AC FE-TASK-026 требует «Unit-тесты» — store тестируется vanilla API (`.getState/.setState/.subscribe`) без React-render; jsdom/RTL не нужны. Полный stack (jsdom + RTL + `@vitest/coverage-*` + setupFiles + coverage thresholds ≥ 80%) — scope FE-TASK-053. Сейчас `test: "vitest run"` — one-shot; FE-TASK-053 переключит на `vitest` (watch) + добавит `test:ci: vitest run --coverage`. Решение подтверждено code-architect.
+- **Отдельный `vitest.config.ts`** в корне Frontend/, а не расширение `vite.config.ts` через `vitest/config`. Причина: (a) test-блок разрастётся в FE-TASK-053 (coverage + setupFiles), (b) чище разделение build vs test, (c) легче merge/замена в 053.
+- **Именованные селектор-хуки сверх AC (useAccessToken/useRole/useIsAuthenticated).** AC упоминает только inline-селекторы вида `useSession((s) => s.user?.role)`. Именованные хуки устраняют дубли в RBAC-потребителях (FE-TASK-027, 028) — рекомендовано react-specialist.
+- **Alias `sessionStore = useSession` как separate export.** Идиоматично для Zustand v4 (hook уже имеет `.getState/.setState/.subscribe`). В архитектуре §7.2 используется `sessionStore.getState()` — alias соблюдает этот контракт. Альтернатива (один экспорт) сломала бы читаемость axios-интерсептора.
+- **Без `devtools`-middleware.** Не требуется AC; добавить можно при необходимости отладки. Без wrap'а через `import.meta.env.DEV` tree-shaking не сработал бы (import всё равно грузит модуль).
+- **Без `subscribeWithSelector`-middleware.** Не требуется для v1; дефолтный `.subscribe(fn)` покрывает axios-интерсептор и будущий refresh-таймер.
+- **Тип `User = components['schemas']['UserProfile']` (indexed access).** Code-reviewer nit #3: если OpenAPI выделит отдельную схему `Role`-enum — можно переключиться. Сейчас устойчиво к расширению профиля.
+
+**Верификация (все test_steps задачи):**
+- Шаг 1 ✓: `npm run test` — 10/10 tests passed, 260 ms. Vitest 1.6.1 v1 RUN mode; ни одного warning. Тестовый файл — `src/shared/auth/session-store.test.ts`.
+- Шаг 2 ✓: `useSession.getState().setAccess('jwt-abc', 900)` → `useSession.getState().accessToken === 'jwt-abc'` (подтверждено тестом #2 + #6 через alias sessionStore).
+
+**Дополнительно проверено:**
+- `npm run typecheck` — 0 errors (User, UserRole, SessionState — все типы разрешаются; exactOptionalPropertyTypes+noUncheckedIndexedAccess не ругаются).
+- `npm run lint` — 0 errors, 0 warnings (с `--max-warnings=0`; boundaries/ignore покрывает `**/*.test.{ts,tsx}` — FSD-правила не триггерятся; vitest.config.ts попадает в config-файл override).
+- `npx prettier --check .` — clean после auto-format session-store.test.ts и index.ts (длинный `export { … }` с >5 именами разбит на многострочный формат).
+- `npm run build` — dist/ 143.08 kB JS / 7.36 kB CSS (gzip: 45.96 / 2.15), без warnings. Bundle **не вырос** — store пока не импортируется в `main.tsx` (runtime wiring в FE-TASK-030).
+- Makefile в Frontend/ отсутствует — этап N/A (как в FE-TASK-007/011/017).
+
+**Subagents:**
+- **react-specialist** (design review): hook/alias split ок; абсолютный epoch-ms для tokenExpiry правильно (§5.3 формула тривиальна); строгий User (не Partial) — backend всегда возвращает полный профиль; добавить именованные селекторы как минимальный набор.
+- **code-architect** (scope review): minimal vitest сейчас — корректный выбор (ACFE-TASK-026 ≠ FE-TASK-053); отдельный vitest.config.ts каноничнее; explicit `import { describe, it, expect }` vs. globals предпочтительнее (меньше магии, не трогает tsconfig types); no blockers.
+- **code-reviewer** (final): ship it; 0 merge-blockers; 3 non-blocking nits (useIsAuthenticated не проверяет expiry, JSDoc на sessionStore alias, UserRole через enum в будущем).
+
+**Соответствие архитектуре:**
+- §5.2 tokens storage — access в Zustand memory, не сериализуется: ✓
+- §5.3 silent-refresh таймер — tokenExpiry как абсолютный epoch-ms (тест #2 фиксирует): ✓
+- §5.6 RBAC selectors — inline (`s.user?.role`) и именованные (`useRole`) экспортированы: ✓
+- §7.2 axios interceptor — `sessionStore.getState().accessToken` работает (тест #6): ✓
+- ADR-FE-03 — access in-memory без persist: ✓; refresh-token — не в scope (FE-TASK-027)
+- §20.5 pin zustand ^4.5.0 — соблюдён (^4.5.7); vitest ^1.6.0 — соблюдён (^1.6.1): ✓
+
+**Заметки для следующих итераций:**
+- FE-TASK-027 (auth-flow): `import { sessionStore, useSession } from '@/shared/auth'`. `setAccess(access, expires_in)` после `POST /auth/login`; `setUser(me)` после `GET /users/me`. Shared-promise refresh — либо через `setTimeout(refresh, tokenExpiry - Date.now() - 60_000)`, либо `sessionStore.subscribe()` для реактивного пересоздания таймера. На logout: `clear()` + `queryClient.clear()`.
+- FE-TASK-012 (axios): request-interceptor — `sessionStore.getState().accessToken` (§7.2, тест #6 — контракт зафиксирован).
+- FE-TASK-028 (RBAC): `useCan/Can/RequireRole` — `useSession((s) => s.user?.role)` или готовый `useRole()`; `useCanExport` — комбинация role + `user?.permissions?.export_enabled` (тест #9 фиксирует селектор).
+- FE-TASK-053 (Vitest full setup): расширить `vitest.config.ts` — jsdom environment + setupFiles (`@testing-library/jest-dom`) + `@vitest/coverage-v8` с thresholds `lines≥80% branches≥75%` для `shared/* entities/*`; переписать script `test: vitest run` → `test: vitest` (watch) + добавить `test:ci: vitest run --coverage`.
+- FE-TASK-030 (App shell): `queryClient.clear()` при logout (помимо `sessionStore.clear()`); композиция провайдеров.
+- Code-reviewer nit: при появлении pure-UI проверок авторизации (feature-флаги, UI-роутинг без API) — тайтить `useIsAuthenticated` до `!!accessToken && (tokenExpiry ?? 0) > Date.now()`. Пока axios-401-catch (§5.4) закрывает этот кейс для всех сетевых запросов.
+- Code-reviewer nit: добавить JSDoc на `sessionStore`-alias — предупреждение, что alias не следует вызывать как hook вне React-компонентов.
+
+**Затронутые файлы:**
+- `Frontend/src/shared/auth/session-store.ts` (new)
+- `Frontend/src/shared/auth/session-store.test.ts` (new)
+- `Frontend/src/shared/auth/index.ts` (modified: re-export public API)
+- `Frontend/vitest.config.ts` (new)
+- `Frontend/package.json` (modified: +zustand, +vitest, +test script)
+- `Frontend/package-lock.json` (+57 пакетов)
+
+---

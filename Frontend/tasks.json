@@ -643,7 +643,56 @@
       "dependencies": [
         "FE-TASK-017"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-17",
+        "files_created": [
+          "Frontend/.storybook/main.ts — framework @storybook/react-vite, stories pattern ['../.storybook/**/*.mdx', '../src/**/*.stories.@(ts|tsx|mdx)'], addons [addon-essentials, addon-a11y], autodocs:'tag', typescript.reactDocgen:'react-docgen-typescript'",
+          "Frontend/.storybook/preview.ts — глобальный import '../src/app/styles/index.css' (tokens.css + Tailwind), backgrounds surface/muted через var(--color-bg|bg-muted), addon-a11y config, controls matchers color/date, storySort (Welcome→Shared→Entities→Features→Widgets→Pages)",
+          "Frontend/.storybook/Welcome.mdx — welcome-страница документирующая token pipeline, §8.5 соглашения стори и Chromatic usage (под env CHROMATIC_PROJECT_TOKEN)"
+        ],
+        "files_modified": [
+          "Frontend/package.json — +3 scripts: storybook='storybook dev -p 6006 --no-open', build-storybook='storybook build', chromatic='chromatic --exit-zero-on-changes'; +5 devDeps: storybook@^8.6.18, @storybook/react-vite@^8.6.18, @storybook/addon-essentials@^8.6.14, @storybook/addon-a11y@^8.6.18, chromatic@^16.3.0",
+          "Frontend/package-lock.json — +154 пакета (storybook toolchain + chromatic)",
+          "Frontend/.gitignore — +storybook-static (артефакт build-storybook)",
+          "Frontend/eslint.config.js — +'.storybook/**/*.mdx' в ignores; override для '.storybook/**/*.{ts,tsx}' — node globals + boundaries off (main.ts/preview.ts вне FSD-слоёв)"
+        ],
+        "deviations": [
+          "Welcome story реализована как MDX в .storybook/, НЕ в src/. Причина: AC строка 635 упоминает Button 'если создан в FE-TASK-019' — Button отсутствует. Код-архитектор одобрил placement в .storybook/Welcome.mdx vs shared/ui — избегаем загрязнения slice'а временной story'ей; src/app/ не подходит по FSD (app — композиция, не docs). Alternative (shared/ui/welcome/welcome.stories.tsx) отвергнут: оставляет throwaway-slice для 019.",
+          "Chromatic конфигурация — только env CHROMATIC_PROJECT_TOKEN, без .chromaticrc/.chromaticrc.json. AC допускает '.chromaticrc ИЛИ env var'. Секретный токен лучше в CI env (GitHub Actions secret); локально не нужен. В FE-TASK-010 (GitHub Actions CI) добавим job chromatic с secret.",
+          "stories pattern расширен до .mdx — для Welcome.mdx. Оригинальный §AC 'src/**/*.stories.@(ts|tsx)' сохранён, добавлен параллельный паттерн '.storybook/**/*.mdx'.",
+          "MSW для Storybook, addon-interactions, eslint-plugin-storybook — deferred в FE-TASK-019+. Не в AC, минимальный scope FE-TASK-018. В FE-TASK-019 (Button + Input + Badge и т.п.) — сразу добавить eslint-plugin-storybook + addon-interactions при необходимости тестов play-функций.",
+          "storybook dev запускается с --no-open флагом. Причина: CI-friendly (не открывает браузер при dev-запуске в CI), локально разработчик откроет http://localhost:6006/ вручную.",
+          "addon-essentials resolved to ^8.6.14 (npm-resolver), остальные storybook-пакеты ^8.6.18. Storybook 8.x гарантирует совместимость минорных версий; non-blocker (code-reviewer nit #3)."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint --max-warnings=0 — 0 errors, 0 warnings",
+          "npx prettier --check . — All matched files use Prettier code style (после --write .storybook/main.ts auto-формат)",
+          "npm run test — 35/35 tests passed (4 файла, 792ms; session-store 10 + rbac pure 9 + rbac hooks 12 + require-role 4); регрессии нет",
+          "npm run build — dist/ 143.08 kB JS / 7.36 kB CSS (gzip 45.96 / 2.15), без warnings",
+          "npm run build-storybook — storybook-static/index.html создан, preview built 1.07 min, Welcome.mdx попал в бандл (storybook-static/assets/Welcome-*.js 3.67 kB / 1.56 kB gzip), 0 errors",
+          "storybook-static/ содержит: index.html, iframe.html, project.json, index.json, assets/ (фонты + JS chunks)",
+          "Makefile в Frontend/ отсутствует — этап N/A (как в FE-TASK-004/005/007/011/017/026/028)",
+          "subagents: code-architect (план-консультация: MDX-welcome в .storybook/ предпочтительнее, env-only Chromatic, .storybook/** в ESLint override, MSW/interactions/plugin-storybook defer до 019+, <StrictMode>-декоратор пропустить); code-reviewer (финал: SHIP, 0 blockers, 6 non-blocking nit'ов — a11y tags/Welcome формулировка/version mismatch/plugin-storybook defer/autodocs:'tag' в 019/chromatic --only-changed в 010)"
+        ],
+        "architecture_alignment": [
+          "§10.2 Visual regression — Storybook + Chromatic: ✓",
+          "§15.1 Storybook 8 + Chromatic host: ✓",
+          "§8.5 Состояния компонентов — инфраструктура готова (Welcome.mdx фиксирует соглашение Default/Hover/Active/Focus/Disabled/Loading/Error/Empty/Role-Restricted для FE-TASK-019+)",
+          "§20.5 pin storybook@^8.1.0 + @storybook/react-vite@^8.1.0 — соблюдён (^8.6.18 удовлетворяет ^8.1.0)",
+          "§3 FSD layout — .storybook/ в Frontend/root (а не в src/), не нарушает FSD-слои"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-019 (UI-примитивы Button/Badge/Chip/Input/Label): установить eslint-plugin-storybook@^0.8 + @storybook/addon-interactions (для play-функций) + class-variance-authority@^0.7, clsx@^2.1, tailwind-merge@^2.3 (§20.5). Каждая stories должна иметь tags:['autodocs'] (иначе Docs-таб пустой при autodocs:'tag' mode). Welcome.mdx упоминает §8.5 — покрыть Default/Hover/Active/Focus/Disabled/Loading/Error для Button.",
+          "FE-TASK-019 (preview.ts обновление): явно включить WCAG AA правила в addon-a11y: a11y.config = { runOnly: { type: 'tag', values: ['wcag2a','wcag2aa'] } } — сейчас rules:[] = defaults (code-reviewer nit #1).",
+          "FE-TASK-020 (overlays Modal/Toast/Tooltip/Popover): добавить @storybook/addon-interactions если нужны play-функции для ESC/focus-trap assertions.",
+          "FE-TASK-010 (GitHub Actions CI): добавить job chromatic с secret CHROMATIC_PROJECT_TOKEN, запуск через npx chromatic --only-changed (экономия snapshots на PR-builds, code-reviewer nit #6). Script 'chromatic' сейчас --exit-zero-on-changes (не блокирует merge на visual-diff); при желании строгого gating — переключить на --exit-zero-on-changes false в CI.",
+          "FE-TASK-045+ (страницы с a11y-gating): Welcome.mdx секция 'Соглашения stories' утверждает 'блокирующие нарушения фейлят Chromatic' — это forward-looking; при реальной настройке a11y-gate в CI (через Chromatic paid tier или custom axe-CI step) уточнить формулировку (code-reviewer nit #2).",
+          "FE-TASK-053 (Vitest full setup): при миграции на jsdom globally — Storybook test-runner @storybook/test-runner (Playwright-based) можно добавить для smoke-тестов stories; отложено до появления реальных компонентов.",
+          "Design tokens pipeline: если появится ADR-FE-09 (token sync Figma↔tokens.css) — Storybook станет hosted reference (Welcome.mdx показывает tokens)."
+        ]
+      }
     },
     {
       "id": "FE-TASK-019",

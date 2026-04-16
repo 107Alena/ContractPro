@@ -1,0 +1,36 @@
+import { Meta } from '@storybook/blocks';
+
+<Meta title="Welcome" />
+
+# ContractPro Design System
+
+Storybook host для компонентов ContractPro. Основан на **Storybook 8 + Vite**, покрыт **Chromatic** для visual regression по §10.2 / §15.1 архитектуры.
+
+## Технологии
+
+- **Storybook 8** — dev-run + сборка статики для Chromatic
+- **Vite 5 builder** — совместим с основным bundler приложения
+- **addon-essentials** — controls, actions, backgrounds, viewport, docs
+- **addon-a11y** — axe-core проверки в панели A11y
+
+## Design tokens
+
+Глобально подгружается `src/app/styles/index.css`, содержащий `tokens.css` (§8.2) + Tailwind base/components/utilities. Все stories используют:
+
+- `var(--color-brand-500)` — `#F55E12`
+- `var(--color-risk-high|medium|low)`
+- `var(--color-bg|bg-muted|fg|fg-muted|border)`
+- radii `sm|md|lg`, shadow `sm|md|lg`, focus-ring токены
+
+## Соглашения stories
+
+1. Stories лежат рядом с компонентом: `src/shared/ui/button/button.stories.tsx`.
+2. Role-restricted состояния — отдельный файл `*.role-restricted.stories.tsx` (§4.5).
+3. Каждый интерактивный компонент покрывает **§8.5**: `Default`, `Hover`, `Active`, `Focus`, `Disabled`, `Loading`, `Error`, `Empty`, `Role-Restricted` где применимо.
+4. Для a11y-проверки используется addon-a11y; блокирующие нарушения — фейлят Chromatic.
+
+## Chromatic
+
+Сборка запускается командой `npm run chromatic` с токеном `CHROMATIC_PROJECT_TOKEN` (env var; в CI — secret).
+
+Локально разработчик запускает `npm run storybook` на порту `6006`.

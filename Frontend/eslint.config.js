@@ -40,6 +40,7 @@ export default tseslint.config(
       'playwright-report/**',
       'test-results/**',
       'src/shared/api/openapi.d.ts',
+      '.storybook/**/*.mdx',
     ],
   },
 
@@ -168,6 +169,19 @@ export default tseslint.config(
     rules: {
       'simple-import-sort/imports': 'error',
       'simple-import-sort/exports': 'error',
+    },
+  },
+
+  {
+    files: ['.storybook/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+    rules: {
+      'boundaries/element-types': 'off',
+      'boundaries/no-unknown': 'off',
+      'boundaries/no-unknown-files': 'off',
+      'boundaries/no-private': 'off',
     },
   },
 

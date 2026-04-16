@@ -717,7 +717,56 @@
       "dependencies": [
         "FE-TASK-018"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-17",
+        "commit": "pending",
+        "summary": "6 UI-примитивов на Radix + Tailwind + CVA: Button (asChild/loading/icons/4 variants × 3 sizes), Badge (5 variants), Chip (selected/interactive/onRemove + Backspace), Input (error/size/4 types), Label (Radix Label + required), Spinner (выделен как reusable per code-architect). Storybook stories + 1 play-function для Button (Tab/Enter/Space a11y). .storybook/preview.ts расширен WCAG 2.1 AA rules в addon-a11y. .storybook/main.ts +addon-interactions. cn() utility в src/shared/lib/cn/.",
+        "files_added": [
+          "src/shared/lib/cn/{cn.ts,index.ts,cn.test.ts}",
+          "src/shared/ui/spinner/{spinner.tsx,index.ts,spinner.stories.tsx}",
+          "src/shared/ui/button/{button.tsx,index.ts,button.stories.tsx,button.test.ts}",
+          "src/shared/ui/badge/{badge.tsx,index.ts,badge.stories.tsx,badge.test.ts}",
+          "src/shared/ui/chip/{chip.tsx,index.ts,chip.stories.tsx,chip.test.ts}",
+          "src/shared/ui/input/{input.tsx,index.ts,input.stories.tsx,input.test.ts}",
+          "src/shared/ui/label/{label.tsx,index.ts,label.stories.tsx,label.test.ts}"
+        ],
+        "files_modified": [
+          "src/shared/ui/index.ts (barrel)",
+          ".storybook/main.ts (+addon-interactions)",
+          ".storybook/preview.ts (WCAG 2.1 AA runOnly tags)",
+          "package.json (+@radix-ui/react-slot,@radix-ui/react-label,class-variance-authority,clsx,tailwind-merge; dev: +@storybook/addon-interactions,@storybook/test)"
+        ],
+        "verifications": {
+          "typecheck": "0 err",
+          "lint": "0 err / 0 warn",
+          "prettier": "clean",
+          "tests": "57/57 passed (+22 new)",
+          "build": "dist 143.08kB / 45.96kB gzip",
+          "storybook_build": "ok ~1.07 min",
+          "makefile": "N/A (отсутствует во Frontend/)"
+        },
+        "architecture_compliance": [
+          "§8.1 FSD: компоненты в src/shared/ui/* с slice-папками",
+          "§8.2 tokens: цвета/радиусы/spacing через Tailwind-алиасы (brand/fg/bg/border/success/warning/danger) без hex-литералов",
+          "§8.3 shared-компоненты: Button/Badge/Chip/Input/Label зафиксированы в таблице",
+          "§8.4 паттерны: Slot-pattern (asChild) через @radix-ui/react-slot, без HOC",
+          "§8.5 состояния: все обязательные Default/Hover/Focus/Disabled/Loading/Error покрыты в stories",
+          "§10.2 visual regression: Chromatic-gate через storybook-static готов"
+        ],
+        "code_reviewer_fixes_applied": [
+          "Button asChild+disabled: для Slot ветка выдаёт aria-disabled + tabIndex=-1 + onClick-guard вместо невалидного <a disabled>",
+          "Tailwind 3.4 aria-busy: не встроен → заменён на data-[loading]: + aria-disabled: (оба скомпилированы, проверено в dist/*.css)",
+          "Input: добавлен комментарий-маркёр для FE-TASK-025 (FormField + aria-describedby auto-wiring через RHF+Zod)"
+        ],
+        "deferred_to_next_tasks": [
+          "Полноценные RTL-тесты с jsdom — FE-TASK-053 (сейчас vitest env=node, покрытие поведения через Storybook play-function)",
+          "FormField (Label + Input + helper/error с автобиндингом aria-describedby) — FE-TASK-025 (когда появится RHF+Zod)",
+          "Tooltip/Popover/Modal/Toast — FE-TASK-020",
+          "DataTable — FE-TASK-021",
+          "FileDropZone — FE-TASK-022"
+        ]
+      }
     },
     {
       "id": "FE-TASK-020",

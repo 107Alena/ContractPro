@@ -21,9 +21,14 @@
     "prepare": "npm run gen:api"
   },
   "dependencies": {
+    "@radix-ui/react-label": "^2.1.8",
+    "@radix-ui/react-slot": "^1.2.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.22.3",
+    "tailwind-merge": "^3.5.0",
     "zustand": "^4.5.7"
   },
   "devDependencies": {
@@ -31,7 +36,9 @@
     "@eslint/js": "^9.39.4",
     "@storybook/addon-a11y": "^8.6.18",
     "@storybook/addon-essentials": "^8.6.14",
+    "@storybook/addon-interactions": "^8.6.18",
     "@storybook/react-vite": "^8.6.18",
+    "@storybook/test": "^8.6.18",
     "@testing-library/react": "^15.0.7",
     "@types/node": "^20.12.7",
     "@types/react": "^18.3.3",

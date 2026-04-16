@@ -544,3 +544,72 @@
 - `Frontend/eslint.config.js` (modified: +.mdx в ignores, +override для .storybook/*.ts)
 
 ---
+
+## FE-TASK-019 (design-system, critical) — done — 2026-04-17
+
+**Итерация:** 9. **Зависимости:** FE-TASK-018 (done). Разблокирует FE-TASK-020/021/022/023/024/025.
+
+**Цель:** 6 UI-примитивов в `src/shared/ui/` на Radix-UI + Tailwind + CVA (Button, Badge, Chip, Input, Label + выделенный Spinner). Storybook stories + 1 play-function (Button a11y). WCAG 2.1 AA в addon-a11y.
+
+**Ключевые решения (с code-architect):**
+- Spinner выделен как отдельный shared/ui-примитив — reuse в FE-TASK-022/023/async-состояниях.
+- `asChild` через `@radix-ui/react-slot` в Button — §8.4 Slot-pattern.
+- `cn()` в `src/shared/lib/cn/` — twMerge(clsx(inputs)).
+- CVA — единый стиль variant × size × state; каждый компонент экспортирует `xxxVariants()` + React-компонент с forwardRef.
+- Vitest env=node: full RTL deferred в FE-TASK-053. Покрытие — pure unit на CVA + Storybook play-function с `@storybook/test` userEvent (Tab/Enter/Space).
+- FormField отложен в FE-TASK-025 (RHF+Zod). Input = `error: boolean` + внешний `aria-describedby`.
+- Chip в shared/ui как примитив; FilterChips (widget/feature) — позже.
+
+**Дизайн-токены:**
+- Все цвета через Tailwind-алиасы (brand/fg/bg/border/success/warning/danger), без hex-литералов.
+- Badge success/warning/danger — `color-mix()` для subtle tint (evergreens 2023+).
+- Focus-ring через `focus-visible:ring` (из tokens.css).
+
+**Расширения конфига:**
+- `.storybook/main.ts`: +`@storybook/addon-interactions`.
+- `.storybook/preview.ts`: `a11y.options.runOnly` = wcag2a/wcag2aa/wcag21a/wcag21aa (закрывает nit #1 FE-TASK-018).
+- `package.json`: +runtime 5 (Radix Slot/Label, CVA, clsx, tailwind-merge); +dev 2 (addon-interactions, @storybook/test).
+
+**Фиксы code-reviewer:**
+1. **Button asChild+disabled**: Radix Slot пробрасывает `disabled` в `<a>` (невалидно). Фикс: asChild-ветка → `aria-disabled=true` + `tabIndex=-1` + onClick-guard, без `disabled` атрибута. Story `AsChildLinkDisabled` добавлена.
+2. **Tailwind 3.4 `aria-busy:` не в дефолте** → `data-[loading]:…` + `aria-disabled:…`. Оба в dist CSS.
+3. **Input**: comment-маркёр про FormField auto-wiring в FE-TASK-025.
+
+**Subagents:**
+- `code-architect`: APPROVE с правками (Spinner, cn в lib/cn/, WCAG AA, barrel export type, +addon-interactions). FormField в FE-TASK-025 — принято.
+- `code-reviewer`: FIX (0 blockers, 1 must-fix asChild+disabled HTML, 1 must-verify aria-busy). Оба фикса применены и верифицированы.
+
+**Верификация (все test_steps):**
+- Шаг 1 ✓: `build-storybook` — все stories (Button 14 включая a11y play).
+- Шаг 2 ✓: addon-a11y axe против WCAG 2.1 AA.
+- Шаг 3 ✓: Button play-function userEvent Tab/Enter/Space (WCAG 2.1.1).
+
+**Дополнительно:** typecheck 0 err; lint 0 err/0 warn; prettier clean; test 57/57 (+22); build 143.08kB/45.96kB gzip; storybook build ~1.07 min ok. Makefile N/A.
+
+**Соответствие архитектуре:**
+- §8.1 FSD ✓, §8.2 tokens ✓, §8.3 shared-компоненты ✓, §8.4 Slot-pattern ✓ (без HOC), §8.5 состояния в Storybook ✓, §10.2 visual regression ✓.
+
+**Заметки для следующих итераций:**
+- **FE-TASK-020** (Modal/Toast/Tooltip/Popover): те же cn+CVA+Radix. ESC/focus-trap через play-functions.
+- **FE-TASK-021** (DataTable): compound через React.Context.
+- **FE-TASK-022** (FileDropZone): `<Spinner>` + `<Chip>` для selected file.
+- **FE-TASK-025** (RHF+Zod forms): FormField (Label+Input+error с auto aria-describedby).
+- **FE-TASK-053** (Vitest full): env=jsdom + jest-dom → behavioral тесты.
+- **FE-TASK-027** (filter-chips feature): на `Chip` + selected-state.
+- **FE-TASK-054** (LoginPage): Input + Label + Button(loading) + asChild.
+- **Chromatic CI (FE-TASK-010)**: `chromatic --only-changed` + secret. Сейчас `--exit-zero-on-changes` не блокирует до стабилизации baseline.
+- **Button loading + iconRight**: сейчас скрываются оба slot'а; non-blocker — при фидбеке дизайнеров.
+- **Chip nested interactive**: non-blocker — при a11y-регрессиях перепроектировать как flex с двумя siblings.
+
+**Затронутые файлы:**
+- `Frontend/src/shared/lib/cn/{cn.ts,index.ts,cn.test.ts}` (new)
+- `Frontend/src/shared/ui/spinner/{spinner.tsx,index.ts,spinner.stories.tsx}` (new)
+- `Frontend/src/shared/ui/button/{button.tsx,index.ts,button.stories.tsx,button.test.ts}` (new)
+- `Frontend/src/shared/ui/badge/{badge.tsx,index.ts,badge.stories.tsx,badge.test.ts}` (new)
+- `Frontend/src/shared/ui/chip/{chip.tsx,index.ts,chip.stories.tsx,chip.test.ts}` (new)
+- `Frontend/src/shared/ui/input/{input.tsx,index.ts,input.stories.tsx,input.test.ts}` (new)
+- `Frontend/src/shared/ui/label/{label.tsx,index.ts,label.stories.tsx,label.test.ts}` (new)
+- `Frontend/src/shared/ui/index.ts` (modified: barrel)
+- `Frontend/.storybook/main.ts` (modified: +addon-interactions)
+- `Frontend/.storybook/preview.ts` (modified: WCAG 2.1 AA)
+- `Frontend/package.json` + `package-lock.json` (modified)

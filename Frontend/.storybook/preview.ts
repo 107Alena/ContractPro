@@ -18,7 +18,23 @@ const preview: Preview = {
       ],
     },
     a11y: {
-      config: { rules: [] },
+      // WCAG 2.1 AA — axe-core теги. Блокирующие нарушения фейлят Chromatic-gate
+      // и play-функции через @storybook/addon-interactions.
+      config: {
+        rules: [
+          { id: 'color-contrast', enabled: true },
+          { id: 'label', enabled: true },
+          { id: 'button-name', enabled: true },
+          { id: 'aria-valid-attr', enabled: true },
+          { id: 'aria-required-attr', enabled: true },
+        ],
+      },
+      options: {
+        runOnly: {
+          type: 'tag',
+          values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'],
+        },
+      },
     },
     options: {
       storySort: {

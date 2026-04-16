@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"unicode/utf8"
@@ -21,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/dmclient"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -103,23 +105,24 @@ func (h *Handler) HandleList() http.HandlerFunc {
 		}
 
 		status := r.URL.Query().Get("status")
-		if status != "" {
-			if _, valid := validStatuses[status]; !valid {
-				model.WriteError(w, r, model.ErrValidationError,
-					"Параметр «status» должен быть одним из: ACTIVE, ARCHIVED, DELETED.")
-				return
-			}
-		}
-
 		// NOTE: search parameter is accepted and validated to maintain a stable
 		// external API contract. DM's ListDocumentsParams does not yet support
 		// search, so the value is not forwarded. When DM adds search support,
 		// we add a Search field to ListDocumentsParams without breaking the
 		// orchestrator's external API.
 		search := r.URL.Query().Get("search")
+
+		vb := validation.NewBuilder()
+		if status != "" {
+			if _, valid := validStatuses[status]; !valid {
+				vb.Add(validation.NewInvalidEnum("status", []string{"ACTIVE", "ARCHIVED", "DELETED"}))
+			}
+		}
 		if search != "" && utf8.RuneCountInString(search) > maxSearchLen {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Параметр «search» не должен превышать 200 символов.")
+			vb.Add(validation.NewTooLong("search", maxSearchLen))
+		}
+		if verr := vb.Build(); verr != nil {
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
@@ -257,8 +260,9 @@ func (h *Handler) HandleDelete() http.HandlerFunc {
 func (h *Handler) extractContractID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	contractID := chi.URLParam(r, "contract_id")
 	if contractID == "" || uuid.Validate(contractID) != nil {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Параметр «contract_id» должен быть валидным UUID.")
+		vb := validation.NewBuilder()
+		vb.Add(validation.NewInvalidUUID("contract_id"))
+		model.WriteValidationError(w, r, vb.Build(), h.log)
 		return "", false
 	}
 	return contractID, true
@@ -277,15 +281,13 @@ func (h *Handler) parseIntParam(w http.ResponseWriter, r *http.Request, name str
 
 	val, err := strconv.Atoi(raw)
 	if err != nil || (min > 0 && val < min) || (max > 0 && val > max) {
-		var msg string
+		vb := validation.NewBuilder()
 		if max > 0 {
-			msg = "Параметр «" + name + "» должен быть целым числом от " +
-				strconv.Itoa(min) + " до " + strconv.Itoa(max) + "."
+			vb.Add(validation.NewOutOfRange(name, min, max))
 		} else {
-			msg = "Параметр «" + name + "» должен быть целым числом >= " +
-				strconv.Itoa(min) + "."
+			vb.Add(validation.NewInvalidFormat(name, fmt.Sprintf("целое число >= %d", min)))
 		}
-		model.WriteError(w, r, model.ErrValidationError, msg)
+		model.WriteValidationError(w, r, vb.Build(), h.log)
 		return 0, false
 	}
 

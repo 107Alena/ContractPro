@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/dmclient"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -120,8 +121,9 @@ func (h *Handler) HandleExport() http.HandlerFunc {
 		format := chi.URLParam(r, "format")
 		artifactType, ok := validFormats[format]
 		if !ok {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Формат экспорта должен быть «pdf» или «docx».")
+			vb := validation.NewBuilder()
+			vb.Add(validation.NewInvalidEnum("format", []string{"pdf", "docx"}))
+			model.WriteValidationError(w, r, vb.Build(), h.log)
 			return
 		}
 
@@ -186,8 +188,9 @@ func (h *Handler) HandleExport() http.HandlerFunc {
 func (h *Handler) extractUUIDParam(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
 	id := chi.URLParam(r, name)
 	if id == "" || uuid.Validate(id) != nil {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Параметр «"+name+"» должен быть валидным UUID.")
+		vb := validation.NewBuilder()
+		vb.Add(validation.NewInvalidUUID(name))
+		model.WriteValidationError(w, r, vb.Build(), h.log)
 		return "", false
 	}
 	return id, true

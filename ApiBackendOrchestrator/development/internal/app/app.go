@@ -33,6 +33,7 @@ import (
 	"contractpro/api-orchestrator/internal/egress/uomclient"
 	"github.com/redis/go-redis/v9"
 
+	"contractpro/api-orchestrator/internal/domain/model"
 	"contractpro/api-orchestrator/internal/infra/broker"
 	"contractpro/api-orchestrator/internal/infra/health"
 	"contractpro/api-orchestrator/internal/infra/kvstore"
@@ -113,6 +114,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 
 	// 1b. Prometheus metrics — no external dependency, always enabled.
 	appMetrics := metrics.NewMetrics()
+	model.SetValidationCounter(appMetrics.ValidationErrorsTotal)
 
 	// 1c. OpenTelemetry tracing — conditional on ORCH_TRACING_ENABLED.
 	// When disabled, returns a zero-cost noop tracer (no connections opened).

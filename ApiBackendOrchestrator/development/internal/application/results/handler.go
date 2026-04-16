@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/dmclient"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -432,8 +433,8 @@ func isDMNotFound(err error) bool {
 func (h *Handler) extractContractID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id := chi.URLParam(r, "contract_id")
 	if id == "" || uuid.Validate(id) != nil {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Параметр «contract_id» должен быть валидным UUID.")
+		verr := validation.NewBuilder().Add(validation.NewInvalidUUID("contract_id")).Build()
+		model.WriteValidationError(w, r, verr, h.log)
 		return "", false
 	}
 	return id, true
@@ -444,8 +445,8 @@ func (h *Handler) extractContractID(w http.ResponseWriter, r *http.Request) (str
 func (h *Handler) extractVersionID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id := chi.URLParam(r, "version_id")
 	if id == "" || uuid.Validate(id) != nil {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Параметр «version_id» должен быть валидным UUID.")
+		verr := validation.NewBuilder().Add(validation.NewInvalidUUID("version_id")).Build()
+		model.WriteValidationError(w, r, verr, h.log)
 		return "", false
 	}
 	return id, true

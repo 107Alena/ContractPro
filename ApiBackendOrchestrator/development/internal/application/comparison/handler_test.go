@@ -127,6 +127,25 @@ func parseJSON(t *testing.T, rr *httptest.ResponseRecorder) map[string]any {
 	return result
 }
 
+func assertValidationField(t *testing.T, result map[string]any, fieldName string) {
+	t.Helper()
+	details, ok := result["details"].(map[string]any)
+	if !ok {
+		t.Fatalf("details is not an object, got %T: %v", result["details"], result["details"])
+	}
+	fields, ok := details["fields"].([]any)
+	if !ok || len(fields) == 0 {
+		t.Fatalf("details.fields is empty or not an array")
+	}
+	for _, f := range fields {
+		fm, _ := f.(map[string]any)
+		if fm["field"] == fieldName {
+			return
+		}
+	}
+	t.Errorf("expected details.fields to contain field %q, got %v", fieldName, fields)
+}
+
 func stubVersionWithArtifacts(artifactStatus string) *dmclient.DocumentVersionWithArtifacts {
 	return &dmclient.DocumentVersionWithArtifacts{
 		DocumentVersion: dmclient.DocumentVersion{
@@ -332,10 +351,7 @@ func TestHandleCompare_EmptyBaseVersionID(t *testing.T) {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 	result := parseJSON(t, rr)
-	details, _ := result["details"].(string)
-	if !strings.Contains(details, "base_version_id") {
-		t.Errorf("expected details to mention base_version_id, got %q", details)
-	}
+	assertValidationField(t, result, "base_version_id")
 }
 
 func TestHandleCompare_EmptyTargetVersionID(t *testing.T) {
@@ -353,10 +369,7 @@ func TestHandleCompare_EmptyTargetVersionID(t *testing.T) {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 	result := parseJSON(t, rr)
-	details, _ := result["details"].(string)
-	if !strings.Contains(details, "target_version_id") {
-		t.Errorf("expected details to mention target_version_id, got %q", details)
-	}
+	assertValidationField(t, result, "target_version_id")
 }
 
 func TestHandleCompare_InvalidUUIDBaseVersion(t *testing.T) {
@@ -390,10 +403,7 @@ func TestHandleCompare_SameVersionIDs(t *testing.T) {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 	result := parseJSON(t, rr)
-	details, _ := result["details"].(string)
-	if !strings.Contains(details, "различными") {
-		t.Errorf("expected details to mention different versions, got %q", details)
-	}
+	assertValidationField(t, result, "target_version_id")
 }
 
 func TestHandleCompare_BaseVersionNotFound(t *testing.T) {
@@ -998,18 +1008,28 @@ func TestCompareRequest_Validate(t *testing.T) {
 		{
 			name:    "same IDs",
 			req:     CompareRequest{BaseVersionID: testBaseVerID, TargetVersionID: testBaseVerID},
-			wantMsg: "различными",
+			wantMsg: "target_version_id",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, ok := tt.req.validate()
-			if ok != tt.wantOK {
-				t.Errorf("validate() ok = %v, want %v", ok, tt.wantOK)
+			verr := tt.req.validate()
+			gotOK := verr == nil
+			if gotOK != tt.wantOK {
+				t.Errorf("validate() ok = %v, want %v", gotOK, tt.wantOK)
 			}
-			if tt.wantMsg != "" && !strings.Contains(msg, tt.wantMsg) {
-				t.Errorf("validate() msg = %q, want substring %q", msg, tt.wantMsg)
+			if tt.wantMsg != "" && verr != nil {
+				found := false
+				for _, f := range verr.Details.Fields {
+					if strings.Contains(f.Field, tt.wantMsg) || strings.Contains(f.Message, tt.wantMsg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("validate() fields = %+v, want field containing %q", verr.Details.Fields, tt.wantMsg)
+				}
 			}
 		})
 	}

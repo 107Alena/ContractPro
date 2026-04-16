@@ -935,8 +935,8 @@ func TestReadBody_ReadError(t *testing.T) {
 	if ok {
 		t.Fatal("readBody returned true for read error")
 	}
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
 	}
 }
 

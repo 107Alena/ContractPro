@@ -1736,3 +1736,55 @@ happy path, no auth (401), invalid contract_id/version_id (400), invalid JSON (4
 - **TTL не эмулируется**: timeout тестируется через прямой вызов TimeoutAwaitingInput (watchdog unit-тесты покрывают key expiration)
 - **Idempotency verification** (S-2 code review): второй POST /confirm-type возвращает 202 без дублирования команды
 - **Status unchanged assertion** (S-1 code review): после 409 статус остаётся ANALYZING
+
+---
+
+## ORCH-TASK-049: Миграция handlers на структурированные VALIDATION_ERROR
+**Дата:** 2026-04-16
+**Статус:** done
+
+### План реализации
+1. Аудит всех handlers, возвращающих VALIDATION_ERROR (subagent: Explore)
+2. Изучение validation types из ORCH-TASK-048 (ValidationErrorBuilder, NewRequired и т.д.)
+3. Проектирование подхода к миграции (subagent: code-architect)
+4. Создание WriteValidationError helper + Prometheus metric в metrics.go + wiring в app.go
+5. Миграция 10 handler пакетов (subagents: golang-pro ×4 параллельно)
+6. Обновление тестов для нового формата (validate() signature, details structure)
+7. Integration-тест multi-field structured error
+8. Code review (subagent: code-reviewer) → 0 critical, 0 high, 2 medium
+9. Полный регресс: 35 пакетов PASS, go vet clean, make build/test/lint OK
+
+### Что реализовано
+
+#### Инфраструктура
+- **validation_response.go** (model): `WriteValidationError(w, r, *ValidationError, *Logger)` — DEBUG логирование каждого field error, Prometheus counter `orch_validation_errors_total{endpoint, code}` через `SetValidationCounter`, endpoint из `chi.RouteContext`
+- **metrics.go**: добавлен `ValidationErrorsTotal *prometheus.CounterVec` в Metrics struct + registration
+- **app.go**: `model.SetValidationCounter(appMetrics.ValidationErrorsTotal)` при старте
+
+#### Миграция handlers (10 пакетов, 41 возврат VALIDATION_ERROR)
+- **upload**: title (REQUIRED, TOO_LONG, INVALID_FORMAT) + file (REQUIRED) — аккумулируются после parse multipart
+- **versions**: file (REQUIRED), extractContractID/extractVersionID (INVALID_UUID), parseIntParam (OUT_OF_RANGE/INVALID_FORMAT)
+- **comparison**: CompareRequest.validate() → `*ValidationError` с builder (REQUIRED, INVALID_UUID, MISMATCH), extractContractID/extractURLParam (INVALID_UUID)
+- **confirmtype**: contract_type (REQUIRED, NOT_IN_WHITELIST) + confirmed_by_user (INVALID_FORMAT) — аккумулируются, contract_id/version_id (INVALID_UUID)
+- **feedback**: FeedbackRequest.validate() → `*ValidationError` (REQUIRED, TOO_LONG), extractUUIDParam (INVALID_UUID)
+- **adminproxy**: policy_id/checklist_id (REQUIRED), body (REQUIRED, INVALID_FORMAT). readBody read error → ErrInternalError (was ErrValidationError)
+- **contracts**: status (INVALID_ENUM), search (TOO_LONG) — аккумулируются, extractContractID (INVALID_UUID), parseIntParam (OUT_OF_RANGE/INVALID_FORMAT)
+- **export**: format (INVALID_ENUM), extractUUIDParam (INVALID_UUID)
+- **results**: extractContractID/extractVersionID (INVALID_UUID)
+- **authproxy**: email+password (REQUIRED, аккумулируются), refresh_token (REQUIRED), decodeBody (INVALID_FORMAT)
+
+#### Тесты
+- comparison/handler_test.go: validate() → *ValidationError, assertValidationField helper
+- feedback/handler_test.go: validate() → *ValidationError
+- adminproxy/handler_test.go: readBody read error → 500
+- **Integration**: TestUpload_ValidationError_StructuredFields — POST /contracts/upload без title + без file → 400, details.fields содержит [{field:"title", code:"REQUIRED"}, {field:"file", code:"REQUIRED"}]
+
+### Ключевые решения
+- **Package-level `SetValidationCounter`**: избегает threading *prometheus.CounterVec через 10 handler конструкторов. Вызывается один раз при старте до HTTP трафика
+- **URL params = early return**: path parameters (contract_id, version_id) используют single-field builder, поскольку bad URL = fundamentally malformed request
+- **Body fields = accumulate**: title+file, email+password, status+search и т.д. — все ошибки собираются и возвращаются одним ответом
+- **adminproxy readBody read error → 500**: generic read errors (не MaxBytesError) — server-side проблема, а не validation
+
+### Следующие задачи
+- ORCH-TASK-050 (high): Permissions Resolver для GET /users/me
+- ORCH-TASK-051 (medium): CORS middleware config update

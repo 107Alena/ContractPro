@@ -603,6 +603,91 @@ func TestReportsReadyToResults(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: Structured VALIDATION_ERROR (ORCH-TASK-049)
+// ---------------------------------------------------------------------------
+
+func TestUpload_ValidationError_StructuredFields(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Send multipart upload with empty title and no file.
+	boundary := "----TestBoundary-validation"
+	var sb strings.Builder
+	sb.WriteString("--" + boundary + "\r\n")
+	sb.WriteString("Content-Disposition: form-data; name=\"title\"\r\n\r\n")
+	sb.WriteString("\r\n") // empty title
+	sb.WriteString("--" + boundary + "--\r\n")
+
+	url := env.server.URL + "/api/v1/contracts/upload"
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(sb.String()))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	token := env.jwtSigner.SignToken(testUserID, testOrgID, auth.RoleLawyer)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	body := readBody(t, resp)
+
+	// 1. Status must be 400.
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", resp.StatusCode, body)
+	}
+
+	// 2. Parse response.
+	var errResp struct {
+		ErrorCode     string `json:"error_code"`
+		CorrelationID string `json:"correlation_id"`
+		Message       string `json:"message"`
+		Suggestion    string `json:"suggestion"`
+		Details       struct {
+			Fields []struct {
+				Field   string `json:"field"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"fields"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(body, &errResp); err != nil {
+		t.Fatalf("unmarshal error response: %v\nbody: %s", err, body)
+	}
+
+	// 3. error_code must be VALIDATION_ERROR.
+	if errResp.ErrorCode != "VALIDATION_ERROR" {
+		t.Errorf("error_code = %q, want VALIDATION_ERROR", errResp.ErrorCode)
+	}
+
+	// 4. details.fields must contain both title and file errors.
+	fieldSet := make(map[string]string)
+	for _, f := range errResp.Details.Fields {
+		fieldSet[f.Field] = f.Code
+	}
+	if code, ok := fieldSet["title"]; !ok {
+		t.Error("expected details.fields to contain field 'title'")
+	} else if code != "REQUIRED" {
+		t.Errorf("title code = %q, want REQUIRED", code)
+	}
+	if code, ok := fieldSet["file"]; !ok {
+		t.Error("expected details.fields to contain field 'file'")
+	} else if code != "REQUIRED" {
+		t.Errorf("file code = %q, want REQUIRED", code)
+	}
+
+	// 5. correlation_id must be present.
+	if errResp.CorrelationID == "" {
+		t.Error("expected non-empty correlation_id")
+	}
+
+	// 6. suggestion must be present.
+	if errResp.Suggestion == "" {
+		t.Error("expected non-empty suggestion")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

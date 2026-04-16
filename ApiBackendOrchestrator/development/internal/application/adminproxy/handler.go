@@ -23,6 +23,7 @@ import (
 	"net/http"
 
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/opmclient"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -117,8 +118,9 @@ func (h *Handler) HandleUpdatePolicy() http.HandlerFunc {
 
 		policyID := chi.URLParam(r, "policy_id")
 		if policyID == "" {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Идентификатор политики обязателен.")
+			vb := validation.NewBuilder()
+			vb.Add(validation.NewRequired("policy_id"))
+			model.WriteValidationError(w, r, vb.Build(), h.log)
 			return
 		}
 
@@ -188,8 +190,9 @@ func (h *Handler) HandleUpdateChecklist() http.HandlerFunc {
 
 		checklistID := chi.URLParam(r, "checklist_id")
 		if checklistID == "" {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Идентификатор чек-листа обязателен.")
+			vb := validation.NewBuilder()
+			vb.Add(validation.NewRequired("checklist_id"))
+			model.WriteValidationError(w, r, vb.Build(), h.log)
 			return
 		}
 
@@ -228,24 +231,26 @@ func (h *Handler) readBody(w http.ResponseWriter, r *http.Request) (json.RawMess
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Тело запроса превышает допустимый размер.")
+			vb := validation.NewBuilder()
+			vb.Add(validation.NewInvalidFormat("body", "максимум 1 МБ"))
+			model.WriteValidationError(w, r, vb.Build(), h.log)
 			return nil, false
 		}
-		model.WriteError(w, r, model.ErrValidationError,
-			"Не удалось прочитать тело запроса.")
+		model.WriteError(w, r, model.ErrInternalError, nil)
 		return nil, false
 	}
 
 	if len(data) == 0 {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Тело запроса не может быть пустым.")
+		vb := validation.NewBuilder()
+		vb.Add(validation.NewRequired("body"))
+		model.WriteValidationError(w, r, vb.Build(), h.log)
 		return nil, false
 	}
 
 	if !json.Valid(data) {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Некорректный формат JSON в теле запроса.")
+		vb := validation.NewBuilder()
+		vb.Add(validation.NewInvalidFormat("body", "JSON"))
+		model.WriteValidationError(w, r, vb.Build(), h.log)
 		return nil, false
 	}
 

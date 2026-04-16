@@ -33,6 +33,7 @@ import (
 	"github.com/google/uuid"
 
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/commandpub"
 	"contractpro/api-orchestrator/internal/egress/dmclient"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
@@ -327,7 +328,8 @@ func (h *Handler) HandleUpload() http.HandlerFunc {
 
 		if err := r.ParseMultipartForm(maxParseMemory); err != nil {
 			h.log.Warn(ctx, "failed to parse multipart form", logger.ErrorAttr(err))
-			model.WriteError(w, r, model.ErrValidationError, "Не удалось разобрать multipart-форму.")
+			verr := validation.NewBuilder().Add(validation.NewInvalidFormat("body", "multipart/form-data")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 		defer func() {
@@ -340,7 +342,8 @@ func (h *Handler) HandleUpload() http.HandlerFunc {
 		file, header, err := r.FormFile("file")
 		if err != nil {
 			h.log.Warn(ctx, "failed to extract file from form", logger.ErrorAttr(err))
-			model.WriteError(w, r, model.ErrValidationError, "Поле «file» обязательно для заполнения.")
+			verr := validation.NewBuilder().Add(validation.NewRequired("file")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 		defer file.Close()
@@ -672,8 +675,8 @@ func isStillProcessing(artifactStatus string) bool {
 func (h *Handler) extractContractID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id := chi.URLParam(r, "contract_id")
 	if id == "" || uuid.Validate(id) != nil {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Параметр «contract_id» должен быть валидным UUID.")
+		verr := validation.NewBuilder().Add(validation.NewInvalidUUID("contract_id")).Build()
+		model.WriteValidationError(w, r, verr, h.log)
 		return "", false
 	}
 	return id, true
@@ -682,8 +685,8 @@ func (h *Handler) extractContractID(w http.ResponseWriter, r *http.Request) (str
 func (h *Handler) extractVersionID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id := chi.URLParam(r, "version_id")
 	if id == "" || uuid.Validate(id) != nil {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Параметр «version_id» должен быть валидным UUID.")
+		verr := validation.NewBuilder().Add(validation.NewInvalidUUID("version_id")).Build()
+		model.WriteValidationError(w, r, verr, h.log)
 		return "", false
 	}
 	return id, true
@@ -696,16 +699,23 @@ func (h *Handler) parseIntParam(w http.ResponseWriter, r *http.Request, name str
 	}
 
 	val, err := strconv.Atoi(raw)
-	if err != nil || (min > 0 && val < min) || (max > 0 && val > max) {
-		var msg string
+	if err != nil {
+		expected := "целое число >= " + strconv.Itoa(min)
 		if max > 0 {
-			msg = "Параметр «" + name + "» должен быть целым числом от " +
-				strconv.Itoa(min) + " до " + strconv.Itoa(max) + "."
-		} else {
-			msg = "Параметр «" + name + "» должен быть целым числом >= " +
-				strconv.Itoa(min) + "."
+			expected = "целое число от " + strconv.Itoa(min) + " до " + strconv.Itoa(max)
 		}
-		model.WriteError(w, r, model.ErrValidationError, msg)
+		verr := validation.NewBuilder().Add(validation.NewInvalidFormat(name, expected)).Build()
+		model.WriteValidationError(w, r, verr, h.log)
+		return 0, false
+	}
+	if (min > 0 && val < min) || (max > 0 && val > max) {
+		var verr *validation.ValidationError
+		if max > 0 {
+			verr = validation.NewBuilder().Add(validation.NewOutOfRange(name, min, max)).Build()
+		} else {
+			verr = validation.NewBuilder().Add(validation.NewInvalidFormat(name, "целое число >= "+strconv.Itoa(min))).Build()
+		}
+		model.WriteValidationError(w, r, verr, h.log)
 		return 0, false
 	}
 

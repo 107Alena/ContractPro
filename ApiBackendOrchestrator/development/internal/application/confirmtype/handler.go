@@ -19,6 +19,7 @@ import (
 
 	"contractpro/api-orchestrator/internal/application/statustracker"
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/infra/kvstore"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -137,13 +138,13 @@ func (h *Handler) Handle() http.HandlerFunc {
 		contractID := chi.URLParam(r, "contract_id")
 		versionID := chi.URLParam(r, "version_id")
 		if !isValidUUID(contractID) {
-			model.WriteErrorWithMessage(w, r, model.ErrValidationError,
-				"Неверный формат contract_id.", nil)
+			verr := validation.NewBuilder().Add(validation.NewInvalidUUID("contract_id")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 		if !isValidUUID(versionID) {
-			model.WriteErrorWithMessage(w, r, model.ErrValidationError,
-				"Неверный формат version_id.", nil)
+			verr := validation.NewBuilder().Add(validation.NewInvalidUUID("version_id")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
@@ -153,25 +154,26 @@ func (h *Handler) Handle() http.HandlerFunc {
 		// 3. Decode and validate request body.
 		var req confirmTypeRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
-			model.WriteErrorWithMessage(w, r, model.ErrValidationError,
-				"Некорректный JSON в теле запроса.", nil)
+			verr := validation.NewBuilder().Add(validation.NewInvalidFormat("body", "JSON")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
+		vb := validation.NewBuilder()
 		req.ContractType = strings.TrimSpace(req.ContractType)
 		if req.ContractType == "" {
-			model.WriteErrorWithMessage(w, r, model.ErrValidationError,
-				"Поле contract_type обязательно.", nil)
-			return
+			vb.Add(validation.NewRequired("contract_type"))
 		}
 		if !req.ConfirmedByUser {
-			model.WriteErrorWithMessage(w, r, model.ErrValidationError,
-				"Поле confirmed_by_user должно быть true.", nil)
-			return
+			vb.Add(validation.NewInvalidFormat("confirmed_by_user", "true"))
 		}
-		if _, ok := h.whitelist[req.ContractType]; !ok {
-			model.WriteErrorWithMessage(w, r, model.ErrValidationError,
-				"Указанный тип договора не поддерживается.", nil)
+		if req.ContractType != "" {
+			if _, ok := h.whitelist[req.ContractType]; !ok {
+				vb.Add(validation.NewNotInWhitelist("contract_type", len(h.whitelist)))
+			}
+		}
+		if verr := vb.Build(); verr != nil {
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 

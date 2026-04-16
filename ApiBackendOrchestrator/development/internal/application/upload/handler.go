@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
 )
@@ -263,7 +264,8 @@ func (h *Handler) Handle() http.HandlerFunc {
 		// ---------------------------------------------------------------
 		if err := r.ParseMultipartForm(maxParseMemory); err != nil {
 			h.log.Warn(ctx, "failed to parse multipart form", logger.ErrorAttr(err))
-			model.WriteError(w, r, model.ErrValidationError, "Не удалось разобрать multipart-форму.")
+			verr := validation.NewBuilder().Add(validation.NewInvalidFormat("body", "multipart/form-data")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 		defer func() {
@@ -273,32 +275,31 @@ func (h *Handler) Handle() http.HandlerFunc {
 		}()
 
 		// ---------------------------------------------------------------
-		// Step 3: Extract and validate title
+		// Step 3: Extract and validate title + file (accumulated)
 		// ---------------------------------------------------------------
 		title := strings.TrimSpace(r.FormValue("title"))
-		if title == "" {
-			model.WriteError(w, r, model.ErrValidationError, "Поле «title» обязательно для заполнения.")
-			return
-		}
-		if utf8.RuneCountInString(title) > maxTitleLen {
-			model.WriteError(w, r, model.ErrValidationError,
-				fmt.Sprintf("Поле «title» не должно превышать %d символов.", maxTitleLen))
-			return
-		}
-		// Reject titles containing control characters (defense-in-depth).
-		if containsControlChars(title) {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Поле «title» содержит недопустимые символы.")
-			return
-		}
+		file, header, fileErr := r.FormFile("file")
 
-		// ---------------------------------------------------------------
-		// Step 4: Extract file
-		// ---------------------------------------------------------------
-		file, header, err := r.FormFile("file")
-		if err != nil {
-			h.log.Warn(ctx, "failed to extract file from form", logger.ErrorAttr(err))
-			model.WriteError(w, r, model.ErrValidationError, "Поле «file» обязательно для заполнения.")
+		vb := validation.NewBuilder()
+		if title == "" {
+			vb.Add(validation.NewRequired("title"))
+		} else {
+			if utf8.RuneCountInString(title) > maxTitleLen {
+				vb.Add(validation.NewTooLong("title", maxTitleLen))
+			}
+			// Reject titles containing control characters (defense-in-depth).
+			if containsControlChars(title) {
+				vb.Add(validation.NewInvalidFormat("title", "текст без управляющих символов"))
+			}
+		}
+		if fileErr != nil {
+			vb.Add(validation.NewRequired("file"))
+		}
+		if verr := vb.Build(); verr != nil {
+			if file != nil {
+				file.Close()
+			}
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 		defer file.Close()

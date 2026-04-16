@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/dmclient"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -72,15 +73,16 @@ type FeedbackRequest struct {
 }
 
 // validate checks that the request is well-formed.
-func (fr *FeedbackRequest) validate() (string, bool) {
+func (fr *FeedbackRequest) validate() *validation.ValidationError {
+	vb := validation.NewBuilder()
 	if fr.IsUseful == nil {
-		return "Поле «is_useful» обязательно для заполнения.", false
+		vb.Add(validation.NewRequired("is_useful"))
 	}
 	comment := strings.TrimSpace(fr.Comment)
 	if utf8.RuneCountInString(comment) > maxCommentLength {
-		return "Комментарий не должен превышать 2000 символов.", false
+		vb.Add(validation.NewTooLong("comment", maxCommentLength))
 	}
-	return "", true
+	return vb.Build()
 }
 
 // FeedbackResponse is the 201 body.
@@ -164,16 +166,16 @@ func (h *Handler) HandleSubmit() http.HandlerFunc {
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Невалидный JSON в теле запроса.")
+			verr := validation.NewBuilder().Add(validation.NewInvalidFormat("body", "JSON")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
 		// Trim comment whitespace before validation.
 		req.Comment = strings.TrimSpace(req.Comment)
 
-		if msg, valid := req.validate(); !valid {
-			model.WriteError(w, r, model.ErrValidationError, msg)
+		if verr := req.validate(); verr != nil {
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
@@ -247,8 +249,8 @@ func feedbackKey(orgID, versionID, feedbackID string) string {
 func (h *Handler) extractUUIDParam(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
 	id := chi.URLParam(r, name)
 	if id == "" || uuid.Validate(id) != nil {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Параметр «"+name+"» должен быть валидным UUID.")
+		verr := validation.NewBuilder().Add(validation.NewInvalidUUID(name)).Build()
+		model.WriteValidationError(w, r, verr, h.log)
 		return "", false
 	}
 	return id, true

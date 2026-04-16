@@ -18,10 +18,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/uomclient"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
@@ -94,15 +96,16 @@ func (h *Handler) HandleLogin() http.HandlerFunc {
 			return
 		}
 
+		vb := validation.NewBuilder()
 		email := strings.TrimSpace(req.Email)
 		if email == "" {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Поле «email» обязательно для заполнения.")
-			return
+			vb.Add(validation.NewRequired("email"))
 		}
 		if strings.TrimSpace(req.Password) == "" {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Поле «password» обязательно для заполнения.")
+			vb.Add(validation.NewRequired("password"))
+		}
+		if verr := vb.Build(); verr != nil {
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
@@ -144,8 +147,8 @@ func (h *Handler) HandleRefresh() http.HandlerFunc {
 		}
 
 		if strings.TrimSpace(req.RefreshToken) == "" {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Поле «refresh_token» обязательно для заполнения.")
+			verr := validation.NewBuilder().Add(validation.NewRequired("refresh_token")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
@@ -185,8 +188,8 @@ func (h *Handler) HandleLogout() http.HandlerFunc {
 		}
 
 		if strings.TrimSpace(req.RefreshToken) == "" {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Поле «refresh_token» обязательно для заполнения.")
+			verr := validation.NewBuilder().Add(validation.NewRequired("refresh_token")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
@@ -266,12 +269,16 @@ func (h *Handler) decodeBody(w http.ResponseWriter, r *http.Request, dest any) b
 	if err := dec.Decode(dest); err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Тело запроса превышает допустимый размер.")
+			verr := validation.NewBuilder().
+				Add(validation.NewInvalidFormat("body", fmt.Sprintf("максимум %d байт", maxAuthBodySize))).
+				Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return false
 		}
-		model.WriteError(w, r, model.ErrValidationError,
-			"Некорректный формат JSON в теле запроса.")
+		verr := validation.NewBuilder().
+			Add(validation.NewInvalidFormat("body", "JSON")).
+			Build()
+		model.WriteValidationError(w, r, verr, h.log)
 		return false
 	}
 	return true

@@ -975,12 +975,13 @@ func TestValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, ok := tt.req.validate()
-			if ok != tt.wantOK {
-				t.Errorf("validate() ok=%v, want %v (msg=%q)", ok, tt.wantOK, msg)
+			verr := tt.req.validate()
+			gotOK := verr == nil
+			if gotOK != tt.wantOK {
+				t.Errorf("validate() ok=%v, want %v", gotOK, tt.wantOK)
 			}
-			if !ok && msg == "" {
-				t.Error("expected non-empty error message when validation fails")
+			if !gotOK && verr != nil && len(verr.Details.Fields) == 0 {
+				t.Error("expected non-empty fields when validation fails")
 			}
 		})
 	}

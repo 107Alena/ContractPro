@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"contractpro/api-orchestrator/internal/domain/model"
+	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/commandpub"
 	"contractpro/api-orchestrator/internal/egress/dmclient"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
@@ -55,23 +56,24 @@ type CompareRequest struct {
 }
 
 // validate checks that both version IDs are valid UUIDs and not equal.
-func (cr *CompareRequest) validate() (string, bool) {
+func (cr *CompareRequest) validate() *validation.ValidationError {
+	vb := validation.NewBuilder()
 	if cr.BaseVersionID == "" {
-		return "Поле «base_version_id» обязательно для заполнения.", false
-	}
-	if uuid.Validate(cr.BaseVersionID) != nil {
-		return "Поле «base_version_id» должно быть валидным UUID.", false
+		vb.Add(validation.NewRequired("base_version_id"))
+	} else if uuid.Validate(cr.BaseVersionID) != nil {
+		vb.Add(validation.NewInvalidUUID("base_version_id"))
 	}
 	if cr.TargetVersionID == "" {
-		return "Поле «target_version_id» обязательно для заполнения.", false
+		vb.Add(validation.NewRequired("target_version_id"))
+	} else if uuid.Validate(cr.TargetVersionID) != nil {
+		vb.Add(validation.NewInvalidUUID("target_version_id"))
 	}
-	if uuid.Validate(cr.TargetVersionID) != nil {
-		return "Поле «target_version_id» должно быть валидным UUID.", false
+	if cr.BaseVersionID != "" && cr.TargetVersionID != "" &&
+		uuid.Validate(cr.BaseVersionID) == nil && uuid.Validate(cr.TargetVersionID) == nil &&
+		cr.BaseVersionID == cr.TargetVersionID {
+		vb.Add(validation.NewMismatch("target_version_id", "base_version_id"))
 	}
-	if cr.BaseVersionID == cr.TargetVersionID {
-		return "Версии для сравнения должны быть различными (base_version_id == target_version_id).", false
-	}
-	return "", true
+	return vb.Build()
 }
 
 // CompareAcceptedResponse is the 202 body for POST /compare.
@@ -150,13 +152,13 @@ func (h *Handler) HandleCompare() http.HandlerFunc {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var req CompareRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			model.WriteError(w, r, model.ErrValidationError,
-				"Невалидный JSON в теле запроса.")
+			verr := validation.NewBuilder().Add(validation.NewInvalidFormat("body", "JSON")).Build()
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
-		if msg, valid := req.validate(); !valid {
-			model.WriteError(w, r, model.ErrValidationError, msg)
+		if verr := req.validate(); verr != nil {
+			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
@@ -302,8 +304,8 @@ func isStillProcessing(artifactStatus string) bool {
 func (h *Handler) extractContractID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id := chi.URLParam(r, "contract_id")
 	if id == "" || uuid.Validate(id) != nil {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Параметр «contract_id» должен быть валидным UUID.")
+		verr := validation.NewBuilder().Add(validation.NewInvalidUUID("contract_id")).Build()
+		model.WriteValidationError(w, r, verr, h.log)
 		return "", false
 	}
 	return id, true
@@ -312,8 +314,8 @@ func (h *Handler) extractContractID(w http.ResponseWriter, r *http.Request) (str
 func (h *Handler) extractURLParam(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
 	id := chi.URLParam(r, name)
 	if id == "" || uuid.Validate(id) != nil {
-		model.WriteError(w, r, model.ErrValidationError,
-			"Параметр «"+name+"» должен быть валидным UUID.")
+		verr := validation.NewBuilder().Add(validation.NewInvalidUUID(name)).Build()
+		model.WriteValidationError(w, r, verr, h.log)
 		return "", false
 	}
 	return id, true

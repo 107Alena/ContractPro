@@ -1113,7 +1113,9 @@
         "Шаг 5: метрика orch_validation_errors_total появляется в /metrics"
       ],
       "dependencies": ["ORCH-TASK-048"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-04-16",
+      "implementation_notes": "Migrated all 10 handler packages (upload, versions, comparison, confirmtype, feedback, adminproxy, contracts, export, results, authproxy) from ad-hoc VALIDATION_ERROR string messages to structured ValidationErrorBuilder pattern. Created internal/domain/model/validation_response.go with WriteValidationError (DEBUG logging per field, Prometheus orch_validation_errors_total{endpoint,code} counter, chi RouteContext endpoint resolution). Added ValidationErrorsTotal to metrics.Metrics. Wired via model.SetValidationCounter in app.go. Body field validation now accumulates ALL errors (e.g., title+file missing returned simultaneously). URL param validation keeps early-return with single structured error. Refactored CompareRequest.validate() and FeedbackRequest.validate() from (string,bool) to *ValidationError. Changed adminproxy readBody non-MaxBytesError from 400 to 500 (server error, not validation). Integration test TestUpload_ValidationError_StructuredFields verifies multi-field structured error response. Code review: 0 critical, 0 high, 2 medium (M1: package-level counter init-once pattern, M2: label cardinality monitoring). All 35 packages PASS, go vet clean, make build/test/lint OK."
     },
     {
       "id": "ORCH-TASK-050",

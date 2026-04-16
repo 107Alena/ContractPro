@@ -17,6 +17,7 @@ import (
 	"contractpro/api-orchestrator/internal/application/authproxy"
 	"contractpro/api-orchestrator/internal/application/comparison"
 	"contractpro/api-orchestrator/internal/application/confirmtype"
+	"contractpro/api-orchestrator/internal/application/confirmwatchdog"
 	"contractpro/api-orchestrator/internal/application/contracts"
 	"contractpro/api-orchestrator/internal/application/export"
 	"contractpro/api-orchestrator/internal/application/feedback"
@@ -93,6 +94,9 @@ type App struct {
 
 	// SSE handler (tracks active connections for graceful close).
 	sseHandler *sse.Handler
+
+	// Confirmation watchdog (monitors expired AWAITING_USER_INPUT keys).
+	watchdog *confirmwatchdog.Watchdog
 
 	// Observability shutdown (flush traces/metrics/logs).
 	// Composites Prometheus metrics (ORCH-TASK-032) and OpenTelemetry tracing (ORCH-TASK-033).
@@ -211,6 +215,24 @@ func NewApp(cfg *config.Config) (*App, error) {
 	confirmStore := statustracker.NewRedisConfirmationStore(rdb)
 	tracker.WithConfirmation(confirmStore, cfg.TypeConfirmation.ConfirmationTimeout)
 
+	// 10b. Confirmation watchdog — monitors expired confirmation:wait:* keys.
+	//      Uses Redis keyspace notifications (preferred) or periodic SCAN (fallback).
+	//      Needs *redis.Client (not redis.Cmdable) for PSubscribe.
+	redisClient, ok := kvClient.RawRedis().(*redis.Client)
+	if !ok {
+		brokerClient.Close()
+		kvClient.Close()
+		return nil, fmt.Errorf("confirmation watchdog: Redis client does not support PSubscribe")
+	}
+	watchdog := confirmwatchdog.NewWatchdog(
+		tracker,
+		kvClient,
+		redisClient,
+		log,
+		appMetrics.UserConfirmationTimeoutsTotal,
+		cfg.TypeConfirmation.WatchdogScanInterval,
+	)
+
 	// 11. Event consumer — subscribes to 13 RabbitMQ topics.
 	//     Uses adapter because broker.Client.Subscribe takes the named type
 	//     broker.MessageHandler, while consumer.BrokerSubscriber expects an
@@ -281,6 +303,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 		server:        server,
 		consumer:      eventConsumer,
 		sseHandler:    sseHandler,
+		watchdog:      watchdog,
 		observability: &compositeObservability{tracer: appTracer, metrics: appMetrics},
 	}, nil
 }
@@ -295,6 +318,11 @@ func (a *App) Start() error {
 	a.log.Info(context.Background(), "starting event consumer")
 	if err := a.consumer.Start(); err != nil {
 		return fmt.Errorf("event consumer: %w", err)
+	}
+
+	a.log.Info(context.Background(), "starting confirmation watchdog")
+	if err := a.watchdog.Start(); err != nil {
+		return fmt.Errorf("confirmation watchdog: %w", err)
 	}
 
 	a.log.Info(context.Background(), "starting HTTP server")
@@ -341,6 +369,12 @@ func (a *App) Shutdown(ctx context.Context) error {
 	if err := a.server.Shutdown(ctx); err != nil {
 		a.log.Error(ctx, "HTTP server shutdown error", logger.ErrorAttr(err))
 		errs = append(errs, fmt.Errorf("http server: %w", err))
+	}
+
+	// Phase 3b: Stop confirmation watchdog (cancel Redis subscription, wait for goroutine).
+	a.log.Info(ctx, "shutdown phase 3b: stopping confirmation watchdog")
+	if a.watchdog != nil {
+		a.watchdog.Shutdown()
 	}
 
 	// Phase 4: Close broker (stops consumer subscriptions, disconnects AMQP).

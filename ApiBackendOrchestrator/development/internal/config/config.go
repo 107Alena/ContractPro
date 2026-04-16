@@ -175,6 +175,9 @@ func (c *Config) Validate() error {
 	if c.TypeConfirmation.IdempotencyTTL <= 0 {
 		problems = append(problems, "ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL must be > 0")
 	}
+	if c.TypeConfirmation.WatchdogScanInterval <= 0 {
+		problems = append(problems, "ORCH_WATCHDOG_SCAN_INTERVAL must be > 0")
+	}
 
 	// Rate limiting conditional validation.
 	if c.RateLimit.Enabled {

@@ -66,6 +66,9 @@ type Metrics struct {
 	RedisOperationsTotal   *prometheus.CounterVec
 	RedisOperationDuration *prometheus.HistogramVec
 
+	// --- Confirmation Watchdog ---
+	UserConfirmationTimeoutsTotal prometheus.Counter
+
 	registry *prometheus.Registry
 }
 
@@ -199,6 +202,12 @@ func NewMetrics() *Metrics {
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.5},
 		}, []string{"operation"}),
 
+		// --- Confirmation Watchdog ---
+		UserConfirmationTimeoutsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "orch_user_confirmation_timeouts_total",
+			Help: "Total user confirmation timeouts triggered by the watchdog.",
+		}),
+
 		registry: reg,
 	}
 
@@ -223,6 +232,7 @@ func NewMetrics() *Metrics {
 		m.AuthFailuresTotal,
 		m.RedisOperationsTotal,
 		m.RedisOperationDuration,
+		m.UserConfirmationTimeoutsTotal,
 	)
 
 	return m

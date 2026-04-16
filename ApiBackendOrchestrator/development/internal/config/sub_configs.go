@@ -260,6 +260,7 @@ func loadCORSConfig() CORSConfig {
 type TypeConfirmationConfig struct {
 	ConfirmationTimeout   time.Duration // ORCH_USER_CONFIRMATION_TIMEOUT (default: 24h)
 	IdempotencyTTL        time.Duration // ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL (default: 60s)
+	WatchdogScanInterval  time.Duration // ORCH_WATCHDOG_SCAN_INTERVAL (default: 1m)
 	ContractTypeWhitelist []string      // ORCH_CONTRACT_TYPE_WHITELIST (default: static v1 list)
 }
 
@@ -274,6 +275,7 @@ func loadTypeConfirmationConfig() TypeConfirmationConfig {
 	return TypeConfirmationConfig{
 		ConfirmationTimeout:   envDuration("ORCH_USER_CONFIRMATION_TIMEOUT", 24*time.Hour),
 		IdempotencyTTL:        envDuration("ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL", 60*time.Second),
+		WatchdogScanInterval:  envDuration("ORCH_WATCHDOG_SCAN_INTERVAL", 1*time.Minute),
 		ContractTypeWhitelist: whitelist,
 	}
 }

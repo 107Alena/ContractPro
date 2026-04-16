@@ -1669,3 +1669,45 @@ happy path, no auth (401), invalid contract_id/version_id (400), invalid JSON (4
 - **ORCH-TASK-042** (medium, depends on 039 ✓): Watchdog (Redis Keyspace Notifications)
 - **ORCH-TASK-043** (high, depends on 040 ✓ + 041 ✓ + 042): E2E integration test (blocked by 042)
 - **ORCH-TASK-049** (high, depends on 048 ✓): Миграция handlers на structured validation errors
+
+## ORCH-TASK-042: Watchdog для AWAITING_USER_INPUT timeout (DONE, 2026-04-16)
+
+### План реализации
+1. Изучить существующий код: statustracker (confirmation.go, status.go, tracker.go), config, app.go wiring, kvstore Subscribe/PSubscribe, metrics
+2. Добавить ORCH_WATCHDOG_SCAN_INTERVAL в TypeConfirmationConfig (default 1m)
+3. Добавить Prometheus counter orch_user_confirmation_timeouts_total в metrics.go
+4. Создать пакет internal/application/confirmwatchdog: Watchdog struct с dual strategy (keyspace notifications + SCAN fallback)
+5. Wiring в app.go: создание после tracker, start после consumer, shutdown phase 3b
+6. Написать 22 unit-теста
+7. Code review (code-reviewer subagent) → применить исправления
+8. Полный прогон: go test -race -count=1 ./..., go vet, make build/test/lint
+
+### Что реализовано
+- **config/sub_configs.go**: TypeConfirmationConfig расширен полем WatchdogScanInterval (ORCH_WATCHDOG_SCAN_INTERVAL, default 1m); валидация > 0 добавлена в config.go
+- **metrics/metrics.go**: UserConfirmationTimeoutsTotal — prometheus.Counter (orch_user_confirmation_timeouts_total), зарегистрирован в dedicated registry; metrics_test.go обновлён (21 метрика)
+- **confirmwatchdog/watchdog.go**: Watchdog struct с consumer-side интерфейсами (StatusTracker, KVStore, RedisSubscriber). Dual strategy:
+  - **Preferred**: Redis Keyspace Notifications — CONFIG SET notify-keyspace-events Ex → PSubscribe __keyevent@0__:expired → фильтр confirmation:wait:* → handleExpiredKey. Auto-reconnect loop при потере подписки
+  - **Fallback**: периодический SCAN (ORCH_WATCHDOG_SCAN_INTERVAL) при недоступности CONFIG SET (AWS ElastiCache, ACL restrictions)
+  - **handleExpiredKey**: prefix filter → extract verID → read confirmation:meta:{verID} from KV → validate meta (orgID, docID not empty) → call StatusTracker.TimeoutAwaitingInput → increment Prometheus counter. ErrInvalidTransition → graceful skip (INFO log, no metric). Corrupt/missing meta → WARN + skip
+  - **Lifecycle**: Start() idempotent (sync.Once), Shutdown() cancels context + waits WaitGroup
+- **app.go**: Watchdog created step 10b (after tracker.WithConfirmation), uses *redis.Client (RawRedis type assertion for PSubscribe). Started in Start() after consumer. Shutdown phase 3b (after HTTP drain, before broker close)
+
+### Тесты (22)
+- handleExpiredKey: happy path, non-confirmation keys, empty version_id, meta not found, meta read error, corrupt meta, missing identity fields, invalid transition graceful skip, tracker error, metrics incremented (×2), metrics not incremented on error/invalid transition
+- ConfigSet: success, failure (fallback to SCAN)
+- SCAN: finds keys, scan error, empty results
+- Lifecycle: graceful shutdown, idempotent start, scan loop processes keys
+- Concurrency: 10 goroutines
+- Interface compliance, component logger
+
+### Ключевые решения
+- **Dual strategy**: keyspace notifications + SCAN — notifications для low-latency (immediate), SCAN для reliability (catch-all). При недоступности CONFIG SET (managed Redis) автоматически используется SCAN
+- **RedisSubscriber interface**: consumer-side interface (ConfigSet, PSubscribe, Scan) — позволяет mock в тестах, production реализация через *redis.Client
+- **Auto-reconnect**: keyspace watcher автоматически переподключается при потере подписки (5s backoff)
+- **Shutdown ordering**: phase 3b (после HTTP drain, перед broker close) — watchdog зависит от Redis, поэтому должен завершиться до закрытия Redis
+- **Race с ConfirmType**: StatusTracker.TimeoutAwaitingInput использует Lua-скрипт с атомарной проверкой AWAITING_USER_INPUT, watchdog получает ErrInvalidTransition и gracefully skips
+
+### Следующие задачи (unblocked)
+- **ORCH-TASK-043** (high, depends on 040 ✓ + 041 ✓ + 042 ✓): E2E integration test — **теперь разблокирована!**
+- **ORCH-TASK-049** (high, depends on 048 ✓): Миграция handlers на structured validation errors
+- **ORCH-TASK-050** (high, no deps): Permissions Resolver

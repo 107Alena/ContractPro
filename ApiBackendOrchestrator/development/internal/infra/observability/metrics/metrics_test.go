@@ -1003,6 +1003,7 @@ func TestMetricCount(t *testing.T) {
 	m.AuthFailuresTotal.WithLabelValues("expired").Inc()
 	m.RedisOperationsTotal.WithLabelValues("get", "success").Inc()
 	m.RedisOperationDuration.WithLabelValues("get").Observe(0.001)
+	m.UserConfirmationTimeoutsTotal.Inc()
 
 	mfs, err := m.Registry().Gather()
 	if err != nil {
@@ -1016,9 +1017,9 @@ func TestMetricCount(t *testing.T) {
 		}
 	}
 
-	// 20 orch_* metrics defined in the architecture spec.
-	if orchCount != 20 {
-		t.Errorf("expected 20 orch_* metrics, got %d", orchCount)
+	// 21 orch_* metrics (20 from architecture spec + 1 watchdog counter).
+	if orchCount != 21 {
+		t.Errorf("expected 21 orch_* metrics, got %d", orchCount)
 	}
 }
 

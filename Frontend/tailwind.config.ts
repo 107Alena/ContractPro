@@ -65,6 +65,12 @@ export default {
       ringOffsetWidth: {
         DEFAULT: 'var(--focus-ring-offset)',
       },
+      zIndex: {
+        modal: 'var(--z-modal)',
+        popover: 'var(--z-popover)',
+        tooltip: 'var(--z-tooltip)',
+        toast: 'var(--z-toast)',
+      },
     },
   },
   plugins: [],

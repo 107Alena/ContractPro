@@ -45,4 +45,12 @@
   --focus-ring-color: rgba(245, 94, 18, 0.6); /* brand-500 @ 60% */
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
+
+  /* Z-index overlays (FE-TASK-020). Порядок: modal < popover/tooltip < toast.
+   * Toast имеет наивысший приоритет как «глобальное уведомление», не может
+   * быть скрыт модалкой. */
+  --z-modal: 1000;
+  --z-popover: 1100;
+  --z-tooltip: 1100;
+  --z-toast: 1200;
 }

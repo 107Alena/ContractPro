@@ -789,7 +789,21 @@
       "dependencies": [
         "FE-TASK-019"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-17",
+        "summary": "4 overlay-примитива на Radix 1.x + Tailwind + CVA. Modal (compound Dialog c dismissOnOverlay/disableEscape), Toast (headless Zustand store + Toaster + useToast, FIFO-5, warn=warning alias, sticky без автоскрытия), Tooltip (TooltipProvider local+global + SimpleTooltip), Popover (compound). Z-index tokens (--z-modal/popover/tooltip/toast) в tokens.css + tailwind. 4 stories (Modal/Toast/Tooltip/Popover) с Default/sizes/sides/defaultOpen/keyboard-play. 82/82 тестов (+21 новых: toast-store 10 + toaster 4 + modal 4 + popover 4 + tooltip 3). Lint/typecheck/prettier/build/build-storybook зелёные. Makefile отсутствует (N/A).",
+        "files": [
+          "Frontend/src/shared/ui/modal/{modal.tsx,modal.test.ts,modal.stories.tsx,index.ts}",
+          "Frontend/src/shared/ui/toast/{toast-store.ts,toast-store.test.ts,toaster.tsx,toaster.test.ts,use-toast.ts,toast.stories.tsx,index.ts}",
+          "Frontend/src/shared/ui/tooltip/{tooltip.tsx,tooltip.test.ts,tooltip.stories.tsx,index.ts}",
+          "Frontend/src/shared/ui/popover/{popover.tsx,popover.test.ts,popover.stories.tsx,index.ts}",
+          "Frontend/src/shared/ui/index.ts (barrel update)",
+          "Frontend/src/app/styles/tokens.css (+z-index tokens)",
+          "Frontend/tailwind.config.ts (+zIndex theme extend)",
+          "Frontend/package.json (+4 radix deps)"
+        ]
+      }
     },
     {
       "id": "FE-TASK-021",

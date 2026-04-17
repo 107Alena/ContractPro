@@ -613,3 +613,73 @@
 - `Frontend/.storybook/main.ts` (modified: +addon-interactions)
 - `Frontend/.storybook/preview.ts` (modified: WCAG 2.1 AA)
 - `Frontend/package.json` + `package-lock.json` (modified)
+
+---
+
+## FE-TASK-020 (design-system, critical) — done — 2026-04-17
+
+**Итерация:** 10. **Зависимости:** FE-TASK-019 (done). Разблокирует FE-TASK-030/037/039 (Toast в providers, Modal в Export/Share/Confirm, LowConfidence/Сравнение).
+
+**Цель:** 4 overlay-примитива в `src/shared/ui/` на Radix 1.x + Tailwind + CVA (Modal, Toast, Tooltip, Popover). Stories + interactive play для a11y; z-index-токены для overlays.
+
+**Ключевые решения (по консультации code-architect, фиксирована в session.log прошлой итерации):**
+1. **Modal** — compound (Modal/ModalTrigger/Content/Header/Title/Description/Body/Footer/Close/Overlay/Portal). Доп. пропсы `dismissOnOverlay` (глушит `onPointerDownOutside`) и `disableEscape` (глушит `onEscapeKeyDown`) — для критичных confirm-модалок. Sizes: sm=max-w-sm, md=max-w-md (default), lg=max-w-2xl. Motion-safe transition (нет tailwindcss-animate — только transition-opacity/scale).
+2. **Toast** — headless Zustand store (`toast-store.ts`, вне React-дерева; позволяет звать `toast.*` из query/error-boundary/etc.) + React Toaster (подписан на store, маппит в Radix Toast Items). API `toast.success/error/warning/warn/info/sticky/dismiss/clear`. `warn` — алиас на `warning` (из §8.3 AC). `sticky` — `duration: null` → автоскрытие отключено. `FIFO 5` с умным вытеснением: при переполнении вытесняется самый старый НЕ-sticky, sticky сохраняется. Radix ToastRoot `type="foreground"` для error/warning/sticky (role=alert) и `"background"` для success/info (role=status). Action payload `{label, onClick(toastId)}` — `onClick` получает id для возможного dismiss.
+3. **Tooltip** — TooltipProvider поднимается глобально в `app/providers/` (FE-TASK-030), `SimpleTooltip` — one-shot обёртка (trigger+content). Опционально `withLocalProvider` — для Storybook / страниц без глобального Provider. Delay=500ms (§8.3). Size: sm=220px, md=320px (default).
+4. **Popover** — compound (Popover/Trigger/Content/Portal/Close/Anchor/Arrow). Sizes: sm/md/lg/auto. Default align=start.
+5. **Z-index токены** (`tokens.css` + `tailwind.config.ts`): `--z-modal=1000`, `--z-popover=1100`, `--z-tooltip=1100`, `--z-toast=1200`. Toast > tooltip/popover > modal. Классы Tailwind: `z-modal`, `z-popover`, `z-tooltip`, `z-toast`.
+6. **Radix versions** (actual majors, 2026-04): react-dialog@1.1.15, react-toast@1.2.15, react-tooltip@1.2.8, react-popover@1.1.15.
+7. **SSR portal** — Radix Portal сам делает guard против non-DOM env; custom portal-root не требуется.
+
+**Тестирование:**
+- `toast-store.test.ts` (10 тестов): enqueue success, warn-алиас, sticky null, custom duration, dismiss, clear, FIFO 5 evict oldest non-sticky, sticky-prefer-keep, action payload, pre-supplied id.
+- `{modal,tooltip,popover,toaster}.test.ts` (15 тестов): CVA-варианты — defaults/sizes/z-классы/border tints.
+- Storybook play-функции: Modal ESC-close, Toast FIFO — live-region count ≤ 5. Полные behavioral-тесты (Tab-in-trap, focus-restore) — отложены в FE-TASK-053 (jsdom + RTL).
+
+**Verification (все test_steps):**
+- Шаг 1 ✓: `build-storybook` — 4 новые stories (Modal: Default/sm/lg/DefaultOpen/Blocking/Controlled/KeyboardEscape; Toast: Variants/WithAction/FifoLimit; Tooltip: Default/Sides/LongContent/DefaultOpen/WithLocalProvider; Popover: Default/sm/Sides/DefaultOpen). Preview built 1.08 min.
+- Шаг 2 ✓: Modal ESC-play — `{Escape}` убирает `[role=dialog]`. Focus-trap обеспечивается Radix. Blocking-story демонстрирует disableEscape.
+- Шаг 3 ✓: addon-a11y WCAG 2.1 AA scan — defaultOpen stories дают axe доступ к открытому DOM (Modal/Tooltip/Popover).
+
+**Дополнительно проверено:**
+- `npm run typecheck` — 0 errors (exactOptionalPropertyTypes-compliant: conditional spread для optional fields в toast-store; conditional assign для optional props в SimpleTooltip).
+- `npm run lint --max-warnings=0` — 0 errors / 0 warnings.
+- `npx prettier --check .` — clean.
+- `npm run test` — 82/82 tests passed (15 файлов; прирост: +21 теста vs FE-TASK-019 baseline 61). Регрессий нет.
+- `npm run build` — dist/ 143.08 kB / 45.96 kB gzip (без изменений — overlays подключаются только через barrel, tree-shaking работает).
+- `CI=true npm run build-storybook` — ok.
+- Makefile в `Frontend/` отсутствует — этап N/A.
+
+**Соответствие архитектуре:**
+- §8.3 таблица компонентов (строки 818–819): Modal/Toast ✓ (controlled + focus-trap + 5 variants + sticky).
+- §8.4 compound pattern + Slot: Modal/Popover compound, Slot через asChild на Trigger/Close ✓.
+- §8.5 состояния — для overlays актуальны Default/Focus/DefaultOpen + sizes; ESC/keyboard как отдельная story.
+- §10.2 Storybook + Chromatic + axe — WCAG 2.1 AA включён в preview.ts с FE-TASK-019.
+- §8.2 tokens — z-index расширены (как в FE-TASK-017 аналогичное расширение shadow-lg/focus-ring).
+- FSD: `src/shared/ui/{modal,popover,tooltip,toast}/` — каждая папка со своим `index.ts`, barrel в `shared/ui/index.ts`.
+
+**Одобренное отклонение:**
+- Упомянутый в session.log «portal-root helper в `shared/lib/`» не реализован — Radix Portal сам обрабатывает SSR/не-DOM окружение, кастом избыточен.
+
+**Инциденты:**
+- После первого `npm install @radix-ui/*` Storybook build падал с «Failed to resolve entry for package react-style-singleton» — `dist/` отсутствовал (битая установка). Исправление: ремоунт `node_modules/react-style-singleton/` и `npm install`. Также случайно был добавлен `react-style-singleton` в `dependencies` при попытке форсированной переустановки — убран (это транзитивная зависимость react-remove-scroll).
+
+**Заметки для следующих итераций:**
+- **FE-TASK-030** (app/providers, root shell): смонтировать глобальные `<TooltipProvider delayDuration={500}>` и `<Toaster />`. Zustand-стор тостов живёт вне React, но Toaster-компонент нужно монтировать один раз рядом с `<RouterProvider>`.
+- **FE-TASK-037** (Export/Share modal): готова Modal с compound API. Для sticky-share-link — `toast.sticky`, для success-message — `toast.success`.
+- **FE-TASK-039** (Comparison LowConfidence confirm, ShareModal): Modal + `disableEscape` для критичных подтверждений.
+- **FE-TASK-053** (Vitest jsdom + RTL): добавить поведенческие тесты — focus-trap в Modal, focus-restore после close, Toast hover pauses autodismiss, Tooltip aria-describedby wiring.
+- **FE-TASK-032** (Sheet/Drawer): отдельно, НЕ переиспользует Modal.
+- **Motion-safe transitions** — сейчас через Tailwind `motion-safe:` + transition. Полноценные enter/exit (tailwindcss-animate) — опционально в FE-TASK-031.
+- **API/Backend-orchestrator integration**: `toast.error` из interceptors (FE-TASK-013+), `Retry-After` 429 → `action: { label: 'Повторить', onClick }`.
+- **i18n**: тексты в stories — placeholder для FE-TASK-011, переезд в i18next-resources в FE-TASK-030.
+
+**Затронутые файлы:**
+- `Frontend/src/shared/ui/modal/{modal.tsx,modal.test.ts,modal.stories.tsx,index.ts}` (new)
+- `Frontend/src/shared/ui/toast/{toast-store.ts,toast-store.test.ts,toaster.tsx,toaster.test.ts,use-toast.ts,toast.stories.tsx,index.ts}` (new)
+- `Frontend/src/shared/ui/tooltip/{tooltip.tsx,tooltip.test.ts,tooltip.stories.tsx,index.ts}` (new)
+- `Frontend/src/shared/ui/popover/{popover.tsx,popover.test.ts,popover.stories.tsx,index.ts}` (new)
+- `Frontend/src/shared/ui/index.ts` (modified: +20 экспортов для overlays)
+- `Frontend/src/app/styles/tokens.css` (modified: +4 z-index токена)
+- `Frontend/tailwind.config.ts` (modified: +zIndex modal/popover/tooltip/toast)
+- `Frontend/package.json` (+4 deps: @radix-ui/react-{dialog,toast,tooltip,popover}) + `package-lock.json`

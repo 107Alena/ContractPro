@@ -990,7 +990,56 @@
       "dependencies": [
         "FE-TASK-019"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-17",
+        "files_created": [
+          "Frontend/src/widgets/processing-progress/step-model.ts — PROCESSING_STEPS (6 шагов: UPLOADED→QUEUED→PROCESSING→ANALYZING→GENERATING_REPORTS→READY), mapStatusToView(status, errorAtStep?): ProcessingView, stepStateAt(), helpers. Лейблы из backend high-architecture §5.2.",
+          "Frontend/src/widgets/processing-progress/processing-progress.tsx — виджет с role=region, progressbar (aria-valuemin/max/now/valuetext/busy), ol со списком из 6 Step'ов (React.memo). CVA через токены (brand/warning/danger/success). Ранний return для REJECTED (pipeline не стартовал). Slot awaitingAction для AWAITING_USER_INPUT.",
+          "Frontend/src/widgets/processing-progress/processing-progress.test.tsx — 24 теста (jsdom docblock): mapStatusToView на все 10 статусов, stepStateAt, aria-атрибуты progressbar, AWAITING CTA slot, REJECTED early-return, aria-current=step, FAILED+errorAtStep override.",
+          "Frontend/src/widgets/processing-progress/processing-progress.stories.tsx — 13 stories (все 10 статусов + AwaitingUserInputWithAction + FailedOnReports + LongLabelOverflow).",
+          "Frontend/src/widgets/processing-progress/index.ts — barrel: ProcessingProgress, ProcessingProgressProps + re-export step-model типов (ProcessingStepKey/ProcessingView/StepState/StepTone/UserProcessingStatus) + mapStatusToView для потребителей."
+        ],
+        "files_modified": [],
+        "deviations": [
+          "Storybook stories: 13 вместо 10 (+AwaitingUserInputWithAction с реальной Button — показывает slot-CTA; +FailedOnReports — демонстрирует errorAtStep override; +LongLabelOverflow — edge-case узкого контейнера). По рекомендации code-architect (RTL edge-cases для длинных русских лейблов).",
+          "awaitingAction — slot-проп ReactNode (по совету code-architect), не callback 'onConfirmType'. Причина: AWAITING_USER_INPUT может в будущем потребовать разные CTA (подтвердить сторону, уточнить юрисдикцию, …); slot даёт гибкость без API-breaking migration и полностью покрывает callback-кейсы (consumer рендерит Button снаружи).",
+          "REJECTED — ранний return без progress-bar и без списка шагов (вариант C code-architect). REJECTED — pre-processing валидация (SSRF/MIME/size), семантически ≠ 'pipeline упал на шаге N'. Отдельная error-card честнее UX.",
+          "step-model оставлен локально в widget'e, НЕ поднят в shared/lib или entities/job/model — YAGNI, нет второго потребителя. По совету code-architect: lift в entities/job (не shared/lib — это domain knowledge, не generic util) при появлении второго консьюмера.",
+          "FAILED/PARTIALLY_FAILED дефолт на errorAtStep: FAILED→PROCESSING, PARTIALLY_FAILED→GENERATING_REPORTS (из backend high-architecture §5.2 маппинга). Потребитель (useEventStream из FE-TASK-016) сможет уточнить через props, если event привезёт error_code с указанием фазы.",
+          "Убран tone-override прop (после code-reviewer non-blocker #5, YAGNI footgun) — tone полностью выводится из status. Если потребуется — вернётся с инвариант-тестом."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint --max-warnings=0 — 0 errors / 0 warnings",
+          "npx prettier --check src/widgets/processing-progress/ — clean",
+          "npm run test — 154/154 passed (+24 новых: 8 mapStatusToView + 5 stepStateAt + 11 render/a11y)",
+          "npm run build — dist/ 143.08 kB JS / 45.96 kB gzip (bundle не вырос: widget pulled lazily страницей-потребителем)",
+          "CI=true npm run build-storybook — ok 1.1 min, processing-progress.stories собран",
+          "Makefile в Frontend/ отсутствует — этап N/A (как в FE-TASK-017..022)",
+          "subagents: code-architect (план-валидация: slot-проп + REJECTED ранний return + React.memo + CVA токены + aria-busy + doc на step-model lift); code-reviewer (финал: 'ship, no blockers'; применены 2 из 6 non-blocker'ов — tone-override удалён, опечатка исправлена)"
+        ],
+        "architecture_alignment": [
+          "§8.3 'ProcessingProgress — 10 статусов → progress-bar + список шагов; для AWAITING_USER_INPUT рендерится не как шаг, а как inline-CTA' — соблюдено 1:1 (AWAITING паузит на ANALYZING, CTA рендерится inline внутри awaiting-шага).",
+          "§8.5 'состояния для каждого компонента' — 13 stories покрывают Default/Loading(через current)/Awaiting/Error/Success + edge-cases.",
+          "Backend high-architecture §5.2 (ApiBackendOrchestrator) — все 10 статусов имеют user-friendly RU-лейблы 1:1 с таблицей (Договор загружен / В очереди на обработку / Извлечение текста и структуры / Юридический анализ / Требуется подтверждение типа договора / Формирование отчётов / Результаты готовы / Частично доступно / Ошибка обработки / Файл отклонён).",
+          "§2 FSD — widget импортирует только shared/* (cn + Spinner + openapi types); нет cross-slice импортов.",
+          "§9.3 'Обработка ошибок по типу' — errorMessage с correlation_id через aria-live=polite (не ломает layout, доступно screen reader'у)."
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-016 (useEventStream hook): на SSE event → queryClient.setQueryData(qk.contracts.status) — данные попадают в потребителя ProcessingProgress через useQuery. Для AWAITING_USER_INPUT — подключить через awaitingAction={<Button onClick={() => openLowConfidenceModal(data)}>Подтвердить тип договора</Button>} (см. FE-TASK-037).",
+          "FE-TASK-037 (low-confidence-confirm feature): Modal открывается из useEventStream при AWAITING_USER_INPUT; одновременно ProcessingProgress показывает inline-CTA через awaitingAction. Это дублирование намеренное — §8.3 + Figma 'Результат'/4 состояние.",
+          "FE-TASK-042 (DashboardPage — critical, блокировал FE-TASK-023): LastCheckCard включает ProcessingProgress для последней версии. Bundle-size budget для dashboard-chunk — учесть +~1 КБ gzip.",
+          "FE-TASK-045 (ContractDetailPage) и FE-TASK-046 (ResultPage — critical, блокирован): тот же ProcessingProgress как header-widget. На ResultPage рендерится ТОЛЬКО при status !== 'READY' (иначе скрывается — user видит результаты).",
+          "FE-TASK-024 (RiskBadge + StatusBadge): StatusBadge маппит те же 10 статусов → badge-вариант. Логика пересекается с mapStatusToView — при желании можно извлечь общий helper `getStatusTone()`. Пока (YAGNI) — дубль минимальный (tone-switch на 10 case'ах). При lift step-model в entities/job — StatusBadge тоже перейдёт на тот же источник.",
+          "FE-TASK-024 + FE-TASK-023 параллелят: StatusBadge использовать в таблицах (Documents, Audit), ProcessingProgress — в карточках/headers.",
+          "Code-reviewer non-blocker #1 (percentOf на FAILED/PARTIALLY_FAILED): `PARTIALLY_FAILED → 80%` visualy меньше, чем `ANALYZING → 60%`'s predecessor — семантика 'прогресс остановлен на N шаге' vs 'прогресс достиг N'. Backlog при появлении конкретной UX-претензии.",
+          "Code-reviewer non-blocker #2 (Шаг X из 6 — hardcoded RU): i18n-extraction в FE-TASK-030 (App shell providers) — перенесёт все RU-лейблы в shared/i18n/locales/ru/widgets.json. Текущие строки помечены /* i18n-candidate */ не явно, но семантически очевидны.",
+          "Code-reviewer non-blocker #3 (aria-busy на section, не progressbar): при появлении FE-TASK-053 (Vitest jsdom global + a11y addon Storybook) — снять a11y-baseline, скорректировать при необходимости.",
+          "FE-TASK-053 (Vitest jsdom global): удалить `// @vitest-environment jsdom` docblock из processing-progress.test.tsx.",
+          "При lift step-model в `entities/job/model/processing-status.ts`: widget останется обёрткой, logic переедет в entities; сейчас public-API barrel экспортирует helpers, чтобы будущий переезд не ломал потребителей."
+        ]
+      }
     },
     {
       "id": "FE-TASK-024",

@@ -810,3 +810,73 @@
 - `Frontend/src/shared/ui/file-drop-zone/{file-drop-zone.tsx,file-drop-zone.test.tsx,file-drop-zone.stories.tsx,index.ts}` (new)
 - `Frontend/src/shared/ui/index.ts` (modified: +5 экспортов из ./file-drop-zone)
 - `Frontend/package.json` (+react-dropzone ^14.2.3) + `package-lock.json`
+
+
+---
+
+## FE-TASK-023 — ProcessingProgress widget (2026-04-17)
+
+**Статус:** done
+**Категория:** design-system
+**Приоритет:** high
+**Зависимости:** FE-TASK-019 (done). **Разблокирует:** FE-TASK-042 (DashboardPage — critical), FE-TASK-045 (ContractDetailPage), FE-TASK-046 (ResultPage — critical).
+
+**Что сделано:**
+- `src/widgets/processing-progress/step-model.ts` — `PROCESSING_STEPS` (линейный pipeline из 6 шагов: UPLOADED → QUEUED → PROCESSING → ANALYZING → GENERATING_REPORTS → READY), `mapStatusToView(status, errorAtStep?) → ProcessingView` (currentIndex, tone, message, terminal, percent), `stepStateAt(index, view) → StepState`. Лейблы 1:1 с `ApiBackendOrchestrator/architecture/high-architecture.md §5.2`.
+- `processing-progress.tsx` — виджет: корневой `<section role=region aria-label>`, progressbar (`aria-valuemin/max/now/valuetext/busy`), `<ol>` со списком 6 `Step`'ов (React.memo). CVA-варианты (`progress/awaiting/error/success`) через токены Tailwind (`bg-brand-500`, `border-warning`, `bg-danger`, `bg-success`), без hex. Ранний return для `REJECTED` — pipeline не стартовал (pre-processing), отдельная error-card без progress-bar. Slot-проп `awaitingAction?: ReactNode` для inline-CTA под AWAITING_USER_INPUT-шагом.
+- `processing-progress.test.tsx` — 24 теста (jsdom docblock, RTL): контракт `mapStatusToView` на все 10 статусов, `stepStateAt` на 4 ключевых сценариях, aria-атрибуты progressbar, slot-CTA рендерится только в awaiting-состоянии, REJECTED ранний return, aria-current=step на текущем, FAILED+errorAtStep override.
+- `processing-progress.stories.tsx` — 13 stories: 10 базовых статусов + `AwaitingUserInputWithAction` (slot + реальная Button) + `FailedOnReports` (errorAtStep override) + `LongLabelOverflow` (edge-case узкого контейнера).
+- `index.ts` — barrel: `ProcessingProgress`, `ProcessingProgressProps` + re-export step-model helpers для потребителей.
+
+**План реализации:**
+1. Консультация code-architect — валидация slot-проп вместо callback, REJECTED → ранний return, step-model локально в widget'e (lift при 2-м потребителе), CVA через токены, `aria-busy` для awaiting/progress, React.memo на `Step`.
+2. step-model.ts с pure-функциями — потребители страницы могут посчитать прогресс без рендера виджета.
+3. Компонент с CVA на корень + на progressbar-fill + на step-icon + на step-label. React.memo на Step.
+4. A11y: region-role + progressbar aria-valuemin/max/now/valuetext/busy + aria-current=step + aria-live=polite.
+5. Тесты: сначала step-model (pure), потом рендер через RTL.
+6. 13 stories (базовые 10 + 3 edge-case по совету code-architect).
+7. Финальный code-reviewer: 'ship-it, no blockers'; применены 2 non-blocker'а (убран tone-override prop, опечатка).
+
+**Ключевые решения / отклонения:**
+- **awaitingAction как slot-проп, не callback.** По совету code-architect: §8.3 — AWAITING_USER_INPUT generic-состояние, завтра может быть «подтвердите сторону» / «уточните юрисдикцию». Slot решает 99% callback-кейсов + flexibility (Link, formaction, несколько кнопок).
+- **REJECTED — ранний return.** Вариант C из code-architect. REJECTED — pre-pipeline валидация (SSRF/MIME/size), семантически ≠ 'pipeline упал на шаге N'. FAILED/PARTIALLY_FAILED показывают progress-bar до error-step.
+- **step-model локально в widget'e**, НЕ в shared/lib / entities/job. YAGNI: entities/job пуст, lift создаст контракт, который будем ломать при первом реальном consumer'е. Barrel экспортирует `mapStatusToView` — будущий переезд не сломает потребителей.
+- **FAILED/PARTIALLY_FAILED — дефолт errorAtStep по backend §5.2:** FAILED → PROCESSING, PARTIALLY_FAILED → GENERATING_REPORTS. Потребитель (useEventStream из FE-TASK-016) может передать более точный шаг, если event привезёт error_code с указанием фазы.
+- **13 stories вместо 10 из acceptance.** +`AwaitingUserInputWithAction`, +`FailedOnReports`, +`LongLabelOverflow` (edge-case RTL по совету code-architect).
+- **Убран `tone`-override prop** (после code-reviewer non-blocker #5). Причина: API-footgun — caller мог передать `tone="success"` при `status="FAILED"` и получить зелёный bar на errored view. Tone теперь полностью выводится из status — инвариант сохранён.
+
+**Verifications:**
+- Шаг 1 ✓: `npm run typecheck` — 0 errors.
+- Шаг 2 ✓: `npm run lint --max-warnings=0` — 0 errors / 0 warnings.
+- Шаг 3 ✓: `npx prettier --check .` — clean.
+- Шаг 4 ✓: `npm run test` — **154/154 passed** (+24 новых).
+- Шаг 5 ✓: `npm run build` — dist/ 143.08 kB JS / 45.96 kB gzip (main не вырос).
+- Шаг 6 ✓: `CI=true npm run build-storybook` — ok 1.1 min, 13 stories в Widgets/ProcessingProgress собраны.
+- Makefile в `Frontend/` отсутствует — этап N/A.
+
+**Соответствие архитектуре:**
+- §8.3 ProcessingProgress — «10 статусов → progress-bar + список шагов; для AWAITING_USER_INPUT рендерится не как шаг, а как inline-CTA» — 1:1.
+- §8.5 — 13 stories покрывают Default/Current/Awaiting/Error/Success + edge-case длинных лейблов.
+- backend §5.2 (ApiBackendOrchestrator) — все 10 статусов имеют user-friendly RU-лейблы 1:1 с таблицей маппинга.
+- §2 FSD — widget импортирует только `@/shared/*` (cn + Spinner + openapi types); никаких пересечений с другими widgets / features / pages / app.
+- §9.3 — errorMessage с correlation_id через `aria-live="polite"`.
+- §1451 (чеклист): «✅ Все 10 статусов обработки ↔ ProcessingProgress + SSE-редьюсер» — выполнено (SSE-редьюсер будет в FE-TASK-016).
+
+**Subagents:**
+- **code-architect** (план-валидация): одобрил общий план; 4 ответа на вопросы; 6 подводных камней (aria-busy, CVA-токены, +2 stories, React.memo, barrel, jsdom docblock) — все применены.
+- **code-reviewer** (финал): вердикт 'ship it', 0 blockers. 6 non-blocker'ов: (1) percentOf на error-статусах (backlog), (2) i18n RU-строк (FE-TASK-030), (3) aria-busy на section (минор), (4) readability (минор), (5) tone-override footgun (**применено**), (6) опечатка 'канонічном' (**применено**).
+
+**Заметки для следующих итераций:**
+- **FE-TASK-016** (useEventStream — pending, high): на SSE event → `queryClient.setQueryData(qk.contracts.status)`; ProcessingProgress получит актуальный status через `useQuery`. Для AWAITING_USER_INPUT — `awaitingAction={<Button onClick={() => openLowConfidenceModal(data)}>Подтвердить тип договора</Button>}`.
+- **FE-TASK-037** (low-confidence-confirm): Modal из useEventStream + ProcessingProgress inline-CTA. Дублирование намеренное (Figma «Результат»/4-е состояние + §8.3).
+- **FE-TASK-042** (DashboardPage — critical, был заблокирован FE-TASK-023): LastCheckCard включает ProcessingProgress для последней версии.
+- **FE-TASK-045** (ContractDetailPage — high), **FE-TASK-046** (ResultPage — critical, был заблокирован): тот же ProcessingProgress как header-widget. На ResultPage рендерится ТОЛЬКО при `status !== 'READY'`.
+- **FE-TASK-024** (RiskBadge + StatusBadge — medium): StatusBadge маппит те же 10 статусов. При появлении 3-го потребителя — вынести `getStatusTone()` в shared helper.
+- **FE-TASK-053** (Vitest jsdom global): удалить `// @vitest-environment jsdom` docblock из `processing-progress.test.tsx`.
+- **FE-TASK-030** (App shell): i18next ru-namespace подхватит RU-лейблы. Backlog — `mapStatusToView(status, { t, errorAtStep })` или useTranslation внутри компонента.
+- **Backlog** (code-reviewer non-blocker #1): percent-семантика на error-статусах (`PARTIALLY_FAILED → 80%` vs `ANALYZING → 60%`). Рассмотреть carry «highest reached» в state-manager (useEventStream).
+- **Backlog** (lift step-model): при 2-м потребителе — поднять в `entities/job/model/processing-status.ts`; widget останется тонкой обёрткой.
+
+**Затронутые файлы:**
+- `Frontend/src/widgets/processing-progress/{step-model.ts,processing-progress.tsx,processing-progress.test.tsx,processing-progress.stories.tsx,index.ts}` (new + modified barrel)
+- (никакие shared/ui компоненты не менялись — FE-TASK-020/019 уже экспортируют Button/Spinner)

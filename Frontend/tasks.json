@@ -827,7 +827,58 @@
       "dependencies": [
         "FE-TASK-019"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-17",
+        "summary": "DataTable на @tanstack/react-table ^8.13.0 (compound pattern: DataTable root + DataTableToolbar + DataTableContent (thead+tbody в одной таблице) + DataTablePagination + DataTableViewOptions + DataTableSelectionCheckbox helper + useDataTable hook). Server-mode через manualPagination/manualSorting/manualFiltering с опциональным подключением client row-models (экономия вычислений в server-режиме). Default slots для empty/loading/error + переопределение через props. aria-sort на column-header, aria-live на pagination range, aria-label на prev/next, role=group на view-options. 8 stories (Default/Loading/Empty/Error/WithSorting/WithPagination/WithRowSelection/WithColumnVisibility). 15 новых тестов в jsdom (docblock), суммарно 97/97 green. Bundle main не вырос (DataTable ленится до страницы-потребителя).",
+        "files_created": [
+          "Frontend/src/shared/ui/table/data-table.tsx (≈440 строк, compound + context + default states)",
+          "Frontend/src/shared/ui/table/data-table.test.tsx (15 тестов, jsdom docblock)",
+          "Frontend/src/shared/ui/table/data-table.stories.tsx (8 stories с sample contract data)",
+          "Frontend/src/shared/ui/table/index.ts (barrel)"
+        ],
+        "files_modified": [
+          "Frontend/src/shared/ui/index.ts — +14 именованных экспортов из ./table",
+          "Frontend/package.json — +@tanstack/react-table@^8.13.0",
+          "Frontend/package-lock.json — +2 пакета (@tanstack/react-table, @tanstack/table-core)"
+        ],
+        "deviations": [
+          "Compound API: Head+Body объединены в DataTableContent вместо раздельных <DataTable.Columns/>+<DataTable.Rows/> (§8.4). Причина: thead/tbody должны быть детьми одного <table>-элемента (иначе невалидный HTML); DataTableContent рендерит <table><thead><tbody/></thead></table> как единое целое и читает данные из context. Внешне compound-семантика сохраняется: DataTableToolbar + DataTableContent + DataTablePagination как 3 слота верхнего уровня.",
+          "Context value не мемоизируется (useMemo[table] был бы identity-стабилен между рендерами из-за внутренней react-table оптимизации, что ломало uncontrolled-сортировку — internal state обновляется без смены ссылки на table). Пересоздаём ctxValue на каждый render — React.memo-посредников здесь нет, overhead ничтожен.",
+          "Row-models условно подключаются: manualSorting=true → не подключаем getSortedRowModel, и т.д. для filtering/pagination. Экономит вычисления когда state контролируется сервером.",
+          "Column-visibility реализован через готовый Popover (из FE-TASK-020) + нативный input[type=checkbox] — не заводим shared Checkbox-примитив до отдельной задачи (его нет в §8.3).",
+          "SelectionCheckbox вынесен отдельным helper-компонентом — чтобы потребитель мог собрать selection-колонку любой формы (чекбокс + custom label + disable по row). Не является обязательным — при желании можно использовать нативный <input type=checkbox>.",
+          "jsdom-тесты через `// @vitest-environment jsdom` docblock пофайлово (согласовано с подходом FE-TASK-028). FE-TASK-053 глобализует jsdom в vitest.config.ts."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint --max-warnings=0 — 0 errors, 0 warnings",
+          "npx prettier --check . — All matched files use Prettier code style",
+          "npm run test — 97/97 passed (+15 новых: dataTableVariants 1 + render/states 6 + sorting 3 + pagination 2 + view-options 1 + selection-checkbox 2)",
+          "npm run build — dist/ 143.08 kB JS / 4.48 kB CSS (gzip 45.96 / 18.99 kB raw CSS), без warnings (DataTable не в main)",
+          "npm run build-storybook — storybook-static/ собран; data-table.stories чанк 74.35 kB / 20.51 kB gzip; 0 errors",
+          "Makefile в Frontend/ отсутствует — этап N/A (как в FE-TASK-007/011/017/020/026/028)",
+          "subagents: Explore (research DataTable architecture references: §8.3 зафиксировано, §8.4 compound, §20.5 pin @tanstack/react-table ^8.13.0, существующие примитивы Modal/Popover/Button как референс)"
+        ],
+        "architecture_alignment": [
+          "§8.3 DataTable — реализованы все фичи из таблицы: сортировка, пагинация (server/client), row-selection, empty/loading/error slots, column-visibility",
+          "§8.4 Compound components — DataTable + DataTableToolbar + DataTableContent + DataTablePagination + DataTableViewOptions + DataTableSelectionCheckbox через React Context",
+          "§8.5 States — 8 stories покрывают Default/Hover/Focus (через row hover + Button focus-ring)/Disabled (через pagination)/Loading/Error/Empty",
+          "§10.2 Visual regression — stories готовы для Chromatic-snapshot-ов",
+          "§20.5 pin @tanstack/react-table ^8.13.0 — соблюдён",
+          "§3 FSD — src/shared/ui/table/ как slice внутри shared/ui (horizontal segments)"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-047 (ContractsListPage): потребитель №1 — использовать DataTable с server-mode (manualPagination+manualSorting+manualFiltering), передать columns для Документов (§8.3). Toolbar — SearchInput + FilterChips + DataTableViewOptions.",
+          "FE-TASK-050 (AuditListPage): потребитель №2 — DataTable для AuditRecord с сортировкой по created_at + фильтрами по actor/action/entity.",
+          "FE-TASK-048 (ResultPage — VersionsTimeline): возможно НЕ DataTable, а кастомный timeline — уточнить по Figma; если подойдёт — переиспользовать.",
+          "FE-TASK-046 (ReportsPage): DocumentsTable из §8.6 tablet-layout — таблица превращается в карточки на md. Ответственность — контейнер-страница, DataTable остаётся desktop-оптимизированной.",
+          "FE-TASK-053 (Vitest full setup): jsdom globally → можно удалить docblock `// @vitest-environment jsdom` в data-table.test.tsx.",
+          "FE-TASK-025 (прочие shared/ui компоненты: Pagination): у нас pagination встроен в DataTable. Отдельный Pagination-примитив из §8.3 можно сделать поверх тех же low-level кнопок для страниц вне таблиц.",
+          "Рекомендация для Sprint-backlog: TanStack Virtual из §20.5 (@tanstack/react-virtual) ещё не установлен — нужен для виртуализации больших таблиц (Audit на 10k+ строк); не требуется до конкретной perf-задачи, но стоит завести тикет.",
+          "Рекомендация Refactor: при появлении shared/ui/checkbox (будет в FE-TASK-025 или отдельной) заменить нативный input[type=checkbox] в DataTableViewOptions и DataTableSelectionCheckbox на общий примитив."
+        ]
+      }
     },
     {
       "id": "FE-TASK-022",

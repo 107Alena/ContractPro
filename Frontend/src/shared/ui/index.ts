@@ -32,6 +32,21 @@ export {
 } from './popover';
 export { Spinner, type SpinnerProps, spinnerVariants } from './spinner';
 export {
+  DataTable,
+  DataTableContent,
+  type DataTableContentProps,
+  DataTablePagination,
+  type DataTablePaginationProps,
+  type DataTableProps,
+  DataTableSelectionCheckbox,
+  type DataTableSelectionCheckboxProps,
+  DataTableToolbar,
+  dataTableVariants,
+  DataTableViewOptions,
+  type DataTableViewOptionsProps,
+  useDataTable,
+} from './table';
+export {
   DEFAULT_TOAST_DURATION,
   toast,
   TOAST_LIMIT,

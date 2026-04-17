@@ -683,3 +683,56 @@
 - `Frontend/src/app/styles/tokens.css` (modified: +4 z-index токена)
 - `Frontend/tailwind.config.ts` (modified: +zIndex modal/popover/tooltip/toast)
 - `Frontend/package.json` (+4 deps: @radix-ui/react-{dialog,toast,tooltip,popover}) + `package-lock.json`
+
+---
+
+## FE-TASK-021 — DataTable на TanStack Table 8 (2026-04-17)
+
+**Итог:** shared-примитив `DataTable` реализован в `src/shared/ui/table/` на `@tanstack/react-table ^8.13.0` (§20.5). Compound API через React Context, оба режима (server/client), 8 Storybook stories, 15 новых тестов (97/97 суммарно).
+
+**План реализации:**
+1. Установить `@tanstack/react-table ^8.13.0` (§20.5 pin).
+2. Спроектировать compound через React Context: root `<DataTable>` + subcomponents `<DataTableToolbar>`, `<DataTableContent>` (объединённые thead+tbody в одном `<table>`), `<DataTablePagination>`, `<DataTableViewOptions>`, `<DataTableSelectionCheckbox>` (helper) + `useDataTable<T>()` hook.
+3. Server-mode: `manualPagination`/`manualSorting`/`manualFiltering` + условное подключение client row-models (экономия CPU когда state контролируется сервером).
+4. Default slots для empty/loading/error + переопределение через props.
+5. A11y: aria-sort на header, aria-live на pagination-range, aria-label на prev/next, role=group на view-options, нативный `indeterminate` через ref.
+6. Тесты (jsdom docblock, как в FE-TASK-028): рендер заголовков, empty/loading/error states, context throws без `<DataTable>`, client-side sorting, server-mode sorting callback, aria-sort transitions, pagination callbacks, page-size change, view-options, selection checkbox with indeterminate.
+7. Stories: Default, Loading, Empty, Error (переименован в `ErrorState` — name Error конфликтует с глобальным `Error` в TS story-typings), WithSorting, WithPagination (server-mode с эмуляцией backend-slice), WithRowSelection, WithColumnVisibility.
+8. Barrel + shared/ui re-exports.
+
+**Ключевые решения:**
+- **Head+Body в одном `DataTableContent`**, а не раздельные `<Columns>`/`<Rows>` из §8.4: thead/tbody должны быть детьми одного `<table>` (валидный HTML). Compound-семантика сохраняется — 3 слота верхнего уровня: Toolbar → Content → Pagination.
+- **ctxValue без useMemo.** Попытка мемоизации по `table` (identity-стабильной между ре-рендерами) ломала uncontrolled-сортировку: TanStack обновляет internal state без смены ссылки на table → `useMemo[table]` не пересчитывает ctxValue → подписчики не видят новый `getRowModel()`. Пересоздаём ctxValue на каждый render — overhead ничтожен (context-provider единственный).
+- **Server-mode с условными row-models.** `manualSorting=true` не подключает `getSortedRowModel()`, аналогично для filter/pagination — экономит cycles.
+- **SelectionCheckbox как самостоятельный helper.** Не встроен в DataTable — позволяет собрать selection-колонку любой формы; indeterminate пробрасывается через ref+useEffect (DOM-атрибут не декларативный).
+- **Column-visibility через существующий Popover из FE-TASK-020** + нативный `<input type=checkbox>` (shared Checkbox-примитива пока нет в §8.3).
+
+**Verifications:**
+- `npm run typecheck` → 0 errors
+- `npm run lint --max-warnings=0` → 0 / 0
+- `npx prettier --check .` → clean
+- `npm run test` → **97/97 passed** (+15 новых)
+- `npm run build` → 143.08 KB / 45.96 KB gzip (main не вырос — lazy load до страницы-потребителя)
+- `npm run build-storybook` → ok, `data-table.stories` чанк 74.35 KB / 20.51 KB gzip
+- Makefile в `Frontend/` отсутствует — этап N/A
+
+**Архитектура:**
+- §8.3 DataTable — 1:1 по списку фич (sort/pagination/row-selection/empty/loading/error/column-visibility)
+- §8.4 Compound pattern — реализован через Context
+- §8.5 States — 8 stories закрывают Default/Hover(row+button)/Focus(ring)/Disabled(pagination)/Loading/Error/Empty
+- §10.2 Visual regression — stories для Chromatic готовы
+- §20.5 pin @tanstack/react-table ^8.13.0 — соблюдён
+
+**Заметки для следующих итераций:**
+- **FE-TASK-047** (ContractsListPage — потребитель №1): `manualPagination+manualSorting+manualFiltering`, колонки Документов, Toolbar = SearchInput + FilterChips + ViewOptions.
+- **FE-TASK-050** (AuditListPage — потребитель №2): сортировка по created_at + фильтры actor/action/entity.
+- **FE-TASK-046** (ReportsPage, tablet-layout §8.6): таблица-в-карточки на `md` — отдельная обёртка, DataTable остаётся desktop.
+- **FE-TASK-053** (Vitest jsdom global): удалить `// @vitest-environment jsdom` docblock из `data-table.test.tsx`.
+- **FE-TASK-025** (прочие shared/ui): pagination встроен в DataTable; отдельный `Pagination`-примитив из §8.3 можно построить поверх тех же low-level кнопок для non-table страниц.
+- **Sprint backlog**: `@tanstack/react-virtual ^3.5.0` из §20.5 ещё не установлен — нужен для виртуализации Audit (10k+ строк); завести тикет до появления perf-требования.
+- **Refactor**: при появлении shared/ui/checkbox заменить нативный `<input type=checkbox>` в ViewOptions и SelectionCheckbox на общий примитив.
+
+**Затронутые файлы:**
+- `Frontend/src/shared/ui/table/{data-table.tsx,data-table.test.tsx,data-table.stories.tsx,index.ts}` (new)
+- `Frontend/src/shared/ui/index.ts` (modified: +14 экспортов из ./table)
+- `Frontend/package.json` (+@tanstack/react-table ^8.13.0) + `package-lock.json`

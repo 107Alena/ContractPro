@@ -1176,7 +1176,58 @@
         "FE-TASK-026",
         "FE-TASK-012"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-17",
+        "files_created": [
+          "Frontend/src/processes/auth-flow/refresh-token-storage.ts — sessionStorage + XOR+base64 obfuscation, API: getRefreshToken/setRefreshToken/clearRefreshToken. SSR-safe (typeof window !== 'undefined' guards). Комментарий явно помечает, что это obfuscation, не защита (ADR-FE-03 fallback, миграция на HttpOnly cookie — §18).",
+          "Frontend/src/processes/auth-flow/refresh-token-storage.test.ts — 6 unit-тестов (@vitest-environment jsdom): roundtrip, пустое хранилище, obfuscation-проверка (raw ≠ plain), clear, повреждённые данные → null, перезапись.",
+          "Frontend/src/processes/auth-flow/actions.ts — login(credentials)/doRefresh()/logout()/softLogout() + setNavigator(fn) + __setHttpForTests(instance). login: POST /auth/login → setAccess + setRefreshToken → GET /users/me → setUser. doRefresh: POST /auth/refresh с refresh_token из storage, rotate refresh при наличии, setAccess; при failure → softLogout + throw AUTH_REFRESH_FAILED. softLogout: clearClientSession (sessionStore.clear + clearRefreshToken + queryClient.clear) + sticky-toast 'Сессия завершена' + redirect. logout: best-effort POST /auth/logout → cleanup + redirect (без sticky-toast).",
+          "Frontend/src/processes/auth-flow/actions.test.ts — 10 integration-тестов (MSW + createHttpClient('http://orch.test/api/v1') с adapter='http' для работы в jsdom): happy login, 401 INVALID_CREDENTIALS, doRefresh happy/без rt/401, shared-promise race (5 параллельных 401 → 1 refresh), softLogout cleanup, logout happy/500-fallback/без rt.",
+          "Frontend/src/processes/auth-flow/timer.ts — silent-refresh timer (§5.3). startSilentRefreshTimer() подписывается на sessionStore, scheduleFor(tokenExpiry) ставит setTimeout на (tokenExpiry - REFRESH_LEAD_MS - now); при delay<=0 — immediate trigger. Идемпотентна. stopSilentRefreshTimer() для teardown.",
+          "Frontend/src/processes/auth-flow/timer.test.ts — 7 unit-тестов (@vitest-environment jsdom, vi.hoisted для mock'а doRefresh): без токена не планирует, ровно 840s до refresh при expiresIn=900, <60s → immediate, reschedule при setAccess, clear отменяет, stop отписывается, идемпотентность двойного start.",
+          "Frontend/src/processes/auth-flow/tab-resume.ts — visibilitychange listener (§5.7). При visibilityState='visible' если tokenExpiry-Date.now() <= REFRESH_LEAD_MS → doRefresh. Идемпотентная регистрация, игнорит unauthenticated.",
+          "Frontend/src/processes/auth-flow/tab-resume.test.ts — 6 unit-тестов: resume просроченного → refresh, resume свежего → нет refresh, hidden не триггерит, без сессии noop, unregister отписывается, идемпотентность повторного register.",
+          "Frontend/src/processes/auth-flow/setup.ts — initAuthFlow() = setRefreshHandler(doRefresh) + startSilentRefreshTimer + registerTabResume; teardownAuthFlow() для HMR/тестов. re-export setNavigator.",
+          "Frontend/src/processes/auth-flow/constants.ts — REFRESH_LEAD_MS = 60_000 (вынесено после code-review — исключает дубль между timer.ts и tab-resume.ts).",
+          "Frontend/src/processes/auth-flow/index.ts — barrel: login/logout/doRefresh/LoginCredentials + initAuthFlow/setNavigator/teardownAuthFlow. softLogout намеренно не экспортирован (internal-only, вызывается только из doRefresh)."
+        ],
+        "files_modified": [
+          "Frontend/src/main.tsx — + initAuthFlow() после initSentry() до createRoot. Комментарий фиксирует: React Router data-loaders синхронны, первый 401 должен попасть в shared-promise, не в неподписанный interceptor."
+        ],
+        "deviations": [
+          "setNavigator — DI-сеттер для React Router: в v1 initAuthFlow устанавливает всё остальное, но fallback на window.location.assign('/login') + console.warn остаётся default'ом. FE-TASK-???? (LoginPage + auth-layout) зарегистрирует навигатор через useNavigate внутри Router-контекста.",
+          "MSW + jsdom + axios: дефолтный XMLHttpRequest-adapter НЕ перехватывается MSW node-adapter'ом. Решение — в actions.test.ts создаётся отдельный createHttpClient(BASE) с adapter='http', инжектируется через __setHttpForTests(). Продакшн shared `http` не трогается. Документировано в actions.ts (комментарий выше module-level httpInstance).",
+          "Два слоя shared-promise формально существуют (client.ts refreshInFlight + actions.ts через одну функцию doRefresh), но фактически координируются: refreshHandler() внутри client.ts ВСЕГДА = doRefresh (регистрируется в setup.ts). Timer вызывает doRefresh напрямую, минуя client; в этой ветке второго promise'а нет, race с 401-тиком из client'а блокируется его refreshInFlight'ом. Подтверждено code-architect.",
+          "XOR+base64 явно помечен как obfuscation (защита от casual-inspection в DevTools), не как security. XSS против sessionStorage остаётся открытым вектором — миграция на HttpOnly cookie в §18 backlog."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint — 0 errors, 0 warnings (--max-warnings=0)",
+          "npm run test — 296/296 passed (было 267 + новых 29: 6 storage, 10 actions, 7 timer, 6 tab-resume). Duration 3.2s",
+          "npm run build — dist/ 622.09 kB JS / 20.66 kB CSS (gzip 199.48 / 4.72). Vite warning о 500kB-пороге игнорируем до FE-TASK-050 (code-splitting).",
+          "Makefile отсутствует в Frontend/ — этап N/A (как в FE-TASK-007/011/012/013/014/017/026/030).",
+          "subagents: code-architect (дизайн: storage в processes/, один inFlight в client.ts, init в main.tsx до createRoot, default window.location.assign ок); code-reviewer (финал: ship-it; blocker'ы исправлены — shadow `navigator`→`navigateFn`, вынесена REFRESH_LEAD_MS в constants.ts, softLogout сужен из public API)."
+        ],
+        "architecture_alignment": [
+          "§5.1 flow — login→setAccess→GET /users/me→setUser (actions.ts:login); logout→clearClientSession→redirect (actions.ts:logout): ✓",
+          "§5.2 token storage — access in-memory Zustand, refresh в sessionStorage+obfuscation (ADR-FE-03 fallback): ✓",
+          "§5.3 silent-refresh timer за 60s до exp (REFRESH_LEAD_MS в constants.ts; timer.ts:scheduleFor): ✓",
+          "§5.4 shared-promise при N параллельных 401 — делегировано в client.ts (refreshInFlight вокруг refreshHandler=doRefresh); тест 5×401→1 refresh подтверждает: ✓",
+          "§5.7 edge-cases: refresh-failure → softLogout + sticky 'Сессия завершена' (actions.ts:softLogout); tab-resume → doRefresh при tokenExpiry <= now+60s (tab-resume.ts): ✓",
+          "§7.2 HTTP-клиент — actions использует shared `http` через обёртку httpInstance (для тестовой DI), в проде — единственный instance с interceptor'ами Authorization/X-Correlation-Id/429/5xx: ✓",
+          "ADR-FE-03 — access in-memory, refresh sessionStorage с obfuscation; миграция на Secure cookie в backlog: ✓"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-??? (LoginPage UI): импортировать { login, LoginCredentials } из '@/processes/auth-flow'. На mount — const navigate = useNavigate(); setNavigator(navigate) (регистрация DI для soft-logout redirect'а без full-page reload). Форма: react-hook-form + applyValidationErrors (из @/shared/api) на 422 VALIDATION_ERROR.",
+          "FE-TASK-??? (TopBar с user-menu + logout button): import { logout } from '@/processes/auth-flow'. onClick={() => { void logout(); }}. После logout автоматически cleanup + redirect.",
+          "FE-TASK-030 уже интегрирован в main.tsx — initAuthFlow() вызывается до createRoot. При добавлении LoginPage / AuthLayout — внутри RouterProvider зарегистрировать setNavigator(navigate).",
+          "FE-TASK-??? (session-watchdog / focus-refresh-roles §5.7 row 4): impl может звать softLogout — для этого либо экспортировать его из barrel, либо использовать logout() + toast.sticky вручную. Сейчас softLogout — internal.",
+          "FE-TASK-028 (RBAC) уже done: useSession/useRole/useCanExport работают с user, установленным login() через sessionStore.setUser.",
+          "Продвинутый nit (code-review): refresh-token-storage предполагает ASCII JWT. Если Orchestrator когда-нибудь переключится на opaque-токены с non-Latin1 — обернуть в encodeURIComponent перед btoa. Для v1 OpenAPI спек описывает JWT-формат, риска нет.",
+          "Продвинутый nit (code-review): timer.scheduleFor при delay<=0 зовёт triggerRefresh() синхронно (в том же тике, что и setAccess). Для retry-storm может быть лучше queueMicrotask — сейчас не критично, login happy-path не триггерит immediate."
+        ]
+      }
     },
     {
       "id": "FE-TASK-028",

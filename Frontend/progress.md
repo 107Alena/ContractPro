@@ -1202,3 +1202,127 @@
 - `Frontend/src/shared/api/errors/orchestrator-error.test.ts` (new, 6 tests)
 
 ---
+
+## FE-TASK-027 — Auth-flow (login/refresh/logout + shared-promise refresh) (2026-04-17)
+
+**Статус:** done.
+**Subagents:** code-architect (дизайн), code-reviewer (финал).
+**Зависимости:** FE-TASK-026 (session-store, done), FE-TASK-012 (axios, done).
+
+### План реализации
+
+Auth-flow как FSD-процесс в `src/processes/auth-flow/` — координирует login/refresh/logout,
+silent-refresh timer, tab-resume обработку, DI-редирект. Реализует §5.1-5.7 high-architecture.
+
+Архитектурные решения:
+1. **Storage в processes/**, не в shared/auth/. Refresh-token — деталь процесса,
+   не shared-примитив. session-store (access in-memory) остаётся shared/auth/,
+   rbac-хуки работают только с ним.
+2. **Один `inFlight` shared-promise** — в `client.ts` (`refreshInFlight` вокруг
+   зарегистрированного `refreshHandler`). Timer вызывает `doRefresh` напрямую,
+   минуя axios, но параллельный 401-interceptor попадёт в тот же
+   `refreshInFlight` (т.к. handler = doRefresh). Двойного запроса нет.
+3. **initAuthFlow до createRoot** в main.tsx. React Router data-loaders
+   запускаются синхронно при mount'е первого route'а — если access истёк,
+   первый 401 должен быть перехвачен интерсептором ДО рендера.
+4. **setNavigator — DI** через модульный сеттер. В v1 default —
+   `window.location.assign('/login')` (degrade-safe, но теряет SPA state).
+   LoginPage-таска позже зарегистрирует `useNavigate` внутри Router-контекста.
+
+### Файлы
+
+- `Frontend/src/processes/auth-flow/refresh-token-storage.ts` — sessionStorage +
+  XOR+base64 obfuscation. Явно помечено: obfuscation, не защита (ADR-FE-03
+  fallback; миграция на HttpOnly cookie в §18).
+- `Frontend/src/processes/auth-flow/actions.ts` — login / doRefresh / logout
+  / softLogout + setNavigator + __setHttpForTests. Разрыв цикла FE-TASK-012↔027
+  через setRefreshHandler (client.ts не импортит actions).
+- `Frontend/src/processes/auth-flow/timer.ts` — silent-refresh timer подписан
+  на sessionStore. scheduleFor ставит setTimeout на `tokenExpiry - REFRESH_LEAD_MS
+  - now`; при delay≤0 — immediate trigger. Идемпотентна.
+- `Frontend/src/processes/auth-flow/tab-resume.ts` — visibilitychange listener,
+  проверяет tokenExpiry на resume и вызывает doRefresh если <60s до exp.
+- `Frontend/src/processes/auth-flow/setup.ts` — initAuthFlow (setRefreshHandler
+  + startSilentRefreshTimer + registerTabResume); teardownAuthFlow для
+  HMR-reload'а и тестов.
+- `Frontend/src/processes/auth-flow/constants.ts` — REFRESH_LEAD_MS = 60_000.
+- `Frontend/src/processes/auth-flow/index.ts` — barrel. softLogout не
+  экспортируется (internal).
+- `Frontend/src/main.tsx` (modified) — initAuthFlow() после initSentry() до createRoot.
+
+### Тесты (29 новых, всего 296 passing)
+
+- refresh-token-storage.test.ts (6): roundtrip, obfuscation ≠ plain, clear,
+  повреждённые данные → null, перезапись, пустое хранилище.
+- actions.test.ts (10): happy login + /users/me; 401 INVALID_CREDENTIALS; doRefresh
+  happy с rotate; doRefresh без rt → softLogout+throw; doRefresh 401 → softLogout;
+  5 параллельных 401 → 1 refresh (shared-promise race); softLogout cleanup;
+  logout happy; logout 500 fallback; logout без rt не дёргает /auth/logout.
+- timer.test.ts (7): без токена не планирует; expiresIn=900 → ровно 840s до
+  refresh; <60s → immediate; reschedule при setAccess; clear отменяет;
+  stopSilentRefreshTimer отписывается; двойной start идемпотентен.
+- tab-resume.test.ts (6): resume просроченного → refresh; resume свежего → нет;
+  hidden не триггерит; без сессии noop; unregister отписывается; двойной
+  register идемпотентен.
+
+### Тонкости реализации
+
+**MSW + jsdom + axios.** Дефолтный axios-adapter в jsdom использует
+XMLHttpRequest (из jsdom), который MSW node-adapter НЕ перехватывает.
+Решение — в actions.test.ts создаётся отдельный `createHttpClient(BASE)` с
+явным `adapter: 'http'`, инжектируется через `__setHttpForTests(instance)`.
+Продакшн-`http` не трогается. Для timer/tab-resume тестов MSW не нужен —
+doRefresh мокается через `vi.hoisted`.
+
+**Shared-promise координация.** Timer вызывает doRefresh напрямую; если в этот
+момент приходит 401, axios-interceptor берёт тот же `doRefresh` через
+refreshHandler, и client.ts group'ирует в один inFlight. Тест "5 параллельных
+401 → 1 refresh" подтверждает это на реальном axios + MSW.
+
+**softLogout cleanup** — sessionStore.clear + clearRefreshToken + queryClient.clear
++ sticky-toast 'Сессия завершена' + redirect. Идемпотентен.
+
+**logout best-effort** — серверная 500 на /auth/logout не блокирует клиентский
+cleanup. Без refresh-токена POST не выполняется вообще.
+
+### Верификация
+
+- `npm run typecheck`: 0 errors
+- `npm run lint` (--max-warnings=0): clean
+- `npm run test`: 296/296 passed, 3.2s
+- `npm run build`: 622 kB js / 20 kB css (gzip 199/5). Vite warning о 500kB-пороге
+  игнорируется до FE-TASK-050 (code-splitting).
+- Makefile отсутствует — этап N/A.
+
+### Заметки для следующей итерации
+
+- **LoginPage таска**: `import { login, setNavigator }` из `@/processes/auth-flow`;
+  на mount компонента, содержащего useNavigate — `setNavigator(navigate)`
+  (регистрация DI для soft-logout без full-page reload).
+- **TopBar logout**: `import { logout }`; `onClick={() => { void logout(); }}`.
+- **Session-watchdog (§5.7 row 4)**: focus-refresh-roles /users/me → сравнение
+  role с текущим. При mismatch — softLogout. Если понадобится, reopen softLogout
+  в public API.
+- **Product nit**: login не обрабатывает VALIDATION_ERROR (форма ещё не существует).
+  При появлении LoginPage добавить `applyValidationErrors(setError, err.details.fields)`.
+
+### Изменённые файлы
+
+**Созданы:**
+- `Frontend/src/processes/auth-flow/refresh-token-storage.ts`
+- `Frontend/src/processes/auth-flow/refresh-token-storage.test.ts`
+- `Frontend/src/processes/auth-flow/actions.ts`
+- `Frontend/src/processes/auth-flow/actions.test.ts`
+- `Frontend/src/processes/auth-flow/timer.ts`
+- `Frontend/src/processes/auth-flow/timer.test.ts`
+- `Frontend/src/processes/auth-flow/tab-resume.ts`
+- `Frontend/src/processes/auth-flow/tab-resume.test.ts`
+- `Frontend/src/processes/auth-flow/setup.ts`
+- `Frontend/src/processes/auth-flow/constants.ts`
+
+**Обновлены:**
+- `Frontend/src/processes/auth-flow/index.ts` (был `export {};`; теперь полный barrel)
+- `Frontend/src/main.tsx` (+ initAuthFlow() до createRoot)
+- `Frontend/tasks.json` (FE-TASK-027 status=done + completion_notes)
+
+---

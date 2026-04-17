@@ -1,6 +1,13 @@
 export { Badge, type BadgeProps, badgeVariants } from './badge';
 export { Button, type ButtonProps, buttonVariants } from './button';
 export { Chip, type ChipProps, chipVariants } from './chip';
+export {
+  dropZoneVariants,
+  FileDropZone,
+  type FileDropZoneHandle,
+  type FileDropZoneProps,
+  type FileDropZoneState,
+} from './file-drop-zone';
 export { Input, type InputProps, inputVariants } from './input';
 export { Label, type LabelProps, labelVariants } from './label';
 export {

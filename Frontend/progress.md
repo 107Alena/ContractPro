@@ -736,3 +736,77 @@
 - `Frontend/src/shared/ui/table/{data-table.tsx,data-table.test.tsx,data-table.stories.tsx,index.ts}` (new)
 - `Frontend/src/shared/ui/index.ts` (modified: +14 экспортов из ./table)
 - `Frontend/package.json` (+@tanstack/react-table ^8.13.0) + `package-lock.json`
+
+---
+
+## FE-TASK-022 — FileDropZone + table-driven file validation (2026-04-17)
+
+**Статус:** done
+**Категория:** design-system
+**Приоритет:** high
+**Зависимости:** FE-TASK-019 (done). **Разблокирует:** FE-TASK-034 (contract-upload — critical), FE-TASK-035 (version-upload), FE-TASK-043 (NewCheckPage — critical).
+
+**План реализации:**
+1. По консультации с code-architect — три слоя: `shared/config/file-formats.ts` (данные), `shared/lib/validate-file/` (поведение), `shared/ui/file-drop-zone/` (UI). validateFile вынесен в shared, а не в feature, т.к. используется shared/ui-компонентом.
+2. `shared/config/runtime-env.ts` — getRuntimeEnv()/getFeatureFlags() с typeof window guard, готово к window.__ENV__ (FE-TASK-009/030).
+3. `shared/config/file-formats.ts` — FILE_FORMATS 1:1 с §7.5 + getActiveFormats(flags?) + getDropzoneAccept(formats).
+4. `shared/lib/validate-file/` — async validateFile через FileReader (jsdom 24 не реализует Blob.arrayBuffer на slice'ах, FileReader работает везде). FileValidationError class с 4 кодами (EMPTY_FILE/FILE_TOO_LARGE/UNSUPPORTED_FORMAT/INVALID_FILE) + getFileValidationMessage (RU).
+5. `shared/ui/file-drop-zone/` — uncontrolled v1 с onAccepted/onError/onReset + imperative open()/reset(). 7 состояний CVA. react-dropzone ^14.2 с включёнными accept/maxFiles=1 (UX-выгода в native picker), но noClick/noKeyboard=true (фикс nested-interactive).
+
+**Ключевые решения:**
+- **shared/config + shared/lib + shared/ui — три слоя.** §7.5 показывает validateFile в feature, но для design-system слоя — shared. shared/lib/cn — устоявшийся прецедент.
+- **FileReader для magic-bytes.** `Blob.arrayBuffer()` отсутствует в jsdom 24 (slice-полученные Blob'ы) и в Safari < 14.1. `Response`-обёртка тоже глючит в jsdom (теряет бинарные байты при wrapping). FileReader.readAsArrayBuffer — стандарт с 2010-х.
+- **EMPTY_FILE сверх §7.5.** Частый кейс (drag&drop пустого файла из Finder). По совету code-architect.
+- **react-dropzone accept/maxFiles=1 включены.** Изначально архитектор предлагал отключить (single source of truth — наш validateFile), но включённый accept даёт фильтрацию в native file-picker диалоге. handleDrop корректно маппит rejection.code в наши коды → unified UX.
+- **noClick/noKeyboard=true (фикс blocker'а от code-reviewer).** Исходно я ставил role=button + tabIndex=0 на root, но это создавало nested interactive с внутренней `<Button>` (axe wcag2a violation). Решение: root → role=region (без клавиатурной активации), drag-drop остаётся mouse-only (как и в нативном UA), клавиатурный путь — через внутреннюю real-кнопку «Выбрать файл».
+- **validationIdRef-guard для stale async-результатов (фикс blocker'а).** При быстрой смене файла или reset за время FileReader финальный then/catch устаревшего вызова не должен перезаписывать актуальный state.
+- **DOCX — best-effort на frontend (фикс blocker'а).** PK\x03\x04 матчит любой ZIP (jar/apk/xlsx). Зафиксировано JSDoc-комментарием. Глубокая валидация (Content_Types.xml + word/document.xml) — на бэкенде (DocumentProcessing security.md §6).
+- **reset() silent на пустом state** — родитель не получает onReset если ничего не выбрано. Аналогично кнопка «Удалить» только при наличии файла.
+- **aria-describedby условный + aria-live=polite на error.** Скринридер не получает «висячий» idref в loading/selected/error состояниях.
+
+**Тестирование:**
+- 8 тестов file-formats: структура FILE_FORMATS, активные форматы по флагам (no flags / with flag / explicitly false), accept-формат для react-dropzone.
+- 3 теста runtime-env: пустой результат при отсутствии window/__ENV__, чтение заданного __ENV__.
+- 8 тестов validate-file (jsdom docblock): happy PDF и DOCX, EMPTY_FILE, FILE_TOO_LARGE (default + custom maxSize), UNSUPPORTED_FORMAT (DOCX без флага), INVALID_FILE (подмена расширения), сообщения для всех 4 кодов.
+- 14 тестов file-drop-zone (jsdom docblock): рендер 5 состояний (idle/selected/loading/disabled/custom-text), поведение (onAccepted для PDF, onError для UNSUPPORTED/INVALID/TOO_LARGE), удаление через кнопку и через ref, ref.reset() silent на пустом state, hint меняется по feature flags.
+
+**Verifications (все test_steps):**
+- Шаг 1 ✓: `npm run typecheck` — 0 errors.
+- Шаг 2 ✓: `npm run lint --max-warnings=0` — 0 errors / 0 warnings.
+- Шаг 3 ✓: `npx prettier --check .` — clean.
+- Шаг 4 ✓: `npm run test` — **130/130 passed** (+33 новых).
+- Шаг 5 ✓: `npm run build` — dist/ 143.08 kB JS / 4.58 kB CSS gzip (main JS не вырос — FileDropZone лениво подключается через barrel; CSS прирос на utility-классы).
+- Шаг 6 ✓: `CI=true npm run build-storybook` — ok 1.10 min, file-drop-zone.stories собран.
+- Makefile в `Frontend/` отсутствует — этап N/A.
+
+**Соответствие архитектуре:**
+- §7.5 FILE_FORMATS — 1:1 (3 формата с правильными MIME/extensions/magicBytes/featureFlags).
+- §7.5 validateFile — 1:1 коды + EMPTY_FILE сверх (одобрено code-architect).
+- §8.3 FileDropZone таблица — все состояния реализованы (drag-hover/selected/error/loading/disabled/max-size guard).
+- §8.5 — 8 stories покрывают Default/Hover (через :hover в idle)/Focus (focus-within-ring)/Disabled/Loading/Error.
+- §13.4 FEATURE_DOCX_UPLOAD — feature-flag путь работает.
+- §13.5 runtime-config — getRuntimeEnv() готов к window.__ENV__.
+- §3 FSD — shared/config + shared/lib/validate-file + shared/ui/file-drop-zone в правильных слоях.
+- §20.5 react-dropzone ^14.2.0 — pin соблюдён.
+
+**Subagents:**
+- code-architect (план: 5 вопросов о размещении/runtime-env guard/FileValidationError разделении/uncontrolled API/validateFile внутри компонента — все ответы интегрированы).
+- code-reviewer (финал-review: вернул 3 merge-blocker'а, все исправлены — race-condition, DOCX best-effort docs, nested interactive a11y).
+
+**Заметки для следующих итераций:**
+- **FE-TASK-034** (contract-upload feature): обернуть FileDropZone — `props.onAccepted → useUploadContract.mutate(file)`, `ref.reset()` при success/cancel. Если потребуется controlled API (form-level validation через RHF/Zod) — расширить FileDropZone props {file?, error?, onChange?}.
+- **FE-TASK-043** (NewCheckPage): композиция FileDropZone + Title-input + WillHappenSteps. 12 figma-состояний включают drag-hover/selected/error/processing-start — первые три покрыты, processing-start = `loading={isUploading}`.
+- **FE-TASK-035** (version-upload): тот же FileDropZone, передаётся base_version_id.
+- **FE-TASK-014** (error catalog): server-side errors FILE_TOO_LARGE/UNSUPPORTED_FORMAT/INVALID_FILE из API — отдельная сущность от FileValidationError; можно переиспользовать getFileValidationMessage логику.
+- **FE-TASK-030** (App shell): после window.__ENV__-инжекции FileDropZone автоматически подхватит FEATURE_DOCX_UPLOAD из FEATURES.
+- **FE-TASK-009** (Dockerfile + entrypoint.sh): runtime-инъекция window.__ENV__ должна включать FEATURES объект (по умолчанию {} — DOCX закрыт). При включении DOCX — синхронизация с backend ORCH_UPLOAD_ALLOWED_MIME_TYPES (см. §18 п.6).
+- **FE-TASK-053** (Vitest jsdom global): удалить `// @vitest-environment jsdom` docblock из validate-file.test.ts и file-drop-zone.test.tsx.
+- **Backlog**: deep DOCX validation (Content_Types.xml + word/document.xml в central directory) — глубокая проверка ~2-4 КБ central directory + парсинг ZIP — отложено до конкретного фишинг-кейса.
+- **Backlog**: при инлайн featureFlags={{...}} — handleDrop пересоздаётся каждый ререндер (deps на formats). Гайдлайн в JSDoc «передавайте мемоизированный объект» дан; альтернатива — JSON.stringify сравнение (overhead vs ясность).
+
+**Затронутые файлы:**
+- `Frontend/src/shared/config/{runtime-env.ts,runtime-env.test.ts,file-formats.ts,file-formats.test.ts,index.ts}` (new + modified barrel)
+- `Frontend/src/shared/lib/validate-file/{validate-file.ts,validate-file.test.ts,index.ts}` (new)
+- `Frontend/src/shared/ui/file-drop-zone/{file-drop-zone.tsx,file-drop-zone.test.tsx,file-drop-zone.stories.tsx,index.ts}` (new)
+- `Frontend/src/shared/ui/index.ts` (modified: +5 экспортов из ./file-drop-zone)
+- `Frontend/package.json` (+react-dropzone ^14.2.3) + `package-lock.json`

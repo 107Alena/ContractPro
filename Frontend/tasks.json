@@ -1453,7 +1453,8 @@
         "FE-TASK-014",
         "FE-TASK-013"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "Создана FSD-фича src/features/contract-upload/ с сегментами api/lib/model. api/upload-contract.ts — axios POST с FormData+timeout 120s; api/http.ts — DI-обёртка через __setHttpForTests (аналог auth-flow/actions). lib/map-upload-error.ts — мап FILE_TOO_LARGE/UNSUPPORTED_FORMAT/INVALID_FILE на поле file (§9.3). model/use-upload-contract.ts — useMutation-хук с опциональным setError: двухступенчатый маппинг (file-field коды → setError('file'), VALIDATION_ERROR → applyValidationErrors §20.4a), фильтр REQUEST_ABORTED, AbortController для cancel()/unmount, invalidateQueries(['contracts','list']). Навигация на /contracts/{id}/versions/{vid}/result и бутстрап SSE делегированы странице через onSuccess-колбэк (FSD-границы: features/* не знает про router/EventSource). Тесты: api unit (16), api integration MSW (6), lib mapper (8), hook renderHook (12) — всего 42. Axios 1.x в node сериализует web-FormData как urlencoded (не мешает MSW per URL-match); multipart корректен в браузере, покрыт unit-проверкой FormData через моковый http.post. typecheck 0, eslint 0 warnings (max-warnings=0), test 338/338, vite build 622kB. Code-review (code-architect + code-reviewer) пройден: гонка abortRef при cancel+upload в одном тике устранена (убрано обнуление ref в onSuccess/onError/cancel — abort() на завершённом no-op); invalidateQueries сужен с qk.contracts.all до ['contracts','list']; UploadFormValues.file переведён с string на File|null; удалён phantom _setError из публичного API."
     },
     {
       "id": "FE-TASK-035",

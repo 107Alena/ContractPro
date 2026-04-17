@@ -1326,3 +1326,76 @@ cleanup. Без refresh-токена POST не выполняется вообщ
 - `Frontend/tasks.json` (FE-TASK-027 status=done + completion_notes)
 
 ---
+
+## Итерация 2026-04-17 — FE-TASK-034 (contract-upload feature)
+
+### Задача
+- **ID:** FE-TASK-034 (critical)
+- **Заголовок:** contract-upload feature: src/features/contract-upload/ — multipart upload с progress, валидация через FileDropZone, error mapping
+- **Зависимости:** FE-TASK-022 ✓, FE-TASK-014 ✓ (applyValidationErrors), FE-TASK-013 ✓ (TanStack Query). Все done.
+
+### План и реализация
+Обсуждено с code-architect. FSD-границы критичны: `features/*` не знает про роутер/EventSource → navigate/SSE делегированы странице через `onSuccess`-колбэк.
+
+**Файловая структура:**
+
+```
+src/features/contract-upload/
+  api/
+    http.ts                              — DI httpInstance + __setHttpForTests (паттерн auth-flow/actions.ts)
+    upload-contract.ts                    — FormData-обёртка над axios POST, timeout 120s, toProgress-bridge
+    upload-contract.test.ts               — unit (16 тестов) через моковый AxiosInstance
+    upload-contract.integration.test.ts   — MSW node (6 тестов), реальный axios-client
+  lib/
+    map-upload-error.ts                   — FILE_TOO_LARGE/UNSUPPORTED_FORMAT/INVALID_FILE → поле file (§9.3)
+    map-upload-error.test.ts              — 8 тестов
+  model/
+    types.ts                              — UploadContractInput/Response/Progress/UploadFormValues
+    use-upload-contract.ts                — useMutation-хук: двухступенчатый маппинг setError, filter REQUEST_ABORTED, AbortController
+    use-upload-contract.test.tsx          — jsdom renderHook (12 тестов)
+  index.ts                                — публичный barrel
+```
+
+**Ключевые инварианты:**
+- Axios web-FormData в node сериализуется как urlencoded (известное поведение axios 1.x) → unit-тесты проверяют FormData-shape через моковый http.post; integration-тест на MSW матчит по URL (не по Content-Type).
+- `invalidateQueries({ queryKey: ['contracts', 'list'] })` — prefix-match только по спискам; чужие byId/versions не трогаются.
+- `REQUEST_ABORTED` фильтруется и не вызывает `onError` → нет toast'ов при user-driven cancel/unmount.
+- `abortRef` НЕ обнуляется в onSuccess/onError/cancel (избегаем гонки cancel()+upload() в одном тике). `abort()` на завершённом controller'е — no-op.
+- `setError` опционален: хук не требует rhf, принимает structurally-совместимый `UseFormSetErrorLike`.
+
+**Code-review (code-architect + code-reviewer) — применённые правки:**
+1. B1: устранена гонка `abortRef = null` при cancel()+upload().
+2. M1: invalidateQueries сужен с `qk.contracts.all` до `['contracts','list']`.
+3. M4: `UploadFormValues.file` переведён с `string` на `File | null`.
+4. m2: убран phantom-prop `_setError` из публичного API.
+5. m9: unused `resolve` в тестах → `_resolve` + `Promise<never>`.
+
+### Проверки
+- `npm run typecheck`: **0 errors**
+- `npm run lint --max-warnings=0`: **0 warnings/errors**
+- `npm run test`: **338/338 passed** (42 новых: api-unit 16, api-integration 6, lib 8, hook 12)
+- `npm run build`: success, dist/assets/index-*.js 622.08 kB (gzip 199.49 kB)
+- Makefile: отсутствует (N/A)
+
+### Файлы созданы/изменены
+**Созданы:**
+- `Frontend/src/features/contract-upload/api/http.ts`
+- `Frontend/src/features/contract-upload/api/upload-contract.ts`
+- `Frontend/src/features/contract-upload/api/upload-contract.test.ts`
+- `Frontend/src/features/contract-upload/api/upload-contract.integration.test.ts`
+- `Frontend/src/features/contract-upload/lib/map-upload-error.ts`
+- `Frontend/src/features/contract-upload/lib/map-upload-error.test.ts`
+- `Frontend/src/features/contract-upload/model/types.ts`
+- `Frontend/src/features/contract-upload/model/use-upload-contract.ts`
+- `Frontend/src/features/contract-upload/model/use-upload-contract.test.tsx`
+
+**Обновлены:**
+- `Frontend/src/features/contract-upload/index.ts` (был `export {};`; теперь полный barrel)
+- `Frontend/tasks.json` (FE-TASK-034 status=done + completion_notes)
+
+### Заметка для следующих итераций
+- **FE-TASK-042 (NewCheckPage)** будет потребителем `useUploadContract`: `setError` передаётся из `useForm`, в `onSuccess` делается `navigate('/contracts/{contractId}/versions/{versionId}/result')` + `openEventStream({documentId: contractId, ...})`.
+- **FE-TASK-035 (version-upload)** может переиспользовать `uploadContract()`, но endpoint другой (`/contracts/{id}/versions/upload`) — понадобится параметризованный вариант или отдельный hook.
+- **Known-issue**: axios 1.x в node с web-FormData выставляет Content-Type=urlencoded. В браузере (prod) это работает корректно через XHR/fetch. Для e2e/Playwright в реальном браузере будет полноценный multipart.
+
+---

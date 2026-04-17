@@ -880,3 +880,82 @@
 **Затронутые файлы:**
 - `Frontend/src/widgets/processing-progress/{step-model.ts,processing-progress.tsx,processing-progress.test.tsx,processing-progress.stories.tsx,index.ts}` (new + modified barrel)
 - (никакие shared/ui компоненты не менялись — FE-TASK-020/019 уже экспортируют Button/Spinner)
+
+
+---
+
+## FE-TASK-012 — axios HTTP-клиент (2026-04-17)
+
+**Статус:** done
+**Категория:** api-layer
+**Приоритет:** critical
+**Зависимости:** FE-TASK-011 (done, sessionStore). FE-TASK-027 (pending) — цикл разорван DI-паттерном `setRefreshHandler`.
+**Разблокирует:** FE-TASK-013 (QueryClient), FE-TASK-014 (error catalog), FE-TASK-015 (SSE wrapper), FE-TASK-027 (auth-flow), FE-TASK-030 (App shell), FE-TASK-034 (contract-upload) — транзитивно всю feature-слой.
+
+**Что сделано:**
+- `src/shared/api/client.ts` — фабрика `createHttpClient(baseURL='/api/v1')` + singleton `http`. Интерсепторы:
+  - request: `Authorization: Bearer {access}` из `sessionStore.getState()` (не перезаписывает, если заголовок уже передан); `X-Correlation-Id` через `crypto.randomUUID()` с fallback на math-based UUIDv4 (legacy-окружения).
+  - response: 5 путей по §7.2-7.4: (1) 401 AUTH_TOKEN_EXPIRED → `getFreshToken()` shared-promise + replay через `instance.request(config)` с удалением старого Authorization; petля-guard `__retryAuth`. (2) 429 → `parseRetryAfter` (integer сек / RFC 7231 HTTP-date / fallback 5s / clamp 60s) + 1 replay. (3) 502/503 GET → 3 попытки backoff 1s/2s/4s; non-GET сразу throw. (4) network error (нет response, не abort/timeout) → 1 retry 1s. (5) все остальные → `toOrchestratorError(err)` с полями ErrorResponse 1:1.
+  - `sleep(ms, signal?)` AbortSignal-aware с корректным cleanup листенера при both resolve и abort путях.
+  - `declare module 'axios'` расширяет `InternalAxiosRequestConfig` приватными флагами (`__retryAuth`, `__retry429`, `__retry5xxCount`, `__retryNetwork`) вместо `any`.
+  - `setRefreshHandler(fn | null)` — внешняя регистрация refresh-callback (разрыв цикла 012↔027). `getFreshToken` — shared-promise обёртка: `refreshInFlight` module-level promise, `.finally` сбрасывает. Без handler → немедленный reject с `OrchestratorError(AUTH_TOKEN_EXPIRED)`.
+  - `__resetForTests()` — экспорт для изоляции module-level state между тестами.
+- `src/shared/api/errors.ts` — класс `OrchestratorError` extends Error: `error_code`, `message`, optional `suggestion`/`details`/`correlationId`/`status`; ErrorResponse / ErrorDetails re-export. `CLIENT_ERROR_CODES` sentinels (NETWORK_ERROR/TIMEOUT/REQUEST_ABORTED/UNKNOWN_ERROR) для случаев без ErrorResponse тела.
+- `src/shared/api/client.test.ts` — 25 тестов MSW v2 (node adapter): request interceptor × 4, 401 refresh × 6 (включая 5 параллельных → 1 refresh, refresh failure, no-handler, non-AUTH 401, petля-guard), 429 × 2 + parseRetryAfter × 4, 502/503 × 3 (GET success/exhaust, POST без retry), network error × 2, TIMEOUT × 1, нормализация × 3 (5xx body, VALIDATION_ERROR fields, non-JSON).
+- `src/shared/api/index.ts` — barrel: `http`, `createHttpClient`, `setRefreshHandler`, `parseRetryAfter`, `RefreshHandler`, `OrchestratorError`, `CLIENT_ERROR_CODES`, `ErrorResponse`, `ErrorDetails`, `OrchestratorErrorOptions`.
+- `package.json` — добавлены `axios@^1.15.0` (dep), `msw@^2.13.4` (devDep).
+
+**План реализации:**
+1. **code-architect (планирование)** — валидация DI-паттерна, 10 вопросов (OrchestratorError в отдельном файле, shared-promise через module-level, Retry-After parse, crypto.randomUUID без polyfill, retry × cancellation, module-state в тестах). 4 подводных камня зафиксированы и применены: retry через `instance.request(config)` (не прямой axios) для прохождения request interceptor заново; флаги `__retryAuth`/`__retryCount` на config; AbortSignal-aware sleep; `__resetForTests()` вместо `resetModules()`.
+2. `errors.ts` первым (self-contained), `client.ts` импортирует. OrchestratorError в отдельном файле — при разворачивании FE-TASK-014 в `errors/` каталог перенос без breaking changes для потребителей (barrel).
+3. Фабрика `createHttpClient` + default-export `http` — тесты могут создавать изолированные инстансы (важно для MSW — каждый тест-сьют свой `BASE`).
+4. Интерсепторы в порядке потока: request сверху, response — ветки проверяются **строго в порядке** 401 → 429 → 5xx → network → error. Порядок важен: 401 может прийти с body `RATE_LIMIT_EXCEEDED` (не должен конфликтовать — только `AUTH_TOKEN_EXPIRED` триггерит refresh).
+5. MSW `setupServer({ onUnhandledRequest: 'error' })` + `beforeAll/afterAll/afterEach` изоляция. `vi.useFakeTimers` + `runAllTimersAsync` для retry/429/network delay.
+6. **code-reviewer (финал)** — ship-it, 0 blockers. 2 non-blocker'а применены: (a) typeof-guard для `retry-after` header (консистентность с `x-correlation-id`), (b) тест на ECONNABORTED → TIMEOUT без retry.
+
+**Ключевые решения / отклонения:**
+- **Разрыв цикла 012↔027 через setRefreshHandler (DI/strategy).** Альтернативы: event emitter (избыточно для одной связки), фабрика с `onRefresh` (ломает singleton, каждый модуль знает, где инстанс). Одобрено code-architect. Риск: забыть зарегистрировать → все 401 идут как OrchestratorError без попытки refresh. Митигейт: JSDoc + тест `без зарегистрированного handler → AUTH_TOKEN_EXPIRED пробрасывается`. FE-TASK-027 вызовет `setRefreshHandler(doRefresh)` в init.
+- **OrchestratorError в отдельном `errors.ts` (не в client.ts).** FE-TASK-014 развернёт `errors/` как каталог (codes, catalog, handler, apply-validation) — перенос одного файла в каталог с ре-экспортом безболезнен. Оставить в client.ts создало бы circular import внутри shared/api при добавлении helper'ов.
+- **Retry 502/503 — своя реализация (без axios-retry).** 20 строк кода, меньше одной транзитивной зависимости, явная проверка `config.method === 'get'`. axios-retry тянул бы свой algo, конфликтующий с нашим `__retry5xxCount` на config.
+- **Retry-After парсер — два формата RFC 7231.** `Number.isFinite(Number(v))` → секунды; иначе `Date.parse(v) - Date.now()` clamp. Fallback 5s + clamp 60s (защита от «вечного» wait при сломанном сервере).
+- **OrchestratorError без `cause: AxiosError`.** Axios config содержит `transformRequest`/`transformResponse` (функции) → structuredClone в Vitest worker падает с DataCloneError при постинге unhandled rejection. Потеря для Sentry минимальна: correlationId позволяет найти backend-логи. Документировано комментарием в toOrchestratorError.
+- **Network error detection — через `!err.response`, не через `err.code`.** MSW v2 node adapter / undici выставляют `err.code='ERR_NETWORK'` непоследовательно между версиями. Факт отсутствия response надёжнее.
+- **Module-level state (`refreshHandler`, `refreshInFlight`) + `__resetForTests()`.** Простота + явность. Альтернатива `vi.resetModules()` с динамическим импортом — магия и долго. Tests: `afterEach(() => { vi.useRealTimers(); server.resetHandlers(); sessionStore.getState().clear(); __resetForTests(); })` — порядок важен (useRealTimers ДО resetHandlers, иначе MSW cleanup зависает под fake-timers).
+- **retry через `instance.request(config)`, не `instance.get(url)`.** Per-request timeout override сохраняется; request interceptor вновь прогоняет Bearer (критично после refresh — иначе старый токен). Перед retry `config.headers.delete('Authorization')` гарантирует подхват свежего.
+- **`declare module 'axios'` module augmentation** вместо `any`: типобезопасность + IntelliSense на `config.__retryAuth`. Приватные флаги видны глобально во всём проекте — acceptable для v1 (один http-клиент); при появлении второго — миграция на `WeakMap<Config, State>`.
+- **crypto.randomUUID без polyfill.** Safari 15.4+, Node 19+ — baseline проекта выше. Fallback math-UUID для legacy (correlation-id не security-sensitive, достаточно уникальности на сессию).
+- **withCredentials = false для v1** (ADR-FE-03: refresh-token в sessionStorage). Миграция на HttpOnly cookie — одна строка в createHttpClient при включении §18 п.1.
+
+**Verifications:**
+- Шаг 1 ✓: `npm run typecheck` — 0 errors.
+- Шаг 2 ✓: `npm run lint --max-warnings=0` — 0 errors / 0 warnings.
+- Шаг 3 ✓: `npx prettier --check .` — clean.
+- Шаг 4 ✓: `npm run test` — **179/179 passed** (+25 новых в client.test.ts).
+- Шаг 5 ✓: `npm run build` — dist/ 143.08 kB JS / 45.96 kB gzip (без изменений: axios tree-shaken — client.ts не импортируется в prod-коде пока).
+- Makefile в `Frontend/` отсутствует — этап N/A.
+
+**Соответствие архитектуре:**
+- §7.2 HTTP-клиент — axios instance, interceptors в указанном порядке 1:1.
+- §7.3 OrchestratorError — все поля ErrorResponse переносятся + correlation_id.
+- §7.4 Retry-политика — 429 (1 retry по Retry-After), 502/503 GET (3 × backoff 1s/2s/4s), 500 (без авторетрая — throw с correlation_id для toast), network error (1 retry 1s).
+- §5.4 Shared-promise — refreshInFlight module-level, единый вызов при N параллельных 401.
+- §7.8 X-Correlation-Id propagation — UUID v4 на фронте, инжектится в каждый запрос.
+- §2 FSD — client.ts импортирует только `@/shared/auth/session-store` (sessionStore vanilla-alias); boundaries-plugin разрешает shared→shared. Зависимостей вверх нет.
+- ADR-FE-03 — access in-memory (sessionStore), refresh-token в sessionStorage (fallback), withCredentials=false для v1.
+
+**Subagents:**
+- **code-architect** (план-валидация, 10 вопросов): одобрил DI setRefreshHandler; 8 из 10 явных рекомендаций применены (выделение OrchestratorError в errors.ts, __resetForTests, своя retry-реализация, парсер обоих форматов Retry-After, crypto.randomUUID, per-request timeout через request(config), network retry в клиенте + OrchestratorError(NETWORK_ERROR), MSW локально в тесте без setup-файла, withCredentials=false для v1). 2 не применены по scope (cancellation AbortSignal в тестах — cover'нут базовой реализацией sleep; `X-Retry-Count` анти-петля прокси — backlog).
+- **code-reviewer** (финал): вердикт 'ship it', 0 blockers. 2 non-blocker'а — **оба применены**: typeof-guard для retry-after header; тест на ECONNABORTED → TIMEOUT без retry.
+
+**Заметки для следующих итераций:**
+- **FE-TASK-013** (QueryClient): `http` + TanStack Query 5 — QueryClientProvider в app/providers, qk-реестр по §4.2. Use `@/shared/api/http` в services.
+- **FE-TASK-014** (error catalog): развернуть `src/shared/api/errors/` каталог — codes.ts (ErrorCode enum из openapi), catalog.ts (ERROR_UX с title/hint/action по §7.3), handler.ts (toUserMessage с server message приоритетом), apply-validation.ts (applyValidationErrors для React Hook Form). OrchestratorError переедет в `errors/orchestrator-error.ts`, barrel обеспечит backwards compat.
+- **FE-TASK-015** (SSE wrapper): отдельный механизм (EventSource не использует axios); token в query (SECURITY-комментарий + ADR-FE-10 про sse_ticket).
+- **FE-TASK-027** (auth-flow): в `processes/auth-flow/init.ts` вызвать `setRefreshHandler(async () => { const {access, expires_in} = await http.post<TokenPair>('/auth/refresh'); sessionStore.getState().setAccess(access, expires_in); return access; })`. Pre-first-request: зарегистрировать в App.tsx / QueryProvider до любого запроса к /users/me.
+- **FE-TASK-034** (contract-upload): per-request timeout=120_000 + `onUploadProgress`. Interceptor retry НЕ триггерится для POST — network error на upload → вручную показать inline-ошибку (см. FILE_TOO_LARGE/INVALID_FILE маппинг из FE-TASK-014).
+- **Backlog (code-reviewer non-blocker-пропущенные):** (1) cancellation AbortSignal покрытие тестом (React Query unmount во время retry-sleep); (2) X-Retry-Count header для защиты от двойной ретрай-петли при прокси; (3) lift `__retry*` флагов в WeakMap при появлении второго http-клиента (shared-api vs public-api).
+- **FE-TASK-053** (Vitest jsdom global + setup): client.test.ts работает под node env — jsdom не нужен. При миграции test env — убедиться, что MSW node adapter не требует alternative setup (msw/browser использует Service Worker).
+
+**Затронутые файлы:**
+- `Frontend/src/shared/api/{client.ts,client.test.ts,errors.ts,index.ts}` (new + modified barrel)
+- `Frontend/package.json` (+axios ^1.15.0, +msw ^2.13.4 devDep) + `package-lock.json`

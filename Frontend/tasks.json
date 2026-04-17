@@ -458,7 +458,8 @@
         "FE-TASK-011",
         "FE-TASK-027"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "Разрыв цикла 012↔027 через setRefreshHandler (DI-pattern): FE-TASK-027 позже зарегистрирует doRefresh; client.ts не импортирует auth-flow. Реализовано: createHttpClient + http singleton, OrchestratorError в отдельном errors.ts (ре-экспорт из barrel; FE-TASK-014 развернёт errors/ как каталог без breaking changes), CLIENT_ERROR_CODES sentinel (NETWORK_ERROR/TIMEOUT/REQUEST_ABORTED/UNKNOWN_ERROR). Interceptors: request (Bearer из sessionStore, X-Correlation-Id через crypto.randomUUID), response (401 AUTH_TOKEN_EXPIRED → shared-promise refresh + replay через request(config) для прохождения интерсептора заново, 429 → sleep(parseRetryAfter) + 1 retry, 502/503 GET → 3 попытки backoff 1s/2s/4s, network error → 1 retry 1s, нормализация в OrchestratorError). AbortSignal-aware sleep с cleanup листенера. Module augmentation axios для __retryAuth/__retry429/__retry5xxCount/__retryNetwork вместо any. __resetForTests() для изоляции module-level state в тестах. 25 тестов MSW (node adapter): auth inject + не перезаписывает, correlation-id generate + preserve, shared-promise (5 параллельных → 1 refresh), refresh failure, no-handler, non-AUTH 401 (не триггерит refresh), petля-guard (повторный 401), 429 single retry, parseRetryAfter (integer/HTTP-date/fallback/clamp), 502/503 GET success+exhaust, 502 POST без retry, network retry + exhaust, TIMEOUT без retry, 5xx+4xx+non-JSON нормализация. OrchestratorError не несёт `cause: AxiosError` (DataCloneError в Vitest worker: axios config содержит transformRequest func). Verifications: typecheck 0, lint 0, prettier clean, test 179/179 passed (+25 новых), build 143.08kB (axios tree-shaken — не импортируется в prod-коде пока). Соответствие архитектуре §7.2-7.4 + §5.4 1:1. Commit: см. git log."
     },
     {
       "id": "FE-TASK-013",

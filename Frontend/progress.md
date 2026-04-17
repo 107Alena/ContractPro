@@ -21,6 +21,99 @@
 
 ---
 
+## FE-TASK-030 — App-shell / composition root (2026-04-17)
+
+**Статус:** done
+**Категория:** layout
+**Приоритет:** critical
+**Итерация:** 15. **Зависимости:** FE-TASK-013 (done), FE-TASK-020 (done), FE-TASK-026 (done). **Разблокирует:** FE-TASK-027, FE-TASK-029, FE-TASK-031, FE-TASK-032, FE-TASK-033, FE-TASK-049, FE-TASK-050.
+
+**Цель:** собрать composition root приложения: providers (Query + I18n + Tooltip + ErrorBoundary), RouterProvider, Toaster, error-страницы 403/404/500/offline, Sentry-инициализация, i18n-инициализация. Переезд `App.tsx` → `src/app/App.tsx` (per §2 high-architecture).
+
+**Ключевые решения (консультация code-architect):**
+1. **Порядок providers:** `AppErrorBoundary → QueryProvider → I18nProvider → TooltipProvider(delay=500) → RouterProvider`. Toaster — **сиблинг** RouterProvider внутри TooltipProvider: не ре-маунтится при route-переходах, переживает навигацию, Radix Portal сам переносит в document.body. Переехал в app/App.tsx.
+2. **i18n:** синхронная инициализация в `shared/i18n/config.ts` на импорт модуля (singleton). `useSuspense: false`, `returnNull: false`. Ресурсы статически импортированы из `locales/ru/{common,errors}.json` — без i18next-http-backend (v1, единственный язык). main.tsx импортирует config до createRoot, чтобы первый paint уже имел ключи.
+3. **Sentry:** `initSentry()` в `shared/observability/sentry.ts` — no-op при пустом `runtimeEnv.SENTRY_DSN` (dev без Sentry-проекта). `@sentry/react ^8.0.0` как зависимость; `Sentry.ErrorBoundary` используется напрямую (§9.2, route-level fallback) — при отсутствующем DSN internal hub no-op-ит, сам компонент продолжает ловить исключения.
+4. **Router:** `createBrowserRouter` с `/` (LandingPage placeholder) + `/403` + `/404` + `/500` + `/offline` + wildcard `*` → `<Navigate to="/404" replace/>`. Остальные 15 маршрутов §6.1 добавляются фича-тасками (FE-TASK-027/031/...). `ROUTES` константы + `type AppRoute` для типизации будущих `<Navigate to=...>`. `createAppRouter()` вызывается через `useMemo` в `App.tsx` — позволяет тестам переключать URL через `pushState`.
+5. **Error-pages:** один slice `src/pages/errors/` с 4 компонентами + общим `ui/ErrorLayout.tsx` — один `index.ts` барьер, меньше дублирования. Кнопки используют `<Button>` без `asChild` (чтобы избежать React.Children.only конфликта с `<Link>` и тройным children-ом в Button.tsx) — на действие навигации используется `useNavigate()`. `ServerError500` читает `location.state.correlationId` и показывает его в выделенном блоке с `data-testid`.
+6. **RouteError fallback:** отдельный `app/router/RouteError.tsx` — ре-использует `pages/errors/ui/ErrorLayout`, живёт вне router-дерева (для Sentry.ErrorBoundary). `/500` route остаётся для программного `navigate('/500')`.
+7. **ThemeProvider:** НЕ добавляется (v1 only light). Токены уже в `app/styles/tokens.css`. Введём при появлении dark-mode / theme-switcher (YAGNI).
+8. **ESLint:** `boundaries/ignore` убрал `src/App.tsx` (переехал в FSD-слой). `src/main.tsx` остаётся в ignore как Vite-bootstrap вне FSD.
+
+**Тестирование (+26 тестов, 267/267):**
+- `shared/i18n/config.test.ts` (6): DEFAULT_LOCALE/NS, resources присутствуют, isInitialized=true, `t('hello')`="Здравствуйте" (test_step #3), errors-namespace ключи, common:actions.
+- `shared/observability/sentry.test.ts` (4): enabled=false при empty/missing/no DSN, enabled=true при заданном DSN.
+- `app/router/router.test.tsx` (5 — jsdom): все error-маршруты + root + wildcard зарегистрированы, все имеют errorElement, ROUTES соответствуют §6.1; RouteError рендерит заголовок/описание и кнопку "Повторить" вызывает resetError.
+- `pages/errors/errors.test.tsx` (6 — jsdom): ErrorLayout, Forbidden403/NotFound404 ("На главную" кнопка), ServerError500 (код 500 + reload), ServerError500 с correlation_id через location.state, Offline (без кода).
+- `app/App.test.tsx` (5 — jsdom): LandingPage при `/`, /403/404/offline рендерятся при pushState; Boom-компонент → `AppErrorBoundary` ловит и показывает RouteError (test_step #2).
+
+**Verification (все test_steps):**
+- Шаг 1 ✓ (визуально, не в CI): `npm run dev` запускается; типовые страницы открываются без console-errors.
+- Шаг 2 ✓: `App.test.tsx` — Boom → Sentry.ErrorBoundary → RouteError fallback.
+- Шаг 3 ✓: `config.test.ts` — `i18n.t('hello')` → "Здравствуйте".
+
+**Gates (все пройдены):**
+- `npm run typecheck` — 0 errors.
+- `npm run lint --max-warnings=0` — 0 errors / 0 warnings.
+- `npx prettier --check .` — clean.
+- `npm run test` — 267/267 (+26 vs prior 241; test_files 34).
+- `npm run build` — 619 kB / 198 kB gzip (прирост ~476 kB / 152 kB gzip от Sentry 8 + i18next + react-i18next + react-router data-layer). Route-lazy code-splitting §11.2 — в последующих фича-тасках.
+- Makefile в `Frontend/` отсутствует — этап N/A (как и в прошлых итерациях).
+
+**Соответствие архитектуре:**
+- §1.1 FSD-слои — App = composition root, providers в `app/providers/`, router в `app/router/`, error-pages в `pages/errors/`, i18n + Sentry в `shared/*` ✓
+- §2 структура — `src/app/App.tsx` (переехал), `src/shared/i18n/locales/ru/*.json` ✓
+- §6.1 карта маршрутов — `/403/404/500/offline` подключены; остальное — в фича-тасках ✓
+- §9.2 Sentry.ErrorBoundary (route-level) + RouteError fallback ✓
+- §14.2 Sentry через `runtimeEnv.SENTRY_DSN` (no-op при отсутствии) ✓
+- §17.1 Error-страницы подключены ✓
+
+**code-reviewer (SHIP-IT, 0 blockers):**
+- Применены non-blocker'ы: убран dead key `errors.route.reset` (RouteError использует `common:actions.retry`); добавлен type `AppRoute`.
+- Отложено: (а) wildcard-redirect integration-тест через pushState — Navigate+AbortSignal несовместимость undici/jsdom (React Router 6.22+ issue в node 20); покрыт unit-тестом на routes.map при createAppRouter; (б) `Sentry.tracesSampleRate` захардкожен 0.1 — env-driven перенос в рамках observability-финализации; (в) `@vitest-environment jsdom` docblock повторяется в 5 файлах — консолидация в vitest.config.ts test env defaults запланирована на FE-TASK-053.
+
+**Инциденты / исправления в процессе:**
+- `Button asChild` + `<Link>`: получил `React.Children.only expected to receive a single React element child` — Button.tsx передаёт Slot тройку children (loading-spinner / children / iconRight), и при `asChild` + одиночном `<Link>` Radix Slot падает. Обход: использовать обычный `<Button>` + `useNavigate()` (нагляднее, без дополнительных требований к Button API). Патч Button (чтобы `asChild` фильтровал undefined/false-children до одного Slottable) — отдельный backlog-кандидат.
+- `router.test.tsx` multiple-elements: отсутствие `afterEach(cleanup())` в jsdom-тестах (per-file environment) → добавлен явный cleanup.
+- Wildcard-Navigate тест: при переключении URL через `pushState('/unknown')` + `render(<App/>)` React Router пытается сделать Request → undici отклоняет AbortSignal. Тест заменён на прямые URLs /403 / /404 / /offline.
+
+**Зависимости (добавлено):**
+- `i18next@^23.10.0`, `react-i18next@^14.1.0`, `@sentry/react@^8.0.0` — +3 deps, 12 transitive packages.
+
+**Затронутые файлы:**
+- `Frontend/src/app/App.tsx` (new — переехал из `src/App.tsx`)
+- `Frontend/src/App.tsx` (deleted)
+- `Frontend/src/main.tsx` (modified — импорт i18n/config + initSentry + App path)
+- `Frontend/src/app/providers/AppErrorBoundary.tsx` (new)
+- `Frontend/src/app/providers/index.ts` (modified — re-export AppErrorBoundary)
+- `Frontend/src/app/router/{router.tsx,RouteError.tsx,index.ts}` (new)
+- `Frontend/src/shared/i18n/{config.ts,I18nProvider.tsx,locales/ru/{common,errors}.json}` (new)
+- `Frontend/src/shared/i18n/index.ts` (modified — re-export всего)
+- `Frontend/src/shared/observability/{sentry.ts}` (new)
+- `Frontend/src/shared/observability/index.ts` (modified — re-export initSentry/Sentry)
+- `Frontend/src/pages/errors/{Forbidden403,NotFound404,ServerError500,Offline}.tsx` (new)
+- `Frontend/src/pages/errors/ui/ErrorLayout.tsx` (new)
+- `Frontend/src/pages/errors/index.ts` (modified)
+- `Frontend/src/pages/landing/{LandingPage.tsx,index.ts}` (new)
+- `Frontend/src/app/{App,providers/AppErrorBoundary}.test.tsx` — 5 тестов
+- `Frontend/src/app/router/router.test.tsx` — 5 тестов
+- `Frontend/src/shared/i18n/config.test.ts` — 6 тестов
+- `Frontend/src/shared/observability/sentry.test.ts` — 4 теста
+- `Frontend/src/pages/errors/errors.test.tsx` — 6 тестов
+- `Frontend/eslint.config.js` (modified — убран src/App.tsx из boundaries/ignore)
+- `Frontend/package.json` (+i18next +react-i18next +@sentry/react) + `package-lock.json`
+
+**Заметки для следующих итераций:**
+- **FE-TASK-027 (auth-flow):** использовать `useNavigate()` с типизированным `AppRoute` для редиректа на `/login`. Auth-pages (`/login`) подключать в `createAppRouter` отдельным route-объектом. `ROUTES.login = '/login'` добавить в `router.tsx`.
+- **FE-TASK-031 (router v2 / code-splitting):** заменить прямые импорты `LandingPage/Forbidden403/...` на `React.lazy(() => import('./...'))` + Suspense fallback. Снизит main-chunk до <200 kB gzip (budget §11.2).
+- **FE-TASK-032 (ProtectedLayout / route guards):** вложить auth-требующие routes в `children` с guard-loader или `<RequireAuth>` wrapper.
+- **FE-TASK-033 (error routing refinements):** уже подключены — остаётся настроить 401 → `/login?next=`, 429 → toast с `Retry-After` из interceptors.
+- **FE-TASK-053 (Vitest jsdom + RTL):** (а) консолидировать `// @vitest-environment jsdom` в vitest.config.ts test env defaults; (б) добавить coverage thresholds; (в) `Sentry.tracesSampleRate` → env-driven; (г) покрыть wildcard-redirect integration-тестом (через React Router `MemoryRouter` + изолированный createMemoryRouter).
+- **Button asChild bugfix:** Slot ожидает одного children; Button передаёт тройку (loading/children/iconRight). Патч — проверка `asChild && !loading && !iconLeft && !iconRight` с прямым cloneElement, либо обёртка в Slottable. Не блокирует текущую задачу, но ограничивает `<Link>` use-cases.
+- **Sentry.ErrorBoundary** сейчас использует реплейс только при `error`; для интеграции с OpenTelemetry (§14.3) — добавить `onError={(e) => otel.recordException(e)}` когда otel.ts появится.
+
+---
+
 ## FE-TASK-004 — Scaffolding Vite 5 + React 18 + TS 5 strict (2026-04-16)
 
 **Статус:** done

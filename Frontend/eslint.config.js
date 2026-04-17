@@ -81,7 +81,6 @@ export default tseslint.config(
         '**/*.spec.{ts,tsx}',
         '**/*.stories.{ts,tsx}',
         'src/main.tsx',
-        'src/App.tsx',
         'src/vite-env.d.ts',
       ],
     },
@@ -134,9 +133,9 @@ export default tseslint.config(
       ],
       'boundaries/no-private': ['error', { allowUncles: false }],
       'boundaries/no-unknown': 'error',
-      // FE-TASK-007: структура FSD-папок создана, неклассифицированных файлов под src/
-      // больше быть не должно (main.tsx/App.tsx/vite-env.d.ts — в boundaries/ignore
-      // до переезда в src/app/ в FE-TASK-030).
+      // FE-TASK-007/030: структура FSD завершена. App.tsx переехал в src/app/;
+      // main.tsx и vite-env.d.ts остаются под src/ (Vite-конвенция bootstrap)
+      // и явно занесены в boundaries/ignore.
       'boundaries/no-unknown-files': 'error',
     },
   },
@@ -149,7 +148,7 @@ export default tseslint.config(
   },
 
   {
-    files: ['src/main.tsx', 'src/App.tsx'],
+    files: ['src/main.tsx'],
     rules: {
       'boundaries/element-types': 'off',
       'boundaries/no-unknown': 'off',

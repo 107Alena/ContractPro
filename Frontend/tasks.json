@@ -1303,7 +1303,8 @@
         "FE-TASK-026",
         "FE-TASK-020"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "App-shell: AppErrorBoundary (Sentry.ErrorBoundary) -> QueryProvider -> I18nProvider -> TooltipProvider(delay=500) -> RouterProvider; Toaster - сиблинг RouterProvider внутри TooltipProvider. i18n sync-init в shared/i18n/config.ts (ru/{common,errors}.json, lng/fallbackLng=ru, useSuspense=false). Sentry: initSentry() в main.tsx - no-op при пустом DSN. Router: createBrowserRouter с / /403 /404 /500 /offline + wildcard `*` -> Navigate /404. Error-pages в pages/errors/ (Forbidden403/NotFound404/ServerError500/Offline + ui/ErrorLayout). RouteError fallback в app/router/. App.tsx переехал в src/app/App.tsx; main.tsx остался в src/ (Vite-bootstrap) и теперь импортирует shared/i18n/config + initSentry() до render. ESLint boundaries/ignore убрал App.tsx. +26 тестов (267/267): i18n-config 6, sentry 4, router+RouteError 5, error-pages 6, App composition 5. Build ok (619kB / 198kB gzip - ожидаемый прирост от Sentry/i18next/React Router; route-lazy code-splitting §11.2 - далее). code-reviewer: SHIP-IT, 0 blockers. Применены non-blocker: убран dead key errors.route.reset, добавлен type AppRoute. Заметки: wildcard redirect integration-тест отложен из-за Navigate+AbortSignal несовместимости undici/jsdom (покрыт unit-тестом на routes.map); Sentry tracesSampleRate захардкожен 0.1 - env-driven в FE-TASK-053."
     },
     {
       "id": "FE-TASK-031",

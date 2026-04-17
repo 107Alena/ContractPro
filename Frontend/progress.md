@@ -1036,3 +1036,76 @@
 - `Frontend/src/shared/api/query-client.test.ts` (new, 4 tests)
 - `Frontend/src/app/providers/QueryProvider.test.tsx` (new, 2 tests, jsdom pragma)
 - `Frontend/package.json` + `package-lock.json` (+@tanstack/react-query ^5.99, +@tanstack/react-query-devtools ^5.99)
+
+---
+
+## FE-TASK-014 — Каталог ошибок Orchestrator API (2026-04-17)
+
+**Статус:** done
+**Категория:** api-layer
+**Приоритет:** critical
+
+**Что сделано:**
+- Развернул `src/shared/api/errors/` как FSD-каталог (вместо одиночного `errors.ts`):
+  - `codes.ts` — `SERVER_ERROR_CODES` (22 кода §7.3) + `CLIENT_ERROR_CODES` (4 sentinel §7.2) + union `ErrorCode` + `isKnownErrorCode` type-guard + тип `ErrorAction`.
+  - `catalog.ts` — `ERROR_UX: Record<ErrorCode, ErrorUXEntry>` 1:1 с §7.3 (title/hint/action); доп. entries для клиентских кодов (`action: 'retry'` для NETWORK_ERROR/TIMEOUT).
+  - `orchestrator-error.ts` — класс `OrchestratorError` (перенос из старого `errors.ts`) + **read-only getter `code`** (alias под `err.code` из §20.4, не ломает существующий `err.error_code`) + `isOrchestratorError` type-guard.
+  - `handler.ts` — `toUserMessage(err) → { title, hint?, action?, correlationId? }` по §20.4:
+    - приоритет server `message` над `ERROR_UX.title` (NFR-5.2);
+    - whitespace-only/empty message → fallback на каталог;
+    - `hint`: server `suggestion` → catalog.hint → undefined;
+    - `action` только из каталога (backend не транслирует UX-решения);
+    - не бросает (критично для SSE/onError hot-path);
+    - `navigator.onLine === false` → «Нет соединения с интернетом».
+  - `apply-validation.ts` — `applyValidationErrors(err, setError, translate?)` по §20.4a:
+    - типобезопасно через `components['schemas']['ValidationFieldError']` (openapi-typescript);
+    - `shouldFocus: matched === 0` — auto-focus на первом невалидном поле;
+    - `setError` throws → поле в `unmatched` (не теряется);
+    - optional `TranslateFn` для i18n DI (FE-TASK-030 поставит настоящий i18next — без breaking);
+    - не бросает на non-VALIDATION / non-Orchestrator / primitives;
+    - + `isValidationError` узкий type-guard.
+  - `index.ts` — barrel с публичным API (типы + значения + guards + функции).
+- Удалён старый `src/shared/api/errors.ts`. `client.ts` продолжает импорт `./errors` (теперь резолвится в `errors/index.ts`) — zero breaking changes.
+- Обновлён `src/shared/api/index.ts` (внешний barrel): +10 новых экспортов (codes, catalog, validation-helpers, guards).
+- Тесты: **45 новых** (codes 13, handler 14, apply-validation 18, orchestrator-error 6). Все 241 теста зелёные.
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **`err.code` вместо `err.error_code`**: архитектура §20.4 пишет `err.code`, но существующий публичный класс уже использует `error_code` (breaking change сломал бы client.ts + тесты). Решение: добавлен read-only getter `code` как алиас → оба пути работают.
+- **i18n DI-pattern**: архитектурный снippet §20.4a жёстко импортирует `i18n.t` из `@/shared/i18n`, но этот модуль пока placeholder (FE-TASK-030). Вместо этого — optional `translate?: TranslateFn` параметр. Default: возвращает серверный `message`. После FE-TASK-030 вызывающие передают `(code, fb, params) => i18n.t('validation.'+code, {defaultValue: fb, ...params})` → инвариант «i18n приоритетнее серверного message» сохранён на уровне integration, а `shared/api` не тянет i18n-зависимость (FSD: api-слой не знает про локаль).
+- **`UseFormSetErrorLike<T>` structural interface**: `react-hook-form` не установлен; structural-тип совместим по duck-typing с RHF's `UseFormSetError`. Замена на настоящий re-export тривиальна при установке RHF.
+- **Client sentinel codes в ERROR_UX**: архитектура §7.3 перечисляет 22 серверных; NETWORK_ERROR/TIMEOUT/REQUEST_ABORTED/UNKNOWN_ERROR добавлены как logical extension — иначе `toUserMessage` на network-error возвращал бы generic fallback без UX-action.
+- **Code review**: SHIP-IT, 0 blockers. 3 non-blocker'а применены (runtime `isKnownErrorCode` + narrow в `toUserMessage` без `as ErrorCode`-каста; дополнительные edge-case тесты: empty message + unknown code).
+
+### Консультации
+- **code-architect** (план-валидация, 4 вопроса): barrel-shape, `error_code` vs `code` alias, i18n DI vs direct import, `UseFormSetError` structural vs dep. Все 4 рекомендации приняты 1:1.
+- **code-reviewer** (финал): SHIP-IT. Применено: `isKnownErrorCode` helper, narrow в handler без cast, +3 edge-case теста.
+
+### Соответствие архитектуре
+- §7.3 — 22 кода ✓ (codes.test.ts: length=22, uniqueness, названия). ERROR_UX.title/hint/action byte-identical со spec (handler.test проверяет конкретные строки).
+- §20.4 — server message → ERROR_UX.title → generic; whitespace handling улучшен (spec's `||` не покрывал '   '); correlationId passthrough ✓.
+- §20.4a — shouldFocus ✓, unmatched ✓, types через openapi-typescript ✓, graceful fallback i18n→message ✓.
+- §7.2 — client sentinel codes (NETWORK/TIMEOUT/ABORT/UNKNOWN) совместимы (`error_code: string`), используются в `client.ts::toOrchestratorError`.
+- §2 FSD — `shared/api/errors/*` остаётся в segment shared (допустимо без slice isolation по eslint-plugin-boundaries `shared allow shared`).
+
+### Заметки для следующих итераций
+- **FE-TASK-015** (SSE wrapper): используй `toUserMessage` в обработчике `onerror` для toast; `OrchestratorError`-инстансы имеют `correlationId` для sticky-error.
+- **FE-TASK-027** (auth-flow): `OrchestratorError({error_code: 'AUTH_TOKEN_EXPIRED'})` уже правильно распознаётся в `client.ts`. Используй `ERROR_UX.AUTH_TOKEN_EXPIRED.action === 'login'` для решения о редиректе.
+- **FE-TASK-030** (app-shell): (a) в `QueryProvider` повесь `QueryCache.onError` → `toast.error(toUserMessage(err))`; (b) когда поставишь i18next — создай `translate: TranslateFn = (c, fb, p) => i18n.t('validation.'+c, {defaultValue: fb, ...p})` и передавай в формы.
+- **FE-TASK-036** (forms с rhf): при установке `react-hook-form` замени `UseFormSetErrorLike<T>` на re-export `UseFormSetError` — signature совместима; остальные типы (`FieldValuesLike`) можно удалить.
+- **Backlog:** (1) если OpenAPI спец станет типизировать `details` через oneOf/discriminated union по `error_code` — убрать `as unknown as` в `readFields`; (2) `isOnline()` helper-модуль (вместо `navigator.onLine` напрямую) для упрощения mock'ов в SSR/handler.test.
+
+### Затронутые файлы
+- `Frontend/src/shared/api/errors/codes.ts` (new)
+- `Frontend/src/shared/api/errors/catalog.ts` (new)
+- `Frontend/src/shared/api/errors/orchestrator-error.ts` (new, перенос из errors.ts + getter `code`)
+- `Frontend/src/shared/api/errors/handler.ts` (new)
+- `Frontend/src/shared/api/errors/apply-validation.ts` (new)
+- `Frontend/src/shared/api/errors/index.ts` (new, barrel)
+- `Frontend/src/shared/api/errors.ts` (deleted — заменён директорией)
+- `Frontend/src/shared/api/index.ts` (modified — +10 exports)
+- `Frontend/src/shared/api/errors/codes.test.ts` (new, 13 tests)
+- `Frontend/src/shared/api/errors/handler.test.ts` (new, 14 tests)
+- `Frontend/src/shared/api/errors/apply-validation.test.ts` (new, 18 tests)
+- `Frontend/src/shared/api/errors/orchestrator-error.test.ts` (new, 6 tests)
+
+---

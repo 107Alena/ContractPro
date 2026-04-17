@@ -503,7 +503,8 @@
       "dependencies": [
         "FE-TASK-012"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "Реализован каталог ошибок в src/shared/api/errors/: codes.ts (SERVER_ERROR_CODES — 22 по §7.3, CLIENT_ERROR_CODES — 4 sentinel, ErrorCode union, isKnownErrorCode), catalog.ts (ERROR_UX 1:1 §7.3 + client-codes), orchestrator-error.ts (перенос из ./errors.ts + read-only getter code — alias §20.4), handler.ts (toUserMessage — приоритет server message над ERROR_UX.title, hint: suggestion → catalog, action: только catalog, correlationId passthrough), apply-validation.ts (applyValidationErrors + isValidationError + UseFormSetErrorLike structural + optional TranslateFn для i18n DI), index.ts (barrel). Старый errors.ts удалён. shared/api/index.ts обновлён. Tests: 45 новых (codes 13 + handler 14 + apply-validation 18 + orchestrator-error 6), всего 241/241 green. Gates: typecheck 0, lint 0, prettier clean, build 143.08 kB. code-reviewer: SHIP-IT, 0 blockers; 3 non-blocker рекомендации применены."
     },
     {
       "id": "FE-TASK-015",

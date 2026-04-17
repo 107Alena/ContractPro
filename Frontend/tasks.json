@@ -528,7 +528,53 @@
       "dependencies": [
         "FE-TASK-013"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-17",
+        "summary": "SSE-wrapper в shared/api/sse.ts по §7.7 + ADR-FE-10. Публичный API: createEventStreamOpener({eventSourceCtor?, http?, now?}) + default openEventStream({documentId?, versionId?, onEvent, onTransportChange?}) => unsubscribe. State-machine: idle→connecting→open→{stale|error}→reconnect(2^retry с, clamp 30с)→polling после 5 неудач. Polling-fallback активен только при documentId+versionId (endpoint /contracts/{id}/versions/{vid}/status требует оба). Возврат в SSE каждый 3с тик; 404/403 — немедленный возврат. 24h soft-reset с инъекцией now() для тестируемости. StatusEvent живёт в shared/api/sse-events.ts (владение — транспортный слой; FSD-boundaries запрещают shared→entities), entities/job — re-export для features/widgets/pages по §20.2. Barrel shared/api/index.ts экспортирует публичный API + константы таймингов.",
+        "files_created": [
+          "Frontend/src/shared/api/sse.ts — openEventStream + createEventStreamOpener (~270 строк)",
+          "Frontend/src/shared/api/sse-events.ts — тип StatusEvent + UserProcessingStatus",
+          "Frontend/src/shared/api/sse.test.ts — 20 unit-тестов: auth-gate, URL composition, status_update, heartbeat watchdog (с граничным тестом 44с/46с), exponential backoff 2/4/8/16s, onerror после возврата из polling, polling fallback (с versionId и без), 404→возврат в SSE, unsubscribe во время reconnect/polling (AbortController + no-new-http после unsub), 24h soft-reset через инъекцию now()"
+        ],
+        "files_modified": [
+          "Frontend/src/shared/api/index.ts — +13 экспортов (createEventStreamOpener, openEventStream, OpenEventStreamOptions/Fn/Deps, EventSourceCtor, TransportMode, Unsubscribe, StatusEvent, UserProcessingStatus + 5 констант SSE_*)",
+          "Frontend/src/entities/job/index.ts — заменён stub `export {}` на re-export StatusEvent/UserProcessingStatus из shared/api/sse-events"
+        ],
+        "deviations": [
+          "StatusEvent — в shared/api/sse-events.ts, НЕ в entities/job. Причина: §20.2 high-architecture.md импортит `from '@/entities/job'`, но eslint-plugin-boundaries запрещает `shared → entities` импорт, а sse.ts лежит в shared. Владелец контракта — транспортный слой (shared/api); entities/job делает re-export для потребителей из features/widgets/pages. Предложение code-architect принято.",
+          "Публичная сигнатура расширена с `{documentId?, onEvent}` до `{documentId?, versionId?, onEvent, onTransportChange?}`. Причина: openapi endpoint /contracts/{contract_id}/versions/{version_id}/status требует ОБА id, а SSE-query-param — только document_id. Без versionId polling-fallback невозможен → fallback становится no-op (остаётся бесконечный reconnect с max 30s backoff). onTransportChange — опциональный hook для диагностики (логирование/UI-индикатор 'offline'); FE-TASK-016 может игнорировать.",
+          "DI-паттерн createEventStreamOpener({eventSourceCtor?, http?, now?}) — аналог createHttpClient в client.ts. Причина: Vitest env=node, EventSource в globalThis отсутствует; инъекция FakeEventSource + fake now() даёт детерминизм без jsdom (vitest.config env=node по FE-TASK-026, FE-TASK-053 расширит на jsdom).",
+          "Polling читает через axios http (не fetch). Плюсы: наследует 401-refresh shared-promise, X-Correlation-Id, retry 502/503 из client.ts. При 404/403 — isOrchestratorError-guard, retry=0, возврат в SSE. При прочих (500, network) — транзиентно, продолжаем цикл.",
+          "Ранний exit при отсутствии accessToken: возврат noop-unsubscribe (не throw). Причина: useEffect-потребитель (FE-TASK-016) ещё может не получить profile; throw обойдёт cleanup; auth-flow сам редиректит на /login. Тест: EventSource не создаётся, onEvent не вызывается. Такой же exit при отсутствии EventSource-impl (node-SSR без мока).",
+          "Heartbeat=45s: backend пингует 15s, запас ×3 (§7.7). SSE-пинг `:ping` — это коммент, EventSource его не пропускает к addEventListener, но на низком уровне onmessage-сторож всё равно получает байты и обновляет last-seen; фактически `:ping` перезапускает heartbeat только косвенно через стандартную reconnect-логику браузера — поэтому резервный watchdog на 45s необходим."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint --max-warnings=0 — 0 errors, 0 warnings",
+          "npx prettier --check Frontend/src/shared/api/sse{,-events,.test}.ts Frontend/src/shared/api/index.ts Frontend/src/entities/job/index.ts — All matched files use Prettier code style",
+          "npm run test — 358/358 tests passed (43 файла; +20 новых SSE-тестов; регрессий нет, 338→358)",
+          "npm run build — dist/ 623.93 kB JS / 20.68 kB CSS (gzip 200.25 / 4.73), без errors",
+          "Makefile отсутствует в Frontend/ — этап N/A (как в FE-TASK-004/005/007/011/017/018/019/020/021/026/027/028/030/034)",
+          "subagents: code-architect (план: StatusEvent размещение, DI-паттерн, polling через http, 404-handling, cleanup race); code-reviewer (SHIP с условиями, blockers=0, majors=M1 stale-controller guard + M2 softResetAt reset в 404 + M3 es?.close в connect — ВСЕ применены; M4 polling→SSE aggressive return + M5 доп.тесты — частично: +2 теста (onerror после polling return, no-http после unsub), +граничный heartbeat 44/46с; M4 'N успешных тиков перед SSE-try-up' оставлен как post-merge follow-up)"
+        ],
+        "architecture_alignment": [
+          "§7.7 SSE implementation — 1:1: openEventStream signature, heartbeat 45s, exponential backoff 2^retry clamp 30s, 5 retries → polling fallback 3s interval, 24h soft-reset",
+          "§7.7 SECURITY-коммент перед url.searchParams.set('token', token) — ссылка на ADR-FE-10 (browser history / third-party JS / CDN raw logs / screenshots)",
+          "ADR-FE-10 Proposed — код помечен как v1 реализация; план миграции на sse_ticket задокументирован (строки 127-134 ADR)",
+          "§3 FSD layout — sse.ts + sse-events.ts + sse.test.ts в shared/api/*; entities/job — re-export для features",
+          "§20.2 useEventStream (FE-TASK-016) — потребляет openEventStream, StatusEvent импортирует из @/entities/job (разрешённый features→entities импорт)",
+          "§7.2 DI-паттерн — createEventStreamOpener{eventSourceCtor?,http?,now?} зеркалит createHttpClient в client.ts"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-016 useEventStream: вызывает openEventStream в useEffect; на каждый event — queryClient.setQueryData(qk.contracts.status(doc, ver), event); при status==='READY' — invalidateQueries(qk.contracts.results(...)); при 'FAILED'/'REJECTED' — toast.error({correlationId}); 'AWAITING_USER_INPUT' — event-bus → FE-TASK-037 LowConfidenceConfirmModal. StatusEvent importить из '@/entities/job' (§20.2).",
+          "FE-TASK-037 low-confidence-confirm: триггер — status==='AWAITING_USER_INPUT' из useEventStream; reuse openEventStream callback или использует event-bus.",
+          "FE-TASK-053 Vitest full: при переключении environment на jsdom — убрать jsdom-shim beforeEach/afterEach в sse.test.ts (window-заглушка); docblock не нужен.",
+          "Post-merge follow-up (M4 ревьюера): рассмотреть политику 'N успешных polling-тиков перед SSE-try-up' для снижения нагрузки на backend при длительной SSE-деградации. Альтернатива — отдельный backoff 10-15с. Задокументировать в ADR-FE-10-patch или в §7.7.",
+          "FE-TASK-015 + OpenAPI: в openapi.d.ts строка 1807 SSE endpoint описан как `text/event-stream: string` — нет схемы payload status_update. Backend ORCH-TASK может добавить component schema StatusEvent; до этого локальный тип в sse-events.ts — source of truth.",
+          "При переходе на sse_ticket (ADR-FE-10 Accepted): переписать createEventStreamOpener на двухступенчатый flow (http.post('/auth/sse-ticket') → new EventSource(?ticket=)); обработка 401 на expired ticket через 1 retry."
+        ]
+      }
     },
     {
       "id": "FE-TASK-016",

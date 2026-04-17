@@ -1399,3 +1399,67 @@ src/features/contract-upload/
 - **Known-issue**: axios 1.x в node с web-FormData выставляет Content-Type=urlencoded. В браузере (prod) это работает корректно через XHR/fetch. Для e2e/Playwright в реальном браузере будет полноценный multipart.
 
 ---
+
+## FE-TASK-015 — SSE wrapper (shared/api/sse.ts) (2026-04-17)
+
+**Статус:** done
+**Категория:** api-layer
+**Приоритет:** high
+**Итерация:** 16. **Зависимости:** FE-TASK-013 (done). **Разблокирует:** FE-TASK-016 → FE-TASK-037 → FE-TASK-043 (critical) и FE-TASK-042 (critical).
+
+### План реализации (выполнен)
+
+1. **Research (code-architect)** — изучены §7.7/§20.2 high-architecture.md + ADR-FE-10, openapi.d.ts (SSE endpoint + polling endpoint + UserProcessingStatus/ProcessingStatus), client.ts как reference для DI-паттерна.
+2. **Дизайн** — выбран DI-паттерн `createEventStreamOpener({eventSourceCtor?, http?, now?})` + default `openEventStream`. Публичная сигнатура расширена до `{documentId?, versionId?, onEvent, onTransportChange?}` (versionId нужен для polling — endpoint требует оба id). StatusEvent размещён в `shared/api/sse-events.ts` (владелец — транспортный слой; FSD-boundaries запрещают shared→entities); entities/job — re-export для features/widgets/pages по §20.2.
+3. **Имплементация** — 270 строк sse.ts: state-machine connect→open→{error|stale}→reconnect(2^retry с, clamp 30с)→polling после 5 неудач→возврат в SSE каждый 3с (или немедленно на 404/403). 24h soft-reset через инъекцию now(). AbortController для polling-запросов с stale-controller guard.
+4. **Тесты** — 20 unit-тестов: auth-gate (нет токена → noop), URL composition + SECURITY-token, status_update → onEvent (payload + невалидный JSON + после unsubscribe), heartbeat watchdog (с граничным тестом 44с=ok / 46с=fire), exponential backoff 2/4/8/16s, сброс retry на onopen, onerror после возврата из polling, polling fallback (с versionId + без versionId), 404→возврат в SSE, unsubscribe во время reconnect (нет нового ES), unsubscribe в polling (AbortController.abort + no-new-http после unsub), 24h soft-reset через fake now(). FakeEventSource + fake http (axios mock).
+5. **Code-review (code-reviewer)** — SHIP-with-conditions; blockers=0; majors M1 (stale-controller guard), M2 (убрать softResetAt=now()+SOFT_RESET_MS в 404-branch), M3 (es?.close() в начале connect) — все применены; M4 (polling→SSE aggressive return каждые 3с) оставлен как post-merge follow-up; M5 доп.тесты — +2 теста (onerror после polling return, no-http после unsub), +граничный heartbeat 44/46с.
+
+### Что сделано
+
+- Публичный API: `openEventStream({documentId?, versionId?, onEvent, onTransportChange?}) => unsubscribe` + фабрика `createEventStreamOpener({eventSourceCtor?, http?, now?})` для тестов/SSR.
+- Экспонент-backoff 2/4/8/16/32→clamp 30с; после 5 неудач подряд → polling-fallback на `/contracts/{id}/versions/{vid}/status` (только если versionId известен; иначе бесконечный reconnect с max 30с).
+- Heartbeat-watchdog 45с (backend пингует 15с × 3 запас). Reset на каждое status_update.
+- 24h soft-reset: при истечении — retry=0, reconnect.
+- Polling через axios `http` из shared/api/client.ts — наследует 401-refresh/correlation-id/retry. Stale-controller guard после await. 404/403 → остановить polling, retry=0, возврат в SSE. Прочие ошибки — транзиентны.
+- Early-exit при отсутствии accessToken → noop-unsubscribe (cleanup useEffect безопасен; throw обошёл бы cleanup). Аналогично при отсутствии EventSource-impl (node-SSR без мока).
+- SECURITY-коммент перед `url.searchParams.set('token', token)` с ссылкой на ADR-FE-10 (browser history / third-party JS / CDN raw logs / screenshots).
+
+### Ключевые решения / отклонения от acceptance criteria
+
+- **Signature AC 515** указывает `{documentId?, onEvent}`; расширено до `{documentId?, versionId?, onEvent, onTransportChange?}`. Причина: polling endpoint `/contracts/{contract_id}/versions/{version_id}/status` требует оба id, а SSE-query-param берёт только document_id. onTransportChange — опциональный hook для диагностики; FE-TASK-016 может игнорировать.
+- **StatusEvent в shared/api/sse-events.ts, не в entities/job** — FSD boundaries запрещают shared→entities; sse.ts (shared) владеет контрактом, entities/job делает re-export для consumers в features/widgets/pages.
+- **DI-паттерн createEventStreamOpener** — аналог createHttpClient, нужен потому что vitest env=node не имеет EventSource в globalThis; также позволяет инжектить fake now() для 24h-теста без ожидания суток.
+- **Polling через axios http** — не fetch. Плюс: 401-refresh/correlation-id/retry наследуется. Минус: OrchestratorError на 404 (обработан через isOrchestratorError + status check).
+
+### Затронутые файлы
+
+**Созданы:**
+- `Frontend/src/shared/api/sse.ts` — openEventStream + createEventStreamOpener
+- `Frontend/src/shared/api/sse-events.ts` — StatusEvent + UserProcessingStatus
+- `Frontend/src/shared/api/sse.test.ts` — 20 unit-тестов с FakeEventSource + fake http
+
+**Обновлены:**
+- `Frontend/src/shared/api/index.ts` — +13 экспортов (API + 5 констант SSE_*)
+- `Frontend/src/entities/job/index.ts` — был `export {};`; теперь re-export StatusEvent/UserProcessingStatus
+- `Frontend/tasks.json` — FE-TASK-015 status=done + completion_notes
+
+### Верификация
+
+- typecheck: 0 errors
+- lint: 0 errors, 0 warnings (max-warnings=0)
+- prettier: All matched files use Prettier code style
+- test: 358/358 passed (+20 новых SSE-тестов; 338→358, регрессий нет)
+- build: 623.93 kB / 200.25 kB gzip (без errors)
+- Makefile в Frontend/ отсутствует — этап N/A
+
+### Заметка для следующих итераций
+
+- **FE-TASK-016 (useEventStream)** — вызывает `openEventStream` в useEffect; на event → `queryClient.setQueryData(qk.contracts.status(doc, ver), event)`; при `status === 'READY'` — `invalidateQueries(qk.contracts.results(...))`; `'FAILED'/'REJECTED'` → `toast.error({correlationId})`; `'AWAITING_USER_INPUT'` → event-bus/callback для FE-TASK-037 LowConfidenceConfirmModal. Импорт StatusEvent — `from '@/entities/job'` (разрешённый shared/features → entities).
+- **FE-TASK-037 (low-confidence-confirm)** — триггер через status=AWAITING_USER_INPUT, RBAC: только LAWYER+ORG_ADMIN.
+- **FE-TASK-053 (Vitest full)** — при переключении environment на jsdom: убрать beforeEach/afterEach jsdom-shim для window в sse.test.ts.
+- **Post-merge follow-up (M4 ревьюера)** — обсудить «N успешных polling-тиков перед SSE-try-up» для снижения нагрузки на backend при длительной SSE-деградации. Альтернатива — отдельный backoff 10-15с. Рассмотреть в ADR-FE-10-patch или новом ADR.
+- **ADR-FE-10 Accepted migration** (после backend ORCH-TASK-047): переписать createEventStreamOpener на двухступенчатый flow (`http.post('/auth/sse-ticket')` → `new EventSource(?ticket=)`); обработка 401 на expired ticket через 1 retry.
+- **OpenAPI** — `/events/stream` в openapi.d.ts описан как `text/event-stream: string` без схемы payload. Backend может добавить component schema StatusEvent; до этого локальный тип в sse-events.ts — source of truth.
+
+---

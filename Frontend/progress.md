@@ -959,3 +959,80 @@
 **Затронутые файлы:**
 - `Frontend/src/shared/api/{client.ts,client.test.ts,errors.ts,index.ts}` (new + modified barrel)
 - `Frontend/package.json` (+axios ^1.15.0, +msw ^2.13.4 devDep) + `package-lock.json`
+
+---
+
+## FE-TASK-013 — TanStack Query setup (QueryClient + QueryProvider + qk-реестр)
+
+**Дата:** 2026-04-17
+**Статус:** done
+**Приоритет:** critical
+**Зависимости:** FE-TASK-012 (done) ✓
+
+### План
+1. Установить `@tanstack/react-query@5` + `@tanstack/react-query-devtools@5`.
+2. `src/shared/api/query-client.ts` — `createQueryClient()` factory + `queryClient` singleton с `defaultOptions.queries` `{staleTime: 30_000, retry: 1, refetchOnWindowFocus: false}` по §4.3 + `__resetQueryClientForTests()` для изоляции кэша.
+3. `src/shared/api/query-keys.ts` — `qk` 1:1 с §4.2 через `as const` для readonly-tuples.
+4. `src/shared/api/types.ts` — `ListParams`, `AuditFilters` (placeholder до /audit OpenAPI), `DocumentStatus` re-export из `openapi.d.ts`.
+5. `src/app/providers/QueryProvider.tsx` — `<QueryProvider>{children}</QueryProvider>` оборачивает `QueryClientProvider` + условный `<ReactQueryDevtools/>` под `import.meta.env.DEV` (Vite/Rollup DCE → dead branch выпиливается в prod).
+6. Barrel exports: `shared/api/index.ts` (+ `qk`, `queryClient`, `createQueryClient`, `__resetQueryClientForTests`, типы), `app/providers/index.ts`.
+7. Тесты: query-keys shape + `expectTypeOf` для readonly-кортежей, query-client defaults, jsdom-тест `useQuery(qk.me)` под `QueryProvider`.
+
+### Реализация
+
+**Архитектурные решения (подтверждены code-architect):**
+- **Singleton queryClient**, а не factory-per-request — для доступа из модульного кода (SSE/`useEventStream` по §4.4 вызывает `queryClient.setQueryData` вне React-дерева).
+- **Отдельный QueryProvider** (не inline в App) — инкапсулирует DevTools + готов к persistQueryClient/broadcastQueryClient в будущем.
+- **DevTools через static import** под `import.meta.env.DEV` — Vite заменяет `import.meta.env.DEV` на литерал `false` при билде, ветка мертва, DCE выпиливает импорт (package `sideEffects: false`). Dynamic import дал бы лишний chunk.
+- **`ListParams`/`AuditFilters` в types.ts**, а не в query-keys.ts — query-keys остаются «чистыми» от доменных типов; `ListParams` переиспользуется в будущих хуках (`useContractsList`).
+- **jsdom через docblock `// @vitest-environment jsdom`** на конкретном файле (QueryProvider.test.tsx), глобальный env — `node` (быстрее для pure TS-тестов).
+
+**qk иерархия (§4.2, 1:1):** `me`, `contracts.{all,list,byId,versions,version,status,results,risks,summary,recommendations,diff}`, `admin.{policies,checklists}`, `audit`. Все `qk.contracts.*` имеют общий префикс `['contracts']` — `invalidateQueries({ queryKey: qk.contracts.all })` каскадно сбрасывает весь под-кэш (§4.2 главная цель).
+
+**Типы openapi:**
+- `DocumentStatus` из `components['schemas']['DocumentStatus']` = `'ACTIVE' | 'ARCHIVED' | 'DELETED'` (тест на `list(...)` использует эти значения, не `READY` — тот относится к `version.status`).
+- `AuditFilters` — `Readonly<Record<string, unknown>>` с TODO-комментом до появления /audit в OpenAPI.
+
+**Тесты (17 новых, 196 total):**
+- `query-keys.test.ts` — 11 тестов: `toEqual` + `expectTypeOf<readonly ['contracts', string]>` для byId/versions/list/audit; hierarchy prefix check (все `qk.contracts.*` начинаются с `'contracts'`).
+- `query-client.test.ts` — 4 теста: `getDefaultOptions()` возвращает §4.3 дефолты; `createQueryClient()` даёт независимые инстансы; `__resetQueryClientForTests()` очищает кэш singleton'а.
+- `QueryProvider.test.tsx` — 2 теста (jsdom): `renderHook(useQuery({queryKey: qk.me, queryFn: async () => mockUser}), { wrapper: QueryProvider })` → `waitFor(isSuccess)` → `queryClient.getQueryData(['me'])` возвращает `mockUser`; default-options-probe проверяет `dataUpdatedAt > 0`.
+
+### Verification
+- `npx tsc --noEmit` — 0 ошибок.
+- `npm run lint` — 0 warnings (max-warnings=0).
+- `npx prettier --check .` — all files clean.
+- `npm run test` — **196/196 passed** (было 179, +17 новых в 3 файлах).
+- `npm run build` — 143.08kB (DevTools tree-shaken; prod bundle не растёт).
+
+### Subagents
+- **code-architect** (план-валидация, 5 вопросов) — GO по плану. Рекомендации применены 1:1: singleton + `__resetForTests`, static DevTools import под `DEV`, `ListParams`/`AuditFilters` в `types.ts`, docblock jsdom per-file.
+- **code-reviewer** (финал) — SHIP IT, 0 blockers. 2 non-blocker'а применены: `__resetQueryClientForTests` упрощён (убраны избыточные `getQueryCache().clear()` — `queryClient.clear()` уже покрывает); `AuditFilters` обёрнут в `Readonly<...>` + TODO-коммент про /audit OpenAPI.
+
+### Соответствие архитектуре
+- §4.1 — QueryClient для server-state, Zustand остаётся для session/UI (не затронут).
+- §4.2 — qk 1:1 со спецификацией, все ключи readonly-типизированы.
+- §4.3 — staleTime=30s default (override per-query в будущих хуках), retry=1, refetchOnWindowFocus=false. `staleTime: 0` для status и `Infinity` для results — per-query override в хуках FE-TASK-018/019/038.
+- §4.4 — `queryClient` экспортирован из `shared/api` для SSE-адаптера; точка интеграции готова для FE-TASK-015.
+- §2 FSD — новые файлы в `shared/api` (import-свободные снизу) и `app/providers` (верхний слой, импортирует `@/shared/api`). Никаких нарушений boundaries-plugin.
+
+### Заметки для следующих итераций
+- **FE-TASK-014** (error catalog) — теперь не блокируется, можно брать: разверни `src/shared/api/errors/` как каталог. OrchestratorError переедет в `errors/orchestrator-error.ts`, barrel сохранит обратную совместимость.
+- **FE-TASK-027** (auth-flow) — не блокируется. В `processes/auth-flow/init.ts` зарегистрировать `setRefreshHandler(...)` до первого запроса; `QueryProvider` + init вызывать в App.tsx (FE-TASK-030).
+- **FE-TASK-030** (app-shell) — теперь не заблокирован по 013. Композиция: `<QueryProvider><RouterProvider>...<Toaster/></...></...>`. QueryDevtools уже внутри QueryProvider.
+- **FE-TASK-031** (routing с data-loaders) — `ensureQueryData(qk.contracts.byId(id))` в loader'ах по §6.2. qk уже готов.
+- **FE-TASK-015** (SSE) — `useEventStream` будет использовать `queryClient.setQueryData(qk.contracts.status(id, vid), patch)`.
+- **FE-TASK-038** (version-results) — `useQuery({queryKey: qk.contracts.results(id,vid), staleTime: Infinity})` после READY (§4.3).
+- **Backlog:** (1) `AuditFilters` — заменить placeholder точным типом после добавления `/audit` в OpenAPI; (2) `staleTime: 0` override для `qk.contracts.status` — применить в хуке после FE-TASK-015; (3) persistQueryClient для offline — FE-TASK-048; (4) `QueryCache.onError` глобальный обработчик — подключить в `QueryProvider` после FE-TASK-014 (через `toast.error(toUserMessage(err))`).
+
+### Затронутые файлы
+- `Frontend/src/shared/api/query-client.ts` (new)
+- `Frontend/src/shared/api/query-keys.ts` (new)
+- `Frontend/src/shared/api/types.ts` (new)
+- `Frontend/src/shared/api/index.ts` (modified — barrel +5 exports)
+- `Frontend/src/app/providers/QueryProvider.tsx` (new, .gitkeep удалён)
+- `Frontend/src/app/providers/index.ts` (new, barrel)
+- `Frontend/src/shared/api/query-keys.test.ts` (new, 11 tests)
+- `Frontend/src/shared/api/query-client.test.ts` (new, 4 tests)
+- `Frontend/src/app/providers/QueryProvider.test.tsx` (new, 2 tests, jsdom pragma)
+- `Frontend/package.json` + `package-lock.json` (+@tanstack/react-query ^5.99, +@tanstack/react-query-devtools ^5.99)

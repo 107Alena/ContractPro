@@ -481,7 +481,8 @@
       "dependencies": [
         "FE-TASK-012"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "Установлены @tanstack/react-query@^5.99 + @tanstack/react-query-devtools@^5.99. Реализовано: (1) src/shared/api/query-client.ts — createQueryClient factory + queryClient singleton с defaultOptions queries {staleTime:30_000, retry:1, refetchOnWindowFocus:false} по §4.3 + __resetQueryClientForTests для изоляции кэша между тестами; (2) src/shared/api/query-keys.ts — qk 1:1 с §4.2 (me, contracts {all,list,byId,versions,version,status,results,risks,summary,recommendations,diff}, admin {policies,checklists}, audit) через `as const` для readonly tuples; (3) src/shared/api/types.ts — ListParams (page/size/status/search из openapi.d.ts), AuditFilters (Readonly<Record<string,unknown>> placeholder до появления /audit в OpenAPI), DocumentStatus re-export; (4) src/app/providers/QueryProvider.tsx — <QueryProvider>{children}</QueryProvider> с QueryClientProvider + условный <ReactQueryDevtools/> под import.meta.env.DEV (Vite/Rollup DCE удаляет в prod через literal false); (5) app/providers/index.ts + shared/api/index.ts barrel exports. Тесты (17 новых): query-keys.test.ts (11 — shape+expectTypeOf для readonly кортежей + hierarchy prefix check для invalidation), query-client.test.ts (4 — defaults §4.3, factory независимость, reset), QueryProvider.test.tsx (2 — docblock @vitest-environment jsdom, renderHook useQuery с qk.me → data под ключом ['me'], default-options-probe). Код-ревью code-architect+code-reviewer: SHIP-IT, 0 blockers; применены 2 non-blocker'а (__reset упрощён до queryClient.clear(), AuditFilters обёрнут в Readonly + TODO-коммент). Verifications: typecheck 0, lint 0, prettier clean, test 196/196 passed (179→196, +17), build 143.08kB (devtools tree-shaken). Соответствие §4.1-4.3 1:1."
     },
     {
       "id": "FE-TASK-014",

@@ -12,3 +12,6 @@ export {
   OrchestratorError,
   type OrchestratorErrorOptions,
 } from './errors';
+export { __resetQueryClientForTests, createQueryClient, queryClient } from './query-client';
+export { qk } from './query-keys';
+export type { AuditFilters, DocumentStatus, ListParams } from './types';

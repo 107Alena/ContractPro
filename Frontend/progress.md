@@ -2406,3 +2406,56 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **Follow-up (low) — `entities/report`**: при появлении ещё endpoint'ов над отчётами (share-audit, regenerate) консолидировать export/share обёртки в `entities/report/api/` и удалить duplication между export-download и share-link.
 
 ---
+
+## FE-TASK-008 — Vite dev-proxy (`/api/*` → :8080, SSE passthrough)
+
+**Дата:** 2026-04-18 · **Статус:** done · **Категория:** infrastructure · **Priority:** high
+
+### План
+
+Добавить в `Frontend/vite.config.ts` `server.proxy`-блок, зеркалящий production nginx из §13.2 high-architecture:
+
+1. Точный regex-ключ для SSE-стрима (`^/api/v1/events/stream(?:\?.*)?$`) с отключением буферизации (proxyRes-листенер удаляет `Content-Length`) и 24-часовым таймаутом.
+2. Общий regex-ключ `^/api/` для остальных REST-эндпоинтов.
+3. `changeOrigin: true`, `ws: false` на обоих ключах (WebSocket в v1 не используется).
+4. Шапка-комментарий со ссылкой на §13.2 + ADR-6 (same-origin) + §7.7 (SSE wrapper).
+
+### Ход выполнения
+
+1. **Архитектура:** прочитал §13.2 (Frontend/architecture/high-architecture.md:991–1080) — production nginx использует две `location`-секции с разными политиками; ADR-6 backend гарантирует same-origin (CORS не активируется).
+2. **Консультация code-architect:** подтверждена корректность regex-ключей (Vite 5 матчит longest-prefix последовательно), достаточность минимального header cleanup (только `Content-Length` — Go-orchestrator на `net/http`+Flusher не ставит ни `Content-Encoding`, ни `Content-Length` для SSE), оправданность 24h-таймаута (зеркалит prod-nginx, консистентность dev↔prod важнее, чем «быстрая ловля зависшего backend в dev»).
+3. **Реализация:** изменён один файл `Frontend/vite.config.ts` (+25 строк в `server.proxy`); комментарий явно ссылается на §13.2/§14.3/ADR-6.
+4. **Quality gates:** typecheck 0, lint 0/0, prettier clean, build OK (main 88.17 KB gzip), `npx vitest run` 721/721 passed (85 файлов, 9.88s) — без регрессий.
+5. **Финальный code-review:** SHIP, 0 blockers; применён опциональный nit (a) — расширил комментарий про защитный слой `Content-Length`. Отклонены: (b) unit-тест для конфига (избыточен, покрывается build + smoke-MSW в FE-TASK-053), (c) вынос `ws: false` в shared default (overengineering для двух записей).
+
+### Ключевые решения
+
+- **Regex-ключи (`^/api/...`) вместо строковых префиксов из AC.** Vite 5 трактует ключ начинающийся с `^` как RegExp; longest-match гарантирован порядком объявления — точный SSE-путь объявлен первым. Покрытие query-string (`?token=...`) критично, т.к. EventSource по §7.7 шлёт JWT через query-параметр (ADR-FE-10 — token-в-URL остаётся до миграции на sse_ticket).
+- **Только `Content-Length` cleanup в proxyRes.** Минимальный защитный слой — Go-orchestrator не ставит этого header'а для `text/event-stream`, но если ошибочно выставит — http-proxy не переключится в chunked transfer и буферизация съест real-time стрим.
+- **24h таймаут (proxyTimeout + timeout).** Консистентность с prod-nginx (`proxy_read_timeout 24h` в §13.2). Альтернатива 1h дала бы быстрее ловлю зависшего backend, но рассинхронизировала бы окружения.
+- **`ws: false` явно.** В v1 нет WebSocket-эндпоинтов; явный флаг — защита от случайного включения upgrade при новых маршрутах.
+
+### Quality gates
+
+- `npm run typecheck`: 0 errors.
+- `npm run lint --max-warnings=0`: clean.
+- `npx prettier --check vite.config.ts`: clean.
+- `npm run build`: production OK (main 88.17 KB gzip, без регрессий).
+- `npx vitest run`: **721/721 passed** (85 файлов, 9.88s).
+- Makefile в `Frontend/` отсутствует — этап «все цели Makefile проходят» N/A.
+
+### Соответствие архитектуре
+
+- **§13.2 nginx-эталон:** SSE location с `proxy_buffering off` + 24h `proxy_read_timeout` + chunked vs general `/api/` reverse-proxy — зеркалится в dev: ✓
+- **ADR-6 (backend) Same-origin deployment:** браузер видит `/api/v1/*` на :5173, проксирование прозрачно, CORS не активируется: ✓
+- **§7.7 SSE wrapper:** `EventSource('/api/v1/events/stream?token=...')` теперь работает в dev через regex-ключ покрывающий query-string: ✓
+- **§14.3 OTel `traceparent`:** без CORS-блока (same-origin): ✓
+
+### Заметки для следующих итераций
+
+- **FE-TASK-009 (Production Dockerfile + nginx.conf):** ту же конфигурацию из §13.2 нужно будет вынести в `Frontend/nginx.conf` — это и будет single source of truth, на который ссылается dev-proxy.
+- **FE-TASK-055 (Playwright e2e):** для прогона e2e против реального backend — поднимать Orchestrator на :8080, Vite на :5173. Proxy позаботится об интеграции; SSE-сценарии теперь проксируются без буферизации.
+- **FE-TASK-027 (auth-flow):** уже использует относительный baseURL `/api/v1` в `shared/api/client.ts` — proxy теперь делает endpoint реально доступным в dev.
+- Если в будущем потребуется ws-проксирование (например, для HMR backend-side) — добавить отдельный ключ с `ws: true`; сейчас все API-маршруты не используют WebSocket (SSE через EventSource).
+
+---

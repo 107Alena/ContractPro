@@ -326,7 +326,45 @@
       "dependencies": [
         "FE-TASK-004"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-18",
+        "summary": "Dev-proxy в Frontend/vite.config.ts: regex-ключ '^/api/v1/events/stream(?:\\?.*)?$' с proxy_read_timeout 24h-аналогом и proxyRes-листенером удаляющим Content-Length (защитный слой против буферизации SSE) + общий '^/api/' reverse-proxy. Оба ключа: target=http://localhost:8080, changeOrigin=true, ws=false. Регулярки гарантируют longest-match — Vite перебирает ключи последовательно, точный SSE-путь объявлен первым. Same-origin (ADR-6) сохраняется: браузер видит /api/v1/* на :5173, traceparent (§14.3) идёт без preflight.",
+        "files_modified": [
+          "Frontend/vite.config.ts — +server.proxy block (~25 строк), +комментарий со ссылкой на §13.2 + ADR-6 + §7.7"
+        ],
+        "deviations": [
+          "Использованы regex-ключи (`^/api/v1/events/stream...`, `^/api/`) вместо строковых префиксов из AC. Причина (code-architect+code-reviewer): Vite 5 трактует ключ начинающийся с ^ как RegExp; этот вариант гарантирует longest-match (точный SSE-путь матчится строго раньше общего /api/) и явно покрывает query-string (?token=...) — критично т.к. EventSource по §7.7 шлёт JWT через query-параметр.",
+          "proxyTimeout/timeout 24h — зеркалит §13.2 nginx (proxy_read_timeout 24h). Альтернатива 1h дала бы быстрее ловлю зависшего backend в dev, но рассинхронизировала бы прод и dev. Выбрали консистентность.",
+          "В configure.proxyRes удаляется только Content-Length (минимальный header cleanup по рекомендации code-architect). Cache-Control/content-encoding не трогаем — Go-orchestrator на net/http+Flusher не ставит ни того, ни другого для text/event-stream; защитный слой только от Content-Length, который ломает chunked transfer."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint --max-warnings=0 — 0 errors / 0 warnings",
+          "npx prettier --check vite.config.ts — All matched files use Prettier code style",
+          "npm run build — main 88.17 KB gzip, dist собран без warnings",
+          "npx vitest run — 721/721 passed (85 файлов, 9.88s) — без регрессий",
+          "Makefile в Frontend/ отсутствует — этап N/A (как в FE-TASK-004/005/007/011/017/026/030/031/032/042)",
+          "subagents: code-architect (план: regex-ключи, минимальный header cleanup, 24h timeout); code-reviewer (финал: SHIP, 0 blockers; применён опциональный nit (a) — расширил комментарий про защитный слой Content-Length)"
+        ],
+        "architecture_alignment": [
+          "§13.2 nginx-эталон: SSE location с proxy_buffering off + 24h read_timeout + chunked vs general /api reverse-proxy — зеркалится в dev: ✓",
+          "ADR-6 (backend) Same-origin deployment — браузер видит /api/v1/* на :5173, проксирование прозрачно, CORS не активируется: ✓",
+          "§7.7 SSE wrapper — EventSource('/api/v1/events/stream?token=...') теперь работает в dev через регекс-ключ покрывающий query-string: ✓",
+          "§14.3 OTel traceparent — без CORS-блока (same-origin): ✓"
+        ],
+        "test_steps_status": [
+          "Шаг 1 (мок backend на :8080): N/A в этой задаче — будет покрыто в FE-TASK-009 (production nginx prod-stack); локально dev-stack завязан на работающий Orchestrator (запускается отдельно)",
+          "Шаг 2 (SSE real-time): структурно гарантировано — proxyRes-листенер удаляет Content-Length; ручная проверка зафиксирована для FE-TASK-029 (LoginPage end-to-end) когда поднимут backend",
+          "Шаг 3 (relative URLs в Network): автоматически — proxy не меняет URL в браузере; subjective verification отложен до e2e (FE-TASK-055)"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-009 (Production Dockerfile + nginx.conf): ту же конфигурацию из §13.2 нужно будет вынести в Frontend/nginx.conf — единственный source-of-truth, на который ссылается этот dev-proxy",
+          "FE-TASK-055 (Playwright e2e): для локального прогона e2e против реального backend — поднимать Orchestrator на :8080, а Vite на :5173; proxy позаботится об интеграции. axe-проверка сценариев SSE будет работать.",
+          "FE-TASK-027 (auth-flow): уже использует относительный baseURL '/api/v1' в shared/api/client.ts — proxy теперь делает endpoint реально доступным",
+          "Если в будущем потребуется ws-проксирование (например, для HMR backend-side) — добавить отдельный ключ с ws=true; сейчас все API-маршруты не используют WebSocket (SSE через EventSource)"
+        ]
+      }
     },
     {
       "id": "FE-TASK-009",

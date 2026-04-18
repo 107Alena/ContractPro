@@ -41,5 +41,35 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // Dev-proxy зеркалит §13.2 high-architecture (production nginx) + ADR-6 (same-origin
+    // deployment в backend). Браузер обращается к относительному /api/v1/* на :5173 —
+    // CORS не активируется, traceparent (§14.3) идёт без preflight.
+    //
+    // Regex-ключи (longest-match) гарантируют, что точный путь SSE-стрима матчится раньше
+    // общего /api/* (см. §7.7 — EventSource на /api/v1/events/stream).
+    proxy: {
+      '^/api/v1/events/stream(?:\\?.*)?$': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        ws: false,
+        // proxy_read_timeout 24h аналог из §13.2 — long-lived SSE.
+        proxyTimeout: 24 * 60 * 60 * 1000,
+        timeout: 24 * 60 * 60 * 1000,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            // Защитный слой: Go-orchestrator на net/http+Flusher по умолчанию НЕ ставит
+            // Content-Length для text/event-stream, но если он его выставит — http-proxy
+            // не переключится в chunked transfer и буферизация съест real-time стрим
+            // (§13.2:proxy_buffering off).
+            delete proxyRes.headers['content-length'];
+          });
+        },
+      },
+      '^/api/': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        ws: false,
+      },
+    },
   },
 });

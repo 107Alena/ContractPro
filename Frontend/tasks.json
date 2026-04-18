@@ -1377,7 +1377,64 @@
         "FE-TASK-014",
         "FE-TASK-019"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-18",
+        "commit": "pending",
+        "files_created": [
+          "Frontend/src/features/auth/login/model/schema.ts",
+          "Frontend/src/features/auth/login/model/schema.test.ts",
+          "Frontend/src/features/auth/login/ui/LoginForm.tsx",
+          "Frontend/src/features/auth/login/ui/LoginForm.test.tsx",
+          "Frontend/src/features/auth/login/index.ts",
+          "Frontend/src/widgets/promo-sidebar/ui/PromoSidebar.tsx",
+          "Frontend/src/widgets/promo-sidebar/ui/PromoSidebar.stories.tsx",
+          "Frontend/src/widgets/promo-sidebar/ui/PromoSidebar.test.tsx",
+          "Frontend/src/widgets/promo-sidebar/index.ts",
+          "Frontend/src/pages/auth/LoginPage.stories.tsx",
+          "Frontend/src/pages/auth/LoginPage.test.tsx"
+        ],
+        "files_updated": [
+          "Frontend/src/pages/auth/LoginPage.tsx (placeholder to full page)",
+          "Frontend/src/pages/auth/index.ts (barrel restricted to LoginPage)",
+          "Frontend/src/features/auth/index.ts (re-export login slice)",
+          "Frontend/package.json (added react-hook-form, zod, @hookform/resolvers)",
+          "Frontend/eslint.config.js (pages allow processes for auth-flow)"
+        ],
+        "metrics": {
+          "tests": "540/540 passed (+31 over baseline 509)",
+          "lint": "0 warnings with --max-warnings=0",
+          "typecheck": "clean",
+          "build_size_gzip": "main bundle 88 kB gzip",
+          "storybook": "builds OK"
+        },
+        "deps_added": [
+          "react-hook-form@^7.72.1",
+          "zod@^3.25.76",
+          "@hookform/resolvers@^3.10.0"
+        ],
+        "key_decisions": [
+          "LoginForm purely presentational: accepts onSubmit(values)=>Promise<void>; no internal useMutation (single-shot submit does not need TanStack).",
+          "Page calls processes/auth-flow.login (does setAccess+setUser); on success navigate(?redirect ?? /dashboard, replace).",
+          "sanitizeRedirect blocks open-redirect: absolute URL, protocol-relative, backslash-trick, and loop to /login.",
+          "useEffect(setFocus(...)) instead of JSX autoFocus (jsx-a11y compliance).",
+          "Form-level error via form.setError(root.serverError) is the only live alert; inline field hints only aria-describedby+aria-invalid.",
+          "401 path: clear password, keep email (facilitates retry).",
+          "VALIDATION_ERROR -> applyValidationErrors; unmatched fields fall back to form-level banner.",
+          "ESLint boundaries tweak: allow pages -> processes (matches progress.md #1450 for auth-flow)."
+        ],
+        "storybook_states": [
+          "Default",
+          "Loading",
+          "ServerError",
+          "ValidationError"
+        ],
+        "deferred_follow_ups": [
+          "e2e Playwright (FE-TASK-055): successful login + wrong password + validation retry.",
+          "setNavigator(navigate) registration via processes/auth-flow.setup not added yet in app layer (planned for FE-TASK-033/057).",
+          "i18n keys (validation.*) still absent; applyValidationErrors falls back to server message (expected until FE-TASK-030 i18n setup)."
+        ]
+      }
     },
     {
       "id": "FE-TASK-030",

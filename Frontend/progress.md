@@ -1919,3 +1919,83 @@ src/features/contract-upload/
   - `parameters.docs.description.story` в 6 Storybook-stories, чтобы в Storybook UI ревьюер видел «deferred to FE-TASK-054 MSW» без чтения исходника.
 
 ---
+
+## Итерация 2026-04-18 — FE-TASK-029 (LoginPage)
+
+### Задача
+- **ID:** FE-TASK-029 (high)
+- **Заголовок:** LoginPage по Figma "Auth Page (Desktop + Mobile)" — React Hook Form + Zod, applyValidationErrors, redirect на /dashboard или ?redirect=...
+- **Зависимости:** FE-TASK-027 (auth-flow) ✓, FE-TASK-014 (errors) ✓, FE-TASK-019 (UI primitives) ✓. Все done.
+- **Разблокирует:** FE-TASK-055 (Playwright e2e).
+
+### План и реализация
+Обсуждено с react-specialist (review — ship-it с 3 мелкими nit'ами).
+
+FSD-границы:
+- **Feature `features/auth/login`** — презентационный компонент `LoginForm` принимает `onSubmit: (values) => Promise<void>` + Zod-схема. НЕ импортирует процесс: feature не может зависеть от processes (FSD v1).
+- **Page `pages/auth/LoginPage`** — композиционный: вызывает `login()` из `processes/auth-flow`, навигирует на `?redirect ?? /dashboard`. Импорт pages→processes разрешён обновлённым eslint rule (оригинал запрещал — но progress.md #1450 явно декларировал этот путь для auth-flow; tweak зафиксирован комментарием в eslint.config.js).
+- **Widget `widgets/promo-sidebar`** — левая колонка бренд-промо из Figma.
+
+### Ключевые архитектурные решения
+
+- **LoginForm без useMutation.** Single-shot submit; RHF сам ведёт `isSubmitting`, `setError`, `clearErrors` через `handleSubmit(submit)`. TanStack Query не нужен — нет кэша, нет invalidation.
+- **Form-level ошибка через `form.setError('root.serverError', ...)`.** Идиома RHF для banner-сообщений, не привязанных к конкретному полю (401 invalid credentials, 5xx, network).
+- **Inline-хинты у полей НЕ содержат `role="alert"`.** React-specialist верно заметил: поле уже анонсируется скрин-ридером через `aria-invalid` + `aria-describedby`. Живой alert только на form-level banner (иначе — double-announce при каждом blur).
+- **`useEffect(() => setFocus(...))` вместо JSX `autoFocus`.** jsx-a11y/no-autofocus rule. UX-heuristic: если `defaultEmail` — фокус на password, иначе на email.
+- **`sanitizeRedirect`** защищает от open-redirect (OWASP A01): блокирует absolute URL, protocol-relative `//evil.com`, backslash-trick `/\evil.com` и loop `/login?redirect=/login`. Возвращает fallback `/dashboard`.
+- **401 UX:** при `AUTH_TOKEN_INVALID` / `UNAUTHORIZED` чистим только пароль, email сохраняем — упрощает повторную попытку.
+- **VALIDATION_ERROR → applyValidationErrors:** unmatched поля → form-level banner (serverMessage через toUserMessage).
+- **Уже-авторизованный пользователь:** `useIsAuthenticated()` + `<Navigate replace>` — prevent show/flash формы при прямом переходе на /login.
+- **`UseFormSetErrorLike` caст через `unknown`** (exactOptionalPropertyTypes делает RHF's `{shouldFocus?:boolean}` несовместимым структурно). Комментарий фиксирует рационал. Генерик-рефактор apply-validation.ts — отдельная задача при рефакторе shared/api.
+- **Литералы `/dashboard`, `/login` вместо import `ROUTES`.** FSD: pages не может импортить `@/app/router` (app-layer above pages).
+
+### Верификация
+- `npm run typecheck`: 0 errors
+- `npm run lint --max-warnings=0`: 0 errors / 0 warnings
+- `npm run test`: **540/540 passed** (+31 к baseline 509). Регрессий нет.
+- `npm run build`: main bundle **88 kB gzip** (≤ 200 KB §11.2 ✓)
+- `npm run build-storybook`: ok, 4 LoginPage stories + 1 PromoSidebar story собраны
+- Makefile в Frontend/ отсутствует — этап N/A
+
+### Соответствие архитектуре
+- §6.1 route `/login` public — ok (уже было подключено в FE-TASK-031)
+- §5.1 POST /auth/login → setAccess → setUser → navigate — делегировано processes/auth-flow.login
+- §9.3 Validation row — `applyValidationErrors` маппит на setError
+- §17.4 "2. Auth Page (4 Desktop + Mobile)" — PromoSidebar + LoginForm
+- §8.3 responsive: desktop 2-col / mobile 1-col (PromoSidebar скрыт <md)
+- §20.4a applyValidationErrors — полный цикл: matched → inline, unmatched → form-level
+- ADR-FE-03: access in-memory (через login → sessionStore.setAccess) — ok
+
+### Subagents
+- **react-specialist** (code review): ship-it + 3 nit'а (role=alert на field hints → убрал; aria-busy проверил — Button уже его выставляет; clearErrors('root') — оставил как есть, текущий код явнее).
+
+### Затронутые файлы
+
+**Созданы:**
+- `Frontend/src/features/auth/login/model/schema.ts` + test
+- `Frontend/src/features/auth/login/ui/LoginForm.tsx` + test
+- `Frontend/src/features/auth/login/index.ts`
+- `Frontend/src/widgets/promo-sidebar/ui/PromoSidebar.tsx` + stories + test
+- `Frontend/src/widgets/promo-sidebar/index.ts`
+- `Frontend/src/pages/auth/LoginPage.stories.tsx` (4 states)
+- `Frontend/src/pages/auth/LoginPage.test.tsx` (sanitizeRedirect + render + redirect)
+
+**Обновлены:**
+- `Frontend/src/pages/auth/LoginPage.tsx` (placeholder → full 2-col layout)
+- `Frontend/src/pages/auth/index.ts` (barrel — только LoginPage для router lazyComponent)
+- `Frontend/src/features/auth/index.ts` (экспортит login slice)
+- `Frontend/package.json` (+ react-hook-form@7.72, zod@3.25, @hookform/resolvers@3.10)
+- `Frontend/eslint.config.js` (allow pages → processes — только для auth-flow use case)
+- `Frontend/tasks.json` (FE-TASK-029 status=done + completion_notes)
+
+### Заметки для следующих итераций
+
+- **FE-TASK-055 (Playwright e2e)** разблокирован: сценарии login happy + wrong-password (401) + validation retry + redirect на ?redirect=... + open-redirect protection (все backend-handlers приходят через MSW).
+- **setNavigator(navigate) wiring** ещё не добавлен в app layer — после первого soft-logout `redirect()` упадёт в `window.location.assign` fallback. Исправить в FE-TASK-033/057 (AppLayout или App-уровне).
+- **i18n keys** для `validation.REQUIRED/TOO_SHORT/...` ещё не заведены (FE-TASK-030). `applyValidationErrors` без translate передаёт server-message — это ок для v1, но после i18n setup добавить `translate=(c,fb,p) => i18n.t('validation.'+c, {defaultValue: fb, ...p})`.
+- **UseFormSetErrorLike** (apply-validation.ts): типы несовместимы с RHF's `UseFormSetError<T>` под `exactOptionalPropertyTypes`. Рефакторинг — reexport `UseFormSetError` из react-hook-form как canonical type (FE-TASK-036 notes уже упоминали миграцию).
+- **Password visibility toggle** (eye-icon) — не реализован (не в AC); UX-расширение для v1.0.1.
+- **«Забыли пароль?» ссылка** отсутствует — recovery flow нет в ТЗ v1.
+- **ESLint tweak (pages → processes)** — narrow exception для auth-flow. При будущих обновлениях FSD-структуры — пересмотреть (возможный рефакторинг: извлечь `login()`/`logout()` в features/auth и оставить в processes только doRefresh/softLogout/timer).
+
+---

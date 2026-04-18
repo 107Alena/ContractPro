@@ -112,7 +112,13 @@ export default tseslint.config(
             },
             {
               from: 'pages',
-              allow: ['widgets', 'features', 'entities', 'shared', sliceSame('pages')],
+              // `processes` допустим для pages по архитектурной договорённости:
+              // processes/auth-flow экспортирует login/logout/setNavigator, которые
+              // вызываются прямо со страниц (LoginPage/TopBar). FSD v1 формально
+              // располагает processes выше pages, но для auth-flow задокументировано
+              // обратное направление импорта (progress.md #1450). Ограничиваем
+              // деформацию явным allow-list, а не ослаблением default.
+              allow: ['processes', 'widgets', 'features', 'entities', 'shared', sliceSame('pages')],
             },
             {
               from: 'widgets',

@@ -1,5 +1,45 @@
 # Frontend Implementation Progress
 
+## FE-TASK-039 — export-download + share-link features (2026-04-18)
+
+**Статус:** done
+**Категория:** feature
+**Приоритет:** high
+**Зависимости:** FE-TASK-028 (done), FE-TASK-020 (done). **Разблокирует:** FE-TASK-046 (critical ResultPage), FE-TASK-048 (ReportsPage).
+
+**Что сделано:**
+- `shared/lib/use-copy/` — `useCopy(resetMs=1500)` с Clipboard API → execCommand fallback; авто-сброс `copied` через `setTimeout`, unmount cleanup. 6 тестов.
+- `features/export-download/`:
+  - `api/http.ts` — локальный DI axios-инстанса (паттерн comparison-start).
+  - `api/export-report.ts` — GET `/contracts/{cid}/versions/{vid}/export/{format}` с `maxRedirects:0 + fetchOptions:{redirect:'manual'} + validateStatus:(s)=>s===302`; extract Location через AxiosHeaders.get() или plain-object; 302 без Location → `OrchestratorError('INTERNAL_ERROR')`.
+  - `model/types.ts` — `ExportFormat`, `ExportReportInput`, `ExportLocation`.
+  - `model/use-export-download.ts` — `useMutation`, `onSuccess → navigate(location)` с DI-дефолтом `window.location.assign`, `onError` c `toUserMessage`, REQUEST_ABORTED фильтруется.
+  - `lib/is-export-not-ready.ts` — type-guard для 404 ARTIFACT_NOT_FOUND / RESULTS_NOT_READY.
+  - `index.ts` — barrel FSD-границы.
+  - Unit + integration (fetch-adapter + MSW) + hook тесты — 20 тестов.
+- `features/share-link/` (параллельный feature для FSD-границы, т.к. `features/*` не импортируют друг у друга):
+  - `api/{http,get-share-link}.ts` — дубликат тонкой обёртки к тому же export-endpoint.
+  - `model/{types,use-share-link}.ts` — `useMutation` + встроенный `useCopy`; `onSuccess` копирует `location` в clipboard, возвращает `copied` флаг.
+  - Unit + integration + hook тесты — 15 тестов.
+- `widgets/export-share-modal/ui/ExportShareModal.tsx` — Radix Modal с 2 карточками (PDF/DOCX) × 2 кнопки («Скачать» + «Скопировать ссылку»). `useCanExport` gate → fallback-note «У вас нет прав». Toast на успех/ошибку. `data-testid` для e2e. navigate prop для DI. 7 тестов.
+- MSW handler на `/export/{format}` (302 + Location) уже был в `tests/msw/handlers/export.ts` — переиспользован.
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- `window.location.assign` не тестируется напрямую (jsdom блокирует `Object.defineProperty(window.location, ...)`) — покрыто DI-параметром `navigate` во всех тестах + фактический e2e в рамках FE-TASK-055.
+- `fetchOptions:{redirect:'manual'}` необходимо, потому что axios fetch-adapter НЕ транслирует `maxRedirects:0` в `redirect:'manual'`. Без этого undici/fetch авто-следует редиректу на `https://presigned.example/...` → NETWORK_ERROR (нет handler'а для presigned-URL). В реальном браузере с XHR-adapter `maxRedirects:0` игнорируется — архитектурный path через navigation-assign всё равно работает.
+- share-link endpoint в OpenAPI отсутствует — архитектура сознательно использует тот же `/export/{format}`. Разница с export-download только в UX-действии: copy-to-clipboard вместо `window.location.assign`. FSD-граница запрещает импорт между `features/*`, поэтому api-обёртка продублирована.
+- jsdom 24 не реализует `document.execCommand` — полифилим `Object.defineProperty(document, 'execCommand', {...})` в тестах, где нужен fallback.
+
+**Подключённые subagents:** code-architect (FSD-границы, решение о дублировании share-link), react-specialist (паттерн DI для `navigate` в useMutation + optsRef для live-коллбэков).
+
+**Затронутые файлы:**
+- Новые: `src/shared/lib/use-copy/*`, `src/features/export-download/{api,model,lib,index.ts}`, `src/features/share-link/{api,model,index.ts}`, `src/widgets/export-share-modal/{ui,index.ts}`.
+- Обновлены: `Frontend/tasks.json` (status: done), `Frontend/progress.md`, `session.log`.
+
+**Проверки:** `npm run test` → 85 файлов / 721 тест зелёные. `npm run lint` → clean. `npm run typecheck` → clean. `npm run build` → 670 модулей, production-артефакты собрались.
+
+---
+
 Лог выполнения задач из `Frontend/tasks.json`. Каждый агент после завершения задачи добавляет запись в формате:
 
 ```

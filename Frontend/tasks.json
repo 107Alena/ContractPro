@@ -1828,7 +1828,39 @@
         "FE-TASK-028",
         "FE-TASK-020"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "summary": "Реализованы features export-download (useExportDownload → navigate→window.location.assign), share-link (useShareLink → clipboard copy + 1500мс checkmark) и widget ExportShareModal (PDF/DOCX × Download/Share с RBAC-fallback для BUSINESS_USER без export_enabled). Добавлен shared/lib/use-copy hook с Clipboard API + execCommand fallback.",
+        "files_created": [
+          "src/shared/lib/use-copy/{use-copy.ts,use-copy.test.tsx,index.ts}",
+          "src/features/export-download/{api/http.ts,api/export-report.ts,api/export-report.test.ts,api/export-report.integration.test.ts,lib/is-export-not-ready.ts,model/types.ts,model/use-export-download.ts,model/use-export-download.test.tsx,index.ts}",
+          "src/features/share-link/{api/http.ts,api/get-share-link.ts,api/get-share-link.test.ts,api/get-share-link.integration.test.ts,model/types.ts,model/use-share-link.ts,model/use-share-link.test.tsx,index.ts}",
+          "src/widgets/export-share-modal/{ui/ExportShareModal.tsx,ui/ExportShareModal.test.tsx,index.ts}"
+        ],
+        "architecture_refs": [
+          "§7.6 Экспорт (302 Redirect)",
+          "§5.6 useCanExport (role + computed permissions.export_enabled)",
+          "§8.11/§17.5 Artifacts ↔ UI consumers (EXPORT_PDF, EXPORT_DOCX)"
+        ],
+        "technical_decisions": [
+          "maxRedirects:0 + fetchOptions:{redirect:'manual'} + validateStatus s===302 — читаем Location напрямую, не следуем редиректу автоматически; fetch-adapter игнорирует maxRedirects без fetchOptions",
+          "FSD-граница запрещает импорт feature↔feature — axios-обёртка getShareLink дублирует exportReport (тривиальная — не оправдывает создание entities/report)",
+          "RBAC-гейтинг в widgets/export-share-modal, не в feature-хуке: useCanExport для BUSINESS_USER без export_enabled рендерит EmptyState вместо карточек",
+          "navigate-DI (NavigateFn) — для тестов подменяется, default — window.location.assign; в jsdom location override через Object.defineProperty для точечного теста",
+          "useCopy hook помещён в shared/lib (переиспользуется в future version/report-share features): Clipboard API → execCommand fallback; copied-флаг с авто-reset через 1500мс и unmount cleanup"
+        ],
+        "tests": {
+          "new_tests": "43 (useCopy:6, export-download: unit 11 + integration 3, share-link: unit 7 + integration 3, ExportShareModal:7)",
+          "total_suite": "85 файлов / 721 тест зелёные",
+          "lint": "eslint . --max-warnings=0 → clean",
+          "typecheck": "tsc --noEmit → clean",
+          "build": "vite build → 670 модулей, production-артефакты собраны"
+        },
+        "follow_ups": [
+          "E2E-тест «Скачать PDF → редирект на presigned URL» — в рамках FE-TASK-055 (Playwright)",
+          "Интеграция ExportShareModal в ResultPage (FE-TASK-044) и ReportsPage (FE-TASK-046)"
+        ]
+      }
     },
     {
       "id": "FE-TASK-040",

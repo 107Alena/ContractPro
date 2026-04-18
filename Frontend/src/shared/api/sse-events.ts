@@ -29,3 +29,44 @@ export interface StatusEvent {
   /** X-Correlation-Id запроса, породившего событие (§7.8). */
   correlation_id?: string;
 }
+
+/** Альтернативный тип договора, предложенный LIC. */
+export interface TypeAlternative {
+  /** Идентификатор типа договора (whitelist LIC: услуги, поставка, подряд, ...). */
+  contract_type: string;
+  /** Уверенность модели в этом типе (0.0–1.0). */
+  confidence: number;
+}
+
+/**
+ * Payload SSE-события `type_confirmation_required` (FR-2.1.3). Шлётся, когда
+ * LIC классифицировал тип договора с уверенностью ниже `threshold` — версия
+ * остановлена в `AWAITING_USER_INPUT`, требуется выбор пользователя.
+ *
+ * Контракт описан в `ApiBackendOrchestrator/architecture/event-catalog.md`
+ * §2.2 (ClassificationUncertain → SSE push). Намеренно НЕ наследует
+ * `StatusEvent`: это другой `event_type` с гарантированным набором полей,
+ * объединение через optional поля скрыло бы инвариант "если статус
+ * AWAITING_USER_INPUT — suggested_type/confidence/threshold present".
+ */
+export interface TypeConfirmationEvent {
+  /** UUID договора. */
+  document_id: string;
+  /** UUID версии. */
+  version_id: string;
+  /** Всегда `AWAITING_USER_INPUT` — backend указывает явно для синхронизации UI. */
+  status: 'AWAITING_USER_INPUT';
+  /** Тип, который LIC считает наиболее вероятным (топ-1 кандидат). */
+  suggested_type: string;
+  /** Уверенность модели в `suggested_type` (0.0–1.0). По условию ниже `threshold`. */
+  confidence: number;
+  /** Порог уверенности, ниже которого требуется подтверждение пользователя. */
+  threshold: number;
+  /** Альтернативные типы (top-N, отсортированы по убыванию confidence).
+   *  Backend гарантирует поле, но может прислать пустой массив. */
+  alternatives?: TypeAlternative[];
+  /** ISO-8601 — время публикации события. */
+  timestamp?: string;
+  /** X-Correlation-Id запроса, породившего событие (§7.8). */
+  correlation_id?: string;
+}

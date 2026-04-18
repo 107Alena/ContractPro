@@ -1768,3 +1768,84 @@ src/features/contract-upload/
 - **FE-TASK-054 (MSW)**: заменить widget-level ErrorState тест на page-level через MSW handler (5xx ошибка на GET /contracts).
 
 ---
+
+## 2026-04-18 — FE-TASK-037 (DONE) low-confidence-confirm feature
+
+### Задача
+
+Реализовать FSD-фичу `src/features/low-confidence-confirm/` — модалка подтверждения типа договора (FR-2.1.3): реакция на SSE event `type_confirmation_required` + POST `/contracts/{id}/versions/{vid}/confirm-type`. RBAC: только LAWYER+ORG_ADMIN. Разблокирует FE-TASK-043 (NewCheckPage critical).
+
+### План реализации
+
+1. **Расширение SSE-инфраструктуры** (`shared/api/`):
+   - `sse-events.ts`: standalone `TypeConfirmationEvent` + `TypeAlternative` (по совету code-architect — НЕ extends `StatusEvent`, чтобы не скрывать инвариант обязательных полей).
+   - `sse.ts`: новый `addEventListener('type_confirmation_required', ...)` рядом с `status_update`. Минимальная валидация обязательных полей. Аддитивно — старые подписки не трогаем.
+   - `use-event-stream.ts`: новый `onTypeConfirmation` через latest-ref pattern + новая опция `enabled?: boolean` (P1 от code-reviewer — для RBAC-gated подписок без открытия EventSource).
+
+2. **RBAC**: новая permission `version.confirm-type: ['LAWYER', 'ORG_ADMIN']` в `shared/auth/rbac.ts` (НЕ реюзаем `risks.view` — совпадение ролей сегодня случайность).
+
+3. **Feature `src/features/low-confidence-confirm/`**:
+   - `api/http.ts` + `api/confirm-type.ts` — DI-обёртка axios + POST функция (паттерн contract-upload).
+   - `lib/map-confirm-type-error.ts` — маппер: 409→stale (toast.warning + dismiss), 400 VALIDATION_ERROR→invalid-type (модалка остаётся), REQUEST_ABORTED→aborted, прочие→unknown.
+   - `model/low-confidence-store.ts` — Zustand store с current event + LRU recent (10 элементов, TTL 60s). Идемпотентность: повторный open для уже открытой/недавно закрытой версии — no-op (защита от backend retry'ев).
+   - `model/use-confirm-type.ts` — useMutation: confirm(contractType) читает event из store, POST. onSuccess → store.resolve + invalidate qk.contracts.versions/status + toast.success. onError разводит по action.kind.
+   - `model/use-low-confidence-bridge.ts` — RBAC-gated `useEventStream(undefined, {enabled: useCan('version.confirm-type'), onTypeConfirmation: store.open})`.
+   - `ui/LowConfidenceConfirmModal.tsx` — presentational модалка (Radix Modal + native `<input type="radio">` + Button). Принимает `confirm: ConfirmHandle` — инициализация useConfirmType вынесена в Provider.
+   - `ui/LowConfidenceConfirmProvider.tsx` — root-композиция: bridge + useConfirmType + Modal по store.
+   - `index.ts` — public API.
+
+4. **App-shell интеграция**: `<LowConfidenceConfirmProvider/>` в `src/app/App.tsx` рядом с RouterProvider/Toaster (внутри QueryProvider).
+
+### Файлы
+
+**Создано** (16):
+- `Frontend/src/features/low-confidence-confirm/api/{http.ts, confirm-type.ts, confirm-type.test.ts}`
+- `Frontend/src/features/low-confidence-confirm/lib/{map-confirm-type-error.ts, map-confirm-type-error.test.ts}`
+- `Frontend/src/features/low-confidence-confirm/model/{types.ts, low-confidence-store.ts, low-confidence-store.test.ts, use-confirm-type.ts, use-confirm-type.test.tsx, use-low-confidence-bridge.ts, use-low-confidence-bridge.test.tsx}`
+- `Frontend/src/features/low-confidence-confirm/ui/{LowConfidenceConfirmModal.tsx, LowConfidenceConfirmModal.test.tsx, LowConfidenceConfirmModal.stories.tsx, LowConfidenceConfirmProvider.tsx}`
+
+**Изменено**:
+- `Frontend/src/shared/api/sse-events.ts` — +TypeAlternative + TypeConfirmationEvent
+- `Frontend/src/shared/api/sse.ts` — +listener type_confirmation_required + onTypeConfirmation в options
+- `Frontend/src/shared/api/sse.test.ts` — +5 тестов на новый listener
+- `Frontend/src/shared/api/use-event-stream.ts` — +onTypeConfirmation passthrough + enabled опция
+- `Frontend/src/shared/api/index.ts` — экспорты типов
+- `Frontend/src/shared/auth/rbac.ts` — +version.confirm-type permission
+- `Frontend/src/shared/auth/rbac.test.ts` — обновлён snapshot
+- `Frontend/src/app/App.tsx` — смонтирован LowConfidenceConfirmProvider
+- `Frontend/src/features/low-confidence-confirm/index.ts` — public API barrel
+- `Frontend/tasks.json` — FE-TASK-037 status=done + completion_notes
+
+### Subagents
+
+- **code-architect** (планирование): PLAN OK с 4 правками: (1) standalone TypeConfirmationEvent (не extends StatusEvent), (2) новая permission `version.confirm-type` (не реюзать risks.view), (3) idempotency LRU recent, (4) Provider в фиче (не в app/processes).
+- **code-reviewer** (финал): SHIP-WITH-FIXES с 1 P1 — wasted SSE-подписка для BUSINESS_USER (открывает EventSource без callback). Применён через `enabled?: boolean` опцию в useEventStream + `enabled: allowed` в bridge.
+
+### Верификация
+
+- typecheck: 0 errors
+- lint --max-warnings=0: 0 errors / 0 warnings
+- prettier (мои файлы): All matched files use Prettier code style
+- test: **501/501 passed** (было 451, **+50 новых**: 5 sse listener + 11 store + 11 use-confirm-type + 7 mapper + 7 modal RTL + 4 bridge + 6 confirm-type api unit). Регрессий нет.
+- build: main **87.96 KB gzip** (было 84 KB, +4 KB из-за новой фичи) ≤ 200 KB §11.2 ✓; vendor chunks без изменений
+- Makefile отсутствует — этап N/A
+
+### Архитектурное соответствие
+
+- **§5.6 RBAC Pattern B** — bridge gated через useCan; BUSINESS_USER не получает SSE-подписку и не может вызвать confirm-type
+- **§7.7 SSE wrapper** расширен новым event_type аддитивно (status_update остаётся работать). Heartbeat reset на оба event-type
+- **§17.1 endpoints** — POST /contracts/{contract_id}/versions/{version_id}/confirm-type реализован
+- **FR-2.1.3** — модалка показывает suggested + confidence + threshold + alternatives; POST с confirmed_by_user=true; 202 → ANALYZING → SSE invalidate
+- **ApiBackendOrchestrator/architecture/event-catalog.md §2.2** — TypeConfirmationEvent 1:1 с payload SSE push
+
+### Заметки для следующих итераций
+
+- **FE-TASK-043 (NewCheckPage critical, разблокирован!)**: после upload версия может перейти в AWAITING_USER_INPUT — модалка автоматически появится глобально через Provider в App-shell. Page не должна обрабатывать тип-confirmation отдельно.
+- **FE-TASK-046 (ResultPage critical)**: на странице версии в статусе AWAITING_USER_INPUT можно показать дополнительный CTA «Подтвердить тип» через прямой вызов `useLowConfidenceStore.getState().open(event)` с префетченным event'ом из GET /results.contract_type.
+- **FE-TASK-053 (полный vitest)**: убрать @vitest-environment jsdom docblock'и в bridge/modal/use-confirm-type tests после миграции на global jsdom env.
+- **FE-TASK-054 (MSW handlers)**: добавить интеграционный тест POST /confirm-type с MSW (по аналогии с upload-contract.integration.test.ts).
+- **Custom-input** для произвольного типа — TODO в LowConfidenceConfirmModal.tsx (требует backend whitelist валидации).
+- **code-reviewer P2 follow-ups (non-blockers)**: (a) pollOnce capture symmetry в sse.ts, (b) memoize confirm handle в Provider, (c) ESC/overlay-click test paths модалки, (d) endpointFor → confirmTypeEndpoint naming.
+- **Reusable pattern**: для будущих interactive SSE events (например clause_clarification_required) шаблон готов: добавить event-type в sse-events + listener в sse + callback в options. Bridge-pattern (RBAC-gated useEventStream + Zustand store + Provider в App-shell + presentational Modal) переиспользуется.
+
+---

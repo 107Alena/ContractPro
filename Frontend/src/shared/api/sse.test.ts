@@ -239,6 +239,69 @@ describe('status_update — onEvent', () => {
   });
 });
 
+describe('type_confirmation_required — onTypeConfirmation (FR-2.1.3)', () => {
+  it('парсит payload и вызывает onTypeConfirmation', () => {
+    const { opener } = setup();
+    const onTypeConfirmation = vi.fn();
+    opener({ onEvent: vi.fn(), onTypeConfirmation });
+    const payload = {
+      document_id: 'doc-1',
+      version_id: 'ver-1',
+      status: 'AWAITING_USER_INPUT' as const,
+      suggested_type: 'услуги',
+      confidence: 0.62,
+      threshold: 0.75,
+      alternatives: [{ contract_type: 'подряд', confidence: 0.21 }],
+    };
+    FakeEventSource.last().emit('type_confirmation_required', JSON.stringify(payload));
+    expect(onTypeConfirmation).toHaveBeenCalledWith(payload);
+  });
+
+  it('без onTypeConfirmation в options — событие молча игнорируется (без падений)', () => {
+    const { opener } = setup();
+    opener({ onEvent: vi.fn() });
+    expect(() =>
+      FakeEventSource.last().emit(
+        'type_confirmation_required',
+        '{"document_id":"d","version_id":"v","status":"AWAITING_USER_INPUT","suggested_type":"x","confidence":0.5,"threshold":0.7}',
+      ),
+    ).not.toThrow();
+  });
+
+  it('малформ-payload (отсутствует suggested_type) — onTypeConfirmation НЕ вызван', () => {
+    const { opener } = setup();
+    const onTypeConfirmation = vi.fn();
+    opener({ onEvent: vi.fn(), onTypeConfirmation });
+    FakeEventSource.last().emit(
+      'type_confirmation_required',
+      '{"document_id":"d","version_id":"v","status":"AWAITING_USER_INPUT","confidence":0.5,"threshold":0.7}',
+    );
+    expect(onTypeConfirmation).not.toHaveBeenCalled();
+  });
+
+  it('битый JSON — подписка живёт, callback не вызван', () => {
+    const { opener } = setup();
+    const onTypeConfirmation = vi.fn();
+    opener({ onEvent: vi.fn(), onTypeConfirmation });
+    expect(() =>
+      FakeEventSource.last().emit('type_confirmation_required', 'garbage{'),
+    ).not.toThrow();
+    expect(onTypeConfirmation).not.toHaveBeenCalled();
+  });
+
+  it('после unsubscribe — onTypeConfirmation не вызван', () => {
+    const { opener } = setup();
+    const onTypeConfirmation = vi.fn();
+    const unsub = opener({ onEvent: vi.fn(), onTypeConfirmation });
+    unsub();
+    FakeEventSource.last().emit(
+      'type_confirmation_required',
+      '{"document_id":"d","version_id":"v","status":"AWAITING_USER_INPUT","suggested_type":"x","confidence":0.5,"threshold":0.7}',
+    );
+    expect(onTypeConfirmation).not.toHaveBeenCalled();
+  });
+});
+
 describe('heartbeat watchdog', () => {
   it('нет событий 45s → close + reconnect', () => {
     vi.useFakeTimers();

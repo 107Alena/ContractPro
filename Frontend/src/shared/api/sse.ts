@@ -24,14 +24,19 @@ import { sessionStore } from '@/shared/auth/session-store';
 import { http as defaultHttp } from './client';
 import { isOrchestratorError } from './errors';
 import type { components } from './openapi';
-import type { StatusEvent } from './sse-events';
+import type { StatusEvent, TypeConfirmationEvent } from './sse-events';
 
 // ─────────── Публичные типы ───────────
 
 // StatusEvent — доменный контракт события. Владелец — транспортный слой
 // shared/api (sse-events.ts); re-export из entities/job предоставляется
 // consume'ерам из слоёв features/widgets/pages по §20.2.
-export type { StatusEvent, UserProcessingStatus } from './sse-events';
+export type {
+  StatusEvent,
+  TypeAlternative,
+  TypeConfirmationEvent,
+  UserProcessingStatus,
+} from './sse-events';
 
 export type TransportMode = 'sse' | 'polling';
 
@@ -50,6 +55,16 @@ export interface OpenEventStreamOptions {
   versionId?: string;
   /** Callback при каждом `status_update`-событии (SSE или poll). */
   onEvent: (event: StatusEvent) => void;
+  /**
+   * Callback при SSE-событии `type_confirmation_required` (FR-2.1.3).
+   * Backend публикует отдельный event_type с расширенным payload
+   * (`suggested_type`, `confidence`, `threshold`, `alternatives`).
+   * Polling-fallback это событие НЕ восстанавливает — оно one-shot, без
+   * реплея. Если SSE упал между публикацией и переподключением, версия
+   * останется в AWAITING_USER_INPUT, пользователь увидит её через polled
+   * status_update и сможет открыть модалку через ContractDetailPage.
+   */
+  onTypeConfirmation?: (event: TypeConfirmationEvent) => void;
   /** Переключение транспорта (для логирования/диагностики в UI). */
   onTransportChange?: (mode: TransportMode) => void;
 }
@@ -217,6 +232,34 @@ export function createEventStreamOpener(deps: OpenEventStreamDeps = {}): OpenEve
         } catch {
           // Мусорный payload — не ломаем подписку, полагаемся на следующий event.
         }
+      });
+
+      instance.addEventListener('type_confirmation_required', (msg) => {
+        if (cancelled) return;
+        resetHeartbeat();
+        if (!opts.onTypeConfirmation) return;
+        const data = (msg as MessageEvent<string>).data;
+        let parsed: TypeConfirmationEvent;
+        try {
+          parsed = JSON.parse(data) as TypeConfirmationEvent;
+        } catch {
+          // Битый payload — игнорируем (defence-in-depth, как в status_update).
+          return;
+        }
+        // Минимальная валидация обязательных полей: bridge не должен
+        // открывать модалку с undefined-suggested_type. Малформ-event
+        // молча отбрасываем, подписка живёт.
+        if (
+          !parsed ||
+          typeof parsed.document_id !== 'string' ||
+          typeof parsed.version_id !== 'string' ||
+          typeof parsed.suggested_type !== 'string' ||
+          typeof parsed.confidence !== 'number' ||
+          typeof parsed.threshold !== 'number'
+        ) {
+          return;
+        }
+        opts.onTypeConfirmation(parsed);
       });
 
       instance.onopen = (): void => {

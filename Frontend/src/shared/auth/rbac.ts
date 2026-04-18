@@ -18,6 +18,11 @@ export const PERMISSIONS = {
   'recommendations.view': ['LAWYER', 'ORG_ADMIN'],
   'comparison.run': ['LAWYER', 'ORG_ADMIN'],
   'version.recheck': ['LAWYER', 'ORG_ADMIN'],
+  // Подтверждение типа договора (FR-2.1.3) — модалка LowConfidenceConfirm.
+  // BUSINESS_USER не видит модалку и не может подтвердить тип, даже если SSE
+  // event докатился (provider в feature low-confidence-confirm проверяет это
+  // на уровне регистрации listener'а — для бизнес-пользователя бридж noop).
+  'version.confirm-type': ['LAWYER', 'ORG_ADMIN'],
   'admin.policies': ['ORG_ADMIN'],
   'admin.checklists': ['ORG_ADMIN'],
   'audit.view': ['ORG_ADMIN'],

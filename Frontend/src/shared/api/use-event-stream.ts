@@ -25,7 +25,7 @@ import {
   type OpenEventStreamFn,
   type TransportMode,
 } from './sse';
-import type { StatusEvent, UserProcessingStatus } from './sse-events';
+import type { StatusEvent, TypeConfirmationEvent, UserProcessingStatus } from './sse-events';
 
 type ToastApi = typeof defaultToast;
 
@@ -95,11 +95,24 @@ function pickTitle(event: StatusEvent, status: UserProcessingStatus): string {
 export interface UseEventStreamOptions {
   /** UUID версии — фильтр подписки + активация polling-fallback в `sse.ts`. */
   versionId?: string;
-  /** Callback при AWAITING_USER_INPUT. Единственная точка низкой связности с
-   *  модалкой LowConfidenceConfirm (event-bus появится позже). */
+  /** Callback при AWAITING_USER_INPUT в `status_update`-событии. Используется
+   *  как low-fidelity fallback (без suggested_type/threshold) — для рич-payload
+   *  подпишись на `onTypeConfirmation`. */
   onAwaitingUserInput?: (event: StatusEvent) => void;
+  /**
+   * Callback при `type_confirmation_required`-событии (FR-2.1.3). Точка низкой
+   * связности с фичей `low-confidence-confirm`: бридж в фиче подписывается
+   * сюда и пишет event в Zustand store, по которому рендерится модалка.
+   */
+  onTypeConfirmation?: (event: TypeConfirmationEvent) => void;
   /** Диагностический callback (sse/polling) — пробрасывается в `openEventStream`. */
   onTransportChange?: (mode: TransportMode) => void;
+  /**
+   * Если `false` — подписка не открывается (используется для RBAC-gated
+   * фич: например, `low-confidence-confirm` bridge для BUSINESS_USER не
+   * должен держать лишний EventSource). По умолчанию `true`.
+   */
+  enabled?: boolean;
   /**
    * @internal DI для unit-тестов — аналог `createHttpClient`/`createEventStreamOpener`.
    * Продакшен-code должен использовать дефолт — `openEventStream` из `shared/api/sse.ts`.
@@ -128,8 +141,10 @@ export function useEventStream(documentId?: string, options: UseEventStreamOptio
   optionsRef.current = options;
 
   const versionId = options.versionId;
+  const enabled = options.enabled ?? true;
 
   useEffect(() => {
+    if (!enabled) return undefined;
     const current = optionsRef.current;
     const opener = current.openEventStreamFn ?? defaultOpenEventStream;
     return opener({
@@ -145,9 +160,12 @@ export function useEventStream(documentId?: string, options: UseEventStreamOptio
           }),
         });
       },
+      onTypeConfirmation: (event) => {
+        optionsRef.current.onTypeConfirmation?.(event);
+      },
       onTransportChange: (mode) => {
         optionsRef.current.onTransportChange?.(mode);
       },
     });
-  }, [documentId, versionId, qc]);
+  }, [documentId, versionId, qc, enabled]);
 }

@@ -48,7 +48,12 @@ export {
   type TransportMode,
   type Unsubscribe,
 } from './sse';
-export { type StatusEvent, type UserProcessingStatus } from './sse-events';
+export {
+  type StatusEvent,
+  type TypeAlternative,
+  type TypeConfirmationEvent,
+  type UserProcessingStatus,
+} from './sse-events';
 export type { AuditFilters, DocumentStatus, ListParams } from './types';
 export {
   dispatchStatusEvent,

@@ -15,6 +15,7 @@ describe('PERMISSIONS table (§5.5)', () => {
       'recommendations.view': ['LAWYER', 'ORG_ADMIN'],
       'comparison.run': ['LAWYER', 'ORG_ADMIN'],
       'version.recheck': ['LAWYER', 'ORG_ADMIN'],
+      'version.confirm-type': ['LAWYER', 'ORG_ADMIN'],
       'admin.policies': ['ORG_ADMIN'],
       'admin.checklists': ['ORG_ADMIN'],
       'audit.view': ['ORG_ADMIN'],

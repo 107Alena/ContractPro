@@ -1681,7 +1681,21 @@
       "dependencies": [
         "FE-TASK-013"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": [
+        "comparison-start feature: api/http.ts (DI), api/start-comparison.ts (POST /contracts/{id}/compare, body {base_version_id, target_version_id} → narrow {jobId, status}), api/get-diff.ts (GET /contracts/{id}/versions/{base}/diff/{target} → narrow VersionDiffResult с fallback'ами для optional полей)",
+        "lib/is-diff-not-ready.ts: helper isDiffNotReadyError(err) — 404 DIFF_NOT_FOUND как soft-state для UI (а не toast-ошибка)",
+        "model/types.ts: StartComparisonInput/Response, GetDiffInput, VersionDiffResult, VersionDiffTextChange/StructuralChange (через OpenAPI components)",
+        "model/use-start-comparison.ts: useMutation, инвалидация qk.contracts.diff(id, base, target); 409 VERSION_STILL_PROCESSING → toast через toUserMessage + ERROR_UX; REQUEST_ABORTED фильтруется",
+        "model/use-diff.ts: useQuery с retry-predicate — DIFF_NOT_FOUND и REQUEST_ABORTED → skip retry (ждём SSE COMPARISON_COMPLETED), прочие — 1 retry; опции enabled/staleTime",
+        "index.ts barrel: публичный API feature (FSD-граница — consumer'ы ResultPage/widgets только через этот путь)",
+        "Безопасность: encodeURIComponent для всех трёх path-params (contractId, baseVersionId, targetVersionId) — закрытие path-injection",
+        "Тесты: 56 новых (start-comparison api 14 + integration 6; get-diff api 12 + integration 5; is-diff-not-ready 4; use-start-comparison 8; use-diff 7). Всего 670/670 passed (было 614)",
+        "typecheck: 0 errors; eslint --max-warnings=0: clean; build 88.18 KB gzip main (без регрессий)",
+        "Code review (subagent code-reviewer): verdict BLOCKING=0, fixes применены — REQUEST_ABORTED retry-skip в useDiff + retryDelay=0 в test для детерминизма",
+        "Разблокирует FE-TASK-047 (high — widgets/version-compare) и FE-TASK-046 (critical — ResultPage с diff-viewer)",
+        "Subagent: code-reviewer (независимое ревью — проверка FSD-границ, error-семантики 409/404, retry-predicate; несколько NON-BLOCKING замечаний приняты/отложены)"
+      ]
     },
     {
       "id": "FE-TASK-037",

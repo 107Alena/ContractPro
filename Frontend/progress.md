@@ -2254,3 +2254,59 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **Потребители recheck в FAILED-state ResultPage**: ожидаемый UX — toast `VERSION_STILL_PROCESSING` с title+hint, а после 202 navigate на `/contracts/{id}/versions/{new_vid}/result` (страница-потребитель сама navigate'ит через onSuccess-колбэк).
 
 ---
+
+## FE-TASK-036 — comparison-start + get-diff feature (2026-04-18)
+
+**Статус:** done
+**Категория:** feature
+**Приоритет:** high
+**Зависимости:** FE-TASK-013 (done — shared/api с qk.contracts.diff, OrchestratorError, toUserMessage).
+**Разблокирует:** FE-TASK-047 (high, widgets/version-compare), FE-TASK-046 (critical, ResultPage с diff-viewer).
+
+**Цель:** feature-слой FSD для запуска сравнения версий (POST /contracts/{id}/compare) и получения результата (GET .../diff/{target_vid}). Обеспечить корректную обработку 409 VERSION_STILL_PROCESSING (версии ещё в обработке) и 404 DIFF_NOT_FOUND (сравнение ещё не готово — soft-state, не error-toast).
+
+**План реализации:**
+1. **Research** — api-specification.yaml §7.5 (CompareRequest/Response, VersionDiff), openapi.d.ts components; эталоны — features/version-recheck (mutation-only + 409) и entities/contract/api/use-contracts (query-pattern).
+2. **Дизайн:**
+   - Два хука (mutation + query) внутри одного feature'а — единый barrel `index.ts`.
+   - `isDiffNotReadyError(err)` как отдельный helper в `lib/` — единая точка правды для retry-predicate в useDiff и для UI-switch в ResultPage/widgets.
+   - `useDiff` retry-predicate: DIFF_NOT_FOUND/REQUEST_ABORTED → skip retry; прочие — 1 retry (default queryClient); опции `enabled`/`staleTime`.
+   - `useStartComparison.onSuccess` инвалидирует только `qk.contracts.diff(id, base, target)` — реальный refetch после COMPARISON_COMPLETED приходит через useEventStream (§7.7).
+3. **Имплементация (~370 LOC):**
+   - `api/http.ts` — локальный DI (копия паттерна version-recheck).
+   - `api/start-comparison.ts` — POST, snake_case body, runtime-narrow {jobId, status}.
+   - `api/get-diff.ts` — GET, 3 path-сегмента с encodeURIComponent, runtime-narrow с fallbacks для optional полей (base/target_version_id → из input; text/structural_diffs → []).
+   - `lib/is-diff-not-ready.ts` — type-guard для 404 DIFF_NOT_FOUND.
+   - `model/types.ts` — Input/Response (camelCase) + reference на OpenAPI raw типы.
+   - `model/use-start-comparison.ts` — useMutation + latest-ref pattern; 409/etc. через toUserMessage.
+   - `model/use-diff.ts` — useQuery с retry-predicate, enabled/staleTime в opts.
+   - `index.ts` — barrel.
+4. **Тесты (56 новых):** start-comparison api 14 + integration 6; get-diff api 12 + integration 5; is-diff-not-ready 4; use-start-comparison 8; use-diff 7.
+5. **Code review (subagent code-reviewer)** — verdict BLOCKING=0, применены 2 NON-BLOCKING фикса: (a) useDiff retry-predicate теперь skip'ает REQUEST_ABORTED для консистентности с version-upload; (b) use-diff.test.tsx переведён на `retryDelay=0` для детерминированного retry-теста вместо wallclock-ожидания. Отложенные NON-BLOCKING: деталь-level narrow для VersionDiff элементов массивов (сейчас as-cast), invariant на пустые version_id (pre-existing gap во всех features).
+
+**Ключевые решения:**
+- **Два хука в одном feature** (не разносить на comparison-start и comparison-view) — семантически единый flow "запуск → результат", общий error-domain (DIFF_NOT_FOUND ↔ COMPARE_QUEUED), общие fixtures в тестах.
+- **`isDiffNotReadyError` отдельно в `lib/`** — не инкапсулировать в хуке: retry-predicate в useDiff и soft-UI в ResultPage — разные consumer'ы, одна проверка.
+- **narrow с fallbacks в get-diff** — OpenAPI все поля optional (open set), но для детерминированного API consumer'ам отдаём всегда полный объект; fallback'и: `base/target_version_id` → из input (round-trip гарантирован); массивы → `[]`; счётчики → 0.
+- **Retry-predicate с `instanceof OrchestratorError`-guard** — защита от бросания raw-Error из narrow-функций (сигнатура `failureCount, err` в react-query принимает `Error`, не `OrchestratorError`).
+- **onSuccess invalidate — одна key** (qk.contracts.diff) — не расширяем до `['contracts', id]` prefix: compare не меняет metadata договора, только породил diff-job.
+
+**Затронутые файлы (новые):**
+- `src/features/comparison-start/{api,lib,model}/*.ts` (7 файлов src)
+- `src/features/comparison-start/{api,lib,model}/*.test.ts{,x}` + `*.integration.test.ts` (7 тест-файлов)
+- `src/features/comparison-start/index.ts` (обновлён с `export {}` → barrel)
+
+**Quality gates:**
+- typecheck: 0 errors
+- eslint --max-warnings=0: clean (автофикс simple-import-sort в 2 тестах)
+- vitest: 670/670 passed (было 614, +56)
+- build: 88.18 KB gzip main (без регрессий)
+
+### Заметки для следующих итераций
+
+- **FE-TASK-047 (widgets/version-compare, high)** — разблокирован полностью. Ожидаемый flow widget'а: два dropdown'а `base/target`, кнопка "Сравнить" → `useStartComparison.startComparison({...})` → `useDiff({...}, { enabled: jobCompleted })`; `jobCompleted` — либо явный флаг от SSE COMPARISON_COMPLETED, либо просто `enabled=true` всегда (retry-predicate сам не будет бомбить сервер на DIFF_NOT_FOUND).
+- **FE-TASK-046 (ResultPage, critical)** — после FE-TASK-036 ещё ждёт FE-TASK-024, FE-TASK-039, FE-TASK-040. Импорт для diff-секции: `import { useDiff, isDiffNotReadyError, type VersionDiffResult } from '@/features/comparison-start'`.
+- **Follow-up (low) — narrow per-array-element в get-diff**: сейчас `text_diffs`/`structural_diffs` приводятся `as [Type][]` без валидации каждого элемента. Можно добавить filter+guard, но это overkill — backend по контракту шлёт валидные элементы. Отложено до реального drift'а.
+- **Follow-up (low) — invariant на пустые path-params**: `encodeURIComponent('')` возвращает `''` → URL `/contracts//compare` пройдёт через axios. Pre-existing gap во всех features (contract-upload, version-upload, version-recheck). Если чинить — то централизованно в http-client через request-interceptor.
+
+---

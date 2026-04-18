@@ -1,10 +1,11 @@
+// @vitest-environment node
 // Unit-тесты HTTP-клиента (§7.2-7.4 high-architecture).
 // Покрывают: auth inject, X-Correlation-Id, 401 refresh race, 429 Retry-After,
 // 502/503 GET backoff, network-error retry, ошибочная нормализация в OrchestratorError.
 //
-// MSW (node adapter) мокает HTTP поверх axios. Vitest environment='node' — ок,
-// MSW v2 использует undici Interceptor API; fetch из axios маршрутится тем же
-// механизмом (axios 1.7+ поддерживает undici через node adapter).
+// MSW (node adapter) мокает HTTP поверх axios. Environment: node (FE-TASK-053
+// установил jsdom по умолчанию, здесь форсим обратно — под jsdom axios выбирает
+// XHR adapter и не интегрируется с MSW v2 undici Interceptor API).
 //
 // Тайминги для retry/429 сокращены через vi.useFakeTimers + runAllTimersAsync.
 import { http as mswHttp, HttpResponse } from 'msw';

@@ -1,13 +1,16 @@
-// Глобальный setup для vitest-тестов (FE-TASK-053 расширит под jest-dom matchers,
-// MSW-реестр и coverage-шипсы). На момент FE-TASK-032 полифилим `localStorage` /
-// `sessionStorage`: в jsdom 24.1.3 + vitest 1.6.1 прототип этих объектов теряется
-// при `populateGlobal` — `localStorage.setItem` возвращает `undefined` и ломает
-// любой код с `zustand/middleware` persist. Полифил включается только если
-// нативная реализация реально нерабочая, иначе уходит из пути (no-op).
+// Глобальный setup для vitest-тестов (FE-TASK-053).
+// 1. Регистрирует @testing-library/jest-dom matchers (toBeInTheDocument и др.) —
+//    подтягивается через /vitest entrypoint, автоматически расширяет `expect`.
+// 2. Полифилит `localStorage`/`sessionStorage` — в jsdom 24.1.3 + vitest 1.6.1
+//    прототип этих объектов теряется при `populateGlobal`, что ломает любой код
+//    с `zustand/middleware` persist. Полифил включается только если нативная
+//    реализация реально нерабочая, иначе уходит из пути (no-op).
 //
 // Ключи сохраняются в памяти до конца теста; очистка — через `.clear()` в
 // afterEach каждого теста. Не пытаемся реализовывать StorageEvent — модулям
 // приложения он не требуется (single-tab SPA).
+
+import '@testing-library/jest-dom/vitest';
 
 class MemoryStorage implements Storage {
   private store = new Map<string, string>();

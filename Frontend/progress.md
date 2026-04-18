@@ -1999,3 +1999,62 @@ FSD-границы:
 - **ESLint tweak (pages → processes)** — narrow exception для auth-flow. При будущих обновлениях FSD-структуры — пересмотреть (возможный рефакторинг: извлечь `login()`/`logout()` в features/auth и оставить в processes только doRefresh/softLogout/timer).
 
 ---
+
+## Итерация 2026-04-18 — FE-TASK-053 (Vitest + Testing Library setup + coverage)
+
+### Задача
+- **ID:** FE-TASK-053 (high, testing)
+- **Описание:** Vitest 1.6 + @testing-library/react 15 + @testing-library/user-event 14 + jsdom environment + jest-dom matchers + coverage (v8, thresholds lines/statements ≥ 80%, branches ≥ 75% для shared/* и entities/*) + scripts `test` (watch) / `test:ci` (--coverage).
+- **Зависимости:** FE-TASK-007 (ESLint/Prettier) — done.
+- **Разблокирует:** FE-TASK-055 (Playwright e2e) через шаблон test-setup.
+
+### План
+Обсуждено с typescript-pro: per-glob thresholds в Vitest 1.6 стабильно работают ключами объекта `thresholds` — подтверждено экспериментом (99% → правильный fail, 80/75 → pass); v8 provider предпочтителен istanbul'у (нативный, без Babel-instrumentation). По environment — типовая рекомендация `environmentMatchGlobs`, но для 2 axios+MSW интеграционных тестов директива `@vitest-environment node` в шапке файла самодокументирующаяся и не требует конфиг-драйва.
+
+### Ключевые решения
+- **environment: 'jsdom' по умолчанию** — большинство тестов (RTL/widgets/pages/features) уже используют jsdom-директиву; теперь она становится default. Pure-node тесты без регрессии — jsdom-оверхед ~50-100 мс/файл приемлем.
+- **2 файла форсят `@vitest-environment node`**: `shared/api/client.test.ts` и `features/contract-upload/api/upload-contract.integration.test.ts`. Причина — axios 1.x под jsdom выбирает XHR adapter, который не интегрируется с MSW v2 undici Interceptor API. Под node — fetch/http adapter работает через undici, MSW перехватывает корректно.
+- **Per-glob thresholds** в `coverage.thresholds`: `'src/shared/**/*.{ts,tsx}'` и `'src/entities/**/*.{ts,tsx}'` → `{ lines: 80, statements: 80, branches: 75, functions: 80 }`. Функции добавлены сверх AC (AC не упоминает), чтобы мёртвые экспорты без тестов ловились явно.
+- **Coverage `exclude`**: *.d.ts, *.{test,spec}.*, *.stories.*, __tests__/**, __mocks__/**, index.ts (FSD barrel), main.tsx, vite-env.d.ts, test-setup.ts. Include: `src/**/*.{ts,tsx}` — весь код отображается в отчёте, thresholds применяются только к foundational-слоям.
+- **test-setup.ts**: `import '@testing-library/jest-dom/vitest'` на вершине (auto-extends `expect`), затем существующий MemoryStorage polyfill (сохранён).
+
+### Верификация
+- `npm run typecheck`: 0 errors
+- `npm run lint --max-warnings=0`: 0 errors / 0 warnings
+- `npm run test:ci` → **540/540 passed, coverage thresholds enforced ✓**. Экспериментально: при временной замене 80→99 для shared/** тест упал с корректной ошибкой (`Coverage for lines (93.16%) does not meet "src/shared/**/*.{ts,tsx}" threshold (99%)`).
+- `npm run build`: main **88.16 KB gzip** (≤ 200 KB §11.2 ✓)
+- `npm run build-storybook`: не затронут.
+- Makefile в Frontend/ отсутствует — этап N/A.
+
+### Соответствие архитектуре
+- §10.1 пирамида: Vitest unit + RTL integration — оба работают в одной конфигурации.
+- §10.4 thresholds `lines/statements ≥ 80%`, `branches ≥ 75%` для shared/* + entities/* — реализовано 1:1.
+- §10.3 MSW — совместим (сохранён для shared/api/client.test.ts + upload-contract.integration.test.ts под node env).
+- package.json scripts — совпадают с §раздел 19 (archives): `test` → `vitest`, `test:ci` → `vitest run --coverage`.
+
+### Subagents
+- **typescript-pro** (design review): v8 vs istanbul, per-glob thresholds синтаксис, environmentMatchGlobs vs директивы — рекомендации использованы.
+- **code-reviewer**: ship-it + 2 nit'а (follow-up): вынести MemoryStorage polyfill в отдельный `test-polyfills.ts`; превентивно добавить `src/mocks/**` в coverage.exclude. Не блокеры.
+
+### Затронутые файлы
+
+**Обновлены:**
+- `Frontend/vitest.config.ts` — полная переработка: jsdom env, setupFiles, coverage v8 с per-glob thresholds, include/exclude.
+- `Frontend/src/test-setup.ts` — добавлен `import '@testing-library/jest-dom/vitest'`; MemoryStorage polyfill сохранён.
+- `Frontend/package.json` — scripts: `test` → watch, `test:ci` → `vitest run --coverage`. devDependencies: `@testing-library/jest-dom@^6.9.1`, `@testing-library/user-event@^14.6.1`, `@vitest/coverage-v8@^1.6.1`.
+- `Frontend/src/features/contract-upload/api/upload-contract.integration.test.ts` — `// @vitest-environment node` директива + актуализированный комментарий.
+- `Frontend/src/shared/api/client.test.ts` — `// @vitest-environment node` директива + комментарий о причине.
+- `Frontend/package-lock.json` — обновлён npm install'ом (24 package added, 1 removed).
+- `Frontend/tasks.json` — FE-TASK-053 status=done + completion_notes.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-055 (Playwright e2e)** разблокирован: vitest-setup не пересекается с Playwright, но `@testing-library/user-event` уже установлен — можно переиспользовать паттерны взаимодействий.
+- **Follow-up nit 1**: вынести MemoryStorage polyfill из `src/test-setup.ts` в `src/test-polyfills.ts` и добавить вторым элементом `setupFiles: ['./src/test-polyfills.ts', './src/test-setup.ts']`. Текущий setup — 50 строк, из которых только 1 строка (`import '@testing-library/jest-dom/vitest'`) — про matchers; остальное — polyfill. Разделение облегчит поддержку.
+- **Follow-up nit 2**: превентивно расширить `coverage.exclude` на `src/mocks/**` и `src/**/*.config.{ts,tsx}` — сейчас таких файлов нет, но при росте кодбазы они могут некорректно попасть в threshold-проверку.
+- **Директивы `// @vitest-environment jsdom`** в 26 тестовых файлах теперь избыточны (default → jsdom). Не удалял массово — риск регрессии, не входит в AC. Отдельная cleanup-задача в будущем.
+- **Coverage HTML report** в `Frontend/coverage/` — добавить в `.gitignore` если ещё не добавлен (проверить отдельно; не в scope FE-TASK-053).
+- **`functions: 80` threshold** добавлен сверх AC. При появлении "мёртвых" экспортов в shared/* (типично barrel re-exports, которые index.ts уже исключает) — удалить или добавить тест.
+- **Zustand persist под jsdom**: MemoryStorage polyfill всё ещё нужен — issue vitest 1.6.1 + jsdom 24.1.3 не исправлен. При апгрейде vitest → 2.x проверить, работает ли нативный jsdom localStorage без полифила.
+
+---

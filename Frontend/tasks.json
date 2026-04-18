@@ -2233,7 +2233,8 @@
       "dependencies": [
         "FE-TASK-007"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "Vitest 1.6.1 + @testing-library/react@15.0.7 + @testing-library/user-event@14.6 + @testing-library/jest-dom@6.9 + @vitest/coverage-v8@1.6.1 установлены. vitest.config.ts: environment=jsdom (default), setupFiles=./src/test-setup.ts (jest-dom matchers + localStorage polyfill), coverage.provider=v8, reporter=['text','html'], thresholds per-glob для src/shared/** и src/entities/** (lines/statements=80, branches=75, functions=80). scripts: test=vitest (watch), test:ci=vitest run --coverage. 2 axios+MSW интеграционных теста получили `// @vitest-environment node` директиву (upload-contract.integration.test.ts, client.test.ts) — под jsdom XHR adapter не интегрируется с undici Interceptor API. Результат: 540/540 passed, typecheck 0 errors, lint 0/0, build 88.16 KB gzip main. Per-glob thresholds экспериментально подтверждены (99% → правильный fail, 80/75 → pass). Code-reviewer: ship-it + 2 follow-up nit (polyfill split в отдельный setup-файл, exclude src/mocks/**)."
     },
     {
       "id": "FE-TASK-054",

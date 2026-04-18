@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Integration-тест: реальный axios-client + MSW. Проверяет, что upload-слой
 // и shared/api/client.ts корректно интегрированы на границах:
 //   • POST /contracts/upload идёт на правильный абсолютный URL (baseURL + path);
@@ -10,7 +11,8 @@
 // расхождение, см. upload-contract.test.ts для unit-проверки FormData-shape).
 // MSW матчит по URL+method и отдаёт mock-response независимо от Content-Type.
 //
-// Environment: node (default). В jsdom global.fetch подменён jsdom-реализацией,
+// Environment: node (форсим через @vitest-environment node — default теперь
+// jsdom по §10.2, FE-TASK-053). В jsdom global.fetch подменён jsdom-реализацией,
 // которая не проходит через undici и MSW-interceptor не срабатывает.
 import { http as mswHttp, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';

@@ -597,7 +597,9 @@
       "dependencies": [
         "FE-TASK-015"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "Реализован shared/api/use-event-stream.ts: тонкий React-хук над openEventStream (§7.7) + чистая dispatchStatusEvent (изоляция побочных эффектов от React). Ключевые решения: latest-ref pattern для колбэков (смена onAwaitingUserInput не рвёт SSE); DI через optional openEventStreamFn/toast (@internal) — аналог createHttpClient/createEventStreamOpener; fallback-titles для FAILED/REJECTED/PARTIALLY_FAILED/AWAITING_USER_INPUT когда backend не шлёт message (TODO i18n); correlation_id пробрасывается в toast.description (API toast не поддерживает correlationId-поле); malformed-guard (document_id/version_id falsy → no-op); AWAITING_USER_INPUT → toast.warning + callback onAwaitingUserInput (low-coupling с LowConfidenceConfirm до event-bus). Тесты: 21 unit для dispatchStatusEvent (env=node, без React) + 7 hook-тестов через renderHook/jsdom (mount/unmount/resubscribe on documentId-change/latest-ref stability/setQueryData/invalidate/toast). Всего 412/412 тестов, typecheck 0, lint 0/0, prettier clean, build 244kB/76kB gzip. Code-review: SHIP 0 blockers/0 majors; 3 minors применены (коммент про latest-ref safety, @internal для DI-полей, TODO про i18n fallback). Разблокирует FE-TASK-037 (critical) → FE-TASK-043 (critical) и FE-TASK-042 (critical).",
+      "completed_at": "2026-04-18"
     },
     {
       "id": "FE-TASK-017",

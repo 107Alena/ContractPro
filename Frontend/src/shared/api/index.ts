@@ -50,3 +50,9 @@ export {
 } from './sse';
 export { type StatusEvent, type UserProcessingStatus } from './sse-events';
 export type { AuditFilters, DocumentStatus, ListParams } from './types';
+export {
+  dispatchStatusEvent,
+  type DispatchStatusEventDeps,
+  useEventStream,
+  type UseEventStreamOptions,
+} from './use-event-stream';

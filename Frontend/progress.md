@@ -21,6 +21,63 @@
 
 ---
 
+## FE-TASK-016 — useEventStream hook (shared/api + TanStack Query + toast) (2026-04-18)
+
+**Статус:** done
+**Категория:** api-layer
+**Приоритет:** high
+**Итерация:** 17. **Зависимости:** FE-TASK-015 (done). **Разблокирует:** FE-TASK-037 (low-confidence-confirm) → FE-TASK-043 (critical NewCheckPage), FE-TASK-042 (critical Dashboard).
+
+**Цель:** React-хук `useEventStream(documentId?, options?)` по §20.2 high-architecture.md — подписка на SSE через `openEventStream` (§7.7 — FE-TASK-015), применение каждого `status_update` к кэшу TanStack Query (`setQueryData(qk.contracts.status)` + `invalidateQueries(qk.contracts.results)` на READY), toast-уведомления на FAILED/REJECTED/AWAITING_USER_INPUT, callback для триггера LowConfidenceConfirm-модалки.
+
+**План реализации (после консультации react-specialist):**
+1. **Research** — §4.4/§7.7/§20.2 high-architecture.md + `sse.ts` (готовый транспорт: heartbeat/reconnect/polling) + `query-keys.ts` + `toast` (Zustand-store, императивный API `toast.error/warning`, НЕТ поля correlationId — через `description`).
+2. **Дизайн (react-specialist)** — решения: `dispatchStatusEvent` как чистая функция (изоляция от React для unit-тестов); DI через optional `openEventStreamFn`/`toast` в options (аналог `createHttpClient`/`createEventStreamOpener`) — не module-global state; latest-ref pattern для колбэков (mutate optionsRef.current в теле рендера — safe, reads happen после commit); fallback-titles для статусов когда backend не шлёт message; callback `onAwaitingUserInput` (event-bus ещё нет — callback проще и явнее).
+3. **Имплементация (~143 LOC)** — `useEventStream(documentId?, options?)` + экспортная чистая `dispatchStatusEvent(event, deps)`. Экспорт добавлен в `shared/api/index.ts`.
+4. **Тесты** — 21 unit для `dispatchStatusEvent` (env=node, без React) + 7 hook-тестов через `renderHook`/jsdom. Покрытие: setQueryData на любом event / порядок setQueryData→invalidate / READY/FAILED/REJECTED/PARTIALLY_FAILED/AWAITING_USER_INPUT × (с message / без message / correlation_id → description / пустой message) / transient-статусы без toast / malformed-event guard / mount+unmount (unsubscribe) / resubscribe при смене documentId / latest-ref стабильность при смене callback'а.
+5. **Code-review (code-reviewer)** — SHIP, 0 blockers, 0 majors. Применены 3 minors: (a) коммент про safety latest-ref во время render; (b) `@internal` JSDoc для DI-полей (предотвращает случайное использование в прод-коде); (c) TODO(i18n) для fallback-titles.
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **Signature — `useEventStream(documentId?, options?: UseEventStreamOptions)`, не `useEventStream(documentId?)`.** AC указывает узкую сигнатуру, но расширение необходимо: (1) `versionId` нужен `sse.ts` для активации polling-fallback; (2) `onAwaitingUserInput` — единственный чистый путь низкой связности с будущей `LowConfidenceConfirmModal` (event-bus ещё нет, архитектура допускает "event-bus или callback"); (3) `openEventStreamFn`/`toast` — DI для unit-тестов (помечены `@internal`). Default-value `{}` — API без options работает.
+- **`dispatchStatusEvent` экспортируется отдельно.** Ради unit-тестируемости без React/jsdom — логика реакций на event не зависит от рендера, и тестить её через renderHook избыточно. Exported, потому что тест импортирует. Консумерам из фич хук достаточен.
+- **`toast.error(message, { correlationId })` — не буквально.** API toast'а (`shared/ui/toast`) не имеет поля `correlationId`. Форматируется как `description: "correlation_id: <id>"` (fallback, когда шаблон UX появится — поменяется только `pickTitle`/format).
+- **Fallback-titles только для тех статусов, которым нужен toast** (FAILED/REJECTED/PARTIALLY_FAILED/AWAITING_USER_INPUT). Transient (UPLOADED/QUEUED/PROCESSING/ANALYZING/GENERATING_REPORTS) отражается в `ProcessingProgress` widget, toast им не нужен. READY — триггерит invalidate, тоже без toast.
+- **Malformed-event guard — falsy-check на `document_id`/`version_id`.** Не zod — это defence-in-depth уровня transport (contractual validation — work для `sse.ts`/openapi). Один битый event не ломает подписку.
+- **PARTIALLY_FAILED → toast.error.** AC упоминает только FAILED/REJECTED, но PARTIALLY_FAILED — ещё один error-terminal статус из UserProcessingStatus enum. Пользователю нужно уведомление о сбое обработки report'а. Согласовано с архитектурой §4.4 (смотри использование 10 статусов).
+- **useEffect deps — `[documentId, versionId, qc]`**. Колбэки читаются через ref, DI-функции через current-ref (DI задаётся один раз в setup и не меняется — не входят в deps). Mount/resubscribe detected corresctly по документируемому тесту latest-ref.
+
+**Затронутые файлы:**
+
+**Созданы:**
+- `Frontend/src/shared/api/use-event-stream.ts` — `useEventStream` + `dispatchStatusEvent` + fallback-titles (~143 LOC)
+- `Frontend/src/shared/api/use-event-stream.test.ts` — 21 unit-тест для `dispatchStatusEvent` (env=node)
+- `Frontend/src/shared/api/use-event-stream.hook.test.tsx` — 7 hook-тестов через renderHook (env=jsdom)
+
+**Обновлены:**
+- `Frontend/src/shared/api/index.ts` — +4 экспорта (`useEventStream`, `dispatchStatusEvent`, `UseEventStreamOptions`, `DispatchStatusEventDeps`)
+- `Frontend/tasks.json` — FE-TASK-016 status=done + completion_notes
+
+### Верификация
+
+- typecheck: 0 errors
+- lint: 0 errors, 0 warnings (max-warnings=0)
+- prettier: All matched files use Prettier code style
+- test: **412/412** passed (+28 новых; 384→412, регрессий нет)
+- build: 244.05 kB / 76.15 kB gzip main + chunks/admin 1.09 kB (без изменений бюджета)
+- Makefile в Frontend/ отсутствует — этап N/A
+
+### Заметка для следующих итераций
+
+- **FE-TASK-037 (LowConfidenceConfirmModal)** — подключение: `const [event, setEvent] = useState<StatusEvent>(); useEventStream(docId, { versionId, onAwaitingUserInput: setEvent });` + рендер модалки при `event`. Триггер — status=AWAITING_USER_INPUT из backend (§4.4/§7.7). RBAC: только LAWYER/ORG_ADMIN (§5.5).
+- **FE-TASK-042 (Dashboard) / FE-TASK-043 (NewCheckPage)** — Dashboard монтирует `useEventStream()` без documentId (JWT-фильтр, все события юзера); NewCheckPage монтирует с конкретным documentId+versionId. После FE-TASK-034 (contract-upload) — на `onSuccess` вызывать `useEventStream(contractId, { versionId })` на ResultPage.
+- **i18n-миграция fallback-titles** — вынести в `shared/i18n/ru/sse.ts` с ключами `sse.fallback.FAILED`/`sse.fallback.REJECTED`/etc. после установки i18next-namespace-конвенции. TODO(i18n) уже в коде.
+- **Event-bus (потенциальная миграция)** — когда (и если) появится глобальный event-bus для cross-cutting notifications, `onAwaitingUserInput` можно заменить на `bus.emit('awaiting-user-input', event)` без изменения хука (callback остаётся — обёртывается в emit на call-site).
+- **`correlation_id` UX** — текущий формат `description: "correlation_id: <id>"` — временный. Когда будет ADR по error-detail UX, адаптировать `pickTitle`/format (возможно — сделать мелким хинтом в фоновом цвете, не основным описанием). Вынести логику в `shared/api/errors` helper?
+- **i18n для `toast.warning` AWAITING_USER_INPUT** — текст "Требуется подтверждение типа договора" — сейчас hard-coded, но по сути это call-to-action вопрос; когда FE-TASK-037 появится, модалка сама покажет CTA — toast может быть тоньше.
+- **Post-merge follow-up ревьюера (nit)** — `vi.fn<Parameters, ReturnType>` deprecated в Vitest 2.x в пользу единого `vi.fn<(...)=>...>`. В проекте Vitest 1.6.1 — не актуально; после апгрейда — миграция one-time sed.
+
+---
+
 ## FE-TASK-031 — Routing: createBrowserRouter + lazy + RBAC + handle.crumb (2026-04-18)
 
 **Статус:** done

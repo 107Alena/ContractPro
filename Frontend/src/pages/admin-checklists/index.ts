@@ -1,1 +1,1 @@
-export {};
+export { AdminChecklistsPage } from './AdminChecklistsPage';

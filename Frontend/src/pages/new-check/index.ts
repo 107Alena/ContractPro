@@ -1,1 +1,1 @@
-export {};
+export { NewCheckPage } from './NewCheckPage';

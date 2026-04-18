@@ -1426,7 +1426,77 @@
         "FE-TASK-030",
         "FE-TASK-028"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-18",
+        "summary": "Полный routeTree §6.1: 16 маршрутов через React.lazy + Suspense (RR 6.4 lazy:-API не используется из-за undici/jsdom-несовместимости при createMemoryRouter+Navigate в Node 20). AppLayout (placeholder <Outlet/>, FE-TASK-032 заполнит Sidebar) и AdminLayout (RequireRole+Outlet, DRY-обёртка для /admin/policies + /admin/checklists). 11 page-плейсхолдеров (LoginPage, DashboardPage, ContractsListPage, NewCheckPage, ContractDetailPage, ResultPage, ComparisonPage, ReportsPage, AdminPoliciesPage, AdminChecklistsPage, SettingsPage) — каждый named-export с data-testid, минимальный контент (full UI — отдельные FE-TASK-029/041..049). handle.crumb типизирован как string | (UIMatch)=>string; для /contracts/:id — функция от params. /audit намеренно не зарегистрирован (§17.1, §18 п.5; v1.1, FE-TASK-003). Wildcard * → NotFound404 без редиректа (сохраняет URL). vite.config.ts: manualChunks для chunks/admin + vendor/{react,router,query,i18n,sentry}. Loaders для /contracts/:id и /...result отложены (TODO(FE-TASK-045/046) после FE-TASK-024).",
+        "files_added": [
+          "src/app/router/AppLayout.tsx",
+          "src/app/router/AdminLayout.tsx",
+          "src/pages/auth/LoginPage.tsx",
+          "src/pages/dashboard/DashboardPage.tsx",
+          "src/pages/contracts-list/ContractsListPage.tsx",
+          "src/pages/new-check/NewCheckPage.tsx",
+          "src/pages/contract-detail/ContractDetailPage.tsx",
+          "src/pages/result/ResultPage.tsx",
+          "src/pages/comparison/ComparisonPage.tsx",
+          "src/pages/reports/ReportsPage.tsx",
+          "src/pages/admin-policies/AdminPoliciesPage.tsx",
+          "src/pages/admin-checklists/AdminChecklistsPage.tsx",
+          "src/pages/settings/SettingsPage.tsx"
+        ],
+        "files_modified": [
+          "src/app/router/router.tsx — полный routeTree, lazyComponent/lazyElement helpers (module-scope identities)",
+          "src/app/router/router.test.tsx — переписан, 31 тест (3 describe-блока: createAppRouter, buildRoutes структура, рендер pages, RBAC, error-маршруты, RouteError)",
+          "src/app/router/index.ts — расширены экспорты (AppLayout, AdminLayout, buildRoutes, RouteHandle, CrumbResolver, CrumbValue)",
+          "src/pages/{auth,dashboard,contracts-list,new-check,contract-detail,result,comparison,reports,settings,admin-policies,admin-checklists}/index.ts — re-export Page-компонентов вместо `export {}`",
+          "vite.config.ts — build.rollupOptions.output.manualChunks (chunks/admin + 5 vendor-чанков)"
+        ],
+        "deviations": [
+          "React.lazy + Suspense вместо RR 6.4 lazy:-API. Причина: data-router (createMemoryRouter/createBrowserRouter с lazy:) под Node 20 + jsdom падает с TypeError: RequestInit AbortSignal (undici несовместим с jsdom-AbortController). React.lazy+Suspense даёт идентичный chunk-splitting и стабилен в тестах. Подтверждено code-reviewer.",
+          "Тесты — MemoryRouter + useRoutes (declarative API), не RouterProvider/createMemoryRouter (data-router). Та же причина. Структурные тесты buildRoutes() — над данными.",
+          "RequireAuth для /dashboard, /contracts/*, /reports, /settings НЕ добавлен — это работа FE-TASK-032 (одновременно с AppLayout shell). AppLayout сейчас — пустой <div><Outlet/></div>. Acceptance criteria FE-TASK-031 этого не требует (только RequireRole для /admin/*).",
+          "Loaders (§6.2) для /contracts/:id и /...result не реализованы — заглушки + TODO(FE-TASK-045/046). useContract/useVersions хуков ещё нет (FE-TASK-024).",
+          "/audit не зарегистрирован (§17.1, §18 п.5). Wildcard перехватит → /404. v1.1 FE-TASK-003.",
+          "Code-splitting для chunks/diff-viewer (diff-match-patch) и chunks/pdf-preview (pdfjs-dist) отложен — модулей ещё нет (FE-TASK-038/039). TODO в vite.config.",
+          "Suspense fallback={null} (не skeleton). TODO(FE-TASK-032): заменить на role=status aria-busy для a11y/CLS на slow 3G."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint --max-warnings=0 — 0 errors / 0 warnings",
+          "npm run test — 384/384 passed (267 → 384, +27 моих новых router-тестов; регрессий нет)",
+          "npm run build — main 244 kB / 76 kB gzip + chunks/admin 1.09 kB / 0.55 kB gzip + 5 vendor-чанков (react 170/56, router 62/21, sentry 74/25, i18n 53/16, query 25/8) + 11 lazy page chunks ~0.5 kB каждый. Main вписывается в §11.2 budget ≤200 kB gzip.",
+          "npx prettier --check src/app src/pages — clean (8 pre-existing warnings в src/features/contract-upload и src/processes/auth-flow — out-of-scope, не тронуты)",
+          "Makefile в Frontend/ отсутствует — этап N/A",
+          "subagents: code-architect (план: lazy-strategy, AdminLayout DRY, AppLayout shell, manualChunks, /audit defer, wildcard renders NotFound), code-reviewer (вердикт SHIP, 0 blockers, 2 majors применены: M1 hoist lazy() в module scope для стабильности identity между buildRoutes()-вызовами, M2 TODO про skeleton fallback с ссылкой на FE-TASK-032)"
+        ],
+        "test_steps_results": [
+          "Шаг 1 ✓: /, /login, /dashboard, /contracts, /contracts/new, /contracts/:id, /contracts/:id/versions/:vid/result, /contracts/:id/compare, /reports, /settings, /admin/policies, /admin/checklists — все рендерят правильный page-плейсхолдер (data-testid). Build делит каждый в отдельный chunk + chunks/admin для admin-страниц.",
+          "Шаг 2 ✓: BUSINESS_USER → /admin/policies → /403 (Forbidden). Также LAWYER → /admin/* → /403. ORG_ADMIN → видит admin-страницы.",
+          "Шаг 3 ✓: /несуществующий-маршрут → NotFound404 (URL сохраняется); /audit (отложен в v1.1) → NotFound404."
+        ],
+        "architecture_alignment": [
+          "§6.1 карта маршрутов — все 16 публичных + 4 error + wildcard зарегистрированы (исключение: /audit отложен §18 п.5)",
+          "§6.3 code-splitting — React.lazy + manualChunks (chunks/admin); diff-viewer/pdf-preview TODO до FE-TASK-038/039",
+          "§6.4 breadcrumbs — handle.crumb типизирован, готов для widgets/breadcrumbs (FE-TASK-033)",
+          "§5.6 Pattern A (route-level RBAC) — AdminLayout с RequireRole для /admin/*",
+          "§9.2 errorElement — каждый top-level и AppLayout-route имеет RouteError",
+          "§11.2 bundle budget — main 76 kB gzip ≤ 200 kB ✓",
+          "§3 FSD — pages/* slices с public-API через index.ts; app/router композиционный"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-032 (Sidebar): заполнить AppLayout — добавить SidebarNavigation + Topbar + Breadcrumbs (использует handle.crumb через useMatches()). Заменить fallback={null} в lazyElement на skeleton с role=status aria-busy.",
+          "FE-TASK-032/033: Sidebar item для /admin виден только при <Can I='admin.policies'> + nested items для policies/checklists.",
+          "FE-TASK-029 (LoginPage): заменить плейсхолдер в src/pages/auth/LoginPage.tsx на полную форму (React Hook Form + Zod + applyValidationErrors); используй ROUTES.dashboard для редиректа после успешного входа.",
+          "FE-TASK-001/002 (admin pages): AdminPoliciesPage/AdminChecklistsPage уже подключены к /admin/policies и /admin/checklists; заменить плейсхолдеры на EmptyState (001) → формы (002). Маршруты RBAC-защищены AdminLayout.",
+          "FE-TASK-041 (LandingPage): сейчас в src/pages/landing/LandingPage.tsx минимальный плейсхолдер — заменить на полную страницу (Hero/Features/Pricing/FAQ).",
+          "FE-TASK-042..046 (page-имплементации): page-компоненты уже подключены к routeTree; заменить плейсхолдеры на полные имплементации. ID-параметры берутся из useParams<{id, vid}>().",
+          "FE-TASK-045/046 (loaders): добавить loader: ({params}) => Promise.all([queryClient.ensureQueryData(qk.contracts.byId(params.id!)...), ...]) когда useContract/useVersions готовы (FE-TASK-024). Раскомментировать TODO в router.tsx.",
+          "FE-TASK-038/039 (chunks/diff-viewer + chunks/pdf-preview): добавить условия в manualChunks vite.config — `if (id.includes('diff-match-patch')) return 'chunks/diff-viewer'` и аналогично pdfjs-dist.",
+          "FE-TASK-053 (Vitest jsdom default): когда test environment станет jsdom by-default, можно удалить // @vitest-environment docblock в router.test.tsx. Также: рассмотреть полифил undici для использования createMemoryRouter в тестах (откроет тестирование RR-loaders).",
+          "v1.1 (/audit): добавить ROUTES.audit + lazy AuditPage + nest в AppLayout с <RequireRole roles={['ORG_ADMIN']}> (Pattern A)."
+        ]
+      }
     },
     {
       "id": "FE-TASK-032",

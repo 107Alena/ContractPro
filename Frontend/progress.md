@@ -21,6 +21,100 @@
 
 ---
 
+## FE-TASK-031 — Routing: createBrowserRouter + lazy + RBAC + handle.crumb (2026-04-18)
+
+**Статус:** done
+**Категория:** layout
+**Приоритет:** high
+**Итерация:** 16. **Зависимости:** FE-TASK-030 (done), FE-TASK-028 (done). **Разблокирует:** FE-TASK-029 (LoginPage), FE-TASK-032 (Sidebar), FE-TASK-033 (Topbar/Breadcrumbs), FE-TASK-041 (Landing), а через 032/033 — FE-TASK-042/044 (critical pages Dashboard/Contracts), FE-TASK-045..049.
+
+**Цель:** полный routeTree §6.1 — все 16 публичных маршрутов + 4 error + wildcard, с lazy-loaded pages (§6.3), RBAC route-guard для /admin/* (§5.6 Pattern A), breadcrumbs handle (§6.4), error pages, granular code-splitting (§11.2).
+
+**План реализации (после консультации code-architect):**
+1. Создать 11 placeholder pages (LoginPage, DashboardPage, ContractsListPage, NewCheckPage, ContractDetailPage, ResultPage, ComparisonPage, ReportsPage, AdminPoliciesPage, AdminChecklistsPage, SettingsPage) — минимальный named-export с data-testid.
+2. AppLayout (placeholder `<Outlet />` + Tailwind shell, FE-TASK-032 заполнит Sidebar) и AdminLayout (RequireRole + Outlet, DRY-обёртка для /admin/*).
+3. router.tsx: useRoutes-совместимая структура с handle.crumb на каждом маршруте, lazyElement-helper, AdminLayout с nested children.
+4. vite.config.ts: manualChunks для chunks/admin + 5 vendor-чанков.
+5. router.test.tsx: 31 тест (структурный анализ + рендер + RBAC).
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **React.lazy + Suspense вместо RR 6.4 `lazy:` route-property API.** Причина: data-router (createBrowserRouter/createMemoryRouter с lazy:) под Node 20 + jsdom падает с `TypeError: RequestInit AbortSignal` (undici несовместим с jsdom-AbortController). React.lazy + Suspense даёт идентичный chunk-splitting в Vite/Rollup и стабилен в тестах. Подтверждено code-reviewer.
+- **Тесты — MemoryRouter + useRoutes (declarative API), не RouterProvider/createMemoryRouter (data-router).** Та же причина. Структурные тесты buildRoutes() — над данными (синхронные).
+- **RequireAuth для /dashboard, /contracts/*, /reports, /settings НЕ добавлен** — это работа FE-TASK-032 одновременно с AppLayout shell. Acceptance этого не требует (только RequireRole для /admin/*).
+- **Loaders (§6.2) не реализованы** — заглушки + TODO(FE-TASK-045/046). useContract/useVersions хуков ещё нет (FE-TASK-024). Acceptance #4 описывает Promise.all loader, но code-architect согласовал defer до готовности api-хуков.
+- **/audit не зарегистрирован** (§17.1, §18 п.5). Wildcard перехватит → /404. v1.1 FE-TASK-003.
+- **Wildcard `*` рендерит NotFound404 напрямую** (не Navigate to /404) — сохраняет URL для UX/аналитики/back-button.
+- **chunks/diff-viewer + chunks/pdf-preview deferred** (FE-TASK-038/039). Модулей diff-match-patch/pdfjs-dist ещё нет в зависимостях. TODO в vite.config.
+- **Lazy-компоненты подняты в module-scope** (после M2 code-reviewer): стабильные React identities между вызовами buildRoutes() — важно для тестов и React.memo.
+- **Suspense fallback={null}** (а не skeleton). Применённый M1 code-reviewer: TODO(FE-TASK-032) для замены на role=status aria-busy.
+
+**Инциденты в процессе:**
+- Первый прогон тестов: 14 failed из-за `AbortSignal` (undici). Workaround: переход на MemoryRouter+useRoutes — все 31 пройдены.
+- 8 pre-existing prettier warnings в src/features/contract-upload и src/processes/auth-flow — out-of-scope. Я случайно отформатировал их через `prettier --write` на всю папку, но откатил через `git checkout --` (per CLAUDE.md «не трогай код, не связанный с задачей»).
+
+**Тестирование (+27 новых тестов, 384/384):**
+- `src/app/router/router.test.tsx` (31 теста, было 4) — `createAppRouter` (2), `buildRoutes структура` (6), `Маршрутизация — рендер pages` (12: /, /login, /dashboard, /contracts, /contracts/new, /contracts/:id с params, /contracts/:id/versions/:vid/result с params, /contracts/:id/compare?base=&target= с searchParams, /reports, /settings, wildcard, /audit), `RBAC route-guards` (5: не-аут → /login, BUSINESS_USER → /403, LAWYER → /403, ORG_ADMIN → policies+checklists), `Error-маршруты` (4: /403, /404, /500, /offline), `RouteError fallback` (2 — старые сохранены).
+
+**Verification (все test_steps):**
+- Шаг 1 ✓: рендер всех маршрутов (12 тестов в `Маршрутизация — рендер pages`); build делит каждый в отдельный chunk + chunks/admin для admin-страниц (1.09 kB / 0.55 kB gzip).
+- Шаг 2 ✓: BUSINESS_USER → /admin/policies → /403 (5 RBAC-тестов).
+- Шаг 3 ✓: /несуществующий-маршрут → NotFound404 (URL сохраняется).
+
+**Gates (все пройдены):**
+- `npm run typecheck` — 0 errors.
+- `npm run lint --max-warnings=0` — 0 errors / 0 warnings.
+- `npx prettier --check src/app src/pages` — clean (8 pre-existing warnings в out-of-scope папках не тронуты).
+- `npm run test` — **384/384** (267 → 384, +117 относительно прошлой итерации; +27 от FE-TASK-031 router-тестов).
+- `npm run build` — **main 244 kB / 76 kB gzip** + chunks/admin 1.09/0.55 + 5 vendor-чанков (react 170/56, router 62/21, sentry 74/25, i18n 53/16, query 25/8) + 11 lazy page chunks ~0.5 kB каждый. Main укладывается в §11.2 budget ≤200 kB gzip ✓.
+- Makefile в `Frontend/` отсутствует — этап N/A (как в FE-TASK-004/005/007/011/015/017/018/019/020/021/026/027/028/030/034).
+
+**Соответствие архитектуре:**
+- §6.1 карта маршрутов — все 16 публичных + 4 error + wildcard ✓ (исключение: /audit отложен §18 п.5)
+- §6.3 code-splitting — React.lazy + manualChunks (chunks/admin); diff-viewer/pdf-preview TODO до FE-TASK-038/039 ✓
+- §6.4 breadcrumbs — handle.crumb типизирован, готов для widgets/breadcrumbs (FE-TASK-033) ✓
+- §5.6 Pattern A (route-level RBAC) — AdminLayout с RequireRole для /admin/* ✓
+- §9.2 errorElement — каждый top-level и AppLayout-route имеет RouteError ✓
+- §11.2 bundle budget — main 76 kB gzip ≤ 200 kB ✓
+- §3 FSD — pages/* slices с public-API через index.ts; app/router композиционный ✓
+
+**code-architect (consult):** план одобрен, 12 архитектурных вопросов разрешены (page placeholders минимум, loaders deferred, AdminLayout DRY, AppLayout placeholder, audit не регистрировать, wildcard рендерит NotFound, manualChunks включить).
+
+**code-reviewer (SHIP, 0 blockers):** 2 majors применены — M1 hoist lazy() в module scope (стабильность identity между buildRoutes()-вызовами), M2 TODO про skeleton fallback с ссылкой на FE-TASK-032. 1 non-blocker: src/pages/audit/ scaffold-директория осталась (FSD-структура из FE-TASK-007), не удаляю — вернётся в v1.1.
+
+**Затронутые файлы:**
+- `Frontend/src/app/router/router.tsx` (полностью переписан)
+- `Frontend/src/app/router/AppLayout.tsx` (new)
+- `Frontend/src/app/router/AdminLayout.tsx` (new)
+- `Frontend/src/app/router/index.ts` (modified — расширены экспорты)
+- `Frontend/src/app/router/router.test.tsx` (переписан, 31 тест)
+- `Frontend/src/pages/auth/LoginPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/dashboard/DashboardPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/contracts-list/ContractsListPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/new-check/NewCheckPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/contract-detail/ContractDetailPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/result/ResultPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/comparison/ComparisonPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/reports/ReportsPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/admin-policies/AdminPoliciesPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/admin-checklists/AdminChecklistsPage.tsx` + `index.ts` (new)
+- `Frontend/src/pages/settings/SettingsPage.tsx` + `index.ts` (new)
+- `Frontend/vite.config.ts` (modified — manualChunks для chunks/admin + 5 vendor-чанков)
+
+**Заметки для следующих итераций:**
+- **FE-TASK-032 (Sidebar):** заполнить AppLayout — добавить SidebarNavigation + Topbar + Breadcrumbs (использует handle.crumb через useMatches()). Заменить fallback={null} в lazyElement на skeleton с role=status aria-busy.
+- **FE-TASK-032/033:** Sidebar item для /admin виден только при `<Can I='admin.policies'>` + nested items для policies/checklists.
+- **FE-TASK-029 (LoginPage):** заменить плейсхолдер в `src/pages/auth/LoginPage.tsx` на полную форму (React Hook Form + Zod + applyValidationErrors); используй ROUTES.dashboard для редиректа после успешного входа.
+- **FE-TASK-001/002 (admin pages):** AdminPoliciesPage/AdminChecklistsPage уже подключены к /admin/policies и /admin/checklists; заменить плейсхолдеры на EmptyState (001) → формы (002). Маршруты RBAC-защищены AdminLayout.
+- **FE-TASK-041 (LandingPage):** сейчас в `src/pages/landing/LandingPage.tsx` минимальный плейсхолдер — заменить на полную страницу.
+- **FE-TASK-042..046 (page-имплементации):** page-компоненты уже подключены к routeTree; заменить плейсхолдеры на полные имплементации. ID-параметры берутся из `useParams<{id, vid}>()`.
+- **FE-TASK-045/046 (loaders):** добавить `loader: ({params}) => Promise.all([queryClient.ensureQueryData(qk.contracts.byId(params.id!)...), ...])` когда useContract/useVersions готовы (FE-TASK-024). Раскомментировать TODO в router.tsx.
+- **FE-TASK-038/039 (chunks/diff-viewer + chunks/pdf-preview):** добавить условия в manualChunks vite.config — `if (id.includes('diff-match-patch')) return 'chunks/diff-viewer'` и аналогично pdfjs-dist.
+- **FE-TASK-053 (Vitest jsdom default):** когда test environment станет jsdom by-default, можно убрать `// @vitest-environment` docblock в router.test.tsx. Также: рассмотреть полифил undici для использования createMemoryRouter в тестах (откроет тестирование RR-loaders).
+- **Pre-existing prettier warnings (8 файлов):** не относятся к FE-TASK-031, не тронуты. Уместно собрать в отдельный chore-коммит при следующей итерации.
+- **v1.1 (/audit):** добавить ROUTES.audit + lazy AuditPage + nest в AppLayout с `<RequireRole roles={['ORG_ADMIN']}>` (Pattern A).
+
+---
+
 ## FE-TASK-030 — App-shell / composition root (2026-04-17)
 
 **Статус:** done

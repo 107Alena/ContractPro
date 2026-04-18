@@ -1,1 +1,1 @@
-export {};
+export { AdminPoliciesPage } from './AdminPoliciesPage';

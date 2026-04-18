@@ -1,1 +1,1 @@
-export {};
+export { ResultPage } from './ResultPage';

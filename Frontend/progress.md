@@ -1614,3 +1614,78 @@ src/features/contract-upload/
 - **OpenAPI** — `/events/stream` в openapi.d.ts описан как `text/event-stream: string` без схемы payload. Backend может добавить component schema StatusEvent; до этого локальный тип в sse-events.ts — source of truth.
 
 ---
+
+## FE-TASK-032 — Sidebar widget (2026-04-18)
+
+**Статус:** done. Commit pending.
+
+### План реализации
+
+1. **shared/layout/** — новый shared-сегмент под cross-widget UI state (Sidebar collapse + mobile drawer). Поднят в shared/, а не в widget-local, потому что FSD запрещает cross-widget import (Topbar/FE-TASK-033 потребуется `setMobileDrawerOpen` для бургера на mobile).
+2. **Zustand + persist middleware** с `partialize`: в localStorage уходит только `sidebarCollapsed` (ожидание UX — свёрнутый rail остаётся свёрнутым после F5). `mobileDrawerOpen` всегда false на mount (reload на mobile не должен заранее открывать drawer).
+3. **widgets/sidebar-navigation/nav-items.ts** — декларативный `readonly NAV_ITEMS[]` с полями `group: 'primary'|'secondary'|'admin'`, `permission?: Permission`. Фильтрация через `<Can I="admin.policies"|"admin.checklists">` (Pattern B). Audit отсутствует (§18 п.5). Порядок групп = порядок Figma.
+4. **widgets/sidebar-navigation/icons.tsx** — inline SVG (stroke-based, 24×24, currentColor, aria-hidden). Иконки: Dashboard, Contracts, Reports, Settings, Policies, Checklist, ChevronLeft, Close, BrandLogo.
+5. **widgets/sidebar-navigation/sidebar-navigation.tsx** — композит:
+   - Desktop `<aside>` с `hidden md:flex`, `sticky top-0 h-screen`, width-transition 72↔248 px.
+   - Mobile drawer через `@radix-ui/react-dialog` (fixed inset-y-0 left-0 w-72, `md:hidden`), портал + overlay + focus-trap бесплатно.
+   - `SidebarContent` переиспользуется в обоих.
+   - Логотип-NavLink → /dashboard, сворачивающийся в BrandLogoIcon при collapsed.
+   - `NavItemLink` в collapsed-rail оборачивается в `SimpleTooltip` (sr-only label + aria-label для SR + hover/focus tooltip).
+   - Bottom toggle (`aria-expanded`/`aria-controls`) с ChevronLeft (rotate-180 при collapsed).
+   - Mobile: `Dialog.Title` + `Dialog.Description` в `sr-only`.
+   - `useEffect([location.pathname])` — автозакрытие drawer при любой навигации (включая программную).
+6. **widgets/sidebar-navigation/sidebar-navigation.stories.tsx** — 5 stories: Expanded, Collapsed, AsLawyer, AsBusinessUser, AsOrgAdmin. `forceCollapsed` prop в `SidebarHarness` управляет пре-установкой store per-story.
+7. **widgets/sidebar-navigation/sidebar-navigation.test.tsx** — 11 тестов: RBAC фильтрация по роли (ORG_ADMIN видит admin; LAWYER/BUSINESS_USER нет; Audit никогда), collapse/toggle + aria-expanded переключение, aria-current на активном NavLink, mobile drawer открытие/закрытие через store, Close-button, onNavigate закрывает drawer при клике на NavLink.
+8. **app/router/AppLayout.tsx** — интеграция: flex-контейнер [Sidebar + main(Outlet)]. Topbar+Breadcrumbs — отложены на FE-TASK-033.
+9. **test-setup.ts + vitest.config setupFiles** — обход jsdom 24.1.3 + vitest 1.6.1 Storage-бага (proto пустой вместо Storage.prototype): MemoryStorage-полифил, подключается только если текущий объект не имеет setItem/getItem. В node-окружении window undefined — полифил no-op.
+
+### Ключевые решения / отклонения от acceptance criteria
+
+- **layout-store в shared/layout/**, не внутри widget: cross-widget state-sharing с Topbar (FE-TASK-033) без FSD-боундари-нарушений. Альтернатива `app/stores/` отклонена, т.к. shared/layout точнее выражает намерение (UI-shell state).
+- **persist(partialize)** — не было в acceptance criteria, но добавлено по согласованию с react-specialist (UX ожидание). Версионированный ключ `cp:layout:v1` на случай будущих миграций.
+- **Два компонента (desktop + mobile) в одном рендере**, а не switch через useMediaQuery: Radix Dialog при open=false не рендерит содержимое (нет focus-trap конфликта). Это проще, чем tab-focus-safe hydration pattern. На mobile desktop-aside скрыт через `hidden md:flex`, не занимает места.
+- **Двойной аннотационный подход на collapsed-rail**: sr-only span + aria-label. Согласовано на review (нит: over-labels, но harmless; WCAG compliant).
+- **aria-expanded на toggle-кнопке** — review предложил рассмотреть aria-pressed (toggle-button pattern). Оставлен aria-expanded, т.к. кнопка связана с aria-controls=sidebar-navigation-aside и раскрывает скрываемый label-контент (семантика disclosure допустима).
+- **forceCollapsed prop** — test/Storybook escape-hatch. В production тесты остаются изолированными от store-state. Нит review: prop leaks test concern — acceptable trade-off, иначе stories дёргают useLayoutStore.setState в decorator.
+- **jsdom Storage-полифил** — infrastructure fix, не часть задачи. Документирован в test-setup.ts комментарием для FE-TASK-053 (тогда переключится environment jsdom глобально).
+
+### Затронутые файлы
+
+**Созданы:**
+- `Frontend/src/shared/layout/layout-store.ts` — Zustand persist store (3 action + 3 селектора)
+- `Frontend/src/shared/layout/layout-store.test.ts` — 6 unit-тестов (defaults, toggle, open/close, persist partialize, rehydrate)
+- `Frontend/src/shared/layout/index.ts` — barrel export
+- `Frontend/src/widgets/sidebar-navigation/sidebar-navigation.tsx` — главный widget (~220 LOC)
+- `Frontend/src/widgets/sidebar-navigation/nav-items.ts` — NAV_ITEMS const
+- `Frontend/src/widgets/sidebar-navigation/icons.tsx` — 9 inline SVG
+- `Frontend/src/widgets/sidebar-navigation/sidebar-navigation.stories.tsx` — 5 stories
+- `Frontend/src/widgets/sidebar-navigation/sidebar-navigation.test.tsx` — 11 тестов
+- `Frontend/src/test-setup.ts` — MemoryStorage-полифил (обход jsdom-бага)
+
+**Обновлены:**
+- `Frontend/src/widgets/sidebar-navigation/index.ts` — был `export {}`; теперь re-export Sidebar + NAV_ITEMS + types
+- `Frontend/src/app/router/AppLayout.tsx` — flex-контейнер Sidebar + Outlet
+- `Frontend/vitest.config.ts` — setupFiles + environmentOptions.jsdom.url
+- `Frontend/eslint.config.js` — boundaries/ignore для src/test-setup.ts
+- `Frontend/tasks.json` — FE-TASK-032 status=done + completion_notes
+
+### Верификация
+
+- typecheck: 0 errors
+- lint: 0 errors, 0 warnings (max-warnings=0)
+- prettier: All matched files use Prettier code style
+- test: 429/429 passed (+17 новых: 11 sidebar-navigation + 6 layout-store; 412 прошлых, регрессий нет)
+- build: production bundle ✓ (chunk chunks/admin-*.js сохранён; dist/ без errors)
+- Makefile в Frontend/ отсутствует — этап N/A
+
+### Заметка для следующих итераций
+
+- **FE-TASK-033 (Topbar + Breadcrumbs + Error pages)** — бургер-кнопка на mobile: `const openMobileDrawer = useLayoutStore(s => s.openMobileDrawer)` → onClick. Topbar встраивается в AppLayout между `div.flex.flex-1.flex-col` и main (на данный момент зарезервировано место). Breadcrumbs читают `useMatches()` и `handle.crumb` — типы RouteHandle уже экспортированы из `@/app/router`.
+- **FE-TASK-042 (DashboardPage)** — разблокирована: Sidebar + AppLayout готовы. Loader на /dashboard использовать через route.loader (§6.2).
+- **FE-TASK-044 (ContractsListPage)** — разблокирована: Sidebar готов, DocumentsTable widget уже есть.
+- **FE-TASK-053 (Vitest full setup)** — перенести `environment: 'jsdom'` в defaults vitest.config, чтобы убрать `@vitest-environment jsdom` pragma из всех React-тестов. Полифил Storage останется в test-setup.ts до апгрейда jsdom/vitest (issue: jsdom 24.1.3 Storage.prototype loss).
+- **Storybook role-restricted stories** — FE-TASK-045/046 потребуют `*.role-restricted.stories.tsx` (§5.6.1) для widgets risk-profile-card, risks-list, recommendations-list (Pattern B в Document Card `322:3`).
+- **Audit widget activation** — когда backend ORCH-TASK-044..046 готовы (v1.1), в NAV_ITEMS добавить `{ key: 'audit', group: 'secondary', permission: 'audit.view' }` + маршрут `/audit` в router.tsx.
+- **persist schema migration** — при расширении LayoutState увеличить `version: 1` → 2 и добавить `migrate(state, version)` в persist options. Текущая partialize сохраняет только boolean — миграция линейная.
+
+---

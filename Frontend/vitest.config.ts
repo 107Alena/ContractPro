@@ -14,5 +14,18 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // jsdom-тестам нужна полноценная URL origin, иначе localStorage отдаёт
+    // SecurityError (opaque origin) — ломает persist-middleware Zustand в
+    // layout-store и любые тесты, использующие localStorage напрямую.
+    environmentOptions: {
+      jsdom: {
+        url: 'http://localhost/',
+      },
+    },
+    // Полифил Storage в jsdom (issue с vitest 1.6.1 + jsdom 24.1.3 — прототипы
+    // localStorage/sessionStorage теряются после populateGlobal).
+    // Подключён в setupFiles, т.к. ориентирован только на jsdom-тесты; в
+    // node-окружении `window === undefined`, полифил safely no-op.
+    setupFiles: ['./src/test-setup.ts'],
   },
 });

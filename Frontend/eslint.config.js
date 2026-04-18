@@ -82,6 +82,8 @@ export default tseslint.config(
         '**/*.stories.{ts,tsx}',
         'src/main.tsx',
         'src/vite-env.d.ts',
+        // test-setup.ts — vitest setupFiles target; не является FSD-элементом.
+        'src/test-setup.ts',
       ],
     },
     rules: {

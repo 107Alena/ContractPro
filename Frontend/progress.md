@@ -2350,3 +2350,59 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **Follow-up (low) — invariant на пустые path-params**: `encodeURIComponent('')` возвращает `''` → URL `/contracts//compare` пройдёт через axios. Pre-existing gap во всех features (contract-upload, version-upload, version-recheck). Если чинить — то централизованно в http-client через request-interceptor.
 
 ---
+
+## FE-TASK-039 — export-download + share-link + ExportShareModal (2026-04-18)
+
+**Статус:** done. Продвигает FE-TASK-046 (критическая ResultPage): теперь она ждёт только FE-TASK-024, FE-TASK-040 (вместо 3 блокеров).
+
+### План реализации
+
+1. **Subagent:** react-specialist — file-tree, сигнатуры хуков, решения по 302-handling и RBAC.
+2. **Архитектурные опоры:** §7.6 (Экспорт 302 Redirect), §5.6 (useCanExport — role + computed permissions.export_enabled из UserPermissions), §17.5 (Artifacts ↔ UI consumers — EXPORT_PDF/EXPORT_DOCX через ExportShareButton), §8.3 (toast + useCopy в shared/lib).
+3. **API endpoint** (`ApiBackendOrchestrator/architecture/api-specification.yaml:616-648`): `GET /contracts/{cid}/versions/{vid}/export/{pdf|docx}` → 302 `Location: <presigned URL>` (TTL 5 мин).
+4. **FSD-структура:**
+   - `src/shared/lib/use-copy/` — clipboard hook (переиспользуемый: future copy-correlation-id, share-audit).
+   - `src/features/export-download/` — useExportDownload (скачивание через navigate).
+   - `src/features/share-link/` — useShareLink (копирование presigned URL). Duplicates thin axios wrapper — FSD запрещает feature↔feature импорт.
+   - `src/widgets/export-share-modal/ui/ExportShareModal.tsx` — UI-композиция обеих фич с RBAC-fallback.
+
+### Имплементация (~580 LOC + тесты)
+
+1. **shared/lib/use-copy** (`use-copy.ts`, `use-copy.test.tsx`, `index.ts`): основной путь — `navigator.clipboard.writeText`; fallback — hidden textarea + `document.execCommand('copy')`. `copied: boolean` с auto-reset через resetMs и unmount-cleanup таймера.
+2. **features/export-download:**
+   - `api/http.ts` — DI-контейнер (паттерн comparison-start).
+   - `api/export-report.ts` — GET с `maxRedirects: 0` + `fetchOptions: { redirect: 'manual' }` + `validateStatus: s => s === 302`; извлекает Location (plain-object headers или AxiosHeaders.get). 302 без Location → `OrchestratorError(INTERNAL_ERROR)` (защита от backend-drift).
+   - `lib/is-export-not-ready.ts` — type-guard для 404 ARTIFACT_NOT_FOUND / RESULTS_NOT_READY (для кнопки «disabled: результат ещё не готов»).
+   - `model/use-export-download.ts` — useMutation + DI `navigate` (default — `window.location.assign`). REQUEST_ABORTED фильтруется; остальные ошибки → `opts.onError(err, toUserMessage(err))`.
+3. **features/share-link:** зеркальная структура (`api/http.ts`, `api/get-share-link.ts`, `model/use-share-link.ts`). useShareLink объединяет useMutation + useCopy — на 302 копирует Location в clipboard; onSuccess получает meta `{input, copied}`.
+4. **widgets/export-share-modal/ui/ExportShareModal.tsx:**
+   - Две карточки (PDF / DOCX) × две кнопки (Скачать / Скопировать ссылку).
+   - При копировании — checkmark + label «Ссылка скопирована» на 1500мс; toast-success.
+   - Error-mapping через `toast.error({title, description})` из `ERROR_UX` (§7.3).
+   - RBAC defensive: если `useCanExport() === false` — EmptyState «У вас нет прав на экспорт»; primary-gate остаётся на caller'е.
+5. **Тесты (43 новых):** useCopy (6), export-report unit+integration (11+3), use-export-download (8), get-share-link unit+integration (7+3), use-share-link (5), ExportShareModal (7).
+
+### Ключевые решения
+
+- **`fetchOptions: { redirect: 'manual' }`** (дополнение к `maxRedirects: 0`) — fetch-adapter axios игнорирует `maxRedirects`. Без этого integration-test падал с NETWORK_ERROR (axios воспринимал opaqueredirect как «нет response» и уходил в network retry). Найдено экспериментально через linter-hint.
+- **navigate-DI вместо прямой зависимости от `window.location.assign`** — jsdom 24 запрещает spyOn на location.assign. Тесты подменяют navigate-proп; для покрытия default-ветки один тест полностью override'ит `window.location` через defineProperty.
+- **useCopy в shared/lib, не в feature** — хук универсальный (copy-correlation-id в FE-TASK-044, future share-audit), «один хук = одна UI-политика» (§1.3).
+- **Duplicate axios-обёртка share-link** — FSD `boundaries/element-types` запрещает features↔features; `entities/report` для single URL-helper — YAGNI.
+- **RBAC-fallback в самой модалке** — defensive: если caller ошибочно откроет для BUSINESS_USER без export_enabled, кнопок экспорта всё равно не будет.
+
+### Quality gates
+
+- `npm run typecheck`: 0 errors.
+- `npm run lint --max-warnings=0`: clean.
+- `npm run test:ci`: **721/721** (85 файлов; было 670 → +51 новых тестов).
+- `npm run build`: 670 модулей, production OK (main 88.17 KB gzip, без регрессий).
+
+### Заметки для следующих итераций
+
+- **FE-TASK-044 (ResultPage, critical)** — после FE-TASK-038. Подключить `ExportShareModal` в правую панель действий: `import { ExportShareModal } from '@/widgets/export-share-modal'`, открывать по клику «Экспорт», передавать `contractId/versionId` из route params.
+- **FE-TASK-046 (ResultPage, critical)** — блокеры сократились до FE-TASK-024, FE-TASK-040. При реализации ReportsPage использовать ту же `ExportShareModal` + `useExportDownload` для row-level actions в таблице отчётов.
+- **FE-TASK-055 (Playwright e2e, high)** — e2e-scenario «Скачать PDF → редирект на presigned URL» покроется здесь. MSW-handler `tests/msw/handlers/export.ts` уже возвращает `https://presigned.example/...?X-Expires=300`.
+- **Follow-up (low) — browser 302 с Authorization в реальном backend**: same-origin (§13.2) не требует `Access-Control-Expose-Headers: Location`, но при реальной проверке нужно убедиться, что nginx не стрипит header. Зафиксировано комментом в `api/export-report.ts`.
+- **Follow-up (low) — `entities/report`**: при появлении ещё endpoint'ов над отчётами (share-audit, regenerate) консолидировать export/share обёртки в `entities/report/api/` и удалить duplication между export-download и share-link.
+
+---

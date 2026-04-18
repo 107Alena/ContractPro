@@ -7,6 +7,7 @@
 // не делает Request, идентичен по логике matching и поддерживает Navigate.
 import '@/shared/i18n/config';
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useRoutes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -32,12 +33,19 @@ function RoutedApp(): JSX.Element | null {
 }
 
 function renderAt(path: string) {
+  // FE-TASK-042 добавил useMe()/useContracts() в DashboardPage — теперь любой
+  // rendered lazy-chunk с TanStack-хуком требует QueryClientProvider. Держим
+  // QueryClient локальным (retry:false) — реальных HTTP-запросов тесты не
+  // проверяют, нас интересует только попадание в page-testid.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <I18nProvider>
-      <MemoryRouter initialEntries={[path]}>
-        <RoutedApp />
-      </MemoryRouter>
-    </I18nProvider>,
+    <QueryClientProvider client={qc}>
+      <I18nProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <RoutedApp />
+        </MemoryRouter>
+      </I18nProvider>
+    </QueryClientProvider>,
   );
 }
 

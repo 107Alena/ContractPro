@@ -1748,7 +1748,71 @@
         "FE-TASK-021",
         "FE-TASK-016"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-18",
+        "summary": "DashboardPage: страница-контейнер useMe + useContracts({size:5}) + useEventStream(undefined) (global SSE feed по §7.7 use-event-stream.ts:118-120) + композиция 6 presentational-виджетов. 4 состояния (Default/Loading/Empty/Error) покрыты виджет-проп-контрактом + QueryClient.setQueryData в stories (без MSW — FE-TASK-054). RBAC через <Can I='contract.upload'>/<Can I='risks.view'> (Pattern B §5.6.1). FSD-границы: widgets→entities→shared; status-view модель поднята в entities/contract, чтобы все 6 виджетов и будущие страницы могли её переиспользовать.",
+        "files_created": [
+          "Frontend/src/entities/user/api/use-me.ts + index.ts — useMe() на TanStack Query, staleTime 60s",
+          "Frontend/src/entities/contract/api/use-contracts.ts — useContracts(ListParams), placeholderData: keepPreviousData, staleTime 30s",
+          "Frontend/src/entities/contract/model/status-view.ts + status-view.test.ts — viewStatus(status) → {label,tone,bucket}; источник для Badge tone + группировки buckets (pending/in_progress/ready/failed/awaiting). Лейблы 1:1 с backend §5.2 high-architecture",
+          "Frontend/src/entities/contract/index.ts — публичный API entity (useContracts/ContractSummary/ContractList + viewStatus/StatusBucket/StatusView)",
+          "Frontend/src/widgets/dashboard-what-matters/{ui/WhatMattersCards.tsx,ui/WhatMattersCards.stories.tsx,ui/WhatMattersCards.test.ts,index.ts} — 4 KPI-счётчика (Всего/В работе/Готовы/Требуют внимания); computeCounters() с unit-тестами",
+          "Frontend/src/widgets/dashboard-last-check/{ui/LastCheckCard.tsx,ui/LastCheckCard.stories.tsx,index.ts} — title + StatusBadge-подобный Badge + CTA (Link + buttonVariants)",
+          "Frontend/src/widgets/dashboard-quick-start/{ui/QuickStart.tsx,ui/QuickStart.stories.tsx,index.ts} — CTA-блок из 3 шагов + кнопка «Загрузить договор»",
+          "Frontend/src/widgets/dashboard-org-card/{ui/OrgCard.tsx,ui/OrgCard.stories.tsx,index.ts} — org name + user name/email + role-badge (ROLE_LABEL mapping)",
+          "Frontend/src/widgets/dashboard-recent-checks/{ui/RecentChecksTable.tsx,ui/RecentChecksTable.stories.tsx,index.ts} — DataTable (compound) с 3 колонками (Название/Статус/Обновлён), пустой empty/error slot",
+          "Frontend/src/widgets/dashboard-key-risks/{ui/KeyRisksCards.tsx,ui/KeyRisksCards.stories.tsx,ui/KeyRisksCards.test.ts,index.ts} — buckets по статусам (Готовы/Требуют действий/Проблемные); splitByBucket() с unit-тестами",
+          "Frontend/src/pages/dashboard/DashboardPage.test.tsx — 5 тестов (Default/Empty/RBAC BUSINESS_USER/ErrorState widget-level) через setQueryData + MemoryRouter",
+          "Frontend/src/pages/dashboard/DashboardPage.stories.tsx — 4 состояния: Default/Loading/Empty/ErrorState"
+        ],
+        "files_modified": [
+          "Frontend/src/pages/dashboard/DashboardPage.tsx — переписан полностью: placeholder → container с useMe + useContracts + useEventStream + layout grid",
+          "Frontend/src/entities/user/index.ts — +useMe/UserProfile",
+          "Frontend/src/app/router/router.test.tsx — renderAt обёрнут в QueryClientProvider (retry:false), т.к. DashboardPage теперь TanStack-consumer"
+        ],
+        "deviations": [
+          "AggregateScore/RiskProfile в LastCheckCard и KeyRisksCards отложены в FE-TASK-046 (ResultPage). На /contracts?size=5 этих полей нет — требует per-version GET /results. Минимальная версия: LastCheck=title+status+CTA; KeyRisks=buckets по processing_status вместо risk-levels. Deviation зафиксирован в шапках обоих файлов.",
+          "Button.asChild + Link падает в jsdom-тестах на React.Children.only (Radix slot 1.2): Button.tsx оборачивает children тремя JSX-выражениями (iconLeft/children/iconRight), Slot передаёт их в SlotClone где `Children.count > 1` бросит. Workaround: <Link className={buttonVariants({variant,size})}> вместо <Button asChild>. Зафиксировано в LastCheckCard.tsx шапке. AsChild+anchor по-прежнему работает в prod, но в тестовой среде ломается.",
+          "status-view.ts в entities/contract/model — не в pages/dashboard, как изначально планировалось code-architect'ом. Причина: widgets не могут импортить pages (FSD-вверх), а 6 виджетов используют эту модель. entities — общий предок.",
+          "ErrorState page-тест упрощён до widget-level (напрямую render WhatMattersCards/KeyRisksCards с prop error). Полный TanStack error-flow (prefetchQuery reject + useQuery на mount) нестабилен в jsdom без MSW — useQuery заново стартует query на mount, игнорируя закешированный error-state. Полный визуальный контракт — Storybook ErrorState story (FE-TASK-054 полноценный через MSW).",
+          "StatusBadge/RiskBadge (FE-TASK-024 pending) не используются — локально Badge из shared/ui с viewStatus(status).tone. Миграция на StatusBadge будет 1:1 — все потребители уже через viewStatus."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint --max-warnings=0 — 0 errors / 0 warnings",
+          "npx prettier --check src/{entities,widgets/dashboard-*,pages/dashboard,app/router/router.test.tsx} — All matched files use Prettier code style (8 pre-existing unformatted файлов в features/contract-upload и processes/auth-flow — out-of-scope)",
+          "npm run test — 451/451 passed (было 429, +22 новых: 9 status-view + 2 computeCounters + 4 splitByBucket + 5 page smoke)",
+          "npm run build — main 84 kB gzip (было 76 kB, +8 kB из-за DataTable pulled in dashboard page), vendor chunks без изменений, 6 widget-chunks по 0.4-0.7 KB gzip; в пределах §11.2 budget ≤ 200 KB",
+          "npm run build-storybook — ok 1.1 min, 22 новых stories (4 WhatMatters + 5 LastCheck + 1 QuickStart + 5 OrgCard + 4 RecentChecks + 4 KeyRisks + 4 DashboardPage) собрались без ошибок",
+          "Makefile в Frontend/ отсутствует — этап N/A (как в FE-TASK-004/005/007/011/017/026/030/031/032)",
+          "subagents: code-architect (план-валидация: 6 отдельных slice-ов widgets/dashboard-*; status-view в entities, не shared/lib; SSE global feed через useEventStream(undefined); storybook setQueryData-паттерн); code-reviewer (финал: SHIP, 0 blockers; применены 2 P1 non-blocker'а — fix doc drift `risk.view`→`risks.view` в KeyRisksCards комментарии + getRowId с `Math.random()`→stable `_missing_${index}`)"
+        ],
+        "architecture_alignment": [
+          "§6.1 маршрут /dashboard (auth guard) — ранее зарегистрирован в FE-TASK-031; placeholder заменён полноценным компонентом",
+          "§17.1 Dashboard endpoints — useMe (GET /users/me) + useContracts({size:5}) (GET /contracts?size=5) + SSE (useEventStream): ✓",
+          "§17.4 виджеты — WhatMattersCards/LastCheckCard/QuickStart/OrgCard/RecentChecksTable/KeyRisksCards все 6 реализованы",
+          "§5.6 Pattern B (Section hiding) — <Can I='contract.upload'>QuickStart + <Can I='risks.view'>KeyRisksCards; Pattern A route-guard уже на уровне AppLayout (FE-TASK-032)",
+          "§7.7 SSE global feed — useEventStream(undefined) подписывается на все события по JWT, обновляет qk.contracts.status(doc,ver) в TanStack cache для downstream-страниц",
+          "§8.3 shared-компоненты — DataTable (FE-TASK-021), Badge/Button/Spinner/buttonVariants (FE-TASK-019/020)",
+          "§8.4 headless hooks + compound — useMe/useContracts возвращают {data,isLoading,error}; DataTable compound уже скомпонован в FE-TASK-021",
+          "§8.5 состояния — Default/Loading/Empty/Error/Role-Restricted покрыты stories",
+          "§9.3 error-UI — role=alert для 5xx-fallback в виджетах",
+          "§11.2 bundle budget — main 84 KB gzip ≤ 200 KB ✓",
+          "§17.5 AGGREGATE_SCORE/RISK_PROFILE — отложены до FE-TASK-046 (ResultPage), а на dashboard минимум: status-buckets"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-029 (LoginPage): после успешного login useMe/useContracts сразу получат данные — dashboard работает из коробки",
+          "FE-TASK-033 (Topbar + Breadcrumbs): в AppLayout добавить Topbar выше <Outlet/>; DashboardPage не нуждается в Breadcrumbs (корень), на /contracts/:id будет показывать путь",
+          "FE-TASK-024 (StatusBadge/RiskBadge): перенести маппинг из entities/contract/model/status-view.ts в shared-примитив; все 6 виджетов переключатся на <StatusBadge status={s}/> без изменения логики (viewStatus остаётся источником истины)",
+          "FE-TASK-044 (ContractsListPage): DataTable server-mode (manualPagination) с тем же useContracts хуком — расширенный ListParams (page/status/search)",
+          "FE-TASK-046 (ResultPage): useContractResults(id,vid) → AggregateScore + RiskProfile для LastCheckCard rich-данных; WhatMattersCards остаётся lightweight",
+          "FE-TASK-054 (MSW): полноценный ErrorState integration-тест через handler с 5xx; заменить widget-level тест на page-level",
+          "FE-TASK-024 не-блокер code-reviewer P3: `computeCounters` counts только items.length (5 последних), а total — server-wide. При UI с разошедшимися числами добавить label 'из последних 5' или extract GET /dashboard/stats (backend scope)",
+          "Button.asChild + Radix Slot в jsdom — general issue (касается future asChild+Link использований). Можно либо (a) отрефакторить Button.tsx чтобы при asChild отправлять только {children} без icon-слотов, (b) переключиться на Link+buttonVariants везде, (c) ждать Radix Slot fix. Это out-of-scope для FE-TASK-042",
+          "FE-TASK-053 (Vitest jsdom global): можно удалить // @vitest-environment jsdom docblock из DashboardPage.test.tsx"
+        ]
+      }
     },
     {
       "id": "FE-TASK-043",

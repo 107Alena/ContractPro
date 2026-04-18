@@ -1689,3 +1689,82 @@ src/features/contract-upload/
 - **persist schema migration** — при расширении LayoutState увеличить `version: 1` → 2 и добавить `migrate(state, version)` в persist options. Текущая partialize сохраняет только boolean — миграция линейная.
 
 ---
+
+## FE-TASK-042 — DashboardPage (2026-04-18)
+
+**Статус:** done. Commit pending.
+
+### План реализации
+
+1. **entities/user/api/use-me.ts** — тонкая обёртка `useQuery` на GET /users/me; queryKey `qk.me`, staleTime 60s. Сигнатура: `useMe(): UseQueryResult<UserProfile>`.
+2. **entities/contract/api/use-contracts.ts** — `useQuery` на GET /contracts с `ListParams` (page/size/status/search), queryKey `qk.contracts.list(params)`, placeholderData=keepPreviousData, staleTime 30s.
+3. **entities/contract/model/status-view.ts** — pure `viewStatus(status)` → `{label, tone, bucket}`. Источник RU-лейблов и цветовых tone для Badge, используется всеми 6 виджетами + будущими ContractsListPage/ContractDetailPage. Поднят в entities, т.к. widgets не могут импортить pages (FSD boundaries) и нужна общая модель.
+4. **6 widgets/dashboard-\*/** — каждый как отдельный FSD slice с `ui/<Widget>.tsx`, `ui/<Widget>.stories.tsx`, `index.ts`. Presentational: принимают `{items|user|contract, isLoading, error}` props — контейнер-логика (useQuery вызовы) на уровне DashboardPage:
+   - **WhatMattersCards** — 4 KPI-счётчика (Всего/В работе/Готовы/Требуют внимания); `computeCounters()` покрыт unit-тестами.
+   - **LastCheckCard** — title + status-Badge + processing-hint + CTA «Открыть результат» или «Перейти к договору».
+   - **QuickStart** — CTA-блок с 3 шагами и кнопкой «Загрузить договор».
+   - **OrgCard** — organization_name + user.name + email + role-badge.
+   - **RecentChecksTable** — DataTable compound (3 колонки: Название/Статус/Обновлён) с empty-slot «Загрузить первый договор».
+   - **KeyRisksCards** — 3 bucket-группы (Готовы / Требуют действий / Проблемные) из `splitByBucket(items)` — покрыт unit-тестами.
+5. **pages/dashboard/DashboardPage.tsx** — переписан с placeholder: контейнер useMe + useContracts({size:5}) + useEventStream(undefined) (global SSE feed). 4-row grid layout (WhatMatters → LastCheck+Org → QuickStart+KeyRisks → RecentChecks). RBAC-фильтрация QuickStart/KeyRisks через `<Can I="…">`.
+6. **pages/dashboard/DashboardPage.stories.tsx** — 4 состояния (Default/Loading/Empty/ErrorState) через `QueryClient.setQueryData` + `sessionStore.setUser`. Без MSW (FE-TASK-054).
+7. **pages/dashboard/DashboardPage.test.tsx** — 5 smoke-тестов через `setQueryData` и `vi.mock('@/shared/api', { useEventStream: vi.fn() })`.
+8. **app/router/router.test.tsx** — `renderAt` обёрнут в `QueryClientProvider` (retry:false), т.к. DashboardPage теперь TanStack-consumer.
+
+### Ключевые решения / отклонения
+
+- **AggregateScore/RiskProfile не используются**. `/contracts?size=5` отдаёт только `ContractSummary` (без risk_profile). Полный rich-контент LastCheckCard/KeyRisksCards требует per-version GET /results — отложено в FE-TASK-046 (ResultPage). Минимум: LastCheck = title+status+CTA; KeyRisks = buckets по processing_status.
+- **status-view в entities, не в pages/dashboard**. Первоначальный план code-architect поместил маппинг в pages/dashboard/model, но FSD запрещает widgets импортить pages. Подъём в entities/contract — лучшее место для доменной модели, переиспользуемой 6 виджетами + future-страницами.
+- **Button.asChild + Link в jsdom**. Button.tsx оборачивает `children` тремя JSX-выражениями (`loading ? Spinner : iconLeft` / `{children}` / `!loading && iconRight`). Radix Slot 1.2 в тестах jsdom падает на `React.Children.only` при таком multi-child layout (в проде работает через фильтрацию nullable). Workaround: `<Link className={buttonVariants({variant,size})}>` вместо `<Button asChild><Link/></Button>` во всех 6 CTA. Зафиксировано в шапке `LastCheckCard.tsx`.
+- **ErrorState page-тест упрощён до widget-level**. Полный TanStack error-flow (prefetchQuery reject + useQuery на mount) нестабилен в jsdom без MSW — useQuery стартует запрос заново, игнорируя cached error-state. Вместо этого тест рендерит WhatMattersCards/KeyRisksCards напрямую с `error` prop и проверяет `role=alert`. Полное визуальное покрытие — Storybook ErrorState story + Chromatic snapshot.
+- **StatusBadge/RiskBadge (FE-TASK-024) не использованы** — они pending medium. Локально `Badge` из shared/ui + `viewStatus(status).tone`. Миграция на StatusBadge будет 1:1: все потребители через единую модель viewStatus (не дублируют mapping).
+- **FSD slice granularity**: 6 отдельных `widgets/dashboard-*` slice-ов вместо общего `widgets/dashboard/` с sub-компонентами. Каждый виджет тестируется/стораится независимо, FSD slice-isolation не ломается. Page импортирует 6 публичных API — всё в пределах слоя widgets через `sliceSame`.
+- **SSE global feed**. `useEventStream(undefined)` документирован в `use-event-stream.ts:118-120` как подписка на все SSE-события по JWT без фильтра по documentId. Обновления попадают в `qk.contracts.status(doc,ver)` и будут подхвачены при переходе на detail/result-страницы. Раздел, который сам виджет не обновляет real-time (ContractSummary не содержит status из SSE — status там snapshot-цельный).
+
+### Затронутые файлы
+
+**Созданы:**
+- `Frontend/src/entities/user/api/use-me.ts` — useMe() hook
+- `Frontend/src/entities/contract/api/use-contracts.ts` — useContracts(ListParams)
+- `Frontend/src/entities/contract/model/status-view.ts` + `.test.ts` — viewStatus() pure + 9 tests
+- `Frontend/src/widgets/dashboard-what-matters/{ui/*.tsx,ui/*.stories.tsx,ui/*.test.ts,index.ts}` — WhatMattersCards + computeCounters
+- `Frontend/src/widgets/dashboard-last-check/{ui/*.tsx,ui/*.stories.tsx,index.ts}` — LastCheckCard
+- `Frontend/src/widgets/dashboard-quick-start/{ui/*.tsx,ui/*.stories.tsx,index.ts}` — QuickStart
+- `Frontend/src/widgets/dashboard-org-card/{ui/*.tsx,ui/*.stories.tsx,index.ts}` — OrgCard
+- `Frontend/src/widgets/dashboard-recent-checks/{ui/*.tsx,ui/*.stories.tsx,index.ts}` — RecentChecksTable
+- `Frontend/src/widgets/dashboard-key-risks/{ui/*.tsx,ui/*.stories.tsx,ui/*.test.ts,index.ts}` — KeyRisksCards + splitByBucket
+- `Frontend/src/pages/dashboard/DashboardPage.test.tsx` — 5 smoke-тестов
+- `Frontend/src/pages/dashboard/DashboardPage.stories.tsx` — 4 состояния
+
+**Обновлены:**
+- `Frontend/src/pages/dashboard/DashboardPage.tsx` — placeholder → full container
+- `Frontend/src/entities/user/index.ts` — re-export useMe/UserProfile
+- `Frontend/src/entities/contract/index.ts` — re-export useContracts/viewStatus/типы
+- `Frontend/src/app/router/router.test.tsx` — renderAt оборачивает в QueryClientProvider
+- `Frontend/tasks.json` — FE-TASK-042 status=done + completion_notes
+
+### Верификация
+
+- typecheck: 0 errors
+- lint: 0 errors, 0 warnings (--max-warnings=0)
+- prettier: мои файлы clean (8 pre-existing файлов в features/contract-upload + processes/auth-flow — out-of-scope)
+- test: 451/451 passed (+22 новых: 9 status-view + 2 computeCounters + 4 splitByBucket + 5 page + 2 router modifications); регрессий нет
+- build: main 84 kB gzip (было 76 kB, +8 kB — DataTable pulled in dashboard-chunk), 6 widget-chunks по 0.4-0.7 kB gzip каждый; в пределах §11.2 budget ≤ 200 kB
+- build-storybook: ok 1.1 min, 22 новых stories собрались без errors
+- Makefile отсутствует — этап N/A
+
+### Заметки для следующих итераций
+
+- **FE-TASK-029 (LoginPage)**: после успешного login useMe/useContracts немедленно получат данные — dashboard работает «из коробки». Навигация `navigate('/dashboard')` после setAccess+setUser.
+- **FE-TASK-033 (Topbar + Breadcrumbs)**: Topbar встраивается в AppLayout между sidebar и main. Breadcrumbs через `useMatches()` + `handle.crumb` — на /dashboard скрыт (корень).
+- **FE-TASK-024 (StatusBadge/RiskBadge)**: миграция на shared-примитив. Все 6 виджетов уже читают через `viewStatus(status).tone` — нужно просто поменять `<Badge variant={view.tone}>{view.label}</Badge>` на `<StatusBadge status={status}/>`. viewStatus остаётся в entities/contract как internal data source для StatusBadge.
+- **FE-TASK-044 (ContractsListPage)**: `useContracts({...params, size: 20})` + DataTable в server-mode (manualPagination+manualSorting+manualFiltering). ListParams и viewStatus уже готовы.
+- **FE-TASK-046 (ResultPage)**: добавить `useContractResults(id, vid)` (entities/contract) → AggregateScore/RiskProfile. LastCheckCard на dashboard тогда может подтянуть rich-данные через `enabled`-gate (если latest.status === 'READY').
+- **Button.asChild + Radix Slot** — general issue для будущих asChild+Link use-cases. Варианты решения (вне scope): (a) рефакторить Button.tsx на `{children}` без icon-слотов при asChild, (b) везде использовать `buttonVariants`-className на Link, (c) ждать Radix fix.
+- **code-reviewer P2 (non-blocker)**: добавить explicit Loading-state assertion в DashboardPage.test.tsx (сейчас покрыто только Storybook).
+- **code-reviewer P3 (non-blocker)**: `computeCounters` учитывает только `items.length` (5 последних), а `total` — server-wide. Если UI-требование покажет, что числа расходятся — добавить label «из последних 5» или ждать GET /dashboard/stats endpoint (backend scope).
+- **code-reviewer P4 (non-blocker)**: `aria-live="polite"` на секциях для SSE-driven state transitions.
+- **FE-TASK-053 (Vitest jsdom global)**: можно удалить `// @vitest-environment jsdom` docblock в DashboardPage.test.tsx после миграции.
+- **FE-TASK-054 (MSW)**: заменить widget-level ErrorState тест на page-level через MSW handler (5xx ошибка на GET /contracts).
+
+---

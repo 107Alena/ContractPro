@@ -1903,7 +1903,47 @@
         "FE-TASK-022",
         "FE-TASK-037"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-18",
+        "scope": "NewCheckPage (12 Figma-состояний) + 2 новых widget (WillHappenSteps, WhatWeCheck). Оркестрация feature/contract-upload (useUploadContract) → navigate('/contracts/:id/versions/:vid/result') по §16.2. Модалка low-confidence (FR-2.1.3) глобальна через Provider в App.tsx — page не держит её локально.",
+        "files_created": [
+          "Frontend/src/widgets/new-check-will-happen/ui/WillHappenSteps.tsx",
+          "Frontend/src/widgets/new-check-will-happen/ui/WillHappenSteps.stories.tsx",
+          "Frontend/src/widgets/new-check-will-happen/index.ts",
+          "Frontend/src/widgets/new-check-what-we-check/ui/WhatWeCheck.tsx",
+          "Frontend/src/widgets/new-check-what-we-check/ui/WhatWeCheck.stories.tsx",
+          "Frontend/src/widgets/new-check-what-we-check/index.ts",
+          "Frontend/src/pages/new-check/NewCheckPage.stories.tsx",
+          "Frontend/src/pages/new-check/NewCheckPage.test.tsx"
+        ],
+        "files_updated": [
+          "Frontend/src/pages/new-check/NewCheckPage.tsx (placeholder → full container)"
+        ],
+        "verification": {
+          "typecheck": "0 errors",
+          "lint": "0 errors, 0 warnings (--max-warnings=0)",
+          "tests": "509/509 passed (+8 new)",
+          "build": "main 88.01 KB gzip (≤ 200 KB §11.2)",
+          "storybook": "built ok — 12 NewCheck stories + 2 widget stories"
+        },
+        "subagents": [
+          "code-architect (implicit via FE-TASK-037 plan notes — Provider globality)",
+          "react-specialist (hook orchestration pattern)",
+          "ui-designer (static widgets layout + tokens)",
+          "code-reviewer (SHIP-WITH-FIXES: applied P1.1 testId, P1.2 removed redundant <Can>)"
+        ],
+        "deviations": [
+          "PasteTextTab — placeholder (v1 только PDF, §7.5/ADR-FE-01). Таб виден, но панель показывает 'появится позже' — сохраняет Figma-layout без фантомного endpoint'а.",
+          "RBAC story #12 — technically unreachable в v1 (permission contract.upload у всех ролей, §5.5), но fallback-экран существует и покрыт test'ом через user=null. Story использует decorate(null).",
+          "Stories 05–11 в Storybook — presentational baseline без MSW; полный pixel-match deferred to FE-TASK-054 (MSW handlers). Интерактивные состояния (dragActive, loading) живут в FileDropZone.stories."
+        ],
+        "follow_ups": [
+          "FE-TASK-046 (ResultPage): SSE статус после 202 UPLOADED подхватится на /result через useEventStream(versionId). NewCheckPage редирект сразу; ResultPage показывает ProcessingProgress до READY.",
+          "FE-TASK-054 (MSW): добавить интерактивные stories с server-side 413/415/400/500 для NewCheckPage.",
+          "P3 code-reviewer: arrow-key navigation между табами (WAI-ARIA tabs pattern); `handleFileError` не пробрасывает client-side message в aria-describedby (covered by FileDropZone internal); maxLength title в shared/constants."
+        ]
+      }
     },
     {
       "id": "FE-TASK-044",

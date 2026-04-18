@@ -1849,3 +1849,73 @@ src/features/contract-upload/
 - **Reusable pattern**: для будущих interactive SSE events (например clause_clarification_required) шаблон готов: добавить event-type в sse-events + listener в sse + callback в options. Bridge-pattern (RBAC-gated useEventStream + Zustand store + Provider в App-shell + presentational Modal) переиспользуется.
 
 ---
+
+## 2026-04-18 — FE-TASK-043 (DONE) NewCheckPage (critical)
+
+### Задача
+
+Реализовать `pages/new-check/` — экран «Новая проверка договора» с 12 состояниями Figma (§17.4 high-architecture). Orchestrates `feature/contract-upload` + `feature/low-confidence-confirm` (последняя уже глобальна через Provider в App.tsx, FE-TASK-037). Разблокирует работу с реальным upload-flow пользователя: dashboard → NewCheck → ResultPage.
+
+### План реализации
+
+1. **2 новых static widget** (`widgets/new-check-will-happen`, `widgets/new-check-what-we-check`) — информационные блоки из §17.4 Figma-screen 4. Presentational-only (без API, без state), paired layout в правой колонке страницы.
+2. **NewCheckPage.tsx** (полная замена placeholder'а):
+   - form: `title` (required, Input+Label) + `file` (required, FileDropZone из shared/ui).
+   - Tabs upload ↔ paste: нативные button'ы с role=tab/tabpanel; paste-вкладка — placeholder (v1 только PDF по §7.5/ADR-FE-01).
+   - useUploadContract с adapter'ом `setFieldError` → обрабатывает file-field (413/415/400) и VALIDATION_ERROR через setError; generic ошибки (5xx/сеть) → toast + form-banner.
+   - onSuccess → `navigate('/contracts/:id/versions/:vid/result')` — SSE открывается на ResultPage.
+   - ProcessingProgress inline виден только на короткий submit-момент; полный progress-UX — на ResultPage.
+   - RBAC fallback при `!useCan('contract.upload')`. В v1 недостижим (permission у всех ролей §5.5), но тест и story покрывают ветку через user=null.
+3. **NewCheckPage.stories.tsx** — 12 stories (Idle, TitleFilled, DragHover, FileSelected, FileTooLarge, FileWrongFormat, FileInvalid, Submitting, ProcessingStart, UploadError, LowConfidenceType, RbacRestricted). Stories 05–11 — presentational baseline; interactive pixel-match deferred to FE-TASK-054 (MSW).
+4. **NewCheckPage.test.tsx** — 8 smoke-тестов: heading/form elements, submit disabled, title validation, tabs switching, widgets visibility, RBAC fallback, onSuccess redirect.
+
+### Ключевые решения / отклонения
+
+- **Form state через useState**, не RHF — проект пока не интегрирует react-hook-form (FE-TASK-025 не стартован). `setFieldError` — adapter к `UseFormSetErrorLike<UploadFormValues>` из `@/shared/api`. Миграция на RHF будет точечной: контейнер меняется, API useUploadContract остаётся тот же.
+- **LowConfidenceConfirmModal не монтируется на странице** — Provider живёт в App.tsx (FE-TASK-037), SSE глобальный. Модалка появится автоматически если pipeline уйдёт в AWAITING_USER_INPUT ещё до редиректа на ResultPage. Page не дублирует логику.
+- **FileDropZone owns client-side validation errors** — `handleFileError` только сбрасывает файл; сообщение рендерится внутри компонента через `getFileValidationMessage`. Server-side ошибки (413/415/400) — отдельно через `state.fileError` под dropzone. Двух источников достаточно: клиентская ошибка исчезает при новом drop'е, серверная — при следующем submit или ручном сбросе.
+- **Tabs без Radix Tabs** — package не установлен, делаем нативными button'ами с правильными ARIA-атрибутами (role=tablist/tab/tabpanel, aria-selected, tabIndex roving-indexless). Arrow-key navigation — отложена (P3 review, не блокирует AC).
+- **Redirect сразу на 202**, не ждём READY — §16.2 sequence: ResultPage получает тот же document_id через route params и открывает SSE. Inline ProcessingProgress на NewCheckPage показывается только во время HTTP-upload (multipart body transfer).
+
+### Subagents
+
+- **code-architect** (implicit через progress.md FE-TASK-037): Provider модалки низкого доверия смонтирован в App.tsx глобально — page-level integration не нужна.
+- **react-specialist** (hook-pattern): useUploadContract composition → useState form-state + adapter setError. Latest-ref не требуется (callback'и стабильны через useCallback).
+- **ui-designer** (static widgets): WillHappenSteps / WhatWeCheck — tokens-only, без API. Цветовые варианты: bg-muted (WillHappen) и bg (WhatWeCheck) для контраста; brand-50 акценты для шагов.
+- **code-reviewer** (final audit): SHIP-WITH-FIXES — P1.1 (test query `role=form` → `data-testid`), P1.2 (убрать лишнюю `<Can>` вокруг Tabs — page уже гарантирует canUpload через early-return).
+
+### Затронутые файлы
+
+**Созданы:**
+- `Frontend/src/widgets/new-check-will-happen/{ui/WillHappenSteps.tsx, ui/WillHappenSteps.stories.tsx, index.ts}`
+- `Frontend/src/widgets/new-check-what-we-check/{ui/WhatWeCheck.tsx, ui/WhatWeCheck.stories.tsx, index.ts}`
+- `Frontend/src/pages/new-check/NewCheckPage.stories.tsx` — 12 stories
+- `Frontend/src/pages/new-check/NewCheckPage.test.tsx` — 8 smoke-тестов
+
+**Обновлены:**
+- `Frontend/src/pages/new-check/NewCheckPage.tsx` — placeholder → full container
+- `Frontend/tasks.json` — FE-TASK-043 status=done + completion_notes
+
+### Верификация
+
+- typecheck: 0 errors
+- lint --max-warnings=0: 0 errors / 0 warnings
+- test: **509/509 passed** (+8 new). Регрессий нет.
+- build: main **88.01 KB gzip** (≤ 200 KB §11.2 ✓)
+- build-storybook: ok, 12 NewCheck stories + 2 widget stories собраны
+- Makefile в Frontend/ отсутствует — этап N/A
+- Архитектура: §16.2 (upload flow → navigate), §17.1 (route /contracts/new + permission), §17.4 (4 widget'а из Figma 4), §5.5/§5.6 (RBAC), §7.5 (upload contract) — соответствуют
+
+### Заметки для следующих итераций
+
+- **FE-TASK-044 (ContractsListPage critical)** разблокирован частично: `useContracts`+`Filters`+`DocumentsTable` уже есть; остаётся виртуализация строк через `@tanstack/react-virtual` + URL search-params + SearchInput с debounce. Page-паттерн взять из DashboardPage.
+- **FE-TASK-046 (ResultPage critical)** — получает `contract_id`+`version_id` через route params; useEventStream(version_id) открывает per-version SSE (в отличие от dashboard'а с global feed). Первый рендер — ProcessingProgress по qk.contracts.status(id,vid); при READY → результаты по параллельным useResults/useRisks/useSummary/useRecommendations.
+- **FE-TASK-054 (MSW handlers)** — дополнить `POST /contracts/upload` moked-handler'ами для сценариев 413/415/400/500, чтобы NewCheckPage.stories перестали быть decorative baseline.
+- **FE-TASK-025 (RHF + Zod)** — когда будет готов, заменить useState form-state на useForm<UploadFormValues>() + zodResolver. `setFieldError` adapter удаляется (прямая передача `setError` в useUploadContract).
+- **P3 code-reviewer follow-ups (non-blockers):**
+  - arrow-key navigation между табами (WAI-ARIA Authoring Practices «Tabs»);
+  - `handleFileError` может принимать message и показывать клиентскую ошибку в page-level aria-describedby (пока FileDropZone owns UI);
+  - `maxLength={200}` title — вынести в `@/features/contract-upload/constants` или в shared/config;
+  - `parameters.docs.description.story` в 6 Storybook-stories, чтобы в Storybook UI ревьюер видел «deferred to FE-TASK-054 MSW» без чтения исходника.
+
+---

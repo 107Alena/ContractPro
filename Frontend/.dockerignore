@@ -1,0 +1,41 @@
+# ContractPro Frontend — Docker build context exclusions.
+# Держим контекст минимальным: build запускает npm ci от нуля внутри контейнера.
+
+# Node / Vite build output
+node_modules
+dist
+dist-ssr
+.vite
+
+# Тестовые артефакты и отчёты
+coverage
+storybook-static
+playwright-report
+test-results
+
+# VCS и CI
+.git
+.github
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
+*.swp
+
+# Локальные env-файлы (build-time VITE_* приходят через ARG, не из .env)
+.env
+.env.local
+.env.*.local
+
+# Документация / tasks — не нужны для сборки runtime-образа
+progress.md
+tasks.json
+backlog-tasks.json
+architecture
+tests/e2e
+
+# Логи
+npm-debug.log*
+yarn-debug.log*
+*.log

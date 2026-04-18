@@ -39,6 +39,10 @@ export default tseslint.config(
       'storybook-static/**',
       'playwright-report/**',
       'test-results/**',
+      // Vite public/ — статика, раздаётся as-is; не является частью ES-graph
+      // приложения. mockServiceWorker.js (MSW) и config.js (runtime-env,
+      // FE-TASK-009) лежат здесь.
+      'public/**',
       'src/shared/api/openapi.d.ts',
       '.storybook/**/*.mdx',
     ],

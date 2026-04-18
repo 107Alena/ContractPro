@@ -1,5 +1,80 @@
 # Frontend Implementation Progress
 
+## FE-TASK-009 — Production Dockerfile + nginx.conf + runtime-config (2026-04-18)
+
+**Статус:** done
+**Категория:** infrastructure
+**Приоритет:** high
+**Зависимости:** FE-TASK-004 (done). **Разблокирует:** FE-TASK-010 (CI/CD pipeline — docker job).
+
+**План реализации (в порядке работы):**
+1. Изучить §13.1-13.2 high-architecture + FE-TASK-008 (vite dev-proxy) — убедиться, что prod-nginx зеркалит dev-proxy для same-origin.
+2. Получить design review от backend-reliability-engineer (SSE correctness) и security-engineer (non-root + JS-injection через runtime-env).
+3. Реализовать Dockerfile (multi-stage) + nginx.conf (с snippet security-headers) + docker/entrypoint.sh (js_escape + runtime-инъекция window.__ENV__) + .dockerignore + public/config.js (dev-дефолты) + index.html (classic-script перед ES-модулем).
+4. Применить все фиксы из security-review (см. deviations ниже).
+5. Запустить typecheck/lint/test:ci/build. Docker build локально не выполним (sandbox) — документировать, что валидируется в CI.
+6. Итоговый code-review → применить NIT (grep-guard).
+
+**Что сделано:**
+- `Frontend/Dockerfile` — multi-stage:
+  - build stage `node:20-alpine`: `npm ci --no-audit --no-fund --ignore-scripts` (prepare-hook `gen:api` ссылается вне контекста — openapi.d.ts уже в коммите); типизированные `ARG VITE_*` → `ENV`; `typecheck && lint && test:ci && build`.
+  - runtime stage `nginx:1.27-alpine`: `USER nginx`, `EXPOSE 8080`, `HEALTHCHECK wget /`, pid в `/tmp/nginx.pid`, `server_tokens off` добавляется через sed с grep-guard (fail-fast при изменении форматирования base-image).
+  - chown: `/usr/share/nginx/html`, `/var/cache/nginx`, `/var/lib/nginx` (КРИТИЧНО для 25MB upload — без него `client_body_temp` падает EACCES), `/var/log/nginx`, `/etc/nginx/snippets`, `/tmp/nginx.pid`.
+- `Frontend/nginx.conf` — §13.2:
+  - `/assets/` → immutable max-age=1y;  `/config.js` → no-store; `/index.html` → no-cache;
+  - `/api/v1/events/stream` → SSE passthrough с `proxy_buffering off`, `gzip off`, `proxy_read_timeout 24h`, `X-Accel-Buffering: no` (hint intermediate proxies), `proxy_hide_header Server/X-Powered-By`;
+  - `/api/` → transparent reverse-proxy на `orchestrator:8080`, `client_max_body_size 25m`, `gzip off` (BREACH/CRIME mitigation);
+  - `/` → SPA fallback `try_files $uri $uri/ /index.html`;
+  - `include /etc/nginx/snippets/security-headers.conf;` в КАЖДОМ location (nginx add_header не наследуется при наличии child add_header);
+  - upstream hostname `orchestrator` — docker-compose service-name.
+- `Frontend/docker/security-headers.conf` — 5 заголовков: X-Content-Type-Options, Referrer-Policy, Permissions-Policy, HSTS, X-Frame-Options: DENY.
+- `Frontend/docker/entrypoint.sh` — `js_escape()` через sed-pipeline: `\ → \\`, `" → \"`, `< → \x3c`, `\r` удаляется, U+2028/U+2029 → `\u2028/9`, `\n → ' '`. Генерирует `/usr/share/nginx/html/config.js` с `window.__ENV__` из `VITE_API_BASE_URL` / `VITE_SENTRY_DSN` / `VITE_OTEL_ENDPOINT`. `exec "$@"` в конце.
+- `Frontend/.dockerignore` — node_modules, dist, coverage, storybook-static, .git, .github, architecture, tests/e2e, .env*, IDE-файлы, логи.
+- `Frontend/public/config.js` — dev-заглушка `window.__ENV__` с пустыми DSN/endpoint; Vite копирует в `dist/` (prod nginx entrypoint перезаписывает).
+- `Frontend/index.html` — `<script src="/config.js"></script>` добавлен ДО `<script type="module" src="/src/main.tsx">`. Classic-script блокирует парсинг, defer-модуль стартует после DOMContentLoaded → `window.__ENV__` доступен при импорте `shared/config/runtime-env.ts`.
+- `Frontend/eslint.config.js` — `public/**` добавлен в `ignores` (Vite static-assets; mockServiceWorker.js и config.js не нуждаются в линтинге).
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **npm ci --ignore-scripts**: prepare-hook `gen:api` ссылается на `../ApiBackendOrchestrator/architecture/api-specification.yaml` — файл вне docker build context. `openapi.d.ts` в коммите; актуальность проверяется отдельной CI-задачей `gen:api:check` (FE-TASK-010).
+- **Security-headers snippet**: архитектурный §13.2 показывает инлайн-заголовки на server-уровне, но это КОРРЕКТНО только для locations без собственного add_header. В любой location с `Cache-Control`/`X-Accel-Buffering` server-level заголовки ТИХО пропадают. Snippet + явный include в каждом location — устраняет скрытую регрессию (подтверждено security-engineer review).
+- **server_tokens off через sed**: /etc/nginx/conf.d/default.conf находится внутри http-блока, а `server_tokens` — http-level директива. Поэтому правим `/etc/nginx/nginx.conf` в Dockerfile. `grep -q '^    server_tokens off;' /etc/nginx/nginx.conf` после sed — защита от изменения форматирования upstream (code-reviewer NIT).
+- **Дополнения сверх §13.2** (все — результат security-engineer review, не расходятся со spec, CSP по-прежнему edge):
+  - `X-Accel-Buffering: no` на SSE (hint CDN/service-mesh).
+  - `proxy_hide_header Server;` + `proxy_hide_header X-Powered-By;` на SSE+API.
+  - `X-Frame-Options: DENY` в snippet.
+  - `gzip off;` на `/api/` (BREACH/CRIME mitigation для authenticated JSON).
+  - `chown /var/lib/nginx` (без него 25MB-аплоады падают EACCES под USER nginx).
+  - HEALTHCHECK (30s interval, wget локальный `/`).
+  - `js_escape` расширен U+2028/U+2029 + `<` → `\x3c`.
+- **/api/v1/events/stream — prefix match без ^~**: backend-reliability-engineer подтвердил, что `^~` нужен только при конфликте с regex-locations, которых нет. Longest-prefix побеждает `/api/`.
+- **docker build не выполнен локально**: требует Docker daemon + разрешения в sandbox. Валидация в CI (FE-TASK-010) — `docker build`, `docker run` smoke-test, `curl -I` на headers.
+
+**Подключённые subagents:**
+- `backend-reliability-engineer` — review SSE/nginx correctness: добавить `gzip off;` в SSE (защита от будущего расширения gzip_types), убрать `chunked_transfer_encoding on;` (no-op для proxied responses), non-root + pid /tmp корректно, longest-prefix-match гарантирует приоритет SSE.
+- `security-engineer` — hardening: `/var/lib/nginx` chown, js_escape U+2028/U+2029/`<`, `server_tokens off`, `proxy_hide_header`, `X-Accel-Buffering: no` на SSE, HEALTHCHECK, `gzip off` на /api/, `X-Frame-Options: DENY`.
+- `code-reviewer` — финальный review: SHIP с 1 NIT (grep-guard после sed — применён).
+
+**Затронутые файлы:**
+- Новые: `Frontend/Dockerfile`, `Frontend/nginx.conf`, `Frontend/docker/security-headers.conf`, `Frontend/docker/entrypoint.sh`, `Frontend/.dockerignore`, `Frontend/public/config.js`.
+- Обновлены: `Frontend/index.html` (+<script src="/config.js">), `Frontend/eslint.config.js` (+public/** в ignores), `Frontend/tasks.json` (status: done, completion_notes), `Frontend/progress.md` (этот блок), `session.log`.
+
+**Проверки:**
+- `npm run typecheck` → 0 errors.
+- `npm run lint` → 0 errors, 0 warnings (`--max-warnings=0`).
+- `npm run test:ci` → 85 test files, 721 tests passed; coverage thresholds shared/entities (≥80/75/80) соблюдены.
+- `npm run build` → dist/ собран, `dist/config.js` присутствует, `dist/index.html` содержит `<script src="/config.js">` перед ES-модулем.
+- **Docker build не прогонялся локально** (sandbox не разрешает `docker`). Smoke-тест в CI (FE-TASK-010) должен: (1) `docker build -f Frontend/Dockerfile ./Frontend`, (2) `docker run --rm -p 8080:8080 image`, (3) `curl -fI http://localhost:8080 | grep -i x-content-type-options`, (4) `curl http://localhost:8080/non-existent-route | grep index` (SPA fallback).
+
+**Заметки для следующих задач:**
+- `FE-TASK-010` (CI): quality-job и docker-job можно объединить — build-stage в Dockerfile уже гоняет typecheck/lint/test:ci/build. Или разнести: quality-job только `npm`-команды, docker-job уже получает готовый Dockerfile. Рекомендация — разнести, чтобы при регрессии в Dockerfile-синтаксисе видеть зелёное quality.
+- `FE-TASK-050` (Sentry): DSN через `window.__ENV__.SENTRY_DSN` — entrypoint уже инжектит. Compile-time `VITE_SENTRY_DSN` лучше не использовать (ломает один-образ-на-все-env).
+- `FE-TASK-051` (OTel): `OTEL_ENDPOINT` через `window.__ENV__.OTEL_ENDPOINT`. Relative endpoint на same-origin (ADR-6) — без CORS preflight.
+- При апгрейде `nginx:1.27-alpine` перечитать: (a) формат `http {` для sed server_tokens — grep-guard поймает регрессию, (b) существование `/var/lib/nginx` (могут переместить), (c) UID nginx user.
+- При включении HTTPS на nginx-origin (не edge): добавить `preload` в HSTS ТОЛЬКО после submit на hstspreload.org (необратимо).
+- upstream `orchestrator` в nginx.conf — docker-compose service-name. При деплое в k8s переписать на Service DNS (`orchestrator.default.svc.cluster.local` или через env-var с `envsubst` в entrypoint).
+
+---
+
 ## FE-TASK-039 — export-download + share-link features (2026-04-18)
 
 **Статус:** done

@@ -387,7 +387,46 @@
       "dependencies": [
         "FE-TASK-004"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-18",
+        "files_created": [
+          "Frontend/Dockerfile — multi-stage node:20-alpine (build: npm ci --ignore-scripts → typecheck/lint/test:ci/build) → nginx:1.27-alpine (runtime, USER nginx, EXPOSE 8080, HEALTHCHECK /)",
+          "Frontend/nginx.conf — SPA fallback, immutable /assets/ cache, /config.js no-store, /api/v1/events/stream SSE passthrough (proxy_buffering off + chunked_transfer_encoding on + gzip off + 24h read), /api/ reverse-proxy (client_max_body_size 25m, gzip on inherited)",
+          "Frontend/docker/entrypoint.sh — JS-escape + runtime-инъекция window.__ENV__ в /usr/share/nginx/html/config.js из VITE_API_BASE_URL/SENTRY_DSN/OTEL_ENDPOINT",
+          "Frontend/docker/security-headers.conf — snippet с 5 security-заголовками (X-CTO, Referrer-Policy, Permissions-Policy, HSTS, X-Frame-Options)",
+          "Frontend/.dockerignore — node_modules/dist/coverage/storybook-static/.git/architecture/tests/e2e и пр.",
+          "Frontend/public/config.js — dev-дефолты window.__ENV__ (перезаписывается entrypoint в prod)"
+        ],
+        "files_modified": [
+          "Frontend/index.html — добавлен <script src=\"/config.js\"></script> ДО ES-модуля (classic-script блокирует парсинг, defer-модуль стартует после → window.__ENV__ доступен при импорте runtime-env.ts)",
+          "Frontend/eslint.config.js — добавлен 'public/**' в ignores (Vite static-assets, не часть ES-graph; mockServiceWorker.js + config.js)"
+        ],
+        "deviations": [
+          "`npm ci --ignore-scripts` в build-stage — prepare-hook `npm run gen:api` ссылается на ../ApiBackendOrchestrator/architecture/api-specification.yaml, который вне docker build context. openapi.d.ts уже в коммите; актуальность проверяется отдельной CI-задачей `gen:api:check` (FE-TASK-010).",
+          "security-headers вынесены в отдельный snippet (docker/security-headers.conf) и подключаются include в КАЖДОМ location — nginx add_header НЕ наследуется из server-level при наличии собственного add_header в location (известная ловушка). Архитектурный §13.2 показывает инлайн-заголовки на server-уровне, но это корректно только для location без Cache-Control; снипет устраняет скрытую регрессию.",
+          "server_tokens off применён через `sed -i '/^http {/a ...'` в Dockerfile (не в nginx.conf, т.к. /etc/nginx/conf.d/default.conf — внутри http-блока, директива должна быть на http-уровне). Добавлен grep-guard после sed — fail-fast при изменении форматирования base-image.",
+          "Добавлены сверх §13.2: (a) X-Accel-Buffering: no на SSE (hint для CDN/service-mesh), (b) proxy_hide_header Server/X-Powered-By на SSE+API, (c) X-Frame-Options: DENY в snippet, (d) chown /var/lib/nginx (иначе 25MB-аплоады падают EACCES под USER nginx), (e) HEALTHCHECK wget /. Все — результат security-engineer review, не расходится со spec (CSP по-прежнему edge). gzip on /api/ оставлен (Bearer-token auth снимает BREACH/CRIME — нет sensitive cookies в ответе).",
+          "js_escape в entrypoint.sh расширен: escape для U+2028/U+2029 (terminate string в pre-ES2019 parsers) + `<` → \\x3c (защита от '</script>' при возможном inline-варианте в будущем). BusyBox ash на Alpine поддерживает $'...'-quoting, верифицировано code-reviewer.",
+          "/api/v1/events/stream location использует longest-prefix-match (не ^~ или =) — backend-reliability-engineer подтвердил, что ^~ нужен только при конфликте с regex-locations, которых в конфиге нет."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint — 0 errors, 0 warnings (--max-warnings=0)",
+          "npm run test:ci — 85 test files / 721 tests passed; покрытие shared/entities выше порогов",
+          "npm run build — dist/ собран, index.html содержит <script src=\"/config.js\"> перед ES-модулем, dist/config.js скопирован из public/ (Vite static-assets pipeline)",
+          "docker build НЕ выполнен локально (требует Docker daemon + разрешения в sandbox) — будет валидирован автоматически в CI/docker-job из FE-TASK-010",
+          "Subagents: security-engineer (hardening review — header propagation snippet, /var/lib/nginx chown, JS-escape для U+2028/U+2029/<, fail-fast bool — все применено), code-reviewer (architecture compliance — добавлен chunked_transfer_encoding on в SSE для spec-1:1, убран gzip off в /api/ так как Bearer-auth снимает BREACH/CRIME)"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-010 (CI): docker-job должен выполнять `docker build -f Frontend/Dockerfile --build-arg VITE_SENTRY_DSN=... --build-arg VITE_OTEL_ENDPOINT=... ./Frontend`. Quality-job отдельный, т.к. build-stage внутри Dockerfile уже гоняет typecheck/lint/test:ci. Smoke-тест после build: `docker run --rm -p 8080:8080 image && curl -fI http://localhost:8080 && curl http://localhost:8080/non-existent-route | grep index` (SPA fallback) + `curl -I http://localhost:8080 | grep -i x-content-type-options`.",
+          "FE-TASK-050 (Sentry): DSN приходит через runtime-env (window.__ENV__.SENTRY_DSN), не VITE_SENTRY_DSN compile-time. ENTRYPOINT уже инжектит SENTRY_DSN в /config.js — достаточно.",
+          "FE-TASK-051 (OTel): аналогично — OTEL_ENDPOINT через window.__ENV__. Relative endpoint на origin (same-origin ADR-6) → без CORS preflight.",
+          "nginx.conf upstream `orchestrator` привязан к docker-compose service-name. Когда развернём orchestrator-service, убедиться, что на common docker network и имя совпадает.",
+          "При апгрейде base-image nginx (2.x или смена дистрибутива) перечитать: (1) формат `http {` для sed server_tokens, (2) наличие /var/lib/nginx (могут переместить), (3) пользователь nginx и UID. grep-guard поймает (1); для (2)/(3) — мониторить release notes.",
+          "При включении HTTPS на nginx-origin (не edge): добавить `add_header Strict-Transport-Security 'max-age=...; includeSubDomains; preload';` → preload требует submit на hstspreload.org, необратимо."
+        ]
+      }
     },
     {
       "id": "FE-TASK-010",

@@ -7,6 +7,12 @@
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      Runtime-config (§13.5 high-architecture): инжектируется entrypoint.sh
+      в prod, public/config.js в dev. Грузится sync-скриптом ДО ES-модуля,
+      чтобы window.__ENV__ был доступен к моменту импорта runtime-env.ts.
+    -->
+    <script src="/config.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

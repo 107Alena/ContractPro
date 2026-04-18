@@ -3,3 +3,4 @@
 
 # Exceptions: tracked files
 !**/scripts/*.sh
+!**/docker/*.sh

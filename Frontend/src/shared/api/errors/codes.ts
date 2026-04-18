@@ -50,6 +50,21 @@ export type ClientErrorCode = (typeof CLIENT_ERROR_CODES)[keyof typeof CLIENT_ER
 /** Полный union кодов — ключи ERROR_UX. Любой новый код должен появиться здесь сначала. */
 export type ErrorCode = ServerErrorCode | ClientErrorCode;
 
+/**
+ * Коды, семантически относящиеся к полю `file` в upload-формах (§9.3 row 413/415/400).
+ * Источник истины для `mapUploadFileError` во всех upload-feature'ах
+ * (contract-upload, version-upload). Cross-feature copy-paste списка рискован —
+ * код формат валидации drift'ует, и feature'ы начинают показывать toast вместо
+ * inline-ошибки на полю. Держим тут, чтобы единообразно.
+ */
+export const FILE_FIELD_ERROR_CODES = [
+  'FILE_TOO_LARGE',
+  'UNSUPPORTED_FORMAT',
+  'INVALID_FILE',
+] as const satisfies readonly ServerErrorCode[];
+
+export type FileFieldErrorCode = (typeof FILE_FIELD_ERROR_CODES)[number];
+
 /** UX-действие, которое UI может предложить пользователю по коду ошибки. */
 export type ErrorAction = 'retry' | 'login' | 'none';
 

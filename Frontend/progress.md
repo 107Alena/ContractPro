@@ -2153,3 +2153,104 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **Directives `// @vitest-environment`** в legacy-тестах сохранены (node для client.test/upload-integration, jsdom для actions.test) — различают axios adapter (XHR jsdom vs http/fetch node).
 
 ---
+
+## FE-TASK-035 — version-upload + version-recheck features (high, feature)
+
+**Статус:** done · **Дата:** 2026-04-18
+
+### Цель
+
+Реализовать две feature, заблокированные в заглушках: `features/version-upload` (загрузка новой версии существующего договора через `POST /contracts/{id}/versions/upload`) и `features/version-recheck` (повторная проверка версии через `POST /contracts/{id}/versions/{vid}/recheck`). Обе необходимы для разблокировки критического `FE-TASK-046` (ResultPage — кнопка «Проверить заново» в FAILED-state) и `FE-TASK-045` (ContractDetailPage — VersionUploadDialog).
+
+### Ключевые отличия от `contract-upload`
+
+| Аспект | contract-upload (/contracts/upload) | version-upload (/contracts/{id}/versions/upload) | version-recheck (/contracts/{id}/versions/{vid}/recheck) |
+|---|---|---|---|
+| Payload | multipart `{file, title}` | multipart `{file}` (title не передаётся) | body отсутствует (POST без тела) |
+| Input | `{file, title}` | `{contractId, file}` | `{contractId, versionId}` |
+| Timeout | 120s | 120s (PDF до 20 МБ) | default 30s (202 возвращается быстро) |
+| AbortController | да | да (повторяем паттерн) | **нет** (быстрый 202, cancel UX бесполезен) |
+| onUploadProgress | да | да | — |
+| Invalidation | `['contracts','list']` | `versions(id)` + `byId(id)` + `['contracts','list']` | `versions(id)` + `status(id, vid)` |
+| Специфичные error-коды | 413/415/400 INVALID_FILE + VALIDATION_ERROR | те же | **409 VERSION_STILL_PROCESSING** (toast через `toUserMessage`) |
+
+### План реализации
+
+1. Анализ эталона `features/contract-upload/` (api/http.ts — DI, api/upload-contract.ts — narrow, lib/map-upload-error.ts, model/use-upload-contract.ts).
+2. Code-architect consult → вердикт: (a) дублировать `mapUploadFileError` локально, но вынести whitelist `FILE_FIELD_ERROR_CODES` в `@/shared/api` (FSD запрет cross-feature); (b) локальный `http.ts` DI per-feature (test seam); (c) `UPLOAD_VERSION_FORM_FIELDS = {file}` без title; (d) для recheck — без AbortController; (e) upload invalidate = 3 ключа (versions + byId + list prefix).
+3. Реализация version-upload (6 файлов) + version-recheck (5 файлов) + shared расширение.
+4. 65 новых тестов (27 + 38).
+5. Code-reviewer ревью → готово к merge (исправлен вводящий в заблуждение комментарий в recheck-version.ts:59-61).
+
+### Создано
+
+**src/shared/api/errors/codes.ts:**
+- `FILE_FIELD_ERROR_CODES = ['FILE_TOO_LARGE', 'UNSUPPORTED_FORMAT', 'INVALID_FILE']` — единый whitelist для upload-feature'ов, чтобы не разошёлся между contract-upload и version-upload.
+- Экспорт через `@/shared/api` barrel.
+
+**src/features/version-upload/:**
+- `api/http.ts` — DI-контейнер `__setHttpForTests` (MSW bridge).
+- `api/upload-version.ts` — `uploadVersion({contractId, file}, opts)`, endpoint `/contracts/{encodeURIComponent(contractId)}/versions/upload`, timeout 120s, narrow non-null, onUploadProgress bridging.
+- `lib/map-upload-error.ts` — `mapUploadVersionError`, `isUploadVersionFileFieldError` на базе shared `FILE_FIELD_ERROR_CODES`.
+- `model/types.ts` — `UploadVersionInput/Response/Progress`, `UPLOAD_VERSION_FORM_FIELDS = {file} as const`, `UploadVersionFormValues = {file: File | null}`.
+- `model/use-upload-version.ts` — `useUploadVersion<TForm>({setError?, onSuccess?, onError?, onUploadProgress?})`; AbortController ref + cleanup на unmount; invalidate 3 keys; file-field-коды → `setError('file', ...)`; VALIDATION_ERROR → `applyValidationErrors`; REQUEST_ABORTED — фильтруется; остальное → `onError(err, toUserMessage(err))`.
+- `index.ts` — barrel без утечки `__setHttpForTests`.
+
+**src/features/version-recheck/:**
+- `api/http.ts` — DI-контейнер.
+- `api/recheck-version.ts` — `recheckVersion({contractId, versionId}, opts)`, POST без body, default timeout, narrow non-null.
+- `model/types.ts` — `RecheckVersionInput/Response`.
+- `model/use-recheck-version.ts` — `useRecheckVersion({onSuccess?, onError?})`; invalidate 2 keys (versions + status); 409 VERSION_STILL_PROCESSING → `toUserMessage` даёт `{title: 'Версия ещё обрабатывается', hint: 'Дождитесь завершения.'}` из `ERROR_UX`; REQUEST_ABORTED — фильтруется; без AbortController.
+- `index.ts` — barrel.
+
+### Обновлено
+
+- `src/shared/api/index.ts` — реэкспорт `FILE_FIELD_ERROR_CODES`, `FileFieldErrorCode`.
+- `src/shared/api/errors/index.ts` — реэкспорт.
+- `src/features/contract-upload/lib/map-upload-error.ts` — заменил локальный inline-массив кодов на импорт из `@/shared/api` (гарантия что upload-фичи не разойдутся).
+
+### Тесты (65 новых)
+
+**version-upload:**
+- `api/upload-version.test.ts` — 15 тестов: endpoint-shape (multipart только file, без title), `encodeURIComponent` в path, timeout 120s, signal/onUploadProgress прокидка, onUploadProgress fraction, narrow non-null (throw при drift'е), 5 error passthrough.
+- `lib/map-upload-error.test.ts` — 12 тестов: file-field коды → {field:'file'}, fallback на error_code при пустом message, non-file коды → null, не-OrchestratorError → null.
+- `model/use-upload-version.test.tsx` — 11 тестов: success + 3 invalidation keys, onUploadProgress, 3 file-field коды → setError, VALIDATION_ERROR, 500 INTERNAL_ERROR passthrough, REQUEST_ABORTED filtered, cancel() / unmount abort.
+- `api/upload-version.integration.test.ts` — 5 тестов: реальный axios+MSW; 202 → narrow; 413/415/400/404.
+
+**version-recheck:**
+- `api/recheck-version.test.ts` — 10 тестов: endpoint-shape (POST без body), encodeURIComponent для обоих path-params, signal прокидка, narrow, 5 error passthrough (включая 409 VERSION_STILL_PROCESSING).
+- `model/use-recheck-version.test.tsx` — 7 тестов: success + 2 invalidation keys, recheckAsync, 409 → toast с title+hint, 500 → toast с server message, REQUEST_ABORTED filtered, onError не вызван на success.
+- `api/recheck-version.integration.test.ts` — 5 тестов: 202 narrow, 409 VERSION_STILL_PROCESSING, 404/403/500.
+
+### Верификация
+
+- `npx tsc --noEmit` — **0 errors**.
+- `npm run lint --max-warnings=0` — **0 errors / 0 warnings**.
+- `npx vitest run` — **614/614 passed** (было 549 до задачи; +65 новых).
+- `npm run build` — main bundle **88.18 KB gzip** (без регрессии vs FE-TASK-054).
+- Makefile в `Frontend/` отсутствует — этап N/A.
+
+### Соответствие архитектуре
+
+- **§6.1 FSD-слои** — две feature-папки со стандартной структурой `api/ + lib/ + model/ + index.ts`. Никаких cross-feature импортов (проверено при ревью).
+- **§7.5 Upload API** — таймаут 120s для multipart, runtime narrow non-null полей `UploadResponse` (OpenAPI optional → domain required).
+- **§9.3 Error-коды** — 413/415/400 INVALID_FILE → inline `setError('file',...)` через файловый маппер; 409 VERSION_STILL_PROCESSING → toast через `toUserMessage` + `ERROR_UX` title+hint.
+- **§16.2 Feature-barrel'ы** — index.ts публикует только хук + типы + helper-функции; `__setHttpForTests` не утекает в прод-бандл.
+- **§20.4a VALIDATION_ERROR** — `applyValidationErrors<TForm>` вызывается для VALIDATION_ERROR с `details.fields`.
+- **§4.x Invalidation strategy** — version-upload: `qk.contracts.versions(id)` + `qk.contracts.byId(id)` + `['contracts','list']` prefix (т.к. last_version_* и строка в списке обновляются). version-recheck: `qk.contracts.versions(id)` + `qk.contracts.status(id,vid)` (новая версия + изменение processing_status исходной).
+- **Security** — `encodeURIComponent(contractId/versionId)` в endpoint-функциях закрывает path-injection.
+
+### Subagents
+
+- **code-architect** (design review): дал вердикт по 5 пунктам дизайна — дублировать `mapUploadFileError`, поднять только whitelist кодов в shared; локальный `http.ts` per-feature; `UPLOAD_VERSION_FORM_FIELDS={file}` с generic-параметричностью; без AbortController в recheck; invalidate 3 keys для upload. Все применены.
+- **code-reviewer** (final review): verdict **ready to merge**. Нашёл один misleading-комментарий в `recheck-version.ts:59-61` (исправлено). Подтвердил чистоту FSD-границ, корректность encodeURIComponent для path-injection, правильную обработку 409 через `toUserMessage + ERROR_UX`.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-046 (ResultPage, critical)** — разблокирован частично (ещё нужны FE-TASK-024 `RiskBadge/StatusBadge`, FE-TASK-039 `export-download`, FE-TASK-040 `feedback-submit + contract-archive + contract-delete`). Импортирует `useRecheckVersion` из `@/features/version-recheck` для кнопки «Проверить заново» в FAILED-state.
+- **FE-TASK-045 (ContractDetailPage, high)** — использует `useUploadVersion` в `VersionUploadDialog`. Импорт: `import { useUploadVersion, UPLOAD_VERSION_FORM_FIELDS } from '@/features/version-upload'`.
+- **Follow-up (low priority) — `narrowUploadResponse` в shared**: сейчас runtime-guard для `UploadResponse` дублируется трижды (contract-upload, version-upload, version-recheck). Можно выделить в `@/shared/api/narrow-upload-response.ts` с generic-параметром. Отложено, т.к. это преждевременная абстракция — до 3-го use case рискованно выделять.
+- **Follow-up (low) — `UPLOAD_TIMEOUT_MS = 120_000`** дублируется в contract-upload + version-upload. Можно вынести в shared как `UPLOAD_TIMEOUT_MS`. Отложено.
+- **Потребители recheck в FAILED-state ResultPage**: ожидаемый UX — toast `VERSION_STILL_PROCESSING` с title+hint, а после 202 navigate на `/contracts/{id}/versions/{new_vid}/result` (страница-потребитель сама navigate'ит через onSuccess-колбэк).
+
+---

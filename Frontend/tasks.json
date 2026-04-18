@@ -1651,7 +1651,17 @@
       "dependencies": [
         "FE-TASK-034"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": [
+        "version-upload feature: api/http.ts (DI), api/upload-version.ts (multipart {file}, timeout 120s, runtime narrow), lib/map-upload-error.ts, model/types.ts (UPLOAD_VERSION_FORM_FIELDS={file}), model/use-upload-version.ts (AbortController + cleanup на unmount, invalidate versions(id) + byId(id) + ['contracts','list']), index.ts barrel",
+        "version-recheck feature: api/http.ts, api/recheck-version.ts (POST без тела, narrow), model/types.ts, model/use-recheck-version.ts (invalidate versions(id) + status(id,vid); 409 VERSION_STILL_PROCESSING → toast через toUserMessage + ERROR_UX title+hint 'Дождитесь завершения'), index.ts barrel",
+        "shared: добавлен FILE_FIELD_ERROR_CODES в src/shared/api/errors/codes.ts — единый whitelist для contract-upload + version-upload, чтобы коды не разошлись; contract-upload обновлён на импорт из shared",
+        "Безопасность: encodeURIComponent применён к path-segments (contractId, versionId) — закрытие path-injection",
+        "Тесты: 65 новых (upload-version api 15 + lib 12 + hook 11 + integration 5; recheck api 10 + hook 7 + integration 5). Всего 614/614 passed (было 549)",
+        "typecheck: 0 errors; eslint --max-warnings=0: clean; build 88.18 KB gzip main (без регрессий)",
+        "Разблокирует FE-TASK-046 (critical ResultPage — recheck-кнопка в FAILED) и FE-TASK-045 (ContractDetailPage — VersionUploadDialog)",
+        "Subagents: code-architect (дизайн-ревью + рекомендации по FSD-границам и инвалидации), code-reviewer (независимое ревью — verdict 'готово к merge')"
+      ]
     },
     {
       "id": "FE-TASK-036",

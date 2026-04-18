@@ -17,6 +17,8 @@ export {
   type ErrorResponse,
   type ErrorUXEntry,
   type FieldValuesLike,
+  FILE_FIELD_ERROR_CODES,
+  type FileFieldErrorCode,
   isKnownErrorCode,
   isOrchestratorError,
   isValidationError,

@@ -6,7 +6,12 @@
 // `applyValidationErrors` их не распознает. Этот хелпер решает какой код
 // положить на какое поле — и возвращает null для прочих ошибок, которые
 // должны обрабатываться как toast (500) или прокидываться (401).
-import { type ErrorCode, isOrchestratorError, type OrchestratorError } from '@/shared/api';
+import {
+  type ErrorCode,
+  FILE_FIELD_ERROR_CODES,
+  isOrchestratorError,
+  type OrchestratorError,
+} from '@/shared/api';
 
 import { UPLOAD_FORM_FIELDS } from '../model/types';
 
@@ -18,11 +23,7 @@ export interface UploadFieldError {
   message: string;
 }
 
-const FILE_FIELD_CODES: readonly ErrorCode[] = [
-  'FILE_TOO_LARGE',
-  'UNSUPPORTED_FORMAT',
-  'INVALID_FILE',
-];
+const FILE_FIELD_CODES: readonly ErrorCode[] = FILE_FIELD_ERROR_CODES;
 
 /**
  * Если `err` — OrchestratorError с кодом из whitelist (FILE_TOO_LARGE /

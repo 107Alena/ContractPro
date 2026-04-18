@@ -14,6 +14,8 @@ export {
   type ClientErrorCode,
   type ErrorAction,
   type ErrorCode,
+  FILE_FIELD_ERROR_CODES,
+  type FileFieldErrorCode,
   isKnownErrorCode,
   SERVER_ERROR_CODES,
   type ServerErrorCode,

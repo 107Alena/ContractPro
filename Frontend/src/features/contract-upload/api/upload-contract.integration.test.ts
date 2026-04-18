@@ -15,14 +15,19 @@
 // jsdom по §10.2, FE-TASK-053). В jsdom global.fetch подменён jsdom-реализацией,
 // которая не проходит через undici и MSW-interceptor не срабатывает.
 import { http as mswHttp, HttpResponse } from 'msw';
-import { setupServer } from 'msw/node';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { __resetForTests, createHttpClient } from '@/shared/api/client';
 import { OrchestratorError } from '@/shared/api/errors';
 
+import { server } from '../../../../tests/msw/server';
 import { __setHttpForTests } from './http';
-import { UPLOAD_CONTRACT_ENDPOINT,uploadContract } from './upload-contract';
+import { UPLOAD_CONTRACT_ENDPOINT, uploadContract } from './upload-contract';
+
+// FE-TASK-054: legacy-setupServer() заменён на единый global-server
+// (tests/msw/server.ts). URL по-прежнему `http://orch.test/api/v1` — absolute
+// URL handlers'а match'ится по exact-origin, глобальные handlers для
+// `http://localhost/api/v1` не пересекаются.
 
 const BASE = 'http://orch.test/api/v1';
 const url = (path: string): string => `${BASE}${path}`;
@@ -31,8 +36,6 @@ const testHttp = createHttpClient(BASE);
 // fetch-adapter шлёт через глобальный undici fetch → MSW v2 перехватывает;
 // http-adapter axios'а в node FormData не форматирует корректно для interceptor'а.
 testHttp.defaults.adapter = 'fetch';
-
-const server = setupServer();
 
 const OK_RESPONSE = {
   contract_id: 'c0ffee00-1111-2222-3333-444444444444',
@@ -48,15 +51,11 @@ function makeFile(): File {
   });
 }
 
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
-afterAll(() => server.close());
-
 beforeEach(() => {
   __setHttpForTests(testHttp);
 });
 
 afterEach(() => {
-  server.resetHandlers();
   __setHttpForTests(null);
   __resetForTests();
 });

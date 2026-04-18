@@ -7,28 +7,29 @@
 // установил jsdom по умолчанию, здесь форсим обратно — под jsdom axios выбирает
 // XHR adapter и не интегрируется с MSW v2 undici Interceptor API).
 //
+// Переход на единый global-server (FE-TASK-054): предыдущая реализация держала
+// локальный setupServer() — при coexistence с глобальным server.listen() оба
+// interceptor-listener'а видели запросы, что давало двойной счёт в handler'ах.
+//
 // Тайминги для retry/429 сокращены через vi.useFakeTimers + runAllTimersAsync.
 import { http as mswHttp, HttpResponse } from 'msw';
-import { setupServer } from 'msw/node';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { sessionStore } from '@/shared/auth/session-store';
 
+import { server } from '../../../tests/msw/server';
 import { __resetForTests, createHttpClient, parseRetryAfter, setRefreshHandler } from './client';
 import { OrchestratorError } from './errors';
 
 const BASE = 'http://orch.test/api/v1';
 const url = (path: string): string => `${BASE}${path}`;
 
-const server = setupServer();
-
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
-afterAll(() => server.close());
 afterEach(() => {
   // useRealTimers до resetHandlers: некоторые cleanup-хуки MSW полагаются
   // на setTimeout, под fake-timers они могут зависнуть и «утечь» в следующий тест.
   vi.useRealTimers();
-  server.resetHandlers();
+  // server.resetHandlers() — вызывается в глобальном test-setup.ts afterEach;
+  // здесь не дублируем.
   sessionStore.getState().clear();
   __resetForTests();
 });

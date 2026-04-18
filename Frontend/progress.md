@@ -2058,3 +2058,98 @@ FSD-границы:
 - **Zustand persist под jsdom**: MemoryStorage polyfill всё ещё нужен — issue vitest 1.6.1 + jsdom 24.1.3 не исправлен. При апгрейде vitest → 2.x проверить, работает ли нативный jsdom localStorage без полифила.
 
 ---
+
+## FE-TASK-054 — MSW setup + handlers (2026-04-18)
+
+### План
+
+1. Поднять глобальный MSW node-server в `tests/msw/server.ts` + browser-worker в `tests/msw/browser.ts`; оба строятся из одной фабрики `createHandlers(baseURL)`.
+2. Handlers для всех 28 endpoints OpenAPI + /events/stream (SSE) в `tests/msw/handlers/*`. Фикстуры — детерминированные UUID + данные в `tests/msw/fixtures/*`.
+3. SSE — собственный плагин через `HttpResponse(new ReadableStream)` с `content-type: text/event-stream`. Поддержка events[] + closeAfterEvents.
+4. `public/mockServiceWorker.js` через `npx msw init public/ --save`.
+5. `src/test-setup.ts`: `server.listen()` + `resetHandlers`/`close` жизненный цикл.
+6. Storybook: канонический `msw-storybook-addon` (`initialize()` + `mswLoader`).
+7. `tsconfig.json` include +tests; `eslint.config.js` override для tests/** (boundaries off).
+8. Миграция 4 legacy-тестов с локальных setupServer() на единый global server.
+
+### Реализация
+
+**Создано (28 файлов в `Frontend/tests/msw/`):**
+
+- `fixtures/ids.ts` — стабильные UUID для детерминизма.
+- `fixtures/users.ts` — LAWYER/BUSINESS_USER/ORG_ADMIN.
+- `fixtures/contracts.ts` — 3 договора + 4 версии (ACTIVE/ARCHIVED × разные processing_status).
+- `fixtures/results.ts` — RiskProfile/Risk/Recommendation/ContractSummaryResult/AnalysisResults.
+- `fixtures/diff.ts` — VersionDiff с 4 text_diffs + 2 structural_diffs.
+- `fixtures/admin.ts` — policies + checklists.
+- `fixtures/auth.ts` — AuthTokens (TTL совпадает с бекенд-конфигом).
+- `fixtures/index.ts` — barrel.
+- `handlers/_helpers.ts` — `joinPath(base, path)` + `errorResponse(status, code, message, extra)` + MOCK_CORRELATION_ID.
+- `handlers/auth.ts` — login/refresh/logout с VALIDATION_ERROR ветками.
+- `handlers/users.ts` — GET /users/me (overrides.me для тестов).
+- `handlers/contracts.ts` — upload (202), list (pagination), get (by id + 404), delete (204), archive (204).
+- `handlers/versions.ts` — list/upload/get/status/recheck/confirm-type (VALIDATION_ERROR при неполном body).
+- `handlers/results.ts` — results/risks/summary/recommendations (все GET, идемпотентные).
+- `handlers/comparison.ts` — POST /compare (202) + GET /diff.
+- `handlers/export.ts` — 302 Redirect на presigned URL (pdf/docx).
+- `handlers/feedback.ts` — POST /feedback (201).
+- `handlers/admin.ts` — GET/PUT policies + checklists.
+- `handlers/sse.ts` — SSE через ReadableStream, опции `events[]` + `closeAfterEvents`; защитный флаг `closed` от race с setTimeout/cancel (P1 code-reviewer).
+- `handlers/index.ts` — фабрика `createHandlers(base)`.
+- `server.ts` — setupServer с абсолютным `http://localhost/api/v1` (anchor к jsdom default origin).
+- `browser.ts` — setupWorker с relative `/api/v1`.
+- `index.ts` — barrel.
+
+**Создано в src/:**
+
+- `src/shared/api/msw-setup.test.ts` — 9 smoke-тестов: default handlers happy/404/302/400, server.use override, SSE ReadableStream (с явным testTimeout=2000ms).
+
+**Обновлено:**
+
+- `Frontend/src/test-setup.ts` — импорт global server, `beforeAll(server.listen({onUnhandledRequest:'warn'}))`, `afterEach(server.resetHandlers)`, `afterAll(server.close)`. Режим 'warn' (не 'bypass'/'error') — компромисс P1: пропавший `server.use` даёт warning вместо 30с real-DNS timeout.
+- `Frontend/.storybook/preview.ts` — `initialize({onUnhandledRequest:'bypass', serviceWorker:{url:'./mockServiceWorker.js'}})` + `loaders: [mswLoader]` (канонический паттерн msw-storybook-addon@^2).
+- `Frontend/tsconfig.json` — `include: ['src', 'tests']`.
+- `Frontend/eslint.config.js` — override для `tests/**/*.{ts,tsx}`: globals.browser+node+es2022, simple-import-sort enforced, boundaries/* off.
+- `Frontend/package.json` — +`msw-storybook-addon@^2.0.6` (dev), +`msw.workerDirectory: 'public/'`.
+- `Frontend/public/mockServiceWorker.js` — сгенерирован `npx msw init public/ --save`.
+
+**Миграция 4 legacy-тестов на единый global server:**
+
+- `src/shared/api/client.test.ts`
+- `src/shared/api/errors/handler.test.ts`
+- `src/features/contract-upload/api/upload-contract.integration.test.ts`
+- `src/processes/auth-flow/actions.test.ts`
+
+URL legacy-тестов остался `http://orch.test/api/v1` — absolute handlers НЕ пересекаются с global `http://localhost/api/v1`. Single-server pattern убрал двойной счёт interceptors (при coexistence двух listen() оба interceptor-listener'а видели запросы).
+
+### Верификация
+
+- `npm run typecheck` — **0 errors**.
+- `npm run lint --max-warnings=0` — **0 errors / 0 warnings**.
+- `npx vitest run` — **549/549 passed** (было 540; +9 smoke-тестов).
+- `npm run build` — main bundle **88.16 KB gzip** (без регрессии vs FE-TASK-053).
+- Makefile в `Frontend/` отсутствует — этап N/A.
+
+### Соответствие архитектуре
+
+- **§10.3 (моки)** — 1:1: "MSW handlers в `tests/msw/handlers/*` — единый набор для dev, test, Storybook. SSE моки через собственный MSW-плагин (`ReadableStream`)". Выполнено без отклонений.
+- **§10.2 (уровни тестов)** — smoke-тест на уровне MSW-инфраструктуры (integration layer — RTL+MSW — получил fundament).
+- **§7.7 (SSE wrapper)** — handler имитирует backend: `event: status_update\ndata: {JSON}\n\n` + heartbeat-comment `: heartbeat`.
+- **§17.1 (endpoints)** — все 28 endpoints + /events/stream покрыты default-handlers; тесты могут override через `server.use()`.
+
+### Subagents
+
+- **code-architect** (design review): FIX-to-GO — обязательные правки: (1) миграция 4 legacy; (2) `msw-storybook-addon` вместо ручного worker.start; (3) tests/** в tsconfig+eslint; (4) warn против `vi.useFakeTimers` в SSE. Все применены.
+- **code-reviewer** (final review): SHIP-WITH-FIXES — P1 применены: (1) SSE `closed`-флаг; (2) `onUnhandledRequest:'warn'`; (3) testTimeout:2s. P2 (contracts.ts list handler игнорирует page/size, ErrorCode уточнение, `void worker;` dead code) — зафиксированы в notes_for_next_tasks.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-044/045/046 (Pages — critical/high)**: смогут использовать global server через `server.use(...)` в beforeEach интеграционных тестов (паттерн в `msw-setup.test.ts`). Для RBAC-вариантов — `createUsersHandlers(base, {me: fixtures.users.businessUser})`.
+- **FE-TASK-055 (Playwright e2e)**: разблокирован — может запускать dev-сервер с MSW-mock через условный `worker.start()` в `main.tsx` (пока не реализовано; компонент инициализации ждёт отдельного feature-flag VITE_MSW).
+- **Follow-up P2 code-reviewer**: (a) `contracts.ts` list-handler добавить `items.slice((page-1)*size, page*size)` для pagination тестов; (b) проверить `CONTRACT_NOT_FOUND` vs `DOCUMENT_NOT_FOUND` в §20.4 error-каталоге; (c) убрать `void worker;` no-op в preview.ts; (d) `import/no-restricted-paths` запрет обратного `src/** → tests/**`.
+- **SSE handler**: `vi.useFakeTimers()` ломает setTimeout внутри ReadableStream — documented warning в sse.ts. Для детерминированных тестов — `delayMs: 0` + ручной read до close.
+- **Coexistence global vs local setupServer()**: при временной необходимости дополнительного server-instance — использовать разные origin-prefix для URL-паттернов, чтобы избежать двойного срабатывания interceptor-listeners.
+- **Storybook Chromatic**: worker start происходит через addon `initialize()`. Если Chromatic упадёт на SW регистрации — проверить `staticDirs: ['../public']` в `storybook/main.ts` (сейчас не задан, но Vite автоматически serve'ит public/).
+- **Directives `// @vitest-environment`** в legacy-тестах сохранены (node для client.test/upload-integration, jsdom для actions.test) — различают axios adapter (XHR jsdom vs http/fetch node).
+
+---

@@ -1,19 +1,16 @@
-// Тесты toUserMessage (§20.4): приоритет server message, fallback на ERROR_UX,
+// Тесты toUserMessage (§20.4): приоритет server message, fallback на ERROL_UX,
 // offline-detection, неизвестные коды, non-Orchestrator error.
+// FE-TASK-054: использует единый global MSW-server (tests/msw/server.ts) —
+// собственный setupServer() удалён во избежание двойного счёта interceptors.
 import { http as mswHttp, HttpResponse } from 'msw';
-import { setupServer } from 'msw/node';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { server } from '../../../../tests/msw/server';
 import { createHttpClient } from '../client';
 import { toUserMessage } from './handler';
 import { OrchestratorError } from './orchestrator-error';
 
 const BASE = 'http://orch.test/api/v1';
-const server = setupServer();
-
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
-afterAll(() => server.close());
-afterEach(() => server.resetHandlers());
 
 describe('toUserMessage — OrchestratorError', () => {
   it('предпочитает серверный message каталогу', () => {

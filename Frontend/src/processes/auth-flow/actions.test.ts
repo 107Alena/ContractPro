@@ -9,14 +9,14 @@
 //  • logout best-effort: серверная 500 не блокирует клиентский cleanup;
 //  • logout без refresh-токена: пропускает POST /auth/logout.
 import { http as mswHttp, HttpResponse } from 'msw';
-import { setupServer } from 'msw/node';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { queryClient } from '@/shared/api';
 import { __resetForTests, createHttpClient, setRefreshHandler } from '@/shared/api/client';
 import { sessionStore } from '@/shared/auth/session-store';
 import { useToastStore } from '@/shared/ui/toast';
 
+import { server } from '../../../tests/msw/server';
 import {
   __resetNavigatorForTests,
   __setHttpForTests,
@@ -31,13 +31,14 @@ import { getRefreshToken, setRefreshToken } from './refresh-token-storage';
 // MSW node-adapter перехватывает Node-http/undici, а не XMLHttpRequest из jsdom.
 // Используем явный http:// baseURL + отдельный http-инстанс (createHttpClient с
 // forced adapter='http') и инжектим в actions через __setHttpForTests.
+// FE-TASK-054: используем единый global MSW-server; handler'ы регистрируем
+// через server.use(...). Global-server listen/close/reset выполняются в
+// src/test-setup.ts — дублировать здесь не нужно.
 const BASE = 'http://orch.test/api/v1';
 const url = (path: string): string => `${BASE}${path}`;
 
 const testHttp = createHttpClient(BASE);
 testHttp.defaults.adapter = 'http';
-
-const server = setupServer();
 
 const USER_FIXTURE = {
   user_id: '11111111-1111-1111-1111-111111111111',
@@ -49,9 +50,6 @@ const USER_FIXTURE = {
   permissions: { export_enabled: true },
 };
 
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
-afterAll(() => server.close());
-
 beforeEach(() => {
   __setHttpForTests(testHttp);
   // doRefresh регистрируется как handler в setup.ts; для тестов инжектим прямо.
@@ -59,7 +57,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  server.resetHandlers();
   sessionStore.getState().clear();
   window.sessionStorage.clear();
   useToastStore.getState().clear();

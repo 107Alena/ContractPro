@@ -192,5 +192,39 @@ export default tseslint.config(
     },
   },
 
+  {
+    // MSW handlers/fixtures/server/worker — тестовая инфраструктура (FE-TASK-054,
+    // §10.3). Не является FSD-элементом. Алиас @/* резолвится через tsconfig
+    // (tests/ попали в include) и eslint-import-resolver-typescript.
+    files: ['tests/**/*.{ts,tsx}'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        ...globals.es2022,
+      },
+    },
+    plugins: {
+      import: importPlugin,
+      'simple-import-sort': simpleImportSort,
+    },
+    settings: {
+      'import/resolver': {
+        typescript: { project: './tsconfig.json' },
+        node: true,
+      },
+    },
+    rules: {
+      'simple-import-sort/imports': 'error',
+      'simple-import-sort/exports': 'error',
+      'boundaries/element-types': 'off',
+      'boundaries/no-unknown': 'off',
+      'boundaries/no-unknown-files': 'off',
+      'boundaries/no-private': 'off',
+    },
+  },
+
   prettierConfig,
 );

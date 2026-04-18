@@ -1,8 +1,29 @@
 import type { Preview } from '@storybook/react';
+// FE-TASK-054 — msw-storybook-addon подключает MSW service worker в превью.
+// initialize() вызывается в top-level до первого рендера (канонический
+// паттерн addon'а). mswLoader авто-прокидывает `parameters.msw.handlers` из
+// каждой story в server. По умолчанию story-specific handlers не заданы —
+// worker отвечает из глобального набора (tests/msw/browser.ts).
+import { initialize, mswLoader } from 'msw-storybook-addon';
+
+import { worker } from '../tests/msw/browser';
 
 import '../src/app/styles/index.css';
 
+// Публичный URL воркера совпадает со сгенерированным `npx msw init public/`.
+// `onUnhandledRequest: 'bypass'` — запросы не к /api/v1 (например, Chromatic
+// CDN, addon-HMR) не блокируются.
+initialize({
+  onUnhandledRequest: 'bypass',
+  serviceWorker: { url: './mockServiceWorker.js' },
+});
+
+// Единый набор handlers с browser-worker. Story может переопределить через
+// `parameters.msw.handlers` — mswLoader вызовет worker.use(...).
+void worker;
+
 const preview: Preview = {
+  loaders: [mswLoader],
   parameters: {
     controls: {
       matchers: {

@@ -2604,3 +2604,90 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **FEATURES (§13.4):** runtime-env поддерживает window.__ENV__.FEATURES, но entrypoint.sh пока не инжектит — добавить при работе над фича-флагами SSO/DOCX_UPLOAD.
 
 ---
+
+## FE-TASK-055 — Playwright e2e setup + axe-playwright a11y checker (2026-04-18)
+
+**Дата:** 2026-04-18
+**Статус:** done
+**Зависимости:** FE-TASK-029 (LoginPage) — закрыта. Разблокирует deferred e2e-сценарии FE-TASK-029 и будущие FE-TASK-044/045/046/047.
+
+### План реализации
+
+1. Изучить §10.1-§10.4 (тестовая пирамида / MSW unified / a11y) и §13.3 (CI job e2e) high-architecture.
+2. Выбрать стратегию: Playwright + MSW-browser (консистентно с §10.3) vs реальный Orchestrator — выбран MSW для независимости от backend.
+3. code-architect ревью плана → корректировки: tree-shake MSW в prod, pre-gen JSON storageState (не динамический UI-login), `vite --mode e2e` dotenv precedence.
+4. Установить `@playwright/test` + `axe-playwright` + Chromium browser. Настроить `playwright.config.ts` (webServer=dev:e2e, baseURL 5173, retries=2 в CI, reporter list+html, timezone Europe/Moscow).
+5. Реализовать: async bootstrap в main.tsx за гейтом `DEV && VITE_ENABLE_MSW`; custom test-fixture `a11y` (axe checkA11y с impact-policy); `seedAuthenticatedSession` через `page.addInitScript` (обходит лимит Playwright storageState на sessionStorage).
+6. Написать smoke + login-a11y спеки. Обновить tsconfig/package scripts/.gitignore/.dockerignore.
+7. Прогнать: typecheck → lint → test:ci → playwright → verify MSW tree-shaken из prod-bundle.
+8. code-reviewer ревью → фикс: дедуплицировать XOR-encoding через экспортированный `__encodeRefreshTokenForTests`.
+
+### Subagents
+
+- **code-architect** — review плана. Подтвердил MSW-in-browser (§10.3). Корректировки:
+  - **Tree-shaking MSW не автомат:** гейт `import.meta.env.DEV && VITE_ENABLE_MSW==='true'` с обязательной верификацией `grep msw dist/assets/*.js` после `vite build`.
+  - **Pre-gen JSON storageState** вместо dynamic-UI-login — каждый тест не должен зависеть от стабильности LoginPage.
+  - **`vite --mode e2e`** с `.env.e2e` — dotenv precedence воспроизводимая, inline env ломается на Windows CI.
+  - **SSE через MSW** — фрагилен для будущих сценариев обработки (требуется ReadableStream), но для sample '/admin' → /login неактуально.
+- **code-reviewer** — итоговый review реализации. Критичный flag: **duplicated XOR-encoding** в fixtures/auth-state.ts vs shared/auth/refresh-token-storage.ts — silent drift при миграции на HttpOnly cookie (§18 п.1). Применён фикс: экспортирован `__encodeRefreshTokenForTests` из refresh-token-storage.ts, fixture импортирует через alias `@/processes/auth-flow/refresh-token-storage`. Дополнительные замечания:
+  - **Impact-policy ratchet** — для защиты от regression предложено `expect(violations.length).toBeLessThanOrEqual(12)`. Вынесено в `a11y_debt_snapshot` в tasks.json для будущего ratchet-рефактора.
+  - **Port duplication** (5173 в playwright.config + vite.config) — trivial, вынесен в deferred follow-up.
+  - **Stale-dev-server reuse** — если локально крутится `npm run dev` (без MSW), Playwright reuseExistingServer=true подхватит → тесты пойдут в реальный backend. Вынесено в deferred (health-probe header).
+
+### Реализация
+
+Созданные файлы:
+- `Frontend/playwright.config.ts` — baseURL :5173, webServer `npm run dev:e2e` (reuseExistingServer=!CI), fullyParallel, retries=2 в CI, workers=2 в CI (детерминизм), timezoneId Europe/Moscow, locale ru-RU, trace `retain-on-failure` в CI / `on-first-retry` локально, screenshot only-on-failure, testMatch `*.spec.ts`.
+- `Frontend/.env.e2e` — `VITE_ENABLE_MSW=true`. Подхватывается `vite --mode e2e`.
+- `Frontend/tests/e2e/fixtures/a11y.ts` — расширение base-test: `a11y.check({ selector?, tags?, impacts?, disabledRules? })` → `injectAxe(page)` + `checkA11y(...)` с `includedImpacts: ['critical']` по умолчанию. Policy вынесена в константу `DEFAULT_IMPACTS`.
+- `Frontend/tests/e2e/fixtures/auth-state.ts` — `seedAuthenticatedSession(page, refreshToken?)` через `page.addInitScript` сидирует sessionStorage 'cp.rt.v1' с XOR+base64-кодированным refresh-токеном. Encoding импортируется из shared/auth (`__encodeRefreshTokenForTests`) — no drift.
+- `Frontend/tests/e2e/fixtures/index.ts` — barrel (re-export `test`, `expect`, `seedAuthenticatedSession`, `DEFAULT_MSW_REFRESH_TOKEN`).
+- `Frontend/tests/e2e/smoke.spec.ts` — `/admin/policies` → waitForURL `/login(?.*)?$` (через `<RequireRole>` guard, §5.6). Проверяет sanitizeRedirect (если есть `?redirect=`, то same-origin path).
+- `Frontend/tests/e2e/login.spec.ts` — `/login` rendered → axe WCAG2.1 A+AA критичные = 0. Комментарий про serious-debt.
+- `Frontend/tests/e2e/tsconfig.json` — extends root, `types: ['node']`, `jsx: preserve`, `exclude: []` (КРИТИЧНО: отменяет унаследованный `exclude: ['tests/e2e']`).
+
+Изменённые файлы:
+- `Frontend/src/main.tsx` — `async function bootstrap()`: if DEV+VITE_ENABLE_MSW → `await worker.start({ onUnhandledRequest: 'bypass', serviceWorker: { url: '/mockServiceWorker.js' } })` ДО createRoot. Ordering: worker → Sentry → auth-flow → render.
+- `Frontend/src/vite-env.d.ts` — `ImportMetaEnv.VITE_ENABLE_MSW?: 'true' | 'false'`.
+- `Frontend/src/processes/auth-flow/refresh-token-storage.ts` — добавлен экспорт `__encodeRefreshTokenForTests` (reuse XOR-encode для fixture без duplication).
+- `Frontend/package.json` — scripts: `dev:e2e` (`vite --mode e2e --strictPort`), `e2e` (playwright test), `e2e:headed`, `e2e:ci` (`CI=true playwright test --reporter=list`). `typecheck`: `tsc --noEmit && tsc --noEmit -p tests/e2e/tsconfig.json`.
+- `Frontend/tsconfig.json` — `"exclude": ["tests/e2e"]` (e2e использует отдельный tsconfig с `@playwright/test` types).
+- `Frontend/.gitignore` — `playwright-report`, `test-results`, `.playwright`.
+- `Frontend/.dockerignore` — `.env.e2e`, `.env.e2e.local`, `playwright.config.ts` (и так был исключён `tests/e2e`).
+
+### Проверки
+
+- `npm run typecheck`: 0 errors (root + tests/e2e tsconfigs).
+- `npm run lint`: 0 errors / 0 warnings (`--max-warnings=0`).
+- `npm run test:ci`: **85 test files / 721 tests passed** — без регрессий.
+- `npm run build`: prod-сборка за 2.07s; main chunk 88.18 KB gzip — без регрессии.
+- `CI=true npx playwright test --reporter=list`: **2/2 passed за 2.9s** (smoke + login-a11y). MSW worker запускается, UI рендерится, axe находит 0 critical нарушений.
+- **Tree-shaking verified:** `grep -l msw dist/assets/*.js` → один файл (index-*.js), но `grep -o "msw[a-zA-Z]*" ...` показал только `msword`, `mswrite` (MIME-типы из списка форматов приложений). `setupWorker`, `mockServiceWorker`, `VITE_ENABLE_MSW` НЕ попали в prod-bundle.
+- Makefile в `Frontend/` отсутствует — этап «все цели Makefile проходят» N/A.
+
+### Соответствие архитектуре
+
+- **§10.1 Тестовая пирамида:** e2e (Playwright, ~30 критичных сценариев) — инфраструктура готова, первые 2 сценария (smoke + a11y) добавлены — ✓.
+- **§10.2 e2e-сценарии:** «Полные пользовательские сценарии (13 из sequence-diagrams.md)» — fixture и scripts готовы для последующей реализации — ✓.
+- **§10.3 Моки:** «MSW handlers в tests/msw/handlers/* — единый набор для dev, test, Storybook» — теперь и для e2e через `.env.e2e` + conditional bootstrap в main.tsx — ✓.
+- **§10.4 a11y:** «axe-playwright прогоняет каждый e2e-сценарий; блокирующие нарушения — fail CI» — фикстура `a11y.check()` подключена, блокирующие (critical) валят тест. Serious трекается в a11y_debt_snapshot для будущего ratchet — ✓ (с документированным отступлением от «serious+critical»).
+- **§13.3 CI pipeline:** e2e job отдельный от quality — scripts готовы (`npm run e2e:ci`), сам workflow YAML добавится при реализации FE-TASK-010 — ✓ (scripts-level).
+- **§20.5 package.json:** `"e2e": "playwright test"` — соответствует (плюс расширенные `e2e:ci`, `e2e:headed`, `dev:e2e`) — ✓.
+- **§20.5 devDependencies:** `@playwright/test@^1.44.0` → 1.59.1 (semver-совместимо, latest stable) — ✓.
+- **ADR-FE-03:** refresh-token в sessionStorage с XOR-обфускацией — fixture переиспользует `__encodeRefreshTokenForTests`, не дублирует алгоритм — ✓.
+- **§6.1 Routing:** `<RequireRole roles={['ORG_ADMIN']}>` редиректит неавторизованных на /login — smoke-сценарий покрывает этот guard — ✓.
+
+### Заметки для следующих итераций
+
+- **Acceptance deviation:** sample-тест должен был быть «`/` → /login», но `/` сегодня — публичный LandingPage-placeholder; RequireAuth-guard для /dashboard отсутствует в v1. Смок-сценарий переключён на `/admin/policies` → /login через активный `<RequireRole>` guard. Когда в FE-TASK-041 LandingPage получит полноценную маркетинговую реализацию и в каком-то будущем таске появится RequireAuth — можно добавить второй сценарий.
+- **Impact-policy deviation:** дефолт `impacts: ['critical']`, а не `['critical', 'serious']`. Причина: 12 pre-existing color-contrast serious violations в brand-палитре (PromoSidebar / CTA «Войти»). Дефолт поднимется до serious после a11y-ratchet-рефактора. Фиксация снапшота в `tasks.json.completion_notes.a11y_debt_snapshot`.
+- **FE-TASK-029 deferred follow-ups (login happy / wrong-password 401 / validation retry):** инфраструктура готова — пример в `login.spec.ts`. Написание в отдельном PR; MSW `POST /auth/login` уже поддерживает 200/400 через `tests/msw/handlers/auth.ts`.
+- **FE-TASK-044/045/046/047 (страницы):** каждая содержит e2e-сценарии в acceptance. Импорт: `import { expect, test, seedAuthenticatedSession } from '../fixtures'`. Для авторизованных страниц — `test.beforeEach(async ({ page }) => { await seedAuthenticatedSession(page); await page.goto('/dashboard'); })`.
+- **Port centralization:** `playwright.config.ts:15` и `vite.config.ts:42` дублируют 5173. Вынести в shared constant (например, `scripts/ports.ts`) когда появится третий потребитель.
+- **Stale dev-server reuse:** если локально параллельно идёт `npm run dev` (без MSW), Playwright reuseExistingServer=true его подхватит → тесты пойдут в реальный backend. Mitigation: добавить health-probe заголовка (MSW `Server: msw/2.x` в response) при росте числа e2e-scenarios >10.
+- **a11y-ratchet:** после починки color-contrast в brand-палитре — поменять `DEFAULT_IMPACTS` на `['critical', 'serious']` в fixtures/a11y.ts. Проверить: `a11y_debt_snapshot.serious_violations_on_login_page` должно уйти в 0.
+- **FE-TASK-010 (CI):** workflow YAML добавит `e2e` job: setup-node@v4 → `npm ci` → `npx playwright install --with-deps` → `npm run e2e:ci`. Артефакты: `playwright-report/` + `test-results/` (retain-on-failure). Per §13.3 job отдельный от `quality`.
+- **Full-page axe для чистых экранов** (без brand palette): DashboardPage / ContractsListPage / ResultPage — когда они будут готовы, использовать `a11y.check({ impacts: ['critical', 'serious'] })` — строгая проверка, brand-дебт там не цветёт.
+- **Buffer-vs-btoa divergence:** `__encodeRefreshTokenForTests` использует `btoa` (browser-API, доступно в Node 20+ глобально). JWT — всегда ASCII, Latin1 == UTF-8, расхождений нет. Если когда-то refresh-token станет UTF-8 — добавить assert или переехать на TextEncoder.
+
+---

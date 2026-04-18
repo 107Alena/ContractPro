@@ -71,3 +71,13 @@ export function clearRefreshToken(): void {
 
 /** @internal — для тестов. */
 export const __REFRESH_STORAGE_KEY = STORAGE_KEY;
+
+/**
+ * @internal — только для тестовой инфраструктуры (tests/e2e/fixtures/auth-state.ts,
+ * FE-TASK-055). Возвращает то же значение, что записалось бы через `setRefreshToken`,
+ * и позволяет Playwright-фикстуре сидировать sessionStorage без дублирования
+ * XOR-ключа. Не использовать в продакшен-коде: обфускация — не безопасность.
+ */
+export function __encodeRefreshTokenForTests(token: string): string {
+  return encode(token);
+}

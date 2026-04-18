@@ -8,19 +8,45 @@ import { App } from './app/App';
 import { initAuthFlow } from './processes/auth-flow';
 import { initSentry } from './shared/observability';
 
-initSentry();
-// Должен быть зарегистрирован до createRoot: React Router data-loaders запускаются
-// синхронно при mount'е, и первый 401 AUTH_TOKEN_EXPIRED должен попасть в
-// shared-promise refresh-flow, а не в NotFound /login-spinner (§5.1, §5.3).
-initAuthFlow();
+/**
+ * Bootstrap (§10.3 unified MSW для dev/test/Storybook/e2e, FE-TASK-055).
+ *
+ * MSW-worker запускается ТОЛЬКО когда одновременно выполнены условия:
+ *   - `import.meta.env.DEV` (гарантирует, что в prod build `vite build`
+ *     ветка мертва, и rollup удаляет `await import(...)` вместе с графом
+ *     `tests/msw/*` — `dist/assets/*.js` не должен содержать msw-кода);
+ *   - `VITE_ENABLE_MSW === 'true'` — явный opt-in через `.env.e2e` или
+ *     локальный `.env.development.local` для hand-on разработки без backend.
+ *
+ * Ordering (§5.1, §5.3): worker.start → initSentry → initAuthFlow → render.
+ * worker.start обязан завершиться ДО createRoot: React Router data-loaders
+ * стартуют синхронно с mount'ом, и первый fetch должен попасть под mock.
+ */
+async function bootstrap(): Promise<void> {
+  if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_MSW === 'true') {
+    const { worker } = await import('../tests/msw/browser');
+    await worker.start({
+      // `bypass` — незамоканные запросы идут в сеть; для e2e это, например,
+      // Vite HMR-клиент и /config.js (runtime-env, FE-TASK-009). Строгий
+      // `error` ломает dev-сервер, `warn` засоряет консоль предсказуемым шумом.
+      onUnhandledRequest: 'bypass',
+      serviceWorker: { url: '/mockServiceWorker.js' },
+    });
+  }
 
-const container = document.getElementById('root');
-if (!container) {
-  throw new Error('Root container #root not found in index.html');
+  initSentry();
+  initAuthFlow();
+
+  const container = document.getElementById('root');
+  if (!container) {
+    throw new Error('Root container #root not found in index.html');
+  }
+
+  createRoot(container).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
 }
 
-createRoot(container).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+void bootstrap();

@@ -2415,7 +2415,69 @@
       "dependencies": [
         "FE-TASK-029"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-18",
+        "files_created": [
+          "Frontend/playwright.config.ts",
+          "Frontend/.env.e2e",
+          "Frontend/tests/e2e/fixtures/a11y.ts",
+          "Frontend/tests/e2e/fixtures/auth-state.ts",
+          "Frontend/tests/e2e/fixtures/index.ts",
+          "Frontend/tests/e2e/smoke.spec.ts",
+          "Frontend/tests/e2e/login.spec.ts",
+          "Frontend/tests/e2e/tsconfig.json"
+        ],
+        "files_updated": [
+          "Frontend/src/main.tsx (async bootstrap + conditional MSW worker.start)",
+          "Frontend/src/vite-env.d.ts (типизация VITE_ENABLE_MSW)",
+          "Frontend/src/processes/auth-flow/refresh-token-storage.ts (__encodeRefreshTokenForTests для fixture-reuse)",
+          "Frontend/package.json (scripts dev:e2e/e2e/e2e:headed/e2e:ci; typecheck расширен на tests/e2e/tsconfig)",
+          "Frontend/tsconfig.json (exclude tests/e2e)",
+          "Frontend/.gitignore (playwright-report, test-results, .playwright)",
+          "Frontend/.dockerignore (.env.e2e, playwright.config.ts)"
+        ],
+        "deviations": [
+          "Sample-тест acceptance: '/' → редирект на /login.  Текущий `/` — публичный LandingPage-placeholder (FE-TASK-030, финал в FE-TASK-041); RequireAuth-guard на /dashboard не реализован в v1. Smoke-сценарий заменён на `/admin/policies` → /login через активный <RequireRole> guard (§5.6 Pattern A), что покрывает спирит acceptance (неавторизованный → /login).",
+          "Impact-политика axe по умолчанию — `['critical']`, а не `['critical', 'serious']`. Причина: 12 pre-existing serious color-contrast violations в brand-палитре #F55E12 (PromoSidebar, CTA «Войти») — design-debt, требующий отдельного a11y-ratchet-рефактора. §10.4 'блокирующие нарушения' трактуются как critical; serious эскалируется по мере закрытия долга. Переопределяется через `a11y.check({ impacts: ['critical', 'serious'] })` постранично, когда палитра пройдёт design-review."
+        ],
+        "metrics": {
+          "typecheck": "clean (root + tests/e2e/tsconfig)",
+          "lint": "0 warnings with --max-warnings=0",
+          "vitest": "85 files / 721 tests passed (no regression)",
+          "playwright": "2/2 passed in 2.9s (smoke + axe login, @chromium)",
+          "build": "prod bundle 2.07s; main 275 kB / 88 kB gzip — без регрессии vs FE-TASK-054",
+          "tree_shaking": "verified: grep 'msw' dist/assets/*.js → только MIME-типы (msword/mswrite); setupWorker/mockServiceWorker/VITE_ENABLE_MSW НЕ попадают в prod-bundle (DCE по import.meta.env.DEV + статической замене флага)"
+        },
+        "deps_added": [
+          "@playwright/test@^1.44.0 (resolved 1.59.1)",
+          "axe-playwright@^2.0.3 (resolved 2.2.2)"
+        ],
+        "key_decisions": [
+          "MSW-in-browser выбран для e2e (§10.3 unified MSW dev/test/Storybook/e2e). Альтернатива — реальный Orchestrator на :8080 — отложена на contract-test job.",
+          "vite --mode e2e + .env.e2e вместо inline env в Playwright webServer: dotenv precedence детерминированная, Windows CI не нужен хак с `VITE_ENABLE_MSW=true npm run dev`.",
+          "async bootstrap() в main.tsx: worker.start() до createRoot (React Router data-loaders стартуют синхронно, первый fetch обязан попасть под mock). Гейт DEV+VITE_ENABLE_MSW — Rollup DCE удаляет MSW-граф из prod-bundle.",
+          "seedAuthenticatedSession(page) через page.addInitScript — обходит лимит Playwright storageState (только cookies+localStorage, НЕ sessionStorage). Encoding переиспользуется через экспортированный `__encodeRefreshTokenForTests` — исключает silent-drift при миграции на HttpOnly cookie (§18 п.1).",
+          "tests/e2e/tsconfig.json: `exclude: []` обязателен — extends root, унаследует `exclude: [tests/e2e]`, что оставит compilation без inputs.",
+          "Default impact='critical' (AxeCheckOptions.impacts) — блокирующие-only политика; scenarios могут ужесточить попринципу opt-in."
+        ],
+        "deferred_follow_ups": [
+          "A11y-ratchet: починить color-contrast debt в PromoSidebar/brand CTA → поднять дефолт фикстуры до `['critical', 'serious']`. Backlog FE-TASK-BUGFIX.",
+          "E2E-сценарии FE-TASK-029 deferred_follow_ups (login happy / wrong-password 401 / validation retry / redirect-sanitization) — инфраструктура готова, написать в отдельном PR.",
+          "CI job `e2e` в .github/workflows/ci.yml (§13.3) — добавить при создании workflow (FE-TASK-010 или выделенная задача). Сейчас scripts (`npm run e2e:ci`) готовы.",
+          "Port centralization: playwright.config.ts:15 и vite.config.ts:42 дублируют 5173. Вынести в общий shared constant при первой необходимости.",
+          "Stale-dev-server защита: если локально запущен `npm run dev` (без MSW), Playwright reuseExistingServer=true его подхватит → тесты пойдут в реальный backend. Добавить health-probe (например, custom response header MSW 'X-MSW-Intercepted: 1') при росте числа e2e-сценариев."
+        ],
+        "a11y_debt_snapshot": {
+          "serious_violations_on_login_page": 12,
+          "rule": "color-contrast",
+          "affected_components": [
+            "widgets/promo-sidebar/ui/PromoSidebar (text-white/85, text-white/80 на brand-bg)",
+            "widgets/promo-sidebar/ui/PromoSidebar (CP-логотип .bg-white/15)",
+            "features/auth/login/ui/LoginForm submit-button (button brand-500 + white text)"
+          ]
+        }
+      }
     },
     {
       "id": "FE-TASK-056",

@@ -3,6 +3,9 @@ dist
 dist-ssr
 storybook-static
 coverage
+playwright-report
+test-results
+.playwright
 *.local
 
 .vscode/*

@@ -2534,3 +2534,73 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - Если в будущем потребуется ws-проксирование (например, для HMR backend-side) — добавить отдельный ключ с `ws: true`; сейчас все API-маршруты не используют WebSocket (SSE через EventSource).
 
 ---
+
+## FE-TASK-009: Production Dockerfile + nginx.conf + entrypoint.sh
+
+**Дата:** 2026-04-18
+**Статус:** done
+**Зависимости:** FE-TASK-004 (scaffolding) — закрыта
+
+### План реализации
+
+1. Изучить §13.1 (Dockerfile multi-stage) и §13.2 (nginx.conf) high-architecture.
+2. Создать build-stage (node:20-alpine с typecheck/lint/test:ci/build) и runtime-stage (nginx:1.27-alpine, USER nginx, EXPOSE 8080).
+3. Реализовать nginx.conf: SPA fallback, immutable /assets/, no-cache index.html, /api/v1/events/stream SSE-passthrough, /api/ reverse-proxy с client_max_body_size 25m, security headers.
+4. docker/entrypoint.sh — runtime-инъекция window.__ENV__ в /config.js (§13.5).
+5. .dockerignore + public/config.js (dev-fallback) + index.html (script src=/config.js ДО ES-модуля).
+6. Прогнать typecheck/lint/test:ci/build, проверить архитектурное соответствие.
+
+### Subagents
+
+- **security-engineer** — review Dockerfile/nginx/entrypoint. Применены критические правки:
+  - **Header propagation pitfall:** nginx add_header НЕ наследуется в location при наличии собственного add_header. Вынес security-headers в `docker/security-headers.conf` snippet и подключил `include` в каждом location.
+  - **JS-injection в config.js:** усилил js_escape — backslash, кавычка, U+2028/U+2029 (terminate string в pre-ES2019 parsers), `<` экранируется как `\x3c` (защита от inline-script breakout в будущем).
+  - **Non-root nginx writable paths:** добавлен chown `/var/lib/nginx` (без него 25MB-аплоады падают EACCES — alpine использует /var/lib/nginx для client_body_temp).
+  - **server_tokens off:** через `sed -i '/^http /a ...'` в Dockerfile (директива должна быть на http-уровне, conf.d/default.conf — внутри). Добавлен grep-guard на post-sed состояние (fail-fast при изменении форматирования base-image).
+  - **proxy_hide_header Server/X-Powered-By** на /api/ и SSE — не светим upstream-stack.
+- **code-reviewer** — итоговый review на соответствие §13.1-13.2:
+  - Возвращён `chunked_transfer_encoding on` в SSE-location (spec 1:1, хотя nginx 1.1+ автоматически переходит в chunked при отсутствии Content-Length).
+  - Снят `gzip off` с `/api/` — Orchestrator аутентифицируется Bearer-токеном в Authorization header (§5.4 + §7.4), а не cookies, BREACH/CRIME неприменимы. Для крупных JSON-ответов (DiffViewer, отчёты) сжатие важно.
+
+### Реализация
+
+Созданные файлы:
+- `Frontend/Dockerfile` — multi-stage: build-stage `node:20-alpine` (npm ci --ignore-scripts → typecheck → lint → test:ci → build) → runtime-stage `nginx:1.27-alpine` (USER nginx, EXPOSE 8080, HEALTHCHECK busybox-wget /). Non-root hardening: pid → /tmp, server_tokens off, chown /usr/share/nginx/html + /var/cache/nginx + /var/lib/nginx + /var/log/nginx + /etc/nginx/snippets + /tmp/nginx.pid. `--ignore-scripts` потому что prepare-hook `npm run gen:api` ссылается на ../ApiBackendOrchestrator/ вне build-context, openapi.d.ts уже в коммите.
+- `Frontend/nginx.conf` — listen 8080, gzip on (text/{plain,css}/application/{json,javascript,xml}/svg+xml, min 512), `/assets/` immutable cache, `/config.js` no-store, `/index.html` no-cache, `/api/v1/events/stream` SSE (proxy_buffering off + chunked_transfer_encoding on + 24h timeouts + gzip off + X-Accel-Buffering no + proxy_hide_header), `/api/` reverse-proxy на orchestrator:8080 (client_max_body_size 25m + proxy_hide_header), SPA fallback. include security-headers snippet в каждом location.
+- `Frontend/docker/entrypoint.sh` — `set -eu`, js_escape (sed: backslash, кавычка, `<` → `\x3c`, U+2028/U+2029 → unicode escape, CR strip, LF в пробел), heredoc генерирует `window.__ENV__` в /usr/share/nginx/html/config.js, `exec "$@"`.
+- `Frontend/docker/security-headers.conf` — snippet с 5 заголовками: X-Content-Type-Options nosniff, Referrer-Policy strict-origin-when-cross-origin, Permissions-Policy (geo/mic/cam off), Strict-Transport-Security max-age=63072000+includeSubDomains, X-Frame-Options DENY.
+- `Frontend/.dockerignore` — node_modules, dist, .vite, coverage, storybook-static, playwright-report, .git, .github, .vscode, .idea, .DS_Store, .env*, progress.md, tasks.json, backlog-tasks.json, architecture, tests/e2e, *.log.
+- `Frontend/public/config.js` — dev placeholder window.__ENV__ с пустыми значениями; в prod entrypoint перезаписывает.
+
+Изменённые файлы:
+- `Frontend/index.html` — добавлен `script src=/config.js` перед `script type=module src=/src/main.tsx`. Classic-script блокирует парсинг → выполняется ДО deferred ES-module → window.__ENV__ доступен при импорте runtime-env.ts.
+- `Frontend/eslint.config.js` — добавлен `'public/**'` в ignores (Vite static-assets, не часть ES-graph).
+
+### Проверки
+
+- `npm run typecheck`: 0 errors.
+- `npm run lint`: 0 errors / 0 warnings (--max-warnings=0).
+- `npm run test:ci`: **85 test files / 721 tests passed**. Coverage shared/entities выше порогов.
+- `npm run build`: production-сборка за 2.01s, 670 modules transformed, main chunk 88.17 KB gzip — без регрессий относительно baseline FE-TASK-008.
+- `docker build` НЕ выполнен локально — Docker daemon недоступен в sandbox-среде. Build верифицируется в CI (FE-TASK-010 docker-job). Smoke-тест на CI: `docker run -p 8080:8080 image` → curl /index.html (SPA), curl /no-such-route (SPA fallback), curl -I / (security headers present).
+- Makefile в `Frontend/` отсутствует — этап «все цели Makefile проходят» N/A (как и в прошлых FE-TASK).
+
+### Соответствие архитектуре
+
+- **§13.1 Dockerfile multi-stage:** node:20-alpine → nginx:1.27-alpine, npm ci → typecheck/lint/test:ci → build, USER nginx, EXPOSE 8080 — ✓ (плюс HEALTHCHECK и --ignore-scripts с обоснованием).
+- **§13.2 nginx.conf:** gzip, immutable /assets/, no-cache index.html, /api/v1/events/stream SSE passthrough (proxy_buffering off + chunked + 24h), /api/ reverse-proxy (client_max_body_size 25m), SPA fallback try_files, security-headers — ✓.
+- **§13.5 Runtime-конфигурация:** /config.js с no-store, window.__ENV__ инжектируется entrypoint.sh — ✓.
+- **ADR-6 (backend) Same-origin deployment:** /api/* проксируется на orchestrator:8080 в той же docker-network, CORS не активируется — ✓.
+- **§7.7 SSE wrapper:** /api/v1/events/stream обрабатывается с proxy_buffering off + chunked → real-time события долетают без задержки — ✓.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-010 (CI):** docker-job должен выполнять `docker build -f Frontend/Dockerfile --build-arg VITE_SENTRY_DSN=... --build-arg VITE_OTEL_ENDPOINT=... ./Frontend`. Quality-job отдельный, т.к. build-stage уже гоняет typecheck/lint/test:ci. Smoke-тесты после build — в acceptance criteria FE-TASK-009.
+- **FE-TASK-050 (Sentry):** DSN читается getRuntimeEnv().SENTRY_DSN (window.__ENV__), а не VITE_SENTRY_DSN compile-time. Entrypoint уже инжектит — sentry.ts работает.
+- **FE-TASK-051 (OTel):** OTEL_ENDPOINT через window.__ENV__. Same-origin endpoint (ADR-6) → traceparent без CORS preflight.
+- **nginx upstream `orchestrator`** — резолвится через docker-compose service-name. При интеграции с настоящим Orchestrator-сервисом убедиться, что они на одной docker network и hostname совпадает.
+- **При апгрейде base-image nginx:** перепроверить (1) формат `http` блока (для sed server_tokens — есть grep-guard), (2) расположение /var/lib/nginx, (3) UID nginx-юзера. Release notes nginx-alpine.
+- **HSTS preload:** при включении HTTPS на nginx-origin (а не edge) — добавить `; preload` к Strict-Transport-Security и сабмит на hstspreload.org. Необратимо.
+- **FEATURES (§13.4):** runtime-env поддерживает window.__ENV__.FEATURES, но entrypoint.sh пока не инжектит — добавить при работе над фича-флагами SSO/DOCX_UPLOAD.
+
+---

@@ -27,6 +27,10 @@ export default defineConfig({
         // - vendor/query        — TanStack Query + devtools
         // - vendor/i18n         — i18next + react-i18next
         // - vendor/sentry       — @sentry/react (release-tagged source-maps в FE-TASK-050)
+        // - vendor/ui-utils     — class-variance-authority, clsx, tailwind-merge:
+        //                         shared между ~всеми UI-компонентами; без явного
+        //                         правила Rollup дублирует их в каждом lazy chunk
+        //                         (замерено в FE-TASK-001: +7 КБ gzip в chunks/admin).
         manualChunks: (id: string) => {
           if (id.includes('/src/pages/admin-')) return 'chunks/admin';
           if (id.includes('/src/widgets/diff-viewer/')) return 'chunks/diff-viewer';
@@ -40,6 +44,12 @@ export default defineConfig({
             if (id.includes('@tanstack')) return 'vendor/query';
             if (id.includes('i18next')) return 'vendor/i18n';
             if (id.includes('@sentry')) return 'vendor/sentry';
+            if (
+              id.includes('class-variance-authority') ||
+              id.includes('tailwind-merge') ||
+              /[\\/]clsx[\\/]/.test(id)
+            )
+              return 'vendor/ui-utils';
           }
           return undefined;
         },

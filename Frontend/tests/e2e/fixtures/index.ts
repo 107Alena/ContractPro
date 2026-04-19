@@ -3,4 +3,9 @@
 // (auth-state) доступны одной import-строкой.
 
 export { expect, test } from './a11y';
-export { DEFAULT_MSW_REFRESH_TOKEN, seedAuthenticatedSession } from './auth-state';
+export {
+  DEFAULT_MSW_REFRESH_TOKEN,
+  type E2ERole,
+  seedAuthenticatedSession,
+  type SeedAuthOptions,
+} from './auth-state';

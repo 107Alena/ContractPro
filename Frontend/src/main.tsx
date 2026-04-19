@@ -24,7 +24,7 @@ import { initSentry } from './shared/observability';
  */
 async function bootstrap(): Promise<void> {
   if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_MSW === 'true') {
-    const { worker } = await import('../tests/msw/browser');
+    const { worker, applyE2ERoleOverride } = await import('../tests/msw/browser');
     await worker.start({
       // `bypass` — незамоканные запросы идут в сеть; для e2e это, например,
       // Vite HMR-клиент и /config.js (runtime-env, FE-TASK-009). Строгий
@@ -32,6 +32,8 @@ async function bootstrap(): Promise<void> {
       onUnhandledRequest: 'bypass',
       serviceWorker: { url: '/mockServiceWorker.js' },
     });
+    // E2E role override из Playwright addInitScript (tests/e2e/fixtures/auth-state.ts).
+    applyE2ERoleOverride();
   }
 
   initSentry();

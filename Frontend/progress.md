@@ -1,5 +1,58 @@
 # Frontend Implementation Progress
 
+## FE-TASK-001 — Admin placeholders (policies / checklists) (2026-04-19)
+
+**Статус:** done
+**Категория:** feature
+**Приоритет:** medium (разблокирует high-приоритетный FE-TASK-002)
+**Зависимости:** FE-TASK-025 (EmptyState), FE-TASK-028, FE-TASK-031 (router/lazy/chunks/admin), FE-TASK-032 (sidebar + RequireRole + AdminLayout) — все done.
+**Разблокирует:** FE-TASK-002 (полный UI admin после DESIGN-TASK-002).
+
+**План реализации:**
+1. Анализ tasks.json — единственный high-priority был blocked, выбран FE-TASK-001 (medium) как разблокирующий FE-TASK-002.
+2. Изучение §17.1/§18 п.4 архитектуры: v1 — placeholder с EmptyState, RBAC-guard, chunks/admin — всё уже на месте из FE-TASK-031/032. Задача — только переписать pages + stories + e2e.
+3. code-architect план: inline SVG (placeholder самодостаточен, FSD-clean), stories Default+RoleRestricted через MemoryRouter+RequireRole harness, 4 e2e через UI-login + SPA-nav.
+4. Переписаны AdminPoliciesPage/AdminChecklistsPage: EmptyState(size="lg", title, description, inline SettingsIcon) + data-testid для e2e.
+5. Stories: Default (простой render) + RoleRestricted (harness с `userRole` prop — не `role`, чтобы не срабатывал jsx-a11y/aria-role).
+6. E2e admin-placeholders.spec.ts — 4 сценария через loginAs(page, role) + spaNavigate(page, path) через history.pushState+popstate (сохраняет memory-state useSession).
+7. Инфра для role-override: пришлось отказаться от cookie-подхода (MSW SW не получает Cookie-заголовок). Реализовано: `window.__cpE2eRole__` → `applyE2ERoleOverride()` в main.tsx → `setE2EUserRole()` в handler /users/me. Tree-shakable, только под DEV+VITE_ENABLE_MSW.
+8. vite.config.ts — вынесен `vendor/ui-utils` chunk (tailwind-merge/cva/clsx): раньше дублировались в chunks/admin и превышали 10 КБ gzip budget.
+9. Проверки: typecheck / lint / vitest 1177 / build / 4+2 e2e / chunks/admin = 1.40 КБ gzip. code-reviewer: SHIP + 3 non-blocking nits — все применены.
+
+**Что сделано:**
+- `src/pages/admin-policies/AdminPoliciesPage.tsx` — inline SettingsIcon (+TODO) + EmptyState size=lg.
+- `src/pages/admin-checklists/AdminChecklistsPage.tsx` — аналогично с другим description.
+- `src/pages/admin-policies/AdminPoliciesPage.stories.tsx` + checklists — Default + RoleRestricted harness.
+- `tests/e2e/admin-placeholders.spec.ts` — 4 теста: (1) ORG_ADMIN EmptyState, (2) BUSINESS_USER → /403, (3a) ORG_ADMIN sidebar admin-группа, (3b) LAWYER не видит группу.
+- `tests/msw/handlers/users.ts` — setE2EUserRole runtime-override.
+- `tests/msw/browser.ts` — applyE2ERoleOverride + type augmentation window.__cpE2eRole__.
+- `src/main.tsx` — вызов applyE2ERoleOverride после worker.start() (внутри DEV+MSW).
+- `tests/e2e/fixtures/auth-state.ts` — сигнатура (page, options) вместо (page, refreshToken), options.role.
+- `tests/e2e/fixtures/index.ts` — +типы E2ERole, SeedAuthOptions.
+- `vite.config.ts` — +vendor/ui-utils (tailwind-merge/cva/clsx).
+
+**Ключевые отклонения:**
+- **Инфраструктура уже готова из FE-TASK-031/032** — router / AdminLayout / sidebar / chunks/admin — ничего не добавлял.
+- **Cookie-based role-override не сработал** — MSW Service Worker не получает Cookie-заголовок (ограничение SW Fetch API). Заменил на window.__cpE2eRole__ + applyE2ERoleOverride.
+- **Inline SettingsIcon дублируется** в обеих admin pages — AC требует placeholder самодостаточности. TODO-комментарии указывают на унос в shared/ui/icons при FE-TASK-002.
+- **vendor/ui-utils добавлен в vite.config.ts** — не в AC, но обязателен для 10 КБ budget. Оптимизация для всех lazy chunks.
+- **Session persistence отсутствует через page.goto** — useSession in-memory, сбрасывается при reload. E2e делает UI-login + SPA-navigate. Candidate для будущей итерации: RequireAuth + session hydration (восстановление юзера из refresh-token на старте).
+- **4-й e2e тест (3b LAWYER sidebar)** — добавил для полного RBAC-покрытия, AC просил 3.
+
+**Подключённые subagents:**
+- `Explore` — поиск READY-тасок с deps + структура проекта.
+- `code-architect` — план реализации с решениями по иконкам, stories, e2e.
+- `code-reviewer` — SHIP + 3 non-blocking nits, все применены.
+
+**Проверки:**
+- `npm run typecheck` — 0 errors.
+- `npm run lint --max-warnings=0` — 0 / 0.
+- `npm run test` — 1177 / 1177 passed.
+- `npx playwright test` — 6 / 6 passed (4 новых admin + 2 старых smoke/login-a11y).
+- `npm run build` — chunks/admin 3.84 КБ raw / 1.40 КБ gzip (budget 10 КБ ✓).
+
+---
+
 ## FE-TASK-041 — LandingPage (Hero/Features/Pricing/FAQ) (2026-04-19)
 
 **Статус:** done

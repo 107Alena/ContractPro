@@ -58,7 +58,47 @@
         "FE-TASK-031",
         "FE-TASK-032"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-19",
+        "files_created": [
+          "Frontend/src/pages/admin-policies/AdminPoliciesPage.stories.tsx",
+          "Frontend/src/pages/admin-checklists/AdminChecklistsPage.stories.tsx",
+          "Frontend/tests/e2e/admin-placeholders.spec.ts"
+        ],
+        "files_modified": [
+          "Frontend/src/pages/admin-policies/AdminPoliciesPage.tsx — переписан: EmptyState с inline SettingsIcon, data-testid='page-admin-policies'",
+          "Frontend/src/pages/admin-checklists/AdminChecklistsPage.tsx — аналогично",
+          "Frontend/tests/msw/handlers/users.ts — добавлен runtime role-override через setE2EUserRole (cookies не проходят через MSW SW)",
+          "Frontend/tests/msw/browser.ts — applyE2ERoleOverride() читает window.__cpE2eRole__",
+          "Frontend/src/main.tsx — вызов applyE2ERoleOverride() после worker.start() (внутри DEV+VITE_ENABLE_MSW гварда)",
+          "Frontend/tests/e2e/fixtures/auth-state.ts — сигнатура (page, options?) вместо (page, refreshToken?), параметр role",
+          "Frontend/tests/e2e/fixtures/index.ts — +типы E2ERole, SeedAuthOptions",
+          "Frontend/vite.config.ts — manualChunks правило для tailwind-merge/cva/clsx → vendor/ui-utils (раньше дублировались в lazy chunks, admin превышал 10 КБ gzip budget)"
+        ],
+        "deviations": [
+          "Router / AdminLayout / Sidebar уже реализованы в FE-TASK-031 + FE-TASK-032 — только pages.tsx нуждались в переписи. lazy + chunks/admin из vite.config.ts уже работали.",
+          "Inline SettingsIcon дублируется в обеих admin pages (18 строк SVG × 2). Принцип 'placeholder самодостаточен' из AC запрещает импорт shared icons. TODO-комментарии в обоих файлах: при FE-TASK-002 унести в shared/ui/icons и удалить дубли.",
+          "Role override для e2e не через cookie (как изначально планировалось): MSW Service Worker не получает Cookie-заголовок в Request — ограничение SW Fetch API. Реализовано через module-level state + applyE2ERoleOverride() в main.tsx, читающий window.__cpE2eRole__ из addInitScript. Только DEV+MSW путь, в prod tree-shaken.",
+          "4-й e2e тест добавлен (3b LAWYER / BUSINESS_USER не видят admin-секцию) — для полного RBAC-покрытия sidebar, ТЗ спрашивал 3.",
+          "vite.config.ts +vendor/ui-utils chunk — не заявлено в AC, но обязательно для выполнения chunks/admin ≤ 10 КБ budget. Выносит tailwind-merge+cva+clsx (~8.7 КБ gzip), используемые почти во всех UI-компонентах, из lazy chunks в один shared vendor.",
+          "Storybook RoleRestricted для pages-уровня сделан через MemoryRouter+RequireRole harness (MSW не подходит, т.к. Router/Guard — не API). Prop `userRole` а не `role` — во избежание jsx-a11y/aria-role false-positive."
+        ],
+        "verification": [
+          "npm run typecheck: 0 errors",
+          "npm run lint: 0 warnings (--max-warnings=0)",
+          "npm run test (vitest): 1177/1177 passed",
+          "npx playwright test: 6/6 passed (4 новых + 2 существующих smoke/login a11y)",
+          "npm run build: chunks/admin — 3.84 КБ raw / 1.40 КБ gzip (budget 10 КБ ✓)",
+          "subagents: code-architect (план), code-reviewer (SHIP + 3 non-blocking nits — все применены: docstring drift, tree-shake note, TODO про SettingsIcon)"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-002 (full admin UI): унести SettingsIcon в shared/ui/icons и удалить inline-дубли из обеих admin pages. Переписать AdminPoliciesPage/AdminChecklistsPage полностью (EmptyState → формы). chunks/admin budget переходит на 80 КБ gzip.",
+          "seedAuthenticatedSession теперь принимает {role}-опцию — используй в будущих e2e с RBAC-проверками (FE-TASK-048 Reports с 403-sharing). Механизм window.__cpE2eRole__ + main.tsx applyE2ERoleOverride уже подключён.",
+          "vendor/ui-utils chunk (tailwind-merge/cva/clsx) — общий для всего app, при добавлении новых shared UI-компонентов они автоматически попадут сюда. Другие lazy chunks (diff-viewer, pdf-preview) теперь не дублируют эти утилиты.",
+          "В проекте НЕТ session persistence через page reload: useSession восстанавливается только после UI-логина. page.goto на protected route сбрасывает сессию → redirect /login. E2e с protected routes должны: (1) UI-login → (2) SPA-navigate через history.pushState+popstate. Добавить RequireAuth+session hydration на старте приложения — candidate task для будущей итерации."
+        ]
+      }
     },
     {
       "id": "FE-TASK-002",

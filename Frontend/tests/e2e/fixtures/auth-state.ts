@@ -15,6 +15,12 @@
 // Encoding переиспользуется из `src/processes/auth-flow/refresh-token-storage.ts`
 // через `__encodeRefreshTokenForTests` — исключает silent-drift ключа и XOR'а,
 // если прод-код мигрирует (напр., в HttpOnly cookie per §18 п.1).
+//
+// Role override (FE-TASK-001): параметр `role` кладётся в window.__cpE2eRole__
+// до старта приложения. main.tsx после worker.start() применяет его через
+// setE2EUserRole → GET /users/me возвращает соответствующий fixture.
+// Cookie-based подход не работает: MSW service worker не получает Cookie-заголовок
+// в Request (ограничение Service Worker Fetch API).
 
 import type { Page } from '@playwright/test';
 
@@ -26,26 +32,43 @@ import {
 /** Тот же refresh-token, что MSW отдаёт в `validTokens` (tests/msw/fixtures/auth.ts). */
 export const DEFAULT_MSW_REFRESH_TOKEN = 'eyJhbGciOiJSUzI1NiJ9.mock-refresh-token.signature';
 
+export type E2ERole = 'LAWYER' | 'BUSINESS_USER' | 'ORG_ADMIN';
+
+export interface SeedAuthOptions {
+  refreshToken?: string;
+  role?: E2ERole;
+}
+
 /**
- * Сидирует sessionStorage до старта приложения. Вызывать ДО `page.goto(...)`.
+ * Сидирует sessionStorage + опциональный MSW role-override до старта приложения.
+ * Вызывать ДО `page.goto(...)`.
  *
  * @example
  *   test.beforeEach(async ({ page }) => {
- *     await seedAuthenticatedSession(page);
- *     await page.goto('/dashboard');
+ *     await seedAuthenticatedSession(page, { role: 'ORG_ADMIN' });
+ *     await page.goto('/admin/policies');
  *   });
  */
 export async function seedAuthenticatedSession(
   page: Page,
-  refreshToken: string = DEFAULT_MSW_REFRESH_TOKEN,
+  options: SeedAuthOptions = {},
 ): Promise<void> {
+  const refreshToken = options.refreshToken ?? DEFAULT_MSW_REFRESH_TOKEN;
   const encoded = __encodeRefreshTokenForTests(refreshToken);
   // addInitScript выполняется в изолированном world'е до любого скрипта
-  // страницы (включая HMR-клиент Vite), поэтому main.tsx увидит токен.
+  // страницы (включая HMR-клиент Vite), поэтому main.tsx увидит и токен,
+  // и role-override до worker.start().
   await page.addInitScript(
-    (payload: { key: string; value: string }) => {
-      window.sessionStorage.setItem(payload.key, payload.value);
+    (payload: { storageKey: string; storageValue: string; role?: E2ERole }) => {
+      window.sessionStorage.setItem(payload.storageKey, payload.storageValue);
+      if (payload.role) {
+        (window as unknown as { __cpE2eRole__?: E2ERole }).__cpE2eRole__ = payload.role;
+      }
     },
-    { key: __REFRESH_STORAGE_KEY, value: encoded },
+    {
+      storageKey: __REFRESH_STORAGE_KEY,
+      storageValue: encoded,
+      ...(options.role !== undefined && { role: options.role }),
+    },
   );
 }

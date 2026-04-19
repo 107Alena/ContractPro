@@ -3230,3 +3230,63 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **CSV escaping** (follow-up): при расширении за enum — RFC 4180 escape или base64.
 - **back/forward тесты** (code-reviewer nit P2): добавить `MemoryRouter initialIndex` sync-тест для useDebouncedSearchParam.
 
+
+---
+
+## FE-TASK-044 — ContractsListPage (7) — DONE
+
+**Статус:** ✅ done (critical, разблокировал v1 flow «Список договоров → карточка»)
+**Commit:** (см. git log)
+
+### Цель
+
+Полноценный экран «Документы» (Figma 7, §17.1/§17.3/§17.4 high-architecture): список договоров с server-side pagination, виртуализацией, фильтрами, поиском и row-actions (archive/delete, RBAC Pattern B). Заменяет placeholder из FE-TASK-031.
+
+### План реализации
+
+1. **widgets/documents-table** (новый) — composable table на базе `useReactTable` + `@tanstack/react-virtual`. Fixed row height 56px, threshold 50 строк для включения виртуализации. Сортировка client-side по текущей странице (server-side pagination сверху). Колонка «Действия» — условный `renderRowActions` prop (проп, не встроенный в виджет; RBAC решение — на уровне page).
+2. **widgets/contracts-metrics-strip** (новый) — 4 KPI-карточки по DocumentStatus (total/active/archived/deleted). Page-scoped подсчёт (до серверных агрегатов) — лейблы «на странице» не вводят в заблуждение.
+3. **pages/contracts-list/model** — `filter-definitions.ts` (status+type+date) + `use-contracts-list-query.ts` (склейка search+filters+pagination → useContracts).
+4. **ContractsListPage** — композиция всего + archive/delete mutations + toast.
+5. Переиспользование **WhatMattersCards** (`widgets/dashboard-what-matters`) без дублирования.
+
+### Subagents
+
+- **code-architect** — FSD-план (файловое дерево, зоны ответственности). Подтвердил: widgets → entities/features/shared OK; метрик-виджеты разделены семантически (KPI по DocumentStatus vs WhatMatters по processing_status).
+- **code-reviewer** — FIX→SHIP c 3 P1 (ARIA roles, URL-encode, drop measureElement) + 2 P2 (упростить items-тип, guard modal pending) + 2 P3 (метки metrics, clear-filters CTA). Все применены.
+
+### Deliverables (по FSD)
+
+| Слой | Слайс | Файлы |
+|------|-------|-------|
+| widgets | `documents-table/` | `model/columns.tsx`, `ui/DocumentsTable.{tsx,test,stories}` |
+| widgets | `contracts-metrics-strip/` | `ui/ContractsMetricsStrip.{tsx,test,stories}` |
+| pages | `contracts-list/` | `ContractsListPage.{tsx,test,stories}`, `model/filter-definitions.ts`, `model/use-contracts-list-query.ts` |
+| deps | package.json | добавлен `@tanstack/react-virtual ^3.13.24` |
+
+### Test results
+
+- `npm run typecheck` — 0 ошибок
+- `npm run lint` — 0/0
+- `npm run test` — **1098/1098 проходят** (+25 новых)
+- `npm run build` — 2.39s, размеры чанков в бюджете
+- a11y: role=grid/gridcell + aria-rowindex/colindex + aria-sort + aria-busy + aria-label на sort-кнопках
+
+### Ключевые архитектурные решения
+
+1. **Виртуализация — threshold 50, fixed row height 56px.** Архитектура §11.2 говорит «>100», но при size=25 default виртуализация никогда бы не включилась. Порог 50 — разумный компромисс: кастомные size=50/100 уходят в virtualized branch. Fixed height вместо dynamic: избегает re-measure циклов в react-virtual + предсказуемый UX при большом количестве строк.
+2. **RBAC Pattern B через renderRowActions prop, не встроенной колонки.** DocumentsTable не знает о ролях; колонка «Действия» появляется только если вызывающая сторона передала renderRowActions. Page вычисляет `canArchive = useCan('contract.archive')` и передаёт render-функцию только LAWYER/ORG_ADMIN. Никакого CSS display:none — именно отсутствие DOM-узла.
+3. **Backend v1 supports only `status`.** Фильтры type и date определены в `CONTRACTS_FILTER_DEFINITIONS`, сохраняются в URL, **но не уходят в API**. Документировано TODO в use-contracts-list-query.ts. Риск: user expectation mismatch — отмечено в limitations, ждёт backend.
+4. **MetricsStrip labels «на странице».** Честность метрик: при server-pagination (size=25) не имеет смысла считать active/archived/deleted по всей базе, потому что у нас только текущая страница. Лейблы прямо говорят «на странице».
+5. **Fallback-рендер виртуализации для jsdom.** `getVirtualItems()` пустой без `getBoundingClientRect()` в тестовой среде → при пустом массиве рендерим все строки подряд. Тесты видят строки, production получает виртуализацию.
+6. **Модалка delete защищена от закрытия во время pending-мутации.** `onOpenChange(false)` игнорируется, если `deleteMutation.isPending` — пользователь не теряет индикацию.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-041 (ReportsPage, high):** может переиспользовать DocumentsTable — колонки другие, но паттерн виртуализации + ColumnDef + row-actions one-to-one.
+- **FE-TASK-048 (dashboard cross-wiring):** часть работы уже сделана — `widgets/dashboard-what-matters/WhatMattersCards` переиспользован на ContractsListPage.
+- **Follow-up P3 (sorting column persistence):** текущая сортировка client-side и локальная; URL-sync сортировки — отдельная задача.
+- **Follow-up P3 (global empty filtered CTA):** добавлена кнопка «Сбросить фильтры» — при debug можно вынести в shared hook.
+- **Backend ORCH extension:** дополнить `/contracts` поддержкой `type` (string) + `date_from`/`date_to` (ISO) — чтобы фильтры работали end-to-end.
+- **ServerAggregates:** добавить `GET /contracts/aggregates?by=status` для точных глобальных KPI в MetricsStrip (убрать «на странице»).
+

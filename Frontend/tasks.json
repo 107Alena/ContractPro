@@ -2320,7 +2320,43 @@
         "FE-TASK-038",
         "FE-TASK-032"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "summary": "ContractsListPage (Figma 7) — экран «Документы»: ContractsMetricsStrip + WhatMattersCards + SearchInput + FilterChips + DocumentsTable с виртуализацией @tanstack/react-virtual, server-side pagination через useContracts, RBAC Pattern B (§5.6.1) для BUSINESS_USER (колонка действий скрывается через условный renderRowActions).",
+        "deliverables": [
+          "widgets/documents-table/model/columns.tsx — ColumnDef<ContractSummary>[] с опциональной колонкой «Действия», StatusBadge, encodeURIComponent на contract_id в Link",
+          "widgets/documents-table/ui/DocumentsTable.tsx — main widget + inline VirtualizedBody; порог VIRTUALIZATION_THRESHOLD=50 строк; fixed ROW_HEIGHT_PX=56; ARIA role=\"grid\"/rowindex/colindex для виртуализированной ветки; fallback-рендер для jsdom (virtualItems=[])",
+          "widgets/documents-table/ui/DocumentsTable.{test,stories}.tsx — 10 unit-тестов (Default/Loading/Empty/EmptyFiltered/Error/RowActions/NoRowActions/Virtualized/NonVirtualized/Fetching) + 9 stories",
+          "widgets/contracts-metrics-strip — KPI-полоса по DocumentStatus (total/active/archived/deleted); лейблы «на странице» явно указывают page-scoped подсчёт до серверных агрегатов; 6 тестов + 4 stories",
+          "pages/contracts-list/model/filter-definitions.ts — декларативный список фильтров (status pinned + type/date non-pinned, в «Ещё фильтры»); v1 в backend уходит только status (OpenAPI контракт), остальные — URL state с TODO",
+          "pages/contracts-list/model/use-contracts-list-query.ts — склейка useDebouncedSearchParam + useFilterParams + usePageParams → ListParams → useContracts; derived items/total/hasActiveFilters",
+          "pages/contracts-list/ContractsListPage.tsx — замена placeholder; RBAC renderRowActions через useCan('contract.archive'); useArchiveContract + useDeleteContract с toast + ConfirmDeleteContractModal; filteredEmptyState содержит «Сбросить фильтры»; модалка удаления не закрывается во время мутации",
+          "pages/contracts-list/ContractsListPage.{test,stories}.tsx — 9 unit-тестов (Default/Loading/Empty/Error/RBAC_BUSINESS/RBAC_LAWYER/URL_search/URL_status/Pagination) + 10 stories (включая Tablet, Virtualized, WithFilters)",
+          "package.json — добавлен @tanstack/react-virtual ^3.13.24"
+        ],
+        "test_results": {
+          "typecheck": "pass",
+          "lint": "pass (0/0)",
+          "unit_tests": "1098/1098 pass (+25 new)",
+          "build": "2.39s, bundle budget OK",
+          "a11y_aria": "role=grid/gridcell + aria-rowindex/colindex + aria-sort + aria-busy"
+        },
+        "code_review_applied": [
+          "P1: URL-encode contract_id в columns Link (XSS defence)",
+          "P1: drop measureElement ref + redundant useEffect(measure) для fixed row heights — предотвращает layout thrash",
+          "P1: ARIA role=grid/row/gridcell + aria-rowcount/rowindex/colindex в виртуализированной ветке — сохраняет навигацию AT при absolute-позиционировании",
+          "P2: упрощён тип items в use-contracts-list-query.ts (readonly ContractSummary[] вместо conditional)",
+          "P2: модалка удаления блокируется от закрытия во время pending-мутации",
+          "P3: лейблы ContractsMetricsStrip переименованы в «на странице» (page-scoped подсчёт до серверных агрегатов)",
+          "P3: сортировочные кнопки получили aria-label",
+          "P3: filteredEmptyState получил CTA «Сбросить фильтры»"
+        ],
+        "limitations": [
+          "Backend OpenAPI v1 поддерживает только `status` filter; фильтры type и date сохраняются в URL, но не уходят в API — TODO в filter-definitions.ts + use-contracts-list-query.ts",
+          "MetricsStrip active/archived/deleted считаются по текущей странице (server-pagination limitation); лейбл честно говорит «на странице» до появления серверных агрегатов",
+          "Виртуализация в jsdom работает в fallback-режиме (virtualItems=[] без getBoundingClientRect) — в production-скролле нормально"
+        ]
+      }
     },
     {
       "id": "FE-TASK-045",

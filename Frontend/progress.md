@@ -2741,3 +2741,125 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **Smoke test utility:** повторно проверить хуки можно через `npx --no-install commitlint --edit <abs-path-to-msg-file>` + `npx --no-install lint-staged` — обе команды не требуют git-коммита.
 
 ---
+
+---
+
+## FE-TASK-047 — ComparisonPage (6) + DiffViewer + 8 widgets version-compare (2026-04-19)
+
+**Status:** done — категория page, priority high.
+**Деп:** FE-TASK-036 (comparison-start feature) + FE-TASK-021 (DataTable) — обе done.
+**Цель:** экран «Сравнение версий» (Figma экран 6, 9 состояний); DiffViewer (lazy-loaded chunk diff-match-patch + Web Worker + window-virtualization); 8 виджетов из §17.4; RBAC LAWYER+ORG_ADMIN; URL params ?base=&target=.
+
+### Реализация
+
+**1. Vite manualChunks (vite.config.ts):**
+- Добавлено: `if (id.includes('/src/widgets/diff-viewer/')) return 'chunks/diff-viewer'` + `if (id.includes('diff-match-patch')) return 'chunks/diff-viewer'`.
+- Web Worker через `new Worker(new URL('../worker/diff.worker.ts', import.meta.url), {type:'module'})` — Vite сам извлекает worker как отдельный asset (`diff.worker-*.js`), вне manualChunks.
+
+**2. widgets/diff-viewer/ (15 файлов, реализация — typescript-pro subagent):**
+- `model/types.ts` — DiffMode, DiffParagraph, DiffSegment, ComputedDiffParagraph.
+- `lib/compute-diff.ts` — pure-функция (computeParagraphDiff + computeAllDiffs с fast-path для unchanged), переиспользуется в worker и jsdom-fallback. diff-match-patch lazy-singleton.
+- `lib/window-virtualization.ts` — pure getVisibleWindow(items, scrollTop, viewportHeight, rowHeight, overscan).
+- `lib/use-diff-worker.ts` — React-хук: создаёт Worker, обрабатывает onMessage, terminate при unmount/смене paragraphs. При `typeof Worker === 'undefined'` (jsdom) — синхронный computeAllDiffs.
+- `worker/diff.worker.ts` — Web Worker, импортирует computeAllDiffs.
+- `ui/diff-viewer.tsx` (default + named) — controlled/uncontrolled DiffMode, virtualized scroll-region role="region", aria-busy на loading, role="alert" на error, retry-кнопка.
+- `ui/diff-row.tsx` (memo) — side-by-side (grid-cols-2) или inline (маркер +/-/~).
+- `ui/diff-segment.tsx` (memo) — insert=success, delete=danger+line-through, equal=обычный.
+- `ui/diff-toolbar.tsx` — segmented control, role="toolbar" + aria-pressed.
+- 4 файла тестов / 29 it() (jsdom через global config FE-TASK-053).
+- 9 Storybook stories: Default, Inline, Loading, ErrorState, Empty, ManyParagraphs (~80, демо виртуализации), HighlightAdded, HighlightRemoved, MixedChanges.
+- Barrel: `index.ts` экспортирует DiffViewer + 4 типа.
+
+**3. widgets/version-compare/ (25 файлов, реализация — react-specialist subagent):**
+- `model/types.ts` — 9 типов: VersionMetadata, ComparisonVerdict, RiskProfileSnapshot, RiskProfileDeltaValue, ChangeCountersValue, ChangesFilter, SectionDiffSummary, ComparisonRiskItem, ComparisonRisksGroups.
+- `lib/compute-counters.ts` — computeChangeCounters(diff): подсчёт added/removed/modified/moved/textual/structural из text_diffs+structural_diffs.
+- `lib/compute-verdict.ts` — computeVerdict (better/worse/unchanged/mixed) + computeRiskDelta.
+- `lib/group-by-section.ts` — топ-5 секций по сумме изменений.
+- 8 UI-виджетов из §17.4:
+  - `VersionMetaHeader` — мета двух версий (md+ две колонки).
+  - `ComparisonVerdictCard` — Badge + summary high+medium.
+  - `ChangeCounters` — 4 plate-карточки + breakdown (textual/structural).
+  - `TabsFilters` — WAI-ARIA tablist с arrow-навигацией (4 фильтра).
+  - `ChangesTable` — на DataTable из shared/ui (FE-TASK-021), client-mode фильтрация.
+  - `RiskProfileDelta` — 3 строки base→target ±delta.
+  - `KeyDiffsBySection` — топ-5 секций с бейджами +X/-Y/~Z.
+  - `RisksGroups` — 3 native `<details>` (resolved/introduced/unchanged).
+- 11 файлов тестов / 42 it().
+- 8 Storybook stories под title `Widgets/VersionCompare/Overview`.
+- Barrel: компоненты + типы + lib-функции.
+
+**4. pages/comparison/ComparisonPage.tsx — 9 состояний экрана:**
+1. **RoleRestricted** — `useCan('comparison.run')===false` (BUSINESS_USER): inline-section с заголовком «Сравнение доступно только юристам» (Pattern B per §5.6.1).
+2. **NoVersionsSelected** — `!base && !target`: empty-state с инструкцией.
+3. **SingleVersionSelected** — только base или только target: «Выберите вторую версию».
+4. **Loading** — `diffQuery.isLoading`: spinner + «Готовим сравнение…», aria-busy.
+5. **NotReady** — `isDiffNotReadyError(error)`: 404 DIFF_NOT_FOUND как soft-state + кнопка «Запустить сравнение» (использует useStartComparison).
+6. **Error** — прочие ошибки: ErrorState с retry (toUserMessage), role="alert".
+7. **NoChanges** — total=0: «Изменений между версиями нет».
+8. **Ready** — `diffQuery.data` с total>0: полный набор виджетов + lazy DiffViewer через React.lazy + Suspense.
+9. **URL params** — `useSearchParams()`: ?base=v1&target=v2 → shareable ссылки.
+
+**5. RBAC §5.5/§5.6:**
+- `useCan('comparison.run')` — LAWYER + ORG_ADMIN.
+- Pattern B inline-fallback (RoleRestrictedState), не /403 redirect — пользователь уже на authorized маршруте.
+- `useDiff({...}, { enabled: Boolean(id && hasBoth && canCompare) })` — query НЕ выполняется для BUSINESS_USER, нет лишних запросов.
+
+**6. Lazy-loading + bundle-size:**
+- `const LazyDiffViewer = lazy(() => import('@/widgets/diff-viewer').then(m => ({default: m.DiffViewer})))`.
+- `<Suspense fallback={<Spinner/>}><LazyDiffViewer paragraphs={...}/></Suspense>`.
+- Build output:
+  - `chunks/diff-viewer-Bso0bD5t.js` = **58.46 КБ raw / 19.25 КБ gzip** — глубоко в budget ≤150 КБ (§6.3).
+  - `diff.worker-DLCV8b8o.js` = **19.94 КБ** (отдельный asset, Vite-конвенция).
+  - Main chunk без регрессий: **245.34 КБ / 78.23 КБ gzip**.
+
+### Verification
+
+| Проверка | Результат |
+|---|---|
+| `npm run typecheck` | 0 errors (включая `tests/e2e/tsconfig.json`) |
+| `npm run lint` (--max-warnings=0) | 0 errors / 0 warnings |
+| `npx prettier --check` (новые файлы) | All matched files use Prettier code style |
+| `npm test -- run` | **801/801 passed** (101 файлов; +80 новых it(): diff-viewer 29 + version-compare 42 + ComparisonPage 9) |
+| `npm run build` | OK; bundle budgets соблюдены |
+| `npm run build-storybook` | OK; 9 stories страницы + 9 stories DiffViewer + 8 stories version-compare добавлены |
+| Makefile в Frontend/ | Отсутствует — N/A (как в FE-TASK-007/011/017/020/021/026/028) |
+
+### Architecture alignment
+
+- **§6.1** Маршрут `/contracts/:id/compare?base=&target=` ↔ ComparisonPage ↔ comparison.run — проверено.
+- **§6.3** `chunks/diff-viewer` (~60 КБ → 19.25 КБ gzip, ≤150 КБ budget) — соблюдено.
+- **§8.3** DiffViewer side-by-side + inline + фильтр — реализовано (mode toggle + counters; structural-фильтр в ChangesTable).
+- **§8.5** Storybook покрывает Default/Hover/Active/Focus/Disabled/Loading/Error/Empty/Role-Restricted — покрыто 9-ю stories страницы + 9 stories DiffViewer.
+- **§9.3** Каталог ошибок: 404 DIFF_NOT_FOUND → soft-state «Сравнение ещё не готово»; 5xx → role=alert + retry.
+- **§11.2** «DiffViewer: инкрементальный рендер, window-based виртуализация по параграфам; вычисление diff в Web Worker» — точно реализовано (worker + getVisibleWindow + translateY + height-spacer).
+- **§17.4** 9 widgets экрана 6 — все реализованы: VersionMetaHeader / ComparisonVerdictCard / ChangeCounters / TabsFilters / ChangesTable / RiskProfileDelta / KeyDiffsBySection / SideBySideDiff (DiffViewer) / RisksGroups.
+- **FSD §3** — widgets импортируют только из `@/shared/*`, `@/entities/*`, `@/features/comparison-start`. ComparisonPage в pages/* импортирует из widgets/* + features/* + shared/*.
+
+### Deviations (зафиксированы в tasks.json.completion_notes)
+
+1. **deriveProfiles/deriveRisksGroups возвращают undefined/пустые группы.** Причина: `VersionDiff` API не содержит risk_profile/risks (см. openapi.d.ts components.schemas.VersionDiff). Полная агрегация profiles по версиям пойдёт через `GET /risks` в FE-TASK-048 (VersionsTimeline). Виджеты RiskProfileDelta/RisksGroups корректно показывают плейсхолдеры; верстка остаётся правильной.
+2. **RoleRestricted = inline (Pattern B) вместо /403 redirect (Pattern A).** Причина: пользователь уже на authorized маршруте `/contracts/:id/compare`, а `comparison.run` — section-level guard, не route-level. Аналог §5.6.1 row 4 (Document Card Role-Restricted).
+3. **Compound API DataTable** — для ChangesTable использован прямой компонент с кастомным рендером строк (DataTable как контейнер с client-mode), а не полностью compound через DataTableToolbar/Pagination. Достаточно для текущего объёма (диффы — не пагинируемые большие списки).
+4. **vi.mock на относительный путь api/get-diff.** useDiff/useStartComparison импортируют функции через относительные пути (`'../api/get-diff'`), поэтому моки `@/features/comparison-start` (barrel) НЕ перехватываются. Используется `vi.mock('@/features/comparison-start/api/get-diff', ...)` — задокументировано в комментарии теста.
+5. **retryDelay=0 в test QueryClient defaults.** useDiff имеет собственный `retry: 1` для не-DIFF_NOT_FOUND ошибок, а `retryDelay` из defaults не переопределяется в useQuery options. Без `retryDelay: 0` тесты на ErrorState таймаутят на exponential backoff (default 1000ms). retry: false из defaults тоже игнорируется (useDiff явно задаёт retry-предикат).
+6. **ComparisonPage передаёт props виджетам через `...(profiles.base ? { baseProfile: profiles.base } : {})`** — `exactOptionalPropertyTypes: true` в tsconfig запрещает передавать undefined в опциональные пропсы; spread с условным включением — стандартный workaround в этой кодовой базе.
+7. **Web Worker module-type.** `new Worker(url, { type: 'module' })` требует Vite + поддержку браузера (все evergreen + Safari 15+). Fallback на classic worker не сделан — Vite plugin react-swc собирает worker как ESM bundle.
+8. **diff-match-patch как singleton.** `getDmp()` лениво создаёт один инстанс на модуль (per-worker и per-page). Безопасно: `diff_main` + `diff_cleanupSemantic` чистые относительно state экземпляра.
+
+### Subagents
+
+- **typescript-pro** — реализовал `widgets/diff-viewer/` (15 файлов): TypeScript strict + noUncheckedIndexedAccess + Web Worker + sync-fallback для jsdom + 9 stories. ESLint --fix отработал чисто.
+- **react-specialist** — реализовал `widgets/version-compare/` (25 файлов): 8 виджетов из §17.4 + 3 helpers + DataTable-интеграция + 8 stories. WAI-ARIA tablist с arrow-навигацией. ESLint --fix отработал чисто.
+- ComparisonPage и тесты — собственноручно: интеграция между виджетами, RBAC, lazy DiffViewer, 9 состояний, мокинг для тестов — контекст компактный, держится в голове проще, чем делегировать.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-046 (critical — ResultPage):** теперь widgets/diff-viewer доступен как библиотечный API. ResultPage может использовать DiffViewer для отображения diff между версиями (если такой паттерн встретится на экране 5).
+- **FE-TASK-048 (medium — VersionsTimeline):** агрегирует profiles по версиям через `GET /risks`. Когда готово — обновить `deriveProfiles`/`deriveRisksGroups` в ComparisonPage, чтобы RiskProfileDelta/RisksGroups получали реальные данные.
+- **FE-TASK-053 (Vitest jsdom global):** уже глобален. Тесты diff-viewer/version-compare/ComparisonPage не требуют docblock `// @vitest-environment jsdom`.
+- **Web Worker tests:** в jsdom Worker недоступен — use-diff-worker откатывается на синхронный путь, поэтому unit-тесты компонентов покрывают логику. Реальный Worker-флоу тестируется в Storybook (live в браузере) и Playwright e2e.
+- **Bundle budget enforcement:** §11.2 рекомендует size-limit для CI; пока не настроен (FE-TASK для CI bundle-gate отдельно). Текущий запас: 19.25 КБ / 150 КБ — 8x headroom.
+- **diff-match-patch + structural diff:** API возвращает text_diffs (для DiffViewer) и structural_diffs (для ChangesTable). DiffViewer работает только с text_diffs; structural_diffs показываются в ChangesTable как отдельный фильтр.
+- **Mobile (sm):** §18 п.7 — Comparison экран без выверенного mobile-дизайна. Текущая верстка responsive-фоллбэк через Tailwind: md+ две колонки, sm — вертикально. Известный риск приёмки.
+- **Перфоманс DiffViewer:** для 80+ параграфов виртуализация работает (height-spacer + translateY); тестировано в ManyParagraphs story. Для 1000+ — потребуется TanStack Virtual (§20.5, ещё не установлен).
+

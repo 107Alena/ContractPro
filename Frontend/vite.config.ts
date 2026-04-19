@@ -15,21 +15,25 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // §6.3 / §11.2 high-architecture — granular code-splitting:
-        // - chunks/admin       — все admin-страницы (FE-TASK-001/002), один общий chunk
-        // - chunks/diff-viewer — widgets/diff-viewer + diff-match-patch (FE-TASK-047),
-        //                        budget ≤150 КБ gzip; нужен только для /compare.
-        // - vendor/react       — React + ReactDOM + scheduler
-        // - vendor/router      — react-router и data-router
-        // - vendor/query       — TanStack Query + devtools
-        // - vendor/i18n        — i18next + react-i18next
-        // - vendor/sentry      — @sentry/react (release-tagged source-maps в FE-TASK-050)
-        // TODO(FE-TASK-038/039): chunks/pdf-preview (pdfjs-dist) добавится одновременно
-        //   с реализацией соответствующего widgets/features.
+        // - chunks/admin        — все admin-страницы (FE-TASK-001/002), один общий chunk
+        // - chunks/diff-viewer  — widgets/diff-viewer + diff-match-patch (FE-TASK-047),
+        //                         budget ≤150 КБ gzip; нужен только для /compare.
+        // - chunks/pdf-preview  — widgets/pdf-navigator (stub в FE-TASK-045; pdfjs-dist
+        //                         присоединится позже, см. §6.3 «~500 КБ»). Стабильное
+        //                         имя chunk'a нужно для size-limit-бюджета и e2e (AC
+        //                         «lazy-loaded chunk»).
+        // - vendor/react        — React + ReactDOM + scheduler
+        // - vendor/router       — react-router и data-router
+        // - vendor/query        — TanStack Query + devtools
+        // - vendor/i18n         — i18next + react-i18next
+        // - vendor/sentry       — @sentry/react (release-tagged source-maps в FE-TASK-050)
         manualChunks: (id: string) => {
           if (id.includes('/src/pages/admin-')) return 'chunks/admin';
           if (id.includes('/src/widgets/diff-viewer/')) return 'chunks/diff-viewer';
+          if (id.includes('/src/widgets/pdf-navigator/')) return 'chunks/pdf-preview';
           if (id.includes('node_modules')) {
             if (id.includes('diff-match-patch')) return 'chunks/diff-viewer';
+            if (id.includes('pdfjs-dist')) return 'chunks/pdf-preview';
             if (id.includes('react-dom') || id.includes('/react/') || id.includes('scheduler'))
               return 'vendor/react';
             if (id.includes('react-router')) return 'vendor/router';

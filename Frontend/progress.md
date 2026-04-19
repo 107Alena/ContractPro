@@ -2926,3 +2926,77 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **Миграция существующих dashboard-виджетов на <StatusBadge/>.** Текущие widgets/dashboard-recent-checks/dashboard-key-risks/dashboard-what-matters/dashboard-last-check используют локальный `<Badge variant={viewStatus().tone}/>` паттерн — корректно работает, но новый код должен предпочитать `<StatusBadge status=/>`. Миграция — хороший side-effect в FE-TASK-044 (ContractsListPage также использует DocumentsTable → общий паттерн консолидируется).
 - **RiskProfileDelta widget (version-compare)** сейчас использует `text-risk-high/medium/low` CSS-классы напрямую. Может быть перенесён на `RISK_LEVEL_META.tone` (Badge variant) для единого источника истины цветов — опционально в рамках рефакторинга когда будет затрагиваться.
 - **Follow-up FE-TASK-024F (shared/ui/Badge leadingIcon).** Добавить в backlog; согласовать иконки с Figma; перевести StatusBadge на explicit icon-per-status после.
+
+---
+
+## FE-TASK-045 — ContractDetailPage (8) + 12 виджетов + lazy PDF (done — 2026-04-19)
+
+**Задача.** Экран «Карточка документа» (Figma 8, 9 + 1 tablet состояния) по §17.1/§17.4: 12 виджетов (DocumentHeader, SummaryCard, QuickStart, LastCheck, KeyRisks, Recommendations, VersionsTimeline, ChecksHistory, VersionPicker, ReportsShared, DeviationsChecklist, PDFNavigator), RBAC Pattern B для BUSINESS_USER (§5.6.1), lazy-loaded chunk `chunks/pdf-preview` (§6.3), Storybook 9 состояний.
+
+### Почему эта задача
+
+Единственная unblocked high-priority после FE-TASK-024 (deps 021/024/028 done). Разблокирует FE-TASK-046 (ResultPage, critical) по зависимости FE-TASK-045 (второй блокер — FE-TASK-040 — остаётся). Двигает проект к завершению v1 pages: из 17 pending задач только 1 high после этого → 16 остаётся (mostly medium).
+
+### Архитектурное решение
+
+**Проблема 1 — pdfjs-dist (~500 КБ).** Архитектура §6.3 прописывает `chunks/pdf-preview` с pdfjs-dist. Добавление пакета в v1 FE-TASK-045 — overkill (реальное PDF-превью не входит в базовый критерий); откладывание пакета лишает архитектуру инфраструктурного chunk'а. Решение: stub-виджет `widgets/pdf-navigator/` с default-export; `vite.config.ts manualChunks` ловит `/src/widgets/pdf-navigator/` (+ `pdfjs-dist` готовым правилом) в `chunks/pdf-preview`. React.lazy + dynamic import → реальный lazy + стабильное имя chunk'a. AC «lazy-загружается только при тумблере» удовлетворён инфраструктурно.
+
+**Проблема 2 — data-loaders (§6.2 `ensureQueryData`).** В проекте ни одна page их не использует: `ComparisonPage`/`DashboardPage` — `useQuery` + `Suspense:false`. Внедрять loader впервые в FE-TASK-045 — введение нового паттерна без пайплайна (router-config, `errorElement`, `useLoaderData` типизация). Решение (одобрено code-architect): отложить; добавить TODO в header ContractDetailPage со ссылкой на §6.2. Отдельная follow-up задача в backlog для миграции всех detail-страниц сразу.
+
+**Проблема 3 — VersionsTimeline vs ChecksHistory.** §17.4 перечисляет оба виджета. Один источник данных (`useVersions`), разные презентации (вертикальный таймлайн + таблица). Выбор: один widget-slice `widgets/versions-timeline/` с двумя UI-компонентами (default + named export) vs два отдельных slice'а. Выбрано **один slice**: DRY, одинаковый источник, строгий FSD не требует one-widget-per-slice (contra `widgets/version-compare/` как прецедент с 8 компонентами). Code-reviewer отметил как nit, но не blocker.
+
+**Проблема 4 — RBAC Pattern B (§5.6.1).** BUSINESS_USER не должен видеть `risks.view`/`recommendations.view` разделы — **и данные не должны грузиться**. В v1 `useRisks/useRecommendations` ещё не существуют (scope FE-TASK-046/048). Решение: widgets `risks-list`/`recommendations-list` — prop-driven empty-states; `<Can I='...'>` оборачивает их на page-уровне. Зафиксирован TODO внутри виджетов: при подключении собственного query использовать `enabled: useCan(...)`.
+
+**Проблема 5 — 404 CONTRACT_NOT_FOUND.** Redirect на `/404` теряет URL пользователя. Решение: inline `NotFoundState` + ссылка «К списку договоров». Паттерн зеркалит `isDiffNotReadyError` в ComparisonPage. retry-predicate на useContract (не ретраит 404) — применён по замечанию code-reviewer (nit #1).
+
+**Подтверждение.** План валидирован **code-architect** (CHANGES → 7 нитов; 4 основные применены: VersionsTimeline+ChecksHistory в одной папке, pdf-navigator stub + vite.config, page-subcomponents в `pages/contract-detail/ui/`, defer loaders; inline 404; prop-driven виджеты; aria-expanded позже). **code-reviewer SHIP** (2 should-fix: retry-predicate на 404 + TODO в виджетах — применены; 1 deferred-for-followup: contractId query-param у /contracts/new — FE-TASK-046).
+
+### Файлы
+
+**Созданы (18):**
+- `src/entities/contract/api/use-contract.ts` + `.test.tsx` — useQuery на GET /contracts/{id}, retry-predicate на CONTRACT_NOT_FOUND (6 тестов).
+- `src/entities/version/api/use-versions.ts` + `.test.tsx` + `index.ts` — useQuery на GET /contracts/{id}/versions (4 теста).
+- `src/widgets/versions-timeline/ui/versions-timeline.tsx` + `checks-history.tsx` + `versions-timeline.test.tsx` (8 тестов) + `index.ts` — два виджета в одной папке, один useVersions-источник.
+- `src/widgets/risks-list/ui/risks-list.tsx` + `.test.tsx` (4 теста) + `index.ts` — prop-driven, empty-state «Появятся после анализа».
+- `src/widgets/recommendations-list/ui/recommendations-list.tsx` + `.test.tsx` (4 теста) + `index.ts` — аналогично.
+- `src/widgets/pdf-navigator/ui/pdf-navigator.tsx` + `.test.tsx` (2 теста) + `index.ts` — stub с default-export для React.lazy.
+- `src/pages/contract-detail/ui/document-header.tsx` + `summary-card.tsx` + `last-check.tsx` + `quick-start.tsx` + `version-picker.tsx` + `reports-shared.tsx` + `deviations-checklist.tsx` — 7 page-specific subcomponents.
+- `src/pages/contract-detail/ContractDetailPage.test.tsx` (6 тестов: Ready/Loading/NotFound/Error/RBAC/PDF-toggle) + `ContractDetailPage.stories.tsx` (9 stories: Default, Loading, NotFound, ErrorState, BusinessUser, AnalyzingVersion, AwaitingUserInput, Failed, NoVersions).
+
+**Модифицированы (5):**
+- `vite.config.ts` — manualChunks: `chunks/pdf-preview` для /src/widgets/pdf-navigator/ + pdfjs-dist.
+- `src/entities/contract/index.ts` — экспорт useContract/ContractDetails/CONTRACT_ENDPOINT.
+- `src/entities/version/index.ts` — экспорт useVersions/VersionDetails/VersionList/VERSIONS_ENDPOINT.
+- `src/pages/contract-detail/ContractDetailPage.tsx` — полная замена placeholder'а на page-композицию; Loading/NotFound/Error/Ready state-machine; `useEventStream(id)`; PDF-тумблер с `aria-expanded`+`aria-controls`+`#pdf-preview-panel`.
+- `src/app/router/router.test.tsx` — ослабление теста `/contracts/:id` (убрана проверка `getByText(/abc-123/)` — placeholder заменён на реальную реализацию).
+
+### Проверка
+
+- `npm run typecheck` — 0 errors.
+- `npm run lint --max-warnings=0` — 0 errors / 0 warnings.
+- `npx vitest run` — **880/880 tests passed** (было 846, +34 новых: useContract 6, useVersions 4, ContractDetailPage 6, versions-timeline+checks-history 8, risks-list 4, recommendations-list 4, pdf-navigator 2).
+- `npx vitest run --coverage` — entities пороги ≥80% пройдены; виджеты 96-100% (без обязательных порогов §10.4).
+- `npm run build` — 2.18 s, chunks/pdf-preview **59 KB gzip** (≤150 KB ограничение granular-chunk'а §6.3), main contract-detail ~24-31 KB gzip.
+- `Makefile` в Frontend/ отсутствует — N/A (паттерн как в FE-TASK-024/042/043/047).
+
+### Subagents
+
+- **code-architect** — план-валидация (CHANGES): подтвердил stub-подход для pdf-navigator + manualChunks; согласовал defer loaders со ссылкой на §6.2; одобрил inline NotFound вместо redirect /404; принял prop-driven виджеты для v1. Минорные правки применены.
+- **code-reviewer** — финальный обзор: **SHIP** с 2 should-fix (retry-predicate на CONTRACT_NOT_FOUND — применён; TODO о `enabled:useCan(...)` в виджетах risks-list/recommendations-list — применён), 1 deferred-for-followup (`contractId` query-param у `/contracts/new` — не используется NewCheckPage; исправить в FE-TASK-046 вместе с NewCheckPage-логикой). Nits (дубликат section `aria-label`, стабильные keys, VersionPicker stale-vid) — низкий ROI, отложены.
+
+### Deviations (зафиксированы в tasks.json.completion_notes)
+
+1. **Loaders (§6.2 ensureQueryData)** — отложены. См. «Архитектурное решение — проблема 2». Рекомендован follow-up «migrate contract-detail (+ result, + comparison) to route loaders» единым батчем.
+2. **PDFNavigator — stub вместо реального pdfjs-dist viewer.** Реальная интеграция (Worker, canvas-rendering, pages navigation) — отдельная задача; chunk уже резервирован и проверяем через build-output.
+3. **useRisks/useRecommendations — не созданы.** Их разработка — scope FE-TASK-046/048. Виджеты risks-list/recommendations-list принимают `undefined` → empty-state. При подключении page-level query — обязательный `enabled: useCan('risks.view'|'recommendations.view')` (TODO прописан в обоих виджетах).
+4. **VersionsTimeline + ChecksHistory в одной папке widgets/versions-timeline/** — deviation от one-widget-per-slice convention. Обосновано общим источником данных + DRY. Code-reviewer nit #4.
+5. **QuickStart → /contracts/new?contractId=...** параметр не читается на стороне NewCheckPage — mark as TODO для FE-TASK-046. На detail-странице ссылка ведёт на общую загрузку.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-046 (ResultPage, critical — частичная разблокировка):** ждёт ещё FE-TASK-040. Готовые `useContract`/`useVersions`/`RisksList`/`RecommendationsList`/`VersionsTimeline`/`ChecksHistory`/`VersionPicker` переиспользуются как есть. Хуки useRisks/useRecommendations + useSummary подключить с `enabled: useCan(...)`. При реализации NewCheckPage-логики — обработать `?contractId=...` (page-pre-fill для «Загрузить новую версию»).
+- **FE-TASK-048 (rich-данные для ComparisonPage через /risks):** параллельно добавить `useRisks`-хук в entities/version/api/ (по паттерну useVersions) — переиспользуется и в ResultPage, и в ComparisonPage RiskProfileDelta.
+- **pdfjs-dist интеграция:** добавить пакет, расширить `widgets/pdf-navigator/ui/pdf-navigator.tsx` под реальный viewer. `vite.config.ts` manualChunks уже ловит pdfjs-dist → `chunks/pdf-preview` — без доп. изменений. Budget ≤500 КБ gzip должен держаться.
+- **Migrate to route loaders (§6.2):** внедрить `ensureQueryData` одновременно для /contracts/:id, /contracts/:id/versions/:vid/result, /contracts/:id/compare — render-as-you-fetch. Отдельная задача, в backlog.
+- **a11y follow-ups (code-reviewer nits):** двойной `aria-label` "Превью PDF" (outer wrapper + inner section) — minor (применено частично: outer переведён на `<div>`); VersionPicker fallback-option для неизвестного `selectedVersionId` — defensive при stale URLs.
+

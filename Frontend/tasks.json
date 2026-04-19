@@ -2287,7 +2287,43 @@
         "FE-TASK-024",
         "FE-TASK-028"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "summary": "ContractDetailPage (Figma 8) — полный экран «Карточка документа»: 12 виджетов по §17.4, RBAC Pattern B (§5.6.1) для BUSINESS_USER, lazy PDFNavigator в отдельном чанке chunks/pdf-preview (§6.3).",
+        "deliverables": [
+          "entities/contract/api/use-contract.ts (+test) — useQuery на GET /contracts/{id}, retry-predicate на CONTRACT_NOT_FOUND по паттерну useDiff",
+          "entities/version/api/use-versions.ts (+test) — useQuery на GET /contracts/{id}/versions",
+          "widgets/versions-timeline — два виджета в одной slice: VersionsTimeline (вертикальный таймлайн) + ChecksHistory (табличная история проверок) — один источник данных useVersions",
+          "widgets/risks-list, widgets/recommendations-list — prop-driven v1 (без useRisks/useRecommendations; подключаются в FE-TASK-046/048). Оба со строгим TODO: enabled:useCan(...) при миграции на собственный query.",
+          "widgets/pdf-navigator — stub-виджет, default-export для React.lazy; pdfjs-dist НЕ добавлен в v1 (~500 КБ отложено до реальной интеграции)",
+          "vite.config.ts manualChunks: chunks/pdf-preview для /src/widgets/pdf-navigator/ и pdfjs-dist",
+          "pages/contract-detail/ui/*.tsx — 7 page-specific subcomponents: DocumentHeader, SummaryCard, LastCheck, QuickStart, VersionPicker, ReportsShared, DeviationsChecklist",
+          "pages/contract-detail/ContractDetailPage.tsx — state-machine Loading/NotFound/Error/Ready; 404 CONTRACT_NOT_FOUND → inline NotFoundState (без redirect на /404); PDF-тумблер с aria-expanded + aria-controls",
+          "ContractDetailPage.test.tsx — 6 unit-тестов (Ready/Loading/NotFound/Error/RBAC BUSINESS_USER/PDF-toggle); мок http.get через vi.hoisted",
+          "ContractDetailPage.stories.tsx — 9 Storybook states: Default, Loading, NotFound, ErrorState, BusinessUser, AnalyzingVersion, AwaitingUserInput, Failed, NoVersions",
+          "router.test.tsx: ослаблен тест /contracts/:id (убрана проверка getByText(/abc-123/), т.к. placeholder заменён на настоящую реализацию; page-contract-detail test-id остался)"
+        ],
+        "verification": {
+          "typecheck": "clean",
+          "lint": "clean",
+          "tests": "880/880 passed (+34 новых: 4 use-contract, 4 use-versions, 6 page, 8 versions-timeline+checks-history, 4 risks-list, 4 recommendations-list, 2 pdf-navigator, 2 retry-predicate)",
+          "coverage": "entities 80%+ пороги прошли; виджеты без порогов (§10.4) — но фактически 96-100%",
+          "build": "vite build 2.18s — chunks/pdf-preview 59 KB gzip, main contract-detail ~24-31 KB gzip (под budget ≤150 КБ granular, §6.3)",
+          "size_limit_config": "Отдельной size-limit конфигурации пока нет (FE-TASK-010 инфраструктурно); ограничения выдерживаются по факту build-output."
+        },
+        "rbac_contract": "Pattern B из §5.6.1: BUSINESS_USER остаётся на карточке, но <Can I='risks.view'> и <Can I='recommendations.view'> скрывают RisksList, RecommendationsList, DeviationsChecklist. Остальные 8 виджетов видимы. Тест it('RBAC Pattern B') покрывает.",
+        "deferred_for_followups": [
+          "React Router data-loaders (§6.2 ensureQueryData) — архитектор одобрил отложить, т.к. loader ещё ни разу не используется в проекте. TODO в page-комментарии.",
+          "QuickStart → /contracts/new?contractId=... — параметр пока не читается NewCheckPage (code-reviewer nit #2). Оставлено на FE-TASK-046 / NewCheckPage-логику.",
+          "useRisks/useRecommendations (/risks, /recommendations endpoints) — scope FE-TASK-046/048. При их подключении использовать enabled:useCan(...) — TODO прописан в widgets/risks-list и widgets/recommendations-list.",
+          "pdfjs-dist реальная интеграция — chunk и lazy-точка уже готовы; подключение содержимого — в последующей итерации."
+        ],
+        "unblocks": [
+          "FE-TASK-046 (ResultPage, critical) — частично, ждёт ещё FE-TASK-040 (features feedback/archive/delete).",
+          "FE-TASK-046: готовые useContract/useVersions хуки + widgets RisksList/RecommendationsList/VersionsTimeline можно переиспользовать как есть."
+        ],
+        "commit": "TBD — git commit после обновления tasks.json + progress.md"
+      }
     },
     {
       "id": "FE-TASK-046",

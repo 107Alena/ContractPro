@@ -197,10 +197,13 @@ describe('Маршрутизация — рендер pages', () => {
     expect(await screen.findByTestId('page-new-check')).toBeDefined();
   });
 
-  it('/contracts/:id → ContractDetailPage с params.id', async () => {
+  it('/contracts/:id → ContractDetailPage', async () => {
+    // FE-TASK-045 заменил placeholder на реальную реализацию: в состоянии
+    // загрузки параметр id больше не выводится в DOM (useContract висит на
+    // pending-запросе). Проверяем только попадание на маршрут — интеграцию
+    // данных покрывает ContractDetailPage.test.tsx.
     renderAt('/contracts/abc-123');
     expect(await screen.findByTestId('page-contract-detail')).toBeDefined();
-    expect(screen.getByText(/abc-123/)).toBeDefined();
   });
 
   it('/contracts/:id/versions/:vid/result → ResultPage с params', async () => {

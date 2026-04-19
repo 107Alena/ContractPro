@@ -1,3 +1,4 @@
+export { CONTRACT_ENDPOINT, type ContractDetails, useContract } from './api/use-contract';
 export {
   type ContractList,
   CONTRACTS_ENDPOINT,

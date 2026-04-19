@@ -2061,7 +2061,28 @@
       "dependencies": [
         "FE-TASK-013"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "scope": [
+          "features/feedback-submit: api/http.ts (DI), api/submit-feedback.ts (POST /contracts/{cid}/versions/{vid}/feedback, narrow 201 → {feedbackId, createdAt}), api/*.test.ts + *.integration.test.ts, model/types.ts, model/use-feedback-submit.ts (write-only, без инвалидации, REQUEST_ABORTED фильтр), model/*.test.tsx, index.ts barrel",
+          "features/contract-archive: api/http.ts, api/archive-contract.ts (POST /contracts/{cid}/archive без body → ContractSummary со status='ARCHIVED'), api/*.test.ts + *.integration.test.ts, model/types.ts, model/use-archive-contract.ts (optimistic: onMutate cancel/snapshot byId+list, setQueryData status='ARCHIVED'+updated_at; onError rollback; onSuccess sync server updated_at; onSettled invalidate), model/*.test.tsx, index.ts",
+          "features/contract-delete: api/http.ts, api/delete-contract.ts (DELETE /contracts/{cid} → ContractSummary со status='DELETED'), api/*.test.ts + *.integration.test.ts, model/types.ts, model/use-delete-contract.ts (optimistic: byId status='DELETED' + filter items из list + decrement total; rollback на ошибке; invalidate onSettled), model/*.test.tsx, ui/ConfirmDeleteContractModal.tsx (доменная обёртка над shared ConfirmDialog), ui/*.test.tsx + *.stories.tsx, index.ts",
+          "shared/ui/confirm-dialog: generic presentational ConfirmDialog (title/description/confirmLabel/cancelLabel/variant/isPending/onConfirm), controlled через open/onOpenChange. Переиспользуется в features/contract-delete. Добавлены confirm-dialog.test.tsx (8 кейсов) + stories"
+        ],
+        "architecture_decisions": [
+          "processing_status НЕ трогаем в оптимистик (derived из DP-пайплайна, сервер пришлёт корректный)",
+          "delete — soft: статус='DELETED', НЕ removeQueries(byId); item убирается из list (дефолтные листы фильтруют ACTIVE)",
+          "feedback без инвалидации — write-only эндпоинт; локальный UI (toast «Спасибо за отзыв») — забота page/widget",
+          "ConfirmDialog вынесен в shared/ui (generic primitive), доменная обёртка ConfirmDeleteContractModal — в features/contract-delete/ui (FSD-корректно, переиспользуемо для archive-confirm если понадобится)",
+          "Hook API: archive/archiveAsync (archive), submit/submitAsync (feedback), remove/removeAsync (delete) — mutate/mutateAsync скрыты"
+        ],
+        "tests": "31 новых теста: submit-feedback.test (13) + integration (4) + use-feedback-submit (8), archive-contract.test (8) + integration (5) + use-archive-contract (8), delete-contract.test (7) + integration (4) + use-delete-contract (8), confirm-dialog (8), ConfirmDeleteContractModal (5). Итого vitest: 955/955 passed (было 878 → +77 с учётом новых features). typecheck ✓, lint ✓ (--max-warnings=0), build 2.24s",
+        "follow_ups": [
+          "FE-TASK-046 (ResultPage, critical) — теперь полностью разблокирована (все deps 023/024/039/040/035 done); FeedbackBlock widget использует useFeedbackSubmit",
+          "FE-TASK-044 (ContractsListPage, critical) — ждёт FE-TASK-038 (filters/search/pagination); useArchiveContract/useDeleteContract готовы к интеграции в DocumentsTable toolbar",
+          "FE-TASK-045 (ContractDetailPage, done) — может быть переведена на useArchiveContract/useDeleteContract вместо заглушек (если были)"
+        ]
+      }
     },
     {
       "id": "FE-TASK-041",

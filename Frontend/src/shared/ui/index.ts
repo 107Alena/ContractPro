@@ -2,6 +2,11 @@ export { Badge, type BadgeProps, badgeVariants } from './badge';
 export { Button, type ButtonProps, buttonVariants } from './button';
 export { Chip, type ChipProps, chipVariants } from './chip';
 export {
+  ConfirmDialog,
+  type ConfirmDialogProps,
+  type ConfirmDialogVariant,
+} from './confirm-dialog';
+export {
   dropZoneVariants,
   FileDropZone,
   type FileDropZoneHandle,

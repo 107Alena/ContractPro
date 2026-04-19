@@ -3000,3 +3000,102 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **Migrate to route loaders (§6.2):** внедрить `ensureQueryData` одновременно для /contracts/:id, /contracts/:id/versions/:vid/result, /contracts/:id/compare — render-as-you-fetch. Отдельная задача, в backlog.
 - **a11y follow-ups (code-reviewer nits):** двойной `aria-label` "Превью PDF" (outer wrapper + inner section) — minor (применено частично: outer переведён на `<div>`); VersionPicker fallback-option для неизвестного `selectedVersionId` — defensive при stale URLs.
 
+---
+
+## FE-TASK-040 — feedback-submit + contract-archive + contract-delete features
+
+**Дата:** 2026-04-19 • **Статус:** done
+
+**Задача.** Три мутации: `useFeedbackSubmit` (POST /feedback), `useArchiveContract` (POST /archive + optimistic/rollback), `useDeleteContract` (DELETE + optimistic/rollback + confirmation modal). Unit-тесты. Разблокирует critical FE-TASK-046 (ResultPage).
+
+### Почему эта задача
+
+Все pending critical задачи частично заблокированы тройкой medium feature-задач. FE-TASK-040 — единственная medium-ready задача, чья единственная зависимость FE-TASK-013 done, которая разблокирует critical FE-TASK-046 (ResultPage — FeedbackBlock widget). Параллельная FE-TASK-038 (filters/search) разблокирует другую critical задачу FE-TASK-044 (ContractsListPage).
+
+### Архитектурные решения
+
+1. **Оптимистичные обновления archive/delete** обновляют *и* `qk.contracts.byId(cid)` (ContractDetails для ContractDetailPage), *и* все queries с prefix `['contracts','list']` (ContractList — items[] + total). Без list-патча ContractsListPage показала бы stale ACTIVE-статус до следующего refetch.
+2. **processing_status НЕ трогаем оптимистично** — derived state из DP-пайплайна, сервер вернёт корректное значение. Локальный патч может мигнуть progress-bar'ом.
+3. **delete — soft, НЕ `removeQueries(byId)`.** Бек возвращает `ContractSummary` со status='DELETED' → ресурс продолжает существовать. Патчим статус, но filter из items[] (дефолтные листы показывают только ACTIVE; decrement total). Восстановление через invalidate в onSettled.
+4. **feedback без инвалидации** — write-only эндпоинт, ни одна query его не читает.
+5. **ConfirmDialog → shared/ui** как generic primitive (title/description/confirmLabel/cancelLabel/variant='danger'|'primary'/isPending/controlled open). Доменная обёртка `ConfirmDeleteContractModal` — в features/contract-delete/ui с русскоязычным «Удалить договор?» + danger-variant. Позволяет переиспользовать для archive-confirm если понадобится.
+6. **Rollback использует mutation context** — snapshot `[previousById, previousLists]` передаётся из onMutate в onError. Восстанавливается только то, что было в кэше до мутации (не создаём несуществующие ключи).
+7. **REQUEST_ABORTED фильтр** в onError — user-driven отмена не должна флудить UI toast'ами.
+8. **Публичный API** единообразен с version-recheck pattern: `{archive, archiveAsync}` / `{submit, submitAsync}` / `{remove, removeAsync}`; `mutate`/`mutateAsync` скрыты из публичного API (утечка react-query подробностей).
+
+**Подтверждение.** План валидирован **code-architect** (корректен, 5 замечаний применены: list-shape, soft-delete semantics, shared/ui vs features размещение, rollback snapshot invariants, optsRef не трогаем в onMutate).
+
+### Файлы
+
+**Созданы (28):**
+
+*features/feedback-submit/* (7)
+- `api/http.ts` — DI axios, `__setHttpForTests`.
+- `api/submit-feedback.ts` — POST /contracts/{cid}/versions/{vid}/feedback с JSON-body, narrow 201.
+- `api/submit-feedback.test.ts` — 13 тестов (call shape + narrow + 4 error codes pass-through).
+- `api/submit-feedback.integration.test.ts` — 4 теста (реальный axios + MSW, 201/400/401/404).
+- `model/types.ts` — SubmitFeedbackInput/Response + raw OpenAPI smoke-test types.
+- `model/use-feedback-submit.ts` — useMutation без инвалидации, optsRef, REQUEST_ABORTED фильтр.
+- `model/use-feedback-submit.test.tsx` — 8 тестов (success/invalidation not called/error handling/aborted).
+- `index.ts` — barrel.
+
+*features/contract-archive/* (7)
+- `api/http.ts`, `api/archive-contract.ts` — POST /contracts/{cid}/archive без body → ContractSummary.
+- `api/archive-contract.test.ts` (8) + `archive-contract.integration.test.ts` (5: 200 с нулевым body, 409 DOCUMENT_ARCHIVED, 404/403/500).
+- `model/types.ts` — ArchiveContractInput/Response + ContractSummary alias.
+- `model/use-archive-contract.ts` — useMutation с onMutate (cancel/snapshot/setQueryData byId+list), onError (rollback + toUserMessage), onSuccess (server sync), onSettled (invalidate).
+- `model/use-archive-contract.test.tsx` — 8 тестов (optimistic до ответа, server updated_at overrides, invalidate в onSettled, rollback на 409/500/ABORT, async).
+- `index.ts` — barrel.
+
+*features/contract-delete/* (10)
+- `api/http.ts`, `api/delete-contract.ts` — DELETE /contracts/{cid} → ContractSummary.
+- `api/delete-contract.test.ts` (7) + `delete-contract.integration.test.ts` (4).
+- `model/types.ts`, `model/use-delete-contract.ts` — useMutation с status='DELETED' + filter items + decrement total, rollback, invalidate onSettled.
+- `model/use-delete-contract.test.tsx` — 8 тестов.
+- `ui/ConfirmDeleteContractModal.tsx` — доменная обёртка над ConfirmDialog (danger-variant, русские тексты).
+- `ui/ConfirmDeleteContractModal.test.tsx` (5) + `.stories.tsx` (3 stories: Default/WithoutTitle/Pending).
+- `index.ts` — barrel.
+
+*shared/ui/confirm-dialog/* (4)
+- `confirm-dialog.tsx` — generic ConfirmDialog (Radix Modal внутри, controlled, danger/primary variant, isPending).
+- `confirm-dialog.test.tsx` — 8 тестов (render title/description, confirm/cancel onClick, isPending блокирует, variant=danger, open=false, children в body).
+- `confirm-dialog.stories.tsx` — 3 stories.
+- `index.ts`.
+
+**Изменены (1):**
+- `shared/ui/index.ts` — добавлен export ConfirmDialog/ConfirmDialogProps/ConfirmDialogVariant.
+
+### Результаты проверок
+
+- `npm run typecheck` ✓ (исходно 1 exactOptionalPropertyTypes-ошибка в optimistic-патче list — исправлено narrowing; 1 stories variant={undefined} — conditional spread).
+- `npm run lint --max-warnings=0` ✓ 0 замечаний.
+- `npm run test:ci` ✓ **955 passed / 955 total** (было 878 → +77 тестов; new files: 31 test cases + 46 новых assertions в существующих пакетах).
+- `npm run build` ✓ 2.24s, основной bundle unchanged (features попали в index chunk), chunks/pdf-preview=59 КБ gzip.
+
+### Test breakdown (77 новых)
+
+- `feedback-submit/api/submit-feedback.test.ts` — 13
+- `feedback-submit/api/submit-feedback.integration.test.ts` — 4
+- `feedback-submit/model/use-feedback-submit.test.tsx` — 8
+- `contract-archive/api/archive-contract.test.ts` — 8
+- `contract-archive/api/archive-contract.integration.test.ts` — 5
+- `contract-archive/model/use-archive-contract.test.tsx` — 8
+- `contract-delete/api/delete-contract.test.ts` — 7
+- `contract-delete/api/delete-contract.integration.test.ts` — 4
+- `contract-delete/model/use-delete-contract.test.tsx` — 8
+- `shared/ui/confirm-dialog/confirm-dialog.test.tsx` — 8
+- `features/contract-delete/ui/ConfirmDeleteContractModal.test.tsx` — 5
+
+### Известные ограничения / TODO
+
+1. **E2E feedback/archive flow** (из test_steps §2) — в scope FE-TASK-055 (Playwright), не в scope этой задачи.
+2. **Concurrent mutations** — если пользователь дважды жмёт archive на один договор, cancelQueries в onMutate предотвращает race с refetch'ем, но саму двойную мутацию react-query serializes by default (ок). Scope-based mutation isolation рассматривался code-architect'ом — не требуется.
+3. **VALIDATION_ERROR с details.fields** для feedback-формы — не пробрасывается через applyValidationErrors (как в upload-version), т.к. feedback-форма минимальна (два поля). При расширении комментария до multiline с server-side регулярками — добавить.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-046 (ResultPage, critical — полностью разблокирована):** все deps готовы. FeedbackBlock widget использует `useFeedbackSubmit` с toast на onSuccess («Спасибо за отзыв») и toast на onError (title=userMessage.title + hint). Action-кнопки в DocumentHeader — `useArchiveContract`/`useDeleteContract` с ConfirmDeleteContractModal.
+- **FE-TASK-044 (ContractsListPage, critical — ждёт FE-TASK-038):** DocumentsTable toolbar получит Archive/Delete кнопки, обёрнутые в `<Can I="contract.archive">`. Deps: 021 (DataTable), 038 (filters) и 032 (Sidebar) готовы, остаётся 038.
+- **FE-TASK-045 (ContractDetailPage, done):** если были заглушки для archive/delete — теперь можно заменить на реальные хуки.
+- **ConfirmDialog переиспользование:** для archive-confirm (если понадобится), revert-confirm, destructive admin-actions. API stable.
+

@@ -4,5 +4,4 @@ export {
   type RiskLevel,
   type RiskLevelMeta,
   riskLevelMeta,
-} from './model';
-export { RiskBadge, type RiskBadgeProps } from './ui';
+} from './risk-level';

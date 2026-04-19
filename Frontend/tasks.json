@@ -1231,7 +1231,66 @@
       "dependencies": [
         "FE-TASK-019"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-19",
+        "summary": "Entity UI RiskBadge (3 уровня) + StatusBadge (10 статусов UserProcessingStatus + fallback Unknown). Единый источник истины для label+tone вынесен в shared/lib/status-view/status-meta.ts, чтобы устранить запрещённый FSD-перекрёстный импорт entities/contract ↔ entities/version. entities/contract/model/status-view.ts отрефакторен: derives {label,tone} из shared, добавляет только bucket для dashboard-группировки — все 12 существующих потребителей (dashboard widgets + pages) не тронуты.",
+        "files_created": [
+          "Frontend/src/shared/lib/status-view/status-meta.ts — STATUS_META: Record<UserProcessingStatus,{label,tone}>; statusMeta() с UNKNOWN fallback",
+          "Frontend/src/shared/lib/status-view/status-meta.test.ts — 10 тестов (все 10 статусов + fallback + invariants)",
+          "Frontend/src/shared/lib/status-view/index.ts",
+          "Frontend/src/entities/version/model/version-status.ts — type VersionStatus = UserProcessingStatus (§143 alias)",
+          "Frontend/src/entities/version/model/index.ts",
+          "Frontend/src/entities/version/ui/status-badge.tsx — <Badge/> wrapper; data-status sentinel для селекторов; children override; null/undefined → 'Неизвестно' neutral",
+          "Frontend/src/entities/version/ui/status-badge.test.tsx — 17 тестов (10 статусов + tones + null/undefined/override/aria)",
+          "Frontend/src/entities/version/ui/status-badge.stories.tsx — 12 stories (10 статусов + Unknown + AllStatuses grid)",
+          "Frontend/src/entities/version/ui/index.ts",
+          "Frontend/src/entities/risk/model/risk-level.ts — RiskLevel type; RISK_LEVEL_META {label,tone,legend} keyed high/medium/low; RISK_LEVELS const; riskLevelMeta()",
+          "Frontend/src/entities/risk/model/risk-level.test.ts — 8 тестов (mapping + legend length + severity-descending order)",
+          "Frontend/src/entities/risk/model/index.ts",
+          "Frontend/src/entities/risk/ui/risk-badge.tsx — Badge + optional SimpleTooltip wrapper; showTooltip default=false (по решению code-architect — избегаем hover-noise в таблицах)",
+          "Frontend/src/entities/risk/ui/risk-badge.test.tsx — 10 тестов (3 levels + tones + tooltip on/off + children override + aria passthrough)",
+          "Frontend/src/entities/risk/ui/risk-badge.stories.tsx — 5 stories (High/Medium/Low/WithTooltip/AllLevels/AllLevelsWithTooltip)",
+          "Frontend/src/entities/risk/ui/index.ts"
+        ],
+        "files_modified": [
+          "Frontend/src/entities/contract/model/status-view.ts — derives {label,tone} из shared STATUS_META; оставлен только bucket; viewStatus() public signature unchanged",
+          "Frontend/src/entities/risk/index.ts — раскрыт public API RiskLevel/RISK_LEVEL_META/RiskBadge",
+          "Frontend/src/entities/version/index.ts — раскрыт public API VersionStatus/StatusBadge"
+        ],
+        "architecture_alignment": [
+          "§8.3 (дизайн-система): RiskBadge + StatusBadge реализованы с цветами из токенов (var(--color-risk-*) / var(--color-success|warning|danger|brand)) через shared/ui/badge variants",
+          "§143 (entities/version): VersionStatus алиас UserProcessingStatus — семантика доменной сущности",
+          "§145 (entities/risk): RiskBadge в entities/risk/ui с уровнями high/medium/low",
+          "§8.4 (headless hooks + compound): RiskBadge + StatusBadge — presentational primitives, без хуков/состояния",
+          "§8.5 (состояния): Storybook покрывает Default для всех вариантов; RiskBadge WithTooltip — hover-state через Radix; фокус/disabled наследуются от Badge",
+          "§9.3 (error-UI): StatusBadge для FAILED/REJECTED → danger tone с ARIA-совместимым текстом",
+          "FR-3.3.1 / ТЗ-1 §4.3: RiskBadge labels 'Высокий/Средний/Низкий риск' + legend-тексты для высокого (блокирующие), среднего (под вопросом), низкого (редакционные)",
+          "NFR-5.2 (ru-локализация): все лейблы на русском",
+          "FSD eslint-plugin-boundaries: STATUS_META вынесен в shared/lib чтобы избежать entity→entity импорта (запрещено lines 136-137)"
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors",
+          "npm run lint --max-warnings=0 — 0 errors / 0 warnings",
+          "CI=1 npx vitest run — 846/846 tests (было 801, +45 новых: 10 status-meta + 17 status-badge + 10 risk-badge + 8 risk-level; старые 11 status-view продолжают проходить после рефакторинга)",
+          "npm run build — main 78.24 KB gzip (§11.2 budget ≤ 200 KB), 701 modules transformed, 0 errors",
+          "npm run build-storybook — ok (1.13 min), 16 новых stories собрались без ошибок",
+          "Makefile N/A для Frontend (pattern как в FE-TASK-042/043/047)",
+          "subagents: code-architect (план-валидация APPROVE с деltas: status-meta naming, showTooltip default=false, ui+model barrels), code-reviewer (SHIP, 0 blockers, 6 P3 nits; применены 3 trivial: spread order с data-* атрибутами после ...rest для сохранения инвариантов test'ов, удалён no-op cn(className), RISK_LEVELS as const satisfies)"
+        ],
+        "deviations": [
+          "Acceptance criterion 'маппит 10 статусов в user-строку + цвет + ИКОНКУ' — StatusBadge не содержит per-status иконки. shared/ui/Badge не имеет icon-slot'а на сегодня; добавление leadingIcon в Badge — изменение публичного контракта shared-примитива, что выходит за scope FE-TASK-024 (требует отдельного пересмотра Figma-токенов, a11y-ревью, update всех текущих Badge-потребителей). Deviation одобрен code-reviewer'ом. Follow-up ticket: 'shared/ui Badge leadingIcon slot + per-status iconography'.",
+          "showTooltip default=false для RiskBadge — отклонение от буквального чтения 'tooltip с legend' (могло бы значить 'всегда'). Решение code-architect: в табличных контекстах (RisksList, DocumentsTable, Reports) hover-per-row создаёт шум и нагружает a11y focus-trap. Потребители в легендах/заголовках (RiskProfileCard, LegalDisclaimer) opt-in'ят tooltip через showTooltip prop. Документировано в header risk-badge.tsx."
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-045 (ContractDetailPage, critical — РАЗБЛОКИРОВАНА): RiskBadge уже готов для KeyRisks/Recommendations виджетов (rendered через <Can I='risks.view'> Pattern B); StatusBadge — для VersionsTimeline/ChecksHistory",
+          "FE-TASK-046 (ResultPage, critical): частичная разблокировка (deps FE-TASK-024 done, FE-TASK-040 pending — feedback-submit/contract-archive). RisksList виджет получит <RiskBadge level={risk.level}/> из entities/risk; RiskProfileCard — с showTooltip=true в заголовке",
+          "FE-TASK-044 (ContractsListPage, critical): блокировка только по FE-TASK-038 (filters/search). StatusBadge готов для DocumentsTable column 'Статус'",
+          "Follow-up FE-TASK-024F (shared/ui/Badge leadingIcon slot) — добавить в backlog; согласовать иконки с Figma; перевести StatusBadge на явные icon-per-status после",
+          "Миграция существующих dashboard-виджетов на <StatusBadge/> вместо локального <Badge variant={viewStatus().tone}/> — можно сделать вместе с FE-TASK-044 для согласованности (сейчас RecentChecksTable/KeyRisksCards/и др. сохраняют старый patern — работает корректно, но новый код должен предпочитать StatusBadge)",
+          "Будущий RiskProfileDelta (widgets/version-compare) сейчас использует text-risk-high/medium/low CSS-классы напрямую — может быть перенесён на RISK_LEVEL_META.tone (через BadgeVariant) для единого источника истины цветов"
+        ]
+      }
     },
     {
       "id": "FE-TASK-025",

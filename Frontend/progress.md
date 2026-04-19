@@ -1,5 +1,76 @@
 # Frontend Implementation Progress
 
+## FE-TASK-041 — LandingPage (Hero/Features/Pricing/FAQ) (2026-04-19)
+
+**Статус:** done
+**Категория:** page
+**Приоритет:** high
+**Зависимости:** FE-TASK-031 (router), FE-TASK-025 (design-system — Accordion/Button/Badge) — все done.
+**Разблокирует:** —
+
+**План реализации (в порядке работы):**
+1. Анализ tasks.json + зависимостей — единственный high-priority READY оказался FE-TASK-041.
+2. Изучение §6.1 (route `/` public), §17.4 (4 секции: Hero/Features/Pricing/FAQ), §8.6 (desktop 1440 primary, есть отдельный mobile-макет для `/` и `/login`), §11.2 (bundle budget).
+3. code-architect план (Q1–Q5): секции inline в pages/landing/sections/ (не widgets/landing-* — нет reuse за пределами /), контент в content.ts как типизированные TS-константы (не i18n JSON, RU-only), 4 section + 1 page story, responsive mobile-first Tailwind, CTA через <Link className={buttonVariants(...)}> (FE-TASK-042 deviation).
+4. Создан content.ts с HERO_CONTENT, FEATURES(6), PRICING_PLANS(3 — free/pro/team) и FAQ_ITEMS(6).
+5. icons.tsx — 6 inline SVG (scan/risk/recommend/summary/history/shield) + диспатчер FeatureIcon — не тянем lucide/heroicons ради 6 иконок.
+6. HeroSection — `<section id="hero" aria-labelledby="hero-title">` с eyebrow → h1 → подзаголовок → 2 CTA (primary→/login, secondary→/login) → trust-бейджи. 2 stories (Default, ShortCopy).
+7. FeaturesSection — grid-cols-1 md:grid-cols-2 lg:grid-cols-3 с hover:border-brand-500, карточки с FeatureIcon. 2 stories.
+8. PricingSection — 3 карточки items-stretch, featured-план (pro) с ring-brand-500 + Badge brand. CheckIcon inline. 2 stories.
+9. FAQAccordion — Radix Accordion type="single" collapsible, max-w-3xl. 2 stories.
+10. LandingPage.tsx переписан: <main data-testid="page-landing"> с последовательной композицией 4 секций.
+11. LandingPage.stories.tsx — 1 Default full-page story.
+12. LandingPage.test.tsx — 6 smoke-тестов (4 heading-a по ariaLabelledBy / hero CTA скоупом по #hero / все features / все plans скоупом по #pricing / все FAQ триггеры / стабильные id-якоря).
+13. Обновлены 2 существующих теста (app/App.test.tsx и app/router/router.test.tsx) — findByTestId('page-landing') вместо завязки на heading "ContractPro" (раньше так ловили placeholder).
+14. Проверки + code-reviewer (SHIP+NITS, 0 P0; применён P1 composite-key `${plan.id}-${index}` для bullets в PricingSection).
+
+**Что сделано:**
+- `src/pages/landing/content.ts` — типизированные RU-константы: `HERO_CONTENT`, `FEATURES`, `PRICING_PLANS`, `FAQ_ITEMS`. Каждый тип экспортируется для переопределения в stories и A/B-тестов.
+- `src/pages/landing/sections/HeroSection.tsx` + `.stories.tsx` — героевая секция с eyebrow/h1/подзаголовок/2 CTA/trust-бейджами. CTA — `<Link className={buttonVariants(...)}>` (primary lg + secondary lg).
+- `src/pages/landing/sections/FeaturesSection.tsx` + `.stories.tsx` — responsive сетка карточек features с inline SVG-иконками.
+- `src/pages/landing/sections/PricingSection.tsx` + `.stories.tsx` — сетка тарифов с featured-вариацией (ring-brand-500 + Badge "Популярный"), внутренний PlanCard + CheckIcon.
+- `src/pages/landing/sections/FAQAccordion.tsx` + `.stories.tsx` — Radix Accordion по FAQ-вопросам.
+- `src/pages/landing/sections/icons.tsx` — 6 inline SVG + FeatureIcon диспатчер.
+- `src/pages/landing/LandingPage.tsx` — переписан с placeholder на реальную композицию 4 секций.
+- `src/pages/landing/LandingPage.stories.tsx` — 1 full-page story.
+- `src/pages/landing/LandingPage.test.tsx` — 6 smoke-тестов.
+- `src/app/App.test.tsx` + `src/app/router/router.test.tsx` — обновлены с heading-match на testid-match.
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **Inline sections вместо widgets/landing-*.** FSD-правило: widgets = reusable composable sections. 4 секции используются только на /, создание 4 widget-слайсов добавило бы ceremony без reuse. Если секция потребуется на другой странице — promote в widgets отдельным таском.
+- **TS-константы вместо i18n JSON.** App RU-only v1, i18next добавил бы indirection без выигрыша. Pricing/features — structured data (icon + bullets + CTA), для JSON-i18n неудобно.
+- **CTA через Link + buttonVariants (не Button asChild).** Известный issue из FE-TASK-042: Button.tsx оборачивает children в iconLeft/children/iconRight, что ломает Radix Slot React.Children.only в jsdom.
+- **Layout не pixel-perfect с Figma 1440x7410.** Нет доступа к Figma в локальной среде; реализовано по AC по структуре (Hero/Features/Pricing/FAQ) + responsive. Chromatic visual regression (AC test_step #2) — отдельная зона (CHROMATIC_PROJECT_TOKEN не настроен локально).
+- **LandingPage оставлен eager-import** в router.tsx (единственная не-lazy page). Обоснование: это entry-point для анонимного посетителя, lazy дал бы лишний round-trip. В FE-TASK-031 было принято аналогичное решение.
+- **2 существующих теста обновлены на testid-match.** Раньше `getByRole('heading', { name: 'ContractPro' })` ловил placeholder h1. Новый h1 несёт маркетинговый заголовок; стабильный testid — устойчивее к копирайту.
+
+**Подключённые subagents:**
+- `Explore` (thorough) — поиск высокоприоритетных READY-тасок в tasks.json с проверкой deps.
+- `code-architect` — план Q1–Q5: inline sections vs widgets/landing-*, content.ts vs i18n, stories-манифест, responsive strategy, CTA pattern.
+- `code-reviewer` — финальный review: SHIP+NITS, 0 P0; применён P1 composite-key для bullets.
+
+**Затронутые файлы:**
+- Новые: `src/pages/landing/content.ts`, `src/pages/landing/sections/{HeroSection,FeaturesSection,PricingSection,FAQAccordion,icons}.tsx`, `src/pages/landing/sections/{HeroSection,FeaturesSection,PricingSection,FAQAccordion}.stories.tsx`, `src/pages/landing/LandingPage.stories.tsx`, `src/pages/landing/LandingPage.test.tsx`.
+- Изменены: `src/pages/landing/LandingPage.tsx` (placeholder → реальная композиция), `src/app/App.test.tsx`, `src/app/router/router.test.tsx`, `Frontend/tasks.json`, `Frontend/progress.md`, `session.log`.
+
+**Проверки:**
+- `npm run typecheck` — 0 ошибок.
+- `npm run lint --max-warnings=0` — 0 / 0 (после автофикса simple-import-sort в 5 файлах).
+- `npm run test` — 1177/1177 passed (+6 новых тестов LandingPage; 2 существующих теста обновлены).
+- `npm run build` — 2.47s. Main-chunk 34.5 kB gzip (с включённым Landing). Под budget §11.2 ≤ 200 KB.
+- Makefile в Frontend/ отсутствует — N/A (как в FE-TASK-042/046).
+
+**Заметки для следующих итераций:**
+- FE-TASK-029 (LoginPage) — обе CTA Landing ведут на `/login`, e2e можно проверить cross-page navigation.
+- FE-TASK-033 (Topbar/Breadcrumbs) — Landing public, не под AppLayout → Topbar не должен рендериться; router корректно держит Landing вне AppLayout.
+- FE-TASK-054 (MSW) — Landing не делает запросов, MSW не нужен.
+- Chromatic visual regression — 9 новых stories в CI-snapshots при настройке CHROMATIC_PROJECT_TOKEN.
+- Pricing-тарифы сейчас заглушки (0₽/4900₽/по запросу). При появлении backend endpoint `/billing/plans` заменить PRICING_PLANS константу на хук.
+- Landing SEO (title/meta/og:image) — out-of-scope FE-TASK-041; отдельный SEO-task через react-helmet-async.
+- Dark-mode на `/`: tailwind.config.ts darkMode:'class', но Hero gradient `from-brand-50 to-bg` может инвертироваться. Либо зафиксировать `data-theme="light"` на `<html>` для /, либо добавить `dark:from-...` override — non-blocker, решение по UX.
+
+---
+
 ## FE-TASK-046 — ResultPage (8 состояний + state-machine) (2026-04-19)
 
 **Статус:** done

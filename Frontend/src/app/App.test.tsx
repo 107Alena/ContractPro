@@ -19,7 +19,10 @@ afterEach(() => {
 describe('App composition root', () => {
   it('рендерит LandingPage для "/" (providers собраны без ошибок)', async () => {
     render(<App />);
-    expect(await screen.findByRole('heading', { name: 'ContractPro' })).toBeDefined();
+    // LandingPage (FE-TASK-041) — использует data-testid="page-landing" вместо
+    // зависимости от конкретного heading-текста, чтобы тест не ломался при
+    // ребрендинге копий.
+    expect(await screen.findByTestId('page-landing')).toBeDefined();
   });
 
   it('/403 рендерит Forbidden page', async () => {

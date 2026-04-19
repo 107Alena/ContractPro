@@ -172,8 +172,10 @@ describe('buildRoutes — структура', () => {
 describe('Маршрутизация — рендер pages', () => {
   it('/ → LandingPage (eager, не lazy)', async () => {
     renderAt('/');
+    // LandingPage (FE-TASK-041) — стабильный testid вместо конкретного heading,
+    // копия на странице меняется чаще, чем роут.
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'ContractPro' })).toBeDefined();
+      expect(screen.getByTestId('page-landing')).toBeDefined();
     });
   });
 

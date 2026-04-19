@@ -1,4 +1,33 @@
+export {
+  Accordion,
+  AccordionContent,
+  type AccordionContentProps,
+  accordionContentVariants,
+  AccordionItem,
+  type AccordionItemProps,
+  accordionItemVariants,
+  AccordionTrigger,
+  type AccordionTriggerProps,
+  accordionTriggerVariants,
+} from './accordion';
 export { Badge, type BadgeProps, badgeVariants } from './badge';
+export {
+  type BreadcrumbItem,
+  Breadcrumbs,
+  BreadcrumbsEllipsis,
+  BreadcrumbsItem,
+  BreadcrumbsLink,
+  type BreadcrumbsLinkProps,
+  breadcrumbsLinkVariants,
+  BreadcrumbsList,
+  BreadcrumbsPage,
+  breadcrumbsPageVariants,
+  type BreadcrumbsProps,
+  BreadcrumbsRoot,
+  type BreadcrumbsRootProps,
+  BreadcrumbsSeparator,
+  breadcrumbsVariants,
+} from './breadcrumbs';
 export { Button, type ButtonProps, buttonVariants } from './button';
 export { Chip, type ChipProps, chipVariants } from './chip';
 export {
@@ -6,6 +35,7 @@ export {
   type ConfirmDialogProps,
   type ConfirmDialogVariant,
 } from './confirm-dialog';
+export { EmptyState, type EmptyStateProps, emptyStateVariants } from './empty-state';
 export {
   dropZoneVariants,
   FileDropZone,
@@ -49,6 +79,14 @@ export {
   PopoverPortal,
   PopoverTrigger,
 } from './popover';
+export { SearchInput, type SearchInputProps } from './search-input';
+export {
+  SegmentedControl,
+  type SegmentedControlOption,
+  type SegmentedControlProps,
+  segmentedControlVariants,
+  segmentedItemVariants,
+} from './segmented-control';
 export { Spinner, type SpinnerProps, spinnerVariants } from './spinner';
 export {
   DataTable,
@@ -65,6 +103,18 @@ export {
   type DataTableViewOptionsProps,
   useDataTable,
 } from './table';
+export {
+  Tabs,
+  TabsContent,
+  type TabsContentProps,
+  tabsContentVariants,
+  TabsList,
+  type TabsListProps,
+  tabsListVariants,
+  TabsTrigger,
+  type TabsTriggerProps,
+  tabsTriggerVariants,
+} from './tabs';
 export {
   DEFAULT_TOAST_DURATION,
   toast,

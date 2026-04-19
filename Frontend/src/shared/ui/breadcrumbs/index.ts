@@ -1,0 +1,17 @@
+export {
+  type BreadcrumbItem,
+  Breadcrumbs,
+  BreadcrumbsEllipsis,
+  BreadcrumbsItem,
+  BreadcrumbsLink,
+  type BreadcrumbsLinkProps,
+  breadcrumbsLinkVariants,
+  BreadcrumbsList,
+  BreadcrumbsPage,
+  breadcrumbsPageVariants,
+  type BreadcrumbsProps,
+  BreadcrumbsRoot,
+  type BreadcrumbsRootProps,
+  BreadcrumbsSeparator,
+  breadcrumbsVariants,
+} from './breadcrumbs';

@@ -3290,3 +3290,99 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **Backend ORCH extension:** дополнить `/contracts` поддержкой `type` (string) + `date_from`/`date_to` (ISO) — чтобы фильтры работали end-to-end.
 - **ServerAggregates:** добавить `GET /contracts/aggregates?by=status` для точных глобальных KPI в MetricsStrip (убрать «на странице»).
 
+
+---
+
+## FE-TASK-025 — прочие shared/ui компоненты (2026-04-19)
+
+**Статус:** done. Design-system foundational блок разблокирован — доступны **все 8** компонентов, упомянутых в архитектуре §17.1.
+
+### Выбор задачи
+
+12 pending → 7 READY. Высший приоритет READY: medium. Но FE-TASK-041 (LandingPage, **high**) и FE-TASK-001 → FE-TASK-002 (**high**) блокировались пендингом FE-TASK-025. Стратегически: делать FE-TASK-025 первой → разблокирует две high-priority задачи.
+
+### План реализации
+
+code-architect спроектировал 6 новых компонентов (2 из 8 уже существовали):
+- **Pagination** — уже в `shared/ui/pagination/` (реализовано в FE-TASK-038). Не трогаем.
+- **LegalDisclaimer** — архитектура §117 помещает его в `widgets/legal-disclaimer/`, уже там. Не трогаем.
+- **EmptyState, Breadcrumbs, Tabs, Accordion, SegmentedControl** — создаём в `shared/ui/`.
+- **SearchInput** — архитектура §175 требует `shared/ui/search-input/`, сейчас в `features/search/ui/`. Переезд + расширение (debounceMs).
+
+### Реализация
+
+#### 1. `shared/ui/empty-state/` (новый)
+Flat компонент. API: `title, description?, icon?, action?, secondaryAction?, role, headingLevel, size, tone`. `role="status"` по умолчанию → `aria-live="polite"` (автоанонс при появлении). `aria-labelledby/aria-describedby` связывают заголовок/описание с корнем. `headingLevel` prop (h2-h6) — для корректной иерархии страницы (P1 от code-reviewer).
+
+CVA variants: `size: sm/md/lg`, `tone: neutral/subtle`.
+
+#### 2. `shared/ui/tabs/` (новый, Radix)
+Обёртка над `@radix-ui/react-tabs@^1.1.3`. Compound: `Tabs` (Root), `TabsList`, `TabsTrigger`, `TabsContent`. CVA variants: `variant: underline/pills`, `size: sm/md`, `fullWidth`. Accessibility — всё от Radix (role=tablist/tab/tabpanel, aria-selected, keyboard ArrowLeft/Right/Home/End). Анимация — `data-[state=inactive]:opacity-0` через `motion-safe:transition-opacity`.
+
+#### 3. `shared/ui/accordion/` (новый, Radix)
+Обёртка над `@radix-ui/react-accordion@^1.2.3`. Compound: `Accordion` (Root с type=single|multiple), `AccordionItem`, `AccordionTrigger` (обёрнут в `AccordionPrimitive.Header` как требует Radix), `AccordionContent`. Chevron с rotation `[&[data-state=open]>svg]:rotate-180`. Hide chevron — `hideChevron` prop.
+
+**Анимация:** добавлены keyframes `accordion-down/accordion-up` в `tailwind.config.ts`, использующие CSS-vars `--radix-accordion-content-height` (стандартный Radix контракт). 200ms ease-out.
+
+#### 4. `shared/ui/segmented-control/` (новый, нативно)
+**Решение не использовать Radix RadioGroup** — чтобы не добавлять зависимость ради одного компонента; реализация 200 строк. `role="radiogroup"` + `role="radio"` на `<button>`, roving tabindex, keyboard ArrowLeft/Right/Up/Down + Home/End + Space/Enter (no-op на уже выбранном, по ARIA APG). Skip disabled в стрелочной навигации. Generic по `TValue extends string`. CVA variants: `size: sm/md`, `fullWidth`.
+
+`findEnabledIndex(options, start, step)` — wrap-around поиск следующей enabled опции; math `((start + step*i) % len + len) % len` для корректной работы с отрицательным step.
+
+#### 5. `shared/ui/search-input/` (переезд + расширение)
+Файлы перенесены из `features/search/ui/SearchInput.*` в `shared/ui/search-input/search-input.*`. Имя файла kebab-case по конвенции. API расширен **backwards-compatible**:
+- `debounceMs?: number` (default 0) — задержка до `onValueChange`.
+- `onInputChange?: (next: string) => void` — синхронный колбэк на каждый ввод (для внешнего is-pending).
+
+Внутренний `draft` state + `emittedRef` (источник истины: что последнее ушло в onValueChange). `useEffect` синхронизирует draft при внешнем изменении value (отличимо от эха debounce через ref). Escape / clear — всегда synchronous через `debouncedEmit.cancel()` + immediate `onValueChange('')`.
+
+`features/search/index.ts` реэкспортирует `SearchInput, SearchInputProps` из `@/shared/ui/search-input` — существующие импорты `@/features/search` (ContractsListPage и тесты) работают без изменений.
+
+#### 6. `shared/ui/breadcrumbs/` (новый)
+**Flat API + compound API в одном файле** (паттерн shadcn/ui):
+- Flat: `<Breadcrumbs items={[{label, href, icon?, current?}]} separator? label? maxItems? />` — для 95% use-cases.
+- Compound: `BreadcrumbsRoot/List/Item/Link/Page/Separator/Ellipsis` — для кастомных ссылок.
+
+**`BreadcrumbsLink asChild`** через `@radix-ui/react-slot` — точка интеграции с React Router Link без зависимости от `react-router-dom` в shared/ui: `<BreadcrumbsLink asChild><Link to="...">{label}</Link></BreadcrumbsLink>`.
+
+**Коллапс** через `maxItems / itemsBeforeCollapse / itemsAfterCollapse`. Ellipsis-item семантически маркируется `id="__ellipsis__"`.
+
+**`useMatches()` integration** — НЕ в shared/ui (чтобы сохранить переносимость). Будет в `widgets/breadcrumbs/` (FE-TASK-033).
+
+### Исправления после code-reviewer (FIX→SHIP)
+
+code-reviewer нашёл 5 P1 + 7 P2. Применены 4 P1 + 1 P2:
+- **P1 #1**: `SearchInput` — рассинк draft при pending debounce. Переименовал `lastEmittedRef → emittedRef`, обновляю **сразу** при `emitChange`, а не в callback-е; useEffect сравнивает `value` с emittedRef чтобы отличать внешние обновления от эха.
+- **P1 #2**: `SegmentedControl` — добавил Space/Enter case (no-op с preventDefault по ARIA APG).
+- **P1 #4**: `EmptyState` — хардкод `<h2>` заменён на `headingLevel: 'h2' | 'h3' | 'h4' | 'h5' | 'h6'` (default 'h2'). Теперь страница с `<h1>` может вложить EmptyState с headingLevel="h2" или "h3" без нарушения иерархии.
+- **P2 #5**: `Breadcrumbs` — `BreadcrumbsPage` конфликтовал с `aria-current={undefined}` из flat path. Решение: default 'page' применяется только когда aria-current **не передан**, если передан `undefined` — не выставлять атрибут (через `'aria-current' in rest ? rest['aria-current'] : 'page'`).
+- **P2 #10**: `findEnabledIndex` упрощён — math `((start + step*i) % len + len) % len` вместо `(... + len*len) % len`.
+- **P2 #11**: SegmentedControl displayName добавлен.
+
+Пропущены P3 nitpicks (пустые `variants: {}` в cva) — приемлемы.
+
+### Проверки
+
+- typecheck ✓ (строгий mode + exactOptionalPropertyTypes)
+- lint 0/0 ✓ (ESLint + simple-import-sort + jsx-a11y)
+- test 1171/1171 ✓ (+73 новых: EmptyState 15, Tabs 12, Accordion 11, SegmentedControl 17, SearchInput 11, Breadcrumbs 15)
+- build 2.45s ✓ (Vite)
+- 44 Storybook stories (EmptyState 9, Tabs 5, Accordion 6, SegmentedControl 6, SearchInput 6, Breadcrumbs 7)
+
+### Ключевые архитектурные решения
+
+1. **shared/ui = переносимые примитивы.** `shared/ui/breadcrumbs` не зависит от `react-router-dom`; `useMatches()` integration делегирован в `widgets/breadcrumbs/` (FE-TASK-033). Точка расширения — `asChild` на BreadcrumbsLink.
+2. **SearchInput миграция с backwards-compatible реэкспортом.** Ни один импорт `@/features/search` не поломан; debounceMs и onInputChange — опциональные расширения.
+3. **SegmentedControl нативно, без Radix.** Экономия bundle + паттерн доказан (Pagination делает keyboard руками).
+4. **Accordion keyframes в tailwind.config.ts.** Стандартный Radix контракт — `--radix-accordion-content-height` CSS var, читается Radix'ом из `scrollHeight` контента. Плавная height-анимация, 200ms.
+5. **SegmentedControl generic по TValue.** Сохраняет литеральные типы на стороне вызывающего (`type Status = 'all' | 'active' | 'archived'`), вместо расширения до `string`.
+6. **EmptyState headingLevel.** Заголовок можно опустить до h3/h4 — не ломает иерархию страницы и axe-checks.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-041 (LandingPage, high)** — разблокирован. Использует Accordion (FAQ-секция), SegmentedControl опционально (Pricing tab), EmptyState для edge-случаев.
+- **FE-TASK-001 (admin shell)** — разблокирован. EmptyState для пустых placeholders.
+- **FE-TASK-033 (widgets/breadcrumbs + Topbar + Error pages)** — разблокирован. Реализовать `useBreadcrumbsFromMatches()` → `BreadcrumbItem[]`, подать в `<Breadcrumbs items={...} />`.
+- **FE-TASK-002 (admin OPM editor)** — частично разблокирован (ждёт FE-TASK-001 + DESIGN-TASK-002).
+- **LegalDisclaimer refactor (optional):** текст дублирован в widgets/legal-disclaimer. Если появится 2-я локация — вынести в shared/ui или в entities/contract/constants.
+- **Accordion fallback для `prefers-reduced-motion`** — уже есть через `motion-safe:` классы; прикруиваются только при отсутствии reduced-motion.

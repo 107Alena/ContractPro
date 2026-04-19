@@ -1,10 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
-import { SearchInput } from './SearchInput';
+import { SearchInput } from './search-input';
 
 const meta = {
-  title: 'Features/Search/SearchInput',
+  title: 'Shared/SearchInput',
   component: SearchInput,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],
@@ -22,11 +22,13 @@ function Harness({
   isPending = false,
   disabled = false,
   clearable = true,
+  debounceMs = 0,
 }: {
   initialValue?: string;
   isPending?: boolean;
   disabled?: boolean;
   clearable?: boolean;
+  debounceMs?: number;
 }) {
   const [value, setValue] = useState(initialValue);
   return (
@@ -38,6 +40,7 @@ function Harness({
         isPending={isPending}
         disabled={disabled}
         clearable={clearable}
+        debounceMs={debounceMs}
       />
     </div>
   );
@@ -61,4 +64,38 @@ export const NotClearable: Story = {
 
 export const Disabled: Story = {
   render: () => <Harness initialValue="readonly" disabled />,
+};
+
+function DebouncedHarness() {
+  const [inputValue, setInputValue] = useState('');
+  const [debouncedValue, setDebouncedValue] = useState('');
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    setPending(inputValue !== debouncedValue);
+  }, [inputValue, debouncedValue]);
+
+  return (
+    <div className="flex w-[360px] flex-col gap-2">
+      <SearchInput
+        value={debouncedValue}
+        onValueChange={(v) => {
+          setDebouncedValue(v);
+        }}
+        onInputChange={(v) => setInputValue(v)}
+        debounceMs={300}
+        isPending={pending}
+        placeholder="Поиск с debounce 300мс"
+      />
+      <div className="text-xs text-fg-muted">
+        input: <code>{JSON.stringify(inputValue)}</code> · debounced:{' '}
+        <code>{JSON.stringify(debouncedValue)}</code>
+      </div>
+    </div>
+  );
+}
+
+export const Debounced: Story = {
+  name: 'Debounced (300ms)',
+  render: () => <DebouncedHarness />,
 };

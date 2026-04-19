@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { SearchInput } from './SearchInput';
+import { SearchInput } from './search-input';
 
 afterEach(() => cleanup());
 
@@ -13,7 +14,7 @@ describe('SearchInput', () => {
     expect(input.placeholder).toBe('Поиск документов');
   });
 
-  it('onValueChange вызывается при вводе', () => {
+  it('onValueChange синхронно вызывается при вводе (debounceMs=0)', () => {
     const onChange = vi.fn();
     render(<SearchInput value="" onValueChange={onChange} />);
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'abc' } });
@@ -37,14 +38,14 @@ describe('SearchInput', () => {
     expect(screen.queryByRole('button', { name: 'Очистить' })).toBeNull();
   });
 
-  it('Escape очищает поле если есть значение', () => {
+  it('Escape очищает поле', () => {
     const onChange = vi.fn();
     render(<SearchInput value="foo" onValueChange={onChange} />);
     fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Escape' });
     expect(onChange).toHaveBeenCalledWith('');
   });
 
-  it('isPending показывает спиннер и скрывает иконку поиска', () => {
+  it('isPending показывает спиннер вместо иконки поиска', () => {
     const { container } = render(<SearchInput value="" onValueChange={vi.fn()} isPending />);
     expect(
       container.querySelector('[role="status"], [aria-hidden="true"].animate-spin'),
@@ -55,5 +56,58 @@ describe('SearchInput', () => {
     render(<SearchInput value="hello" onValueChange={vi.fn()} disabled />);
     expect((screen.getByRole('searchbox') as HTMLInputElement).disabled).toBe(true);
     expect(screen.queryByRole('button', { name: 'Очистить' })).toBeNull();
+  });
+
+  it('debounceMs=300 откладывает onValueChange, onInputChange — синхронно', async () => {
+    vi.useFakeTimers();
+    try {
+      const onChange = vi.fn();
+      const onInputChange = vi.fn();
+      render(
+        <SearchInput
+          value=""
+          onValueChange={onChange}
+          onInputChange={onInputChange}
+          debounceMs={300}
+        />,
+      );
+      fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'a' } });
+      expect(onInputChange).toHaveBeenCalledWith('a');
+      expect(onChange).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(onChange).toHaveBeenCalledWith('a');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('debounce отменяется при Escape и сразу эмитится пустая строка', () => {
+    vi.useFakeTimers();
+    try {
+      const onChange = vi.fn();
+      render(<SearchInput value="abc" onValueChange={onChange} debounceMs={300} />);
+      fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'abcd' } });
+      fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Escape' });
+      expect(onChange).toHaveBeenLastCalledWith('');
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      // после Escape 'abcd' не должно прилететь
+      expect(onChange).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Escape не эмитит ничего если поле уже пустое', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<SearchInput value="" onValueChange={onChange} />);
+    const input = screen.getByRole('searchbox');
+    input.focus();
+    await user.keyboard('{Escape}');
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

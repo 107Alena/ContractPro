@@ -32,6 +32,13 @@ export {
   ModalTrigger,
 } from './modal';
 export {
+  PageSizeSelect,
+  type PageSizeSelectProps,
+  Pagination,
+  type PaginationProps,
+  paginationVariants,
+} from './pagination';
+export {
   Popover,
   PopoverAnchor,
   PopoverArrow,

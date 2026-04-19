@@ -1987,7 +1987,43 @@
       "dependencies": [
         "FE-TASK-019"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-19",
+        "summary": "FE-TASK-038 реализован полностью: три feature-модуля (filters/search/pagination) + shared-примитив Pagination + shared-хук useDebounce. URL-driven state через react-router-dom useSearchParams с functional updater (race-safe). FSD-границы соблюдены — features не импортируют друг друга; композиция делегирована page-слою (FE-TASK-044 ContractsListPage).",
+        "deliverables": [
+          "src/shared/lib/use-debounce/{use-debounce.ts, use-debounce.test.tsx, index.ts} — generic useDebounce<T>(value, delayMs) + useDebouncedCallback<A>(fn, delayMs) с cancel/flush; fnRef исключает race при смене fn-ссылки. 13/13 тестов.",
+          "src/shared/ui/pagination/{pagination.tsx, pagination.test.tsx, pagination.stories.tsx, index.ts} — новый headless-primitive Pagination (с боковыми страницами, ellipsis, aria-current, безопасным клэмпом) + PageSizeSelect. НЕ зависит от TanStack Table context (в отличие от DataTablePagination). Экспорт добавлен в shared/ui/index.ts. 13/13 тестов.",
+          "src/features/search/ — SearchInput (Input+иконка+clear+Escape+isPending spinner), useSearchParam (base URL hook), useDebouncedSearchParam (debounced URL-sync с minLength, clear, ref-based race guard). Публичные API через features/search/index.ts. 19 тестов (SearchInput 8 + useSearchParam 5 + useDebouncedSearchParam 6).",
+          "src/features/filters/ — FilterChips (pinned+non-pinned разделение, active tokens chips with onRemove), MoreFiltersModal (Radix Dialog с aria-describedby), useFilterParams (URL-driven с single/multi kind, activeCount, toggleOption, clear per-key/all), parseFilterParams/serializeFilterParams, CSV helpers (toCsv/fromCsv с документированным LIMITATION для non-enum values). 32 теста.",
+          "src/features/pagination/ — PaginationControls (обёртка над shared Pagination + PageSizeSelect; safePage клэмп для рассинхрона URL и total; isLoading skeleton; ariaLabel/aria-live подписи диапазона), usePageParams (URL page/size с клэмпом невалидных значений и чистыми дефолтами), constants (DEFAULT_PAGE_SIZE=20, PAGE_SIZE_OPTIONS=[10,20,50,100]). 15 тестов."
+        ],
+        "url_contract": "page (1-based, default=1 не пишется), size (из allowedSizes, default=20 не пишется), search (через features/search), status/CSV multi-filters (через features/filters). Соответствует OpenAPI ListContracts query params.",
+        "verification": {
+          "typecheck": "0 errors",
+          "lint": "0 errors / 0 warnings (--max-warnings=0)",
+          "tests": "1073/1073 passed (было 980 → +93 новых: 13 use-debounce, 13 shared pagination, 19 search, 32 filters, 15 pagination + 1 новый клэмп-тест)",
+          "build": "vite build 2.44s — без регрессий, новые features попадают в index-chunk'и согласно granular-стратегии vite.config.ts",
+          "prettier": "прогнан --write на новых файлах",
+          "makefile": "Frontend/Makefile отсутствует — N/A (паттерн FE-TASK-024/040/045/046/047)"
+        },
+        "code_reviewer_verdict": "SHIP. Применены 2 P2 (safePage clamp в PaginationControls + aria-describedby в MoreFiltersModal) и 3 P3 (исправлен dead-code btnSize в Pagination, commit-функция поднята выше setTimeout в useDebouncedSearchParam, добавлен LIMITATION-комментарий в csv.ts для non-enum значений). Отложено 4 P3 (definitions stability JSDoc, replace-default UX decision, endPages non-null assertion, MemoryRouter back/forward тесты — не блокеры v1).",
+        "architecture_alignment": "§6.3 (code-split): shared/ui/pagination и features/* попадают в основные index-chunks, chunks/pdf-preview и chunks/diff-viewer без изменений. §7.4 (API): URL-канон совпадает с OpenAPI listContracts query. §8.3 (Design System): Pagination extends shared/ui; SearchInput/FilterChips используют Chip+Input+Modal primitives. §9.3 (Error handling): в рамках v1 features не делают своих HTTP-запросов, ошибки обрабатываются на page-level. §11.2 (Performance): useSearchParam functional updater + ref-based deps — минимальные re-rendering, заложена база под TanStack Query placeholderData в PaginationControls потребителе.",
+        "deviations": [
+          "Acceptance criterion 'Pagination — обёртка над shared/ui Pagination': в shared/ui не было standalone-Pagination (только DataTablePagination, привязан к table context). Добавлен новый shared/ui/pagination primitive — согласуется с follow-up, зафиксированным в tasks.json у FE-TASK-025.",
+          "Acceptance criterion 'useDebounce hook в shared/lib/hooks/': в проекте принят паттерн shared/lib/<name>/ (см. shared/lib/use-copy, shared/lib/validate-file, shared/lib/status-view). Использован shared/lib/use-debounce/ — соответствует существующей конвенции. Путь shared/lib/hooks/ требовал бы плоской коллекции и противоречит существующей FSD-структуре.",
+          "Multi-select для filter.status — в v1 single-value (backend OpenAPI listContracts принимает один DocumentStatus). CSV-инфраструктура в lib/csv.ts + filter-params.ts заложена для v1.1 — активируется при расширении OpenAPI до status_in: DocumentStatus[].",
+          "MoreFiltersModal пока пустой в реальном использовании: 'Тип договора' и 'Дата' из FE-TASK-044 acceptance не имеют backend query-params. Инфраструктура FilterDefinition[] готова — подключение конкретных фильтров — в FE-TASK-044, зависит от backend-расширения."
+        ],
+        "unblocks": [
+          "FE-TASK-044 (ContractsListPage, critical) — ПОЛНОСТЬЮ разблокирована (все deps 021/038/032 done). Композируется через useFilterParams + useDebouncedSearchParam + usePageParams в одной page; FilterChips + SearchInput + PaginationControls рендерятся в DocumentsTable toolbar.",
+          "FE-TASK-048 (ReportsPage) — также получит PaginationControls для ReportsTable, если serverside-pagination."
+        ],
+        "subagents": [
+          "code-architect — план-валидация: утвердил вынос shared/ui/pagination как standalone-primitive (follow-up из FE-TASK-025), FSD-границу 'page композирует features', URL-canonicalization. Зафиксировал 5 потенциальных issues (page > totalPages rebalance, definitions stability, CSV escaping limit) — 2 применены (safePage clamp, CSV LIMITATION), 3 отложены в follow-up.",
+          "code-reviewer — финальный обзор: SHIP verdict. Подтвердил FSD-границы, race-safety useSearchParams, cleanup в strict-mode, accessibility (aria-current/aria-live/role=group). Применены 2 should-fix (safePage + aria-describedby) + 3 nit'а; 4 P3 отложены."
+        ]
+      }
     },
     {
       "id": "FE-TASK-039",

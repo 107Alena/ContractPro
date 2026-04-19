@@ -3161,3 +3161,72 @@ URL legacy-тестов остался `http://orch.test/api/v1` — absolute ha
 - **FE-TASK-045 (ContractDetailPage, done):** если были заглушки для archive/delete — теперь можно заменить на реальные хуки.
 - **ConfirmDialog переиспользование:** для archive-confirm (если понадобится), revert-confirm, destructive admin-actions. API stable.
 
+---
+
+## FE-TASK-038 — Filters + search + pagination shared features (done — 2026-04-19)
+
+**Задача.** Три feature-модуля: `features/filters/` (FilterChips + MoreFiltersModal + useFilterParams), `features/search/` (SearchInput + useDebouncedSearchParam/useSearchParam), `features/pagination/` (PaginationControls + usePageParams) + shared-хук `shared/lib/use-debounce` + новый shared-primitive `shared/ui/pagination`. URL-driven state, FSD-границы, unit-тесты.
+
+### Почему эта задача
+
+Единственная medium-ready задача, разблокирующая critical FE-TASK-044 (ContractsListPage). Все high/critical задачи были заблокированы. FE-TASK-038 имеет единственную dep FE-TASK-019 (done). После выполнения: FE-TASK-044 полностью unblocked (deps 021/038/032 все done).
+
+### Архитектурные решения
+
+**Проблема 1 — отсутствие shared/ui/Pagination primitive.** Acceptance criterion — «обёртка над shared/ui Pagination» — но в проекте был только `DataTablePagination` (жёстко привязан к TanStack Table context через `useDataTableContext`). Решение: новый standalone-primitive `shared/ui/pagination/` (Pagination + PageSizeSelect) для non-table страниц. Согласуется с follow-up, зафиксированным в FE-TASK-025 tasks.json. `DataTablePagination` остаётся для tabular workflow.
+
+**Проблема 2 — URL-драйвинг vs Zustand-store.** Для shareable-ссылок и browser back/forward нужен URL-state. Выбор: URL через `useSearchParams` от react-router-dom. Race-condition при concurrent обновлениях нескольких ключей — закрыт functional updater pattern: `setSearchParams((prev) => new URLSearchParams(prev))`. Без functional updater два соседних хука, обновляющих разные ключи в одном тике, затирали бы друг друга.
+
+**Проблема 3 — useDebouncedSearchParam stale closure.** Классическая ловушка: debounced-callback капшутит `inputValue` в замыкании → при быстром вводе последовательные таймеры ссылаются на устаревшие значения. Решение: ref-based `latestInputRef` (обновляется каждый рендер), `useEffect` deps `[inputValue, committedValue, debounceMs]` и проверка `latestInputRef.current === inputValue` перед коммитом. Tests покрывают coalescing серии быстрых изменений.
+
+**Проблема 4 — URL canonicalization.** Дефолтные значения (page=1, size=20, search='', status='') не пишутся в URL — сохраняем чистый shareable-link. Невалидный page/size (page=abc, page=-5, size=999) → fallback на default при чтении, но URL не перезаписываем (избегаем infinite loop при ручной правке URL).
+
+**Проблема 5 — Multi-select для backend-enum.** Acceptance «FilterChips: статус, дата, тип договора». OpenAPI backend `listContracts.query.status` — single `DocumentStatus`. Решение v1: single-select для status. CSV-инфраструктура (`lib/csv.ts`, `parse/serializeFilterParams`) заложена с LIMITATION-комментарием.
+
+**Проблема 6 — FSD границы.** ESLint-boundaries запрещает `features → features`. Каждая feature self-contained; композиция — в page (FE-TASK-044 ContractsListPage через единый `searchParams`).
+
+**Подтверждение.** План валидирован **code-architect**. **code-reviewer SHIP** c 2 P2 (PaginationControls safePage clamp + MoreFiltersModal aria-describedby — применены) и 3 P3 (dead-code btnSize + commit function hoisting + CSV LIMITATION — применены). 4 P3 отложены.
+
+### Файлы
+
+**Создано (29):**
+
+- `src/shared/lib/use-debounce/` (3) — generic useDebounce + useDebouncedCallback с cancel/flush. 13 тестов.
+- `src/shared/ui/pagination/` (4) — Pagination primitive + PageSizeSelect. 13 тестов + 8 stories. Экспорт добавлен в `shared/ui/index.ts`.
+- `src/features/search/` (9) — SearchInput + useSearchParam + useDebouncedSearchParam. 19 тестов + 5 stories.
+- `src/features/filters/` (11) — FilterChips + MoreFiltersModal + useFilterParams + CSV helpers. 32 теста + 2 stories.
+- `src/features/pagination/` (8) — PaginationControls + usePageParams + constants. 16 тестов + 8 stories.
+
+**Изменено (1):**
+- `src/shared/ui/index.ts` — экспорт Pagination, PageSizeSelect, paginationVariants.
+
+### Проверка
+
+- `npm run typecheck` — 0 errors.
+- `npm run lint --max-warnings=0` — 0 errors / 0 warnings.
+- `CI=1 npx vitest run` — **1073/1073 tests passed** (было 980, +93 новых).
+- `npm run build` — 2.44 s. Chunks без регрессий.
+- `prettier --write` — прогнан на новых файлах.
+- `Makefile` отсутствует — N/A (паттерн предыдущих задач).
+
+### Subagents
+
+- **code-architect** — валидация FSD плана; standalone `shared/ui/pagination`; URL-canonicalization; single-select для status v1.
+- **code-reviewer** — SHIP c 2 P2 + 3 P3 (применены).
+
+### Deviations
+
+1. **Новый `shared/ui/pagination` primitive** — в проекте был только `DataTablePagination`. Согласуется с follow-up из FE-TASK-025.
+2. **Путь `shared/lib/use-debounce/`** — вместо `shared/lib/hooks/`, соответствует существующей FSD-конвенции проекта.
+3. **Single-value для filter.status v1** — backend ограничение. CSV-инфраструктура готова под v1.1.
+4. **FilterChips «Тип договора» и «Дата» отложены** — нет backend query-параметров; FilterDefinition[] готов.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-044 (ContractsListPage, critical — ПОЛНОСТЬЮ РАЗБЛОКИРОВАНА):** все deps (021, 024, 032, 038) done. Композиция: поднять `useFilterParams` + `useDebouncedSearchParam` + `usePageParams` в одной page. Query `useContracts({page, size, status, search})` с `placeholderData: (prev) => prev`. Reset page=1 при смене filter/search через `useEffect`.
+- **Rebalance edge case:** после delete-документа, если page=last, total сократится → PaginationControls клэмпит safePage, но query-key ещё содержит старый page. Потребуется `setPage(Math.max(1, Math.ceil(newTotal / size)))` в onSuccess.
+- **FE-TASK-048 (ReportsPage):** может использовать `PaginationControls` + `useDebouncedSearchParam`.
+- **MoreFiltersModal следующий шаг:** Date-range picker, virtualization при >30 опциях.
+- **CSV escaping** (follow-up): при расширении за enum — RFC 4180 escape или base64.
+- **back/forward тесты** (code-reviewer nit P2): добавить `MemoryRouter initialIndex` sync-тест для useDebouncedSearchParam.
+

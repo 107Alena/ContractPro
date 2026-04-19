@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# Resolve $1 (git passes it relative to repo root CWD) to absolute path BEFORE cd.
+MSG_FILE_ABS="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+HUSKY_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$HUSKY_DIR/.." || exit 1
+npx --no-install commitlint --edit "$MSG_FILE_ABS"

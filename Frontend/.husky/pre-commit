@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+HUSKY_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$HUSKY_DIR/.." || exit 1
+npx --no-install lint-staged

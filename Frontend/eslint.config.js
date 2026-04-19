@@ -184,6 +184,20 @@ export default tseslint.config(
   },
 
   {
+    // Node-side maintenance scripts (husky bootstrap, codegen helpers и т.п.).
+    // CommonJS-модули Node, не часть ES-графа приложения.
+    files: ['scripts/**/*.cjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'commonjs',
+      globals: { ...globals.node },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+
+  {
     files: ['.storybook/**/*.{ts,tsx}'],
     languageOptions: {
       globals: { ...globals.node },

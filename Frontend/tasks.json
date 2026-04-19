@@ -2374,7 +2374,8 @@
         "FE-TASK-040",
         "FE-TASK-035"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "ResultPage full implementation (FE-TASK-046, 2026-04-19). New entity slice src/entities/result (useResults / useRisks / useSummary / useRecommendations) с unit-тестами. RiskDetailsDrawer в src/entities/risk/ui (Radix Dialog, useId для aria-describedby). RisksList расширен optional onRiskClick. Виджеты-стабы наполнены: feedback-block, legal-disclaimer, mandatory-conditions-checklist, risk-profile-card. Page-local ui: document-card, summary-table, deviations-from-policy, next-actions, export-share-button, recheck-button, processing-banner, warnings-banner, state-screens. State-machine (8 состояний §17.4): Loading / NotFound / Rejected / Failed / AwaitingUserInput / Processing / ReadyWithWarnings / Ready. На странице единый useResults — backend фильтрует по роли (§17.5); UI дополнительно скрывает секции через <Can I=\"risks.view\"> / <Can I=\"recommendations.view\"> (Pattern B §5.6.1). ExportShareButton через useCanExport; RecheckButton через useRecheckVersion. isPolicyDeviation вынесен в entities/risk/model. Проверки: typecheck ✓, lint ✓ (0/0), test:ci 980/980 (было 970 → 977 новые hook-тесты + 10 ResultPage-тестов), build 2.37s. 8 Storybook stories. code-reviewer: SHIP, применены nit'ы — isPolicyDeviation DRY, useId для drawer, aria-label на LoadingState."
     },
     {
       "id": "FE-TASK-047",

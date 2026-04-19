@@ -207,10 +207,12 @@ describe('Маршрутизация — рендер pages', () => {
   });
 
   it('/contracts/:id/versions/:vid/result → ResultPage с params', async () => {
+    // FE-TASK-046 заменил placeholder на реальную state-machine: в loading-
+    // состоянии useContract висит на pending-запросе, поэтому contract_id не
+    // попадает в DOM. Проверяем только попадание на маршрут — интеграция
+    // данных покрывается ResultPage.test.tsx.
     renderAt('/contracts/c1/versions/v2/result');
     expect(await screen.findByTestId('page-result')).toBeDefined();
-    expect(screen.getByText(/c1/)).toBeDefined();
-    expect(screen.getByText(/v2/)).toBeDefined();
   });
 
   it('/contracts/:id/compare?base=A&target=B → ComparisonPage с searchParams', async () => {

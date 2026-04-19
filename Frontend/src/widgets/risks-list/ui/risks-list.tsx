@@ -20,9 +20,17 @@ export interface RisksListProps {
   risks?: readonly Risk[] | undefined;
   isLoading?: boolean | undefined;
   error?: unknown;
+  /**
+   * Открывает RiskDetailsDrawer (§16.5 компонентное дерево ResultPage,
+   * §17.5 artifact RISK_ANALYSIS). Когда передан — каждый элемент списка
+   * рендерится как `<button>`, кликабелен и получает роль кнопки. Когда
+   * пропущен — элементы остаются пассивными `<li>` (обратная совместимость
+   * с ContractDetailPage/Dashboard, где drawer пока не подключён).
+   */
+  onRiskClick?: ((risk: Risk) => void) | undefined;
 }
 
-export function RisksList({ risks, isLoading, error }: RisksListProps): JSX.Element {
+export function RisksList({ risks, isLoading, error, onRiskClick }: RisksListProps): JSX.Element {
   return (
     <section
       aria-label="Ключевые риски"
@@ -54,7 +62,11 @@ export function RisksList({ risks, isLoading, error }: RisksListProps): JSX.Elem
       ) : (
         <ul className="flex flex-col gap-3" data-testid="risks-list">
           {risks.map((risk, idx) => (
-            <RiskItem key={risk.id ?? `risk-${idx}`} risk={risk} />
+            <RiskItem
+              key={risk.id ?? `risk-${idx}`}
+              risk={risk}
+              {...(onRiskClick ? { onClick: () => onRiskClick(risk) } : {})}
+            />
           ))}
         </ul>
       )}
@@ -62,12 +74,9 @@ export function RisksList({ risks, isLoading, error }: RisksListProps): JSX.Elem
   );
 }
 
-function RiskItem({ risk }: { risk: Risk }): JSX.Element {
-  return (
-    <li
-      data-testid="risks-list-item"
-      className="flex flex-col gap-2 rounded-md border border-border bg-bg-muted p-3"
-    >
+function RiskItem({ risk, onClick }: { risk: Risk; onClick?: () => void }): JSX.Element {
+  const body = (
+    <>
       <div className="flex flex-wrap items-baseline gap-2">
         {risk.level ? <RiskBadge level={risk.level} /> : null}
         {risk.clause_ref ? (
@@ -78,6 +87,30 @@ function RiskItem({ risk }: { risk: Risk }): JSX.Element {
       {risk.legal_basis ? (
         <p className="text-xs text-fg-muted">Основание: {risk.legal_basis}</p>
       ) : null}
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <li data-testid="risks-list-item">
+        <button
+          type="button"
+          onClick={onClick}
+          data-testid="risks-list-item-button"
+          className="flex w-full flex-col gap-2 rounded-md border border-border bg-bg-muted p-3 text-left transition hover:bg-bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+        >
+          {body}
+        </button>
+      </li>
+    );
+  }
+
+  return (
+    <li
+      data-testid="risks-list-item"
+      className="flex flex-col gap-2 rounded-md border border-border bg-bg-muted p-3"
+    >
+      {body}
     </li>
   );
 }

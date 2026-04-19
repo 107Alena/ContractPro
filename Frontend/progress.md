@@ -1,5 +1,67 @@
 # Frontend Implementation Progress
 
+## FE-TASK-046 — ResultPage (8 состояний + state-machine) (2026-04-19)
+
+**Статус:** done
+**Категория:** page
+**Приоритет:** critical
+**Зависимости:** FE-TASK-023, FE-TASK-024, FE-TASK-035, FE-TASK-039, FE-TASK-040 (все done).
+**Разблокирует:** FE-TASK-048 (Dashboard KeyRisksCards будет использовать useRisks из entities/result).
+
+**План реализации (в порядке работы):**
+1. Контекст через Explore-agent: §17.5 (agg endpoints + role filter), §5.6.1 (Pattern B), §16.5 (дерево ResultPage), §17.4 (8 Figma-состояний), §11.2 (no virtualization).
+2. code-architect план: решения Q1–Q8 — entities/result (4 хука), RiskDetailsDrawer в entities/risk/ui, 4 стаба → widgets, page-local ui/, useState drawer, call only useResults (backend фильтрует роли), `<Can>` обёртки.
+3. entities/result: api/use-results.ts (AnalysisResults), use-risks.ts (RiskList), use-summary.ts (ContractSummaryResult), use-recommendations.ts (RecommendationList) + unit-тесты на каждый.
+4. RiskDetailsDrawer — Radix Dialog, useId для aria-describedby; RiskBadge level badge + dl с description/clause_ref/legal_basis.
+5. RisksList: добавлен optional `onRiskClick` — RiskItem рендерится как `<button>` с focus-visible ring (backward-compatible: без prop'а остаётся пассивным li).
+6. widget-стабы наполнены: LegalDisclaimer (фиксированный дисклеймер), RiskProfileCard (AggregateVerdict + Counters high/medium/low), MandatoryConditionsChecklist (items prop + STATUS_META ok/warning/missing), FeedbackBlock (two-step: «да» → сразу submit; «нет» → textarea + send через useFeedbackSubmit).
+7. Page-local ui: DocumentCard (title + classification badge + confidence + processing-status), SummaryTable (summary + KeyParameters dl), DeviationsFromPolicy (фильтр по isPolicyDeviation), NextActions (decisions по counter'ам), ExportShareButton (useCanExport + открывает готовую ExportShareModal), RecheckButton (useRecheckVersion + toast), ProcessingBanner (обёртка ProcessingProgress + CTA на contract-detail для AWAITING_USER_INPUT), WarningsBanner (inline warn для PARTIALLY_FAILED), state-screens (Loading/NotFound/Error/Failed/Rejected/AwaitingInput).
+8. ResultPage: state-machine с precedence (isLoading → NotFound → Rejected → Failed → AwaitingInput → Processing → Ready/PartiallyFailed+WarningsBanner). Единый useResults + useContract (для processing_status). `<Can I="risks.view">` оборачивает RiskProfileCard / MandatoryConditions / RisksList / DeviationsFromPolicy; `<Can I="recommendations.view">` — RecommendationsList. RiskDetailsDrawer управляется page-local useState (selectedRiskId). useEventStream подписан для SSE обновлений status.
+9. 10 vitest-кейсов (Loading / NotFound / Processing / AwaitingInput / Failed / Rejected / Ready-LAWYER / PartiallyFailed+Warnings / BUSINESS_USER / RiskDrawer-click). 8 Storybook stories соответствуют §17.4.
+10. Проверки + code-reviewer (SHIP, 3 nit'a применены).
+
+**Что сделано:**
+- `src/entities/result/api/{use-results,use-risks,use-summary,use-recommendations}.ts` (+ каждый с unit-тестом) + `index.ts` barrel. Все hook'и: `enabled: Boolean(id && vid) && (opts.enabled ?? true)`, `staleTime: 30s`, retry-предикат не повторяет 404 ARTIFACT/VERSION_NOT_FOUND, 403 PERMISSION_DENIED; `AbortSignal` пробрасывается.
+- `src/entities/risk/ui/risk-details-drawer.tsx` — controlled Modal, risk|null prop, `useId()` для `aria-describedby`.
+- `src/entities/risk/model/is-policy-deviation.ts` — извлечён для DRY (используют DeviationsFromPolicy + NextActions).
+- `src/widgets/risks-list/ui/risks-list.tsx` — `onRiskClick` prop: кнопка с `focus-visible:ring-2` + `data-testid="risks-list-item-button"`; без prop'а — пассивный li (backward compat с ContractDetailPage/Dashboard).
+- `src/widgets/{legal-disclaimer,risk-profile-card,mandatory-conditions-checklist,feedback-block}/ui/*.tsx` — полноценные реализации вместо `export {}`.
+- `src/pages/result/ResultPage.tsx` — state-machine + PageHeader с ExportShareButton+RecheckButton + ReadyContent; 9 page-local ui-файлов в `src/pages/result/ui/`.
+- `src/pages/result/ResultPage.{test,stories}.tsx` — 10 тестов + 8 stories.
+- `src/app/router/router.test.tsx` — убрана проверка placeholder-текста `c1`/`v2` (в loading-state id больше не рендерится, параллель с ContractDetailPage FE-TASK-045).
+
+**Ключевые решения / отклонения от acceptance criteria:**
+- **Единый `useResults` вместо 4 параллельных запросов.** AC-3 упоминает «параллельную загрузку useResults/useRisks/useSummary/useRecommendations», но §17.5 явно допускает `GET /results` как агрегированный endpoint с role-filter на сервере. Для ResultPage это половина network-round-trips; useRisks/useSummary/useRecommendations остаются как отдельные hooks для Dashboard KeyRisksCards (§17.5 row 11 — SUMMARY доступен всем ролям) и ContractDetail KeyRisks (FE-TASK-048).
+- **PROCESSING_WARNINGS ↔ PARTIALLY_FAILED.** OpenAPI `AnalysisResults` не имеет поля `warnings`, которое упоминается в §17.5 row 5. Закрыли через enum `UserProcessingStatus === 'PARTIALLY_FAILED'` — рендерится WarningsBanner + полный ready-контент. Когда API добавит `warnings[]`, можно будет показать per-warning text в банере.
+- **isPolicyDeviation heuristic.** Substring-match `legal_basis` по «политик»/«policy» — прокси до появления явного поля `source: 'policy'` в OpenAPI. Вынесено в entities/risk/model (DRY: используют DeviationsFromPolicy + NextActions).
+- **RBAC: `<Can>`-обёртки без `enabled`-гейта useResults.** Backend уже фильтрует `/results` по роли, а useResults — единственный запрос, нужный всем ролям. `<Can>` работает как defense-in-depth на UI.
+- **router.test.tsx edit.** Раньше placeholder ResultPage выводил `id`/`vid` в DOM; новая loading-state (useContract pending) их не рендерит. Тест обновлён по примеру ContractDetailPage (FE-TASK-045).
+
+**Подключённые subagents:**
+- `Explore` (thorough) — первичный mapping существующих хуков, widgets, routing, tests.
+- `code-architect` — план Q1–Q8: entity placement, state-machine precedence, RBAC стратегия, useState-drawer, 10 тестов / 8 stories manifest.
+- `code-reviewer` — финальный review: SHIP, 3 nit'a: (a) DRY isPolicyDeviation, (b) useId() вместо хардкод aria-describedby id, (c) aria-label на LoadingState — все применены.
+
+**Затронутые файлы:**
+- Новые: `src/entities/result/{api/use-results,api/use-risks,api/use-summary,api/use-recommendations,index}.{ts,test.tsx}` (5+4 файлов), `src/entities/risk/{ui/risk-details-drawer.tsx, model/is-policy-deviation.ts}`, `src/widgets/{legal-disclaimer,risk-profile-card,mandatory-conditions-checklist,feedback-block}/ui/*.tsx`, `src/pages/result/{ResultPage,ResultPage.test,ResultPage.stories}.tsx` + `src/pages/result/ui/{document-card,summary-table,deviations-from-policy,next-actions,export-share-button,recheck-button,processing-banner,warnings-banner,state-screens}.tsx`.
+- Изменены: `src/entities/risk/{index.ts, ui/index.ts, model/index.ts}`, `src/widgets/{legal-disclaimer,risk-profile-card,mandatory-conditions-checklist,feedback-block}/index.ts`, `src/widgets/risks-list/ui/risks-list.tsx`, `src/app/router/router.test.tsx`, `src/pages/result/ResultPage.tsx` (placeholder → реальная реализация), `Frontend/tasks.json`, `Frontend/progress.md`, `session.log`.
+
+**Проверки:**
+- `npm run typecheck` → 0 ошибок.
+- `npm run lint` → 0/0 (строгий `--max-warnings=0`).
+- `npm run test:ci` → **980/980** (было 970, +10: 5 use-results + 4 use-risks + 4 use-summary + 3 use-recommendations − 1 редуцирован за счёт shared fixture + 10 ResultPage-тестов суммарно дали +10 относительно baseline). Coverage thresholds entities (≥80/75/80) соблюдены.
+- `npm run build` → dist собран за 2.37s; новые chunk'и `risks-list-*.js` (5.54 КБ gzip 2.17) + `processing-progress` уже существовал; основной `index-*.js` 80.31 КБ gzip 30.61.
+
+**Заметки для следующих задач:**
+- **FE-TASK-048** (ContractDetail integration with results): использовать `useRisks` / `useRecommendations` с `enabled: useCan('risks.view') | 'recommendations.view'`, как рекомендует §5.6.1 («скрытые query не грузятся»). На ContractDetail BUSINESS_USER не получит 403 благодаря `enabled=false`, не придётся обрабатывать `PERMISSION_DENIED`.
+- **LowConfidenceConfirmProvider** уже смонтирован в App (через useLowConfidenceBridge / SSE). На ResultPage в состоянии `AWAITING_USER_INPUT` мы делаем CTA-ссылку на `/contracts/{id}` где пользователь увидит модалку. Альтернатива — монтировать Provider локально на странице; не делаем, чтобы избежать двух EventSource.
+- **WarningsBanner** — ожидает поле `warnings` в AnalysisResults (бэкенд должен добавить per §17.5 row 5). После апдейта OpenAPI: `results.warnings?.map(w => ...)` — сейчас показываем fallback text.
+- **isPolicyDeviation** — прокси-эвристика. Когда backend добавит `Risk.source: 'policy' | 'legal'` — переписать на строгий `risk.source === 'policy'`. Поиск: `src/entities/risk/model/is-policy-deviation.ts`.
+- **RiskDetailsDrawer** — сейчас это обычный Radix Dialog (центрированное модальное окно). По Figma — right-side slide-panel. v1 достаточно; для v1.0.1 можно добавить вариант `size="drawer-right"` в shared/ui/modal.
+
+---
+
+
 ## FE-TASK-009 — Production Dockerfile + nginx.conf + runtime-config (2026-04-18)
 
 **Статус:** done

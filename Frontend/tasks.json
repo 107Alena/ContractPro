@@ -2819,7 +2819,45 @@
       "dependencies": [
         "FE-TASK-012"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-20",
+        "files_created": [
+          "Frontend/src/shared/observability/otel.ts — init модуль: buildOtelConfig (pure) + enrichSpan + tagXhrCorrelationId (WeakMap helper) + initOtel (idempotency guard) + __resetOtelForTests. Service name=contractpro-frontend, resource atrs service.name/service.version(git SHA)/deployment.environment. WebTracerProvider + BatchSpanProcessor + OTLPTraceExporter",
+          "Frontend/src/shared/observability/otel.test.ts — 13 unit-тестов: buildOtelConfig 3 (no-op без endpoint / полный descriptor / gitSha=empty), enrichSpan 7 (no auth / с session LAWYER+org-42 / Fetch Request correlation_id / RequestInit+Headers / plain object headers case-insensitive / XHR через tagXhrCorrelationId / app.http_path = URL.pathname), initOtel 3 (no-op / enabled+регистрация провайдера / idempotent)"
+        ],
+        "files_modified": [
+          "Frontend/src/shared/observability/index.ts — +exports buildOtelConfig, enrichSpan, initOtel, InitOtelResult, OtelProviderDescriptor, tagXhrCorrelationId",
+          "Frontend/src/main.tsx — initSentry → initOtel → initAuthFlow; обновлён docstring ordering (§5.1, §5.3, §14.3)",
+          "Frontend/vite.config.ts — manualChunks: +`if (id.includes('@opentelemetry')) return 'vendor/otel'`; комментарий-навигатор для vendor/otel chunk'а (~27 КБ gzip)",
+          "Frontend/package.json — +9 deps @opentelemetry/* (api@1.9.1, sdk-trace-web@1.30.1, resources@1.30.1, semantic-conventions@1.40.0, instrumentation@0.57.2, instrumentation-fetch@0.57.2, instrumentation-xml-http-request@0.57.2, exporter-trace-otlp-http@0.57.2, context-zone@1.30.1); size-limit: +vendor/otel 100 KB gzip",
+          "Frontend/package-lock.json — 44 новых транзитивных зависимостей"
+        ],
+        "deviations": [
+          "Сверх tasks.json добавлены @opentelemetry/instrumentation-xml-http-request (axios в браузере использует XHR adapter — без XHR-инструментации 100% span'ов API теряется; соответствует архитектуре §14.3 line 1152) и транзитивные ядра (@opentelemetry/api/resources/semantic-conventions/context-zone/instrumentation). Context-zone установлен, но НЕ регистрируется как contextManager — StackContextManager (default в WebTracerProvider) достаточен для v1 fetch/XHR tracing. Можно добавить при росте async-chain сложности.",
+          "app.http_path вместо http.route (Minor от code-reviewer): semconv http.route означает templated route (`/contracts/:id`), которого на клиенте нет без router-aware резолвера. app.http_path = URL.pathname — честный non-semconv атрибут с человекочитаемым путём; миграция на http.route возможна позднее с маппингом routeTree.",
+          "XHR correlation_id через WeakMap + tagXhrCorrelationId() helper (grep'абельный контракт, Minor от code-reviewer). В v1 axios interceptor НЕ вызывает tagXhrCorrelationId → app.correlation_id остаётся undefined для XHR-span'ов (accepted limitation с TODO(FE-TASK-052) в коде). Fetch-span'ы заполняются корректно через Request.headers.get.",
+          "buildOtelConfig выделен в pure-функцию (паттерн FE-TASK-050 buildSentryConfig) для изоляции тестов от регистрации глобального trace API. initOtel — тонкая обёртка с idempotency guard (module-level initialized flag, защита от StrictMode double-mount или случайных вызовов).",
+          "propagateTraceHeaderCorsUrls оставлен default (empty) — safer-by-default: traceparent не утекает в cross-origin. Same-origin deployment (ADR-6) делает это безопасным умолчанием; при появлении multi-origin — явно настраивать allow-list."
+        ],
+        "verification": [
+          "npm run typecheck: 0 errors (root + tests/e2e)",
+          "npm run lint: 0 warnings (--max-warnings=0)",
+          "npm run test (vitest): 1236/1236 passed (+13 новых в otel.test.ts)",
+          "npm run build: vendor/otel 104.12 KB raw / 26.96 KB gzip; vite build 3.27s, 1205 modules",
+          "npx size-limit: 13/13 budgets pass (+vendor/otel 26.96 KB ≤ 100 KB)",
+          "Соответствие §14.3 high-architecture: sdk-trace-web + instrumentation-fetch + instrumentation-xml-http-request + exporter-trace-otlp-http ✓, OTLP endpoint из runtime-env ✓, span attrs app.user_role/app.org_id/app.correlation_id ✓, traceparent auto-injection через стандартную W3CTraceContextPropagator ✓, SSE-ограничение документировано в JSDoc ✓, release tagging через service.version=__GIT_SHA__ ✓",
+          "Makefile в Frontend/ отсутствует — шаг N/A (инфраструктурные задачи используют npm scripts)",
+          "subagents: code-architect (план: buildOtelConfig pure + enrichSpan + tagXhrCorrelationId), code-reviewer (SHIP-WITH-NITS → применены Major #1 tagXhrCorrelationId helper с TODO(FE-TASK-052), Minor #2 http.route → app.http_path, Nit #9 bundle comment update)"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-052 (web-vitals + logger): axios-interceptor в src/shared/api/client.ts (строка 207) должен вызывать tagXhrCorrelationId(xhr, correlationId) для заполнения app.correlation_id в XHR-span'ах. Простейший способ — config.adapter wrapping или WeakMap по config-объекту + onDownloadProgress event.target. При подключении web-vitals → Sentry.captureMessage достаточно, отдельный OTel metric-pipeline не требуется в v1.",
+          "Sentry Performance остаётся отключённым (tracesSampleRate:0 в sentry.ts:57). При желании включить Sentry Performance позднее — disable OTel-fetch-instrumentation через instrumentations config или переключиться на Sentry-only tracing.",
+          "При необходимости http.route (templated) — добавить router-aware резолвер, читающий matches из react-router, маппить в `:id`-форму и добавлять attr в enrichSpan перед отправкой span'а. Сейчас app.http_path содержит concrete pathname.",
+          "SSE-стрим /api/v1/events/stream (§7.7) не покрывается OTel-инструментацией (EventSource API не wrap'ится fetch/XHR). Корреляция через correlation_id в payload событий (уже есть в StatusEvent, §4.4). При необходимости — написать кастомный instrumentation-event-source.",
+          "CI-pipeline для OTLP-коллектора: VITE_ENABLE_OTEL (или через runtime-env OTEL_ENDPOINT в /config.js) — в prod nginx-entrypoint.sh (FE-TASK-009 Dockerfile) должен инжектить OTEL_ENDPOINT. Сейчас поле в RuntimeEnv уже объявлено, entrypoint.sh расширится в FE-TASK-010 или отдельной задачей."
+        ]
+      }
     },
     {
       "id": "FE-TASK-052",

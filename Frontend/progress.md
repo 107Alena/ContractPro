@@ -1,5 +1,61 @@
 # Frontend Implementation Progress
 
+## FE-TASK-051 — OpenTelemetry SDK + OTLP exporter + fetch/XHR instrumentations (§14.3) (2026-04-20)
+
+**Статус:** done
+**Категория:** observability
+**Приоритет:** medium (из 6 pending: FE-TASK-002 high блокирован DESIGN-TASK-002; FE-TASK-048 medium блокирован Figma; FE-TASK-051 — естественное продолжение FE-TASK-050 Sentry, `tracesSampleRate:0` зарезервирован в sentry.ts именно под OTel)
+**Зависимости:** FE-TASK-012 (axios API client + correlation-id interceptor) — done.
+**Разблокирует:** FE-TASK-052 (web-vitals + logger — уже запланировано, что client.ts должен tag'ить XHR через tagXhrCorrelationId).
+
+**План реализации:**
+1. Выбор задачи: из 6 pending FE-TASK-002 (high) блокирован DESIGN-TASK-002, FE-TASK-048 (medium) — Figma макет. Среди ready medium — FE-TASK-051 (OTel), FE-TASK-056 (docs). OTel выбран как foundation для distributed tracing и для закрытия «долга» по `tracesSampleRate:0` из FE-TASK-050.
+2. Research: `src/shared/observability/` содержит только Sentry (FE-TASK-050); `runtime-env.ts:14` уже объявляет `OTEL_ENDPOINT?: string`; `client.ts:207` генерирует `X-Correlation-Id` (UUID v4) per-request; `UserProfile` schema имеет `organization_id`, `role`.
+3. План (code-architect): `buildOtelConfig` pure (паттерн buildSentryConfig) + `initOtel` wrapper; WebTracerProvider + BatchSpanProcessor + OTLPTraceExporter; `FetchInstrumentation` + `XMLHttpRequestInstrumentation` (деviation от tasks.json: axios→XHR, без XHR inst 100% API-span'ов теряются, подтверждено §14.3 line 1152); shared `applyCustomAttributesOnSpan` для обоих; SSE не покрывается (task AC + §14.3 ограничение).
+4. Реализация:
+   - `src/shared/observability/otel.ts` — `buildOtelConfig(env, gitSha, mode)` возвращает `{endpoint, resourceAttributes}` или null; resource attrs `service.name=contractpro-frontend`, `service.version=<gitSha>` (если непуст), `deployment.environment=<mode>`. `enrichSpan(span, request)` читает `sessionStore.getState().user` лениво, ставит `app.user_role`/`app.org_id`/`app.correlation_id`/`app.http_path`. `tagXhrCorrelationId(xhr, id)` — WeakMap-based helper (XHR API не раскрывает request-headers reader'у). `initOtel()` с idempotency guard (module-level `initialized`) для защиты от StrictMode/double-bootstrap. `__resetOtelForTests` — test-only reset.
+   - `readCorrelationId` покрывает 4 ветви: Request.headers.get (Fetch), xhrCorrelationIds.get (XHR WeakMap), Headers instance, plain object (case-insensitive).
+   - `index.ts` — barrel: buildOtelConfig, enrichSpan, initOtel, tagXhrCorrelationId, types.
+   - `main.tsx` — ordering: worker.start → initSentry → initOtel → initAuthFlow → render. initOtel до первого fetch/XHR (инструментация патчит globals).
+   - `vite.config.ts` — `if (id.includes('@opentelemetry')) return 'vendor/otel'` в manualChunks.
+   - `package.json` — +9 deps @opentelemetry/* (api@1.9.1, sdk-trace-web@1.30.1, resources@1.30.1, semantic-conventions@1.40.0, instrumentation@0.57.2, instrumentation-fetch@0.57.2, instrumentation-xml-http-request@0.57.2, exporter-trace-otlp-http@0.57.2, context-zone@1.30.1) + size-limit `vendor/otel` 100 KB gzip.
+5. Тесты — `otel.test.ts` (13 unit): buildOtelConfig (3: no-op, full descriptor, gitSha=empty→no version), enrichSpan (7: no auth / LAWYER+org-42 / Fetch Request X-Correlation-Id / RequestInit+Headers / plain case-insensitive / XHR через tagXhrCorrelationId / app.http_path), initOtel (3: no-op, enabled+getTracer, idempotent).
+6. Code review (SHIP-WITH-NITS) — применены:
+   - **Major #1**: введён `tagXhrCorrelationId(xhr, id)` helper с WeakMap storage + TODO(FE-TASK-052) комментарий в коде. Для v1 axios-interceptor НЕ вызывает tagger → XHR-span'ы имеют `app.correlation_id=undefined` (accepted limitation; Fetch работает). Ссылка на FE-TASK-052 для фикса.
+   - **Minor #2**: `http.route` → `app.http_path`. Semconv `http.route` требует templated route (`/contracts/:id`), который на клиенте не резолвится без router-aware маппинга. `app.http_path` — честный non-semconv атрибут.
+   - **Nit #9**: комментарий в vite.config.ts обновлён с фактическим gzip (27 KB vs ожидавшихся 50-80).
+
+### Ключевые отклонения от плана
+
+- **instrumentation-xml-http-request добавлен сверх tasks.json.** Архитектура §14.3 упоминает оба (fetch+xhr), axios в браузере использует XHR adapter — без XHR инструментации 100% API-span'ов теряется. Это соответствие архитектуре, не отклонение от неё.
+- **context-zone установлен, но не регистрируется** как contextManager. `StackContextManager` (default в WebTracerProvider) достаточен для v1 fetch/XHR tracing. `ZoneContextManager` нужен только при глубоких async chain'ах — можно подключить позже.
+- **app.correlation_id для XHR в v1 не работает.** XHR API не позволяет читать request-headers в `applyCustomAttributesOnSpan`. Фикс — через WeakMap + axios-adapter wrapper — запланирован в FE-TASK-052 (явный TODO в коде). Fetch-span'ы работают корректно.
+- **propagateTraceHeaderCorsUrls оставлен default (empty).** Safer-by-default: traceparent не утекает в cross-origin. Same-origin deployment (ADR-6) делает это безопасным умолчанием.
+
+### Проверки
+
+- typecheck ✓ (root + tests/e2e; strict + exactOptionalPropertyTypes + noUncheckedIndexedAccess)
+- lint ✓ (0 warnings с --max-warnings=0)
+- vitest ✓ (1236/1236 passed, +13 новых)
+- build ✓ (1205 modules, vite 3.27s, vendor/otel 104.12 KB raw / 26.96 KB gzip)
+- size-limit ✓ (13/13 budgets pass; vendor/otel 26.96 KB ≤ 100 KB)
+- Makefile в Frontend/ отсутствует — шаг N/A
+- Соответствие §14.3 1:1: sdk-trace-web + instrumentation-fetch + instrumentation-xml-http-request + exporter-trace-otlp-http; OTLP endpoint runtime; span attrs app.user_role/app.org_id/app.correlation_id (+app.http_path) + service.* из resource; traceparent auto-injection через W3CTraceContextPropagator (default); SSE-ограничение задокументировано.
+
+### Subagents
+
+- **code-architect** — план: buildOtelConfig pure + enrichSpan + tagXhrCorrelationId, vendor/otel chunk, 9 пакетов с пиннингом, риски (SDK API churn 0.x для instrumentation packages, test isolation, StrictMode double-invoke).
+- **code-reviewer** — SHIP-WITH-NITS: Major #1 (XHR correlation_id accepted limitation), Minor #2 (http.route→app.http_path), Nit #9 (bundle comment). Все применены.
+
+### Что разблокируется и заметки для следующих задач
+
+- **FE-TASK-052**: axios-interceptor (`client.ts:207`) должен вызвать `tagXhrCorrelationId(xhr, correlationId)` для заполнения `app.correlation_id` в XHR-span'ах. Способ: config.adapter wrapping или WeakMap по config + onDownloadProgress event.target. Пайплайн web-vitals → Sentry.captureMessage — DSN runtime-env готов, scrubber работает.
+- Sentry Performance остаётся отключённым (tracesSampleRate:0). При желании поднять Sentry tracing — disable OTel fetch-instrumentation или переключиться на Sentry-only tracing.
+- При росте сложности async-chain'ов — подключить `ZoneContextManager` из context-zone как `contextManager` в `provider.register({contextManager})`.
+- CI: prod nginx-entrypoint.sh (FE-TASK-009 Dockerfile) должен инжектить `OTEL_ENDPOINT` в `/config.js` (runtime-env §13.5). Поле в RuntimeEnv объявлено; entrypoint.sh расширится отдельной задачей.
+
+---
+
 ## FE-TASK-050 — Sentry SDK интеграция (§14.2) (2026-04-20)
 
 **Статус:** done

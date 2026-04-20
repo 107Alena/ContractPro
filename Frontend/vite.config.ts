@@ -14,6 +14,11 @@ export default defineConfig({
     target: 'es2022',
     rollupOptions: {
       output: {
+        // Отдельное имя для entry-chunk'а — отличает main от lazy-страниц
+        // `src/pages/*/index.tsx`, которые Rollup именует `index-*.js`. Нужно для
+        // size-limit (§13.3, FE-TASK-010): стабильный glob `assets/main-*.js`
+        // позволяет bound'ить только main-bundle (≤200 КБ gzip).
+        entryFileNames: 'assets/main-[hash].js',
         // §6.3 / §11.2 high-architecture — granular code-splitting:
         // - chunks/admin        — все admin-страницы (FE-TASK-001/002), один общий chunk
         // - chunks/diff-viewer  — widgets/diff-viewer + diff-match-patch (FE-TASK-047),

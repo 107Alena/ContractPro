@@ -1,5 +1,60 @@
 # Frontend Implementation Progress
 
+## FE-TASK-010 — GitHub Actions CI (§13.3) + size-limit (2026-04-20)
+
+**Статус:** done
+**Категория:** infrastructure
+**Приоритет:** medium (из 8 pending — FE-TASK-002 high блокирован DESIGN-TASK-002)
+**Зависимости:** FE-TASK-009 (package.json/husky) — done.
+**Разблокирует:** автоматическая валидация typecheck/lint/test/build/size-limit на каждом PR и push; фундамент для SHA-пиннинга actions и multi-domain workflow (DocumentProcessing, etc.).
+
+**План реализации:**
+1. Выбор задачи: из 8 pending ни одна не имеет priority=critical. FE-TASK-002 (high) блокирован DESIGN-TASK-002. Среди медиумов FE-TASK-010 выбран как foundational infrastructure — обеспечивает непрерывную валидацию для всех 47 завершённых задач и будущих.
+2. Research: §13.3 архитектуры — каноничный YAML с 3 jobs (quality/e2e/docker). package.json проверен: существуют все скрипты (typecheck/lint/test:ci/build/e2e:ci), нет size-limit конфига. Корень монорепо /Users/alenabaranova/Desktop/ContractPro/ не имеет .github/.
+3. План (code-architect): workflow в корне монорепо с `paths:` фильтром + `defaults.run.working-directory: Frontend`; step-level `if: env.X != ''` для secret-гейтинга; кеш Playwright браузеров отдельно; concurrency group + .nvmrc. gen:api:check как отдельный job/step. Не добавлять scope-creep.
+4. Реализация:
+   - `/Users/alenabaranova/Desktop/ContractPro/.github/workflows/frontend-ci.yml` — 3 job'а, `permissions: contents: read` на workflow-уровне, concurrency cancel-in-progress.
+   - quality: checkout → setup-node@v4 (node-version-file=.nvmrc, cache=npm) → `npm ci` → `gen:api:check` → typecheck → lint → test:ci → build → size-limit → chromaui/action@v11 (только PR + non-empty CHROMATIC_TOKEN).
+   - e2e: needs=quality. actions/cache@v4 на ~/.cache/ms-playwright с fallback на `playwright install-deps`. Запуск через `npm run e2e:ci` (vite --mode e2e поднимает webServer сам). upload-artifact@v4 playwright-report при failure.
+   - docker: needs=[quality, e2e], `if: push && ref=refs/heads/master`. docker/setup-buildx-action@v3 → docker/login-action@v3 (гейт на REGISTRY_USERNAME + REGISTRY_PASSWORD + REGISTRY_HOST) → docker/build-push-action@v5 (context=./Frontend, push=гейт, tags=${{ vars.REGISTRY_HOST || 'localhost' }}/contractpro-frontend:${{ github.sha }}, cache-from/to=type=gha).
+   - `Frontend/.nvmrc` — node 20.
+   - `Frontend/vite.config.ts` — добавлен `entryFileNames: 'assets/main-[hash].js'` (отделить main от lazy-страниц `src/pages/*/index.tsx`, которые Rollup тоже именует index-*).
+   - `Frontend/package.json` — скрипт `"size-limit"`, секция "size-limit" с 12 бюджетами (main 200 KB, chunks/admin 10 KB, chunks/diff-viewer/pdf-preview 150 KB, каждый vendor/* 150 KB, lazy pages 100 KB, catch-all other async 80 KB), devDeps size-limit + @size-limit/file.
+5. Локальная верификация: typecheck 0 errors, lint 0, test:ci 1206/1206, build ok, size-limit 12/12 ✓. YAML parse OK.
+6. Review (code-reviewer): SHIP-WITH-NITS. Применены критические фиксы:
+   - C1 (silent false-green): 7 shared chunks (WhatMattersCards, processing-progress, risks-list, status-*, apply-validation, diff.worker) не матчились ни одним глобом. Добавлен catch-all `dist/assets/*.js` (кроме `main-*`/`index-*`) с лимитом 80 KB.
+   - C2: lazy-pages aggregate ужесточён с 150 KB до 100 KB gzip (текущее 53 KB, 2x запас).
+   - N1: `permissions: contents: read` на workflow-level (least-privilege).
+   - N9: `vars.REGISTRY_HOST != ''` добавлен в гейтинг docker-login + build-push.
+   
+   Нефиксы (задокументированы): N2 SHA-пиннинг actions (low risk, follow-up), N5 exitZeroOnChanges consistent с npm-скриптом, N6 e2e на master-push (belt-and-suspenders), N7 Playwright cache key (безопасно широкий), N3 comment clarity.
+
+**Verification:**
+- typecheck: 0 errors
+- lint (--max-warnings=0): 0 warnings
+- test:ci (vitest+coverage): 154 files / 1206 tests passed
+- build: `dist/assets/main-0Ygwp4sz.js` (49.91 KB gzip) отделён; все чанки на месте
+- size-limit: 12/12 ✓. main 49.85/200 KB; chunks/admin 1.4/10; pdf-preview 57/150; vendor/react 55.85/150 (самый крупный); other async catch-all 13.32/80; lazy pages 53.28/100
+- YAML parse (js-yaml): OK (jobs=quality/e2e/docker, permissions=contents:read, on=[push, pull_request])
+
+**Ключевые решения:**
+- Workflow в корне монорепо (.github/workflows/frontend-ci.yml), не во Frontend/.github/ — GH Actions сканирует только корневой `.github/`. Имя `frontend-ci.yml` (не `ci.yml`) под multi-domain monorepo.
+- Secret-гейтинг через step-level `if: env.X != ''` + step-level `env:` с `secrets.*`/`vars.*` — работает на форках/до настройки Ops, не блокирует merge.
+- Vite `entryFileNames: 'assets/main-[hash].js'` — без него size-limit glob `index-*.js` сматчил бы и main, и 9 lazy-страниц (ambiguity, ложно-зелёный).
+- Makefile для Frontend отсутствует (проект на npm scripts). Все CI-гейты прописаны как npm-скрипты.
+- gen:api:check включён как CI-gate (§15.2) — не в AC, но архитектура требует.
+
+**Subagents вызваны:** Explore (research), code-architect (план), code-reviewer (SHIP-WITH-NITS).
+
+**Notes for next tasks:**
+- FE-TASK-050 (Sentry): `build.sourcemap='hidden'` создаст `main-[hash].js.map` и `index-[hash].js.map` — Sentry release должен их upload'ить и удалить перед Docker COPY (§14.2).
+- FE-TASK-056 (README/CONTRIBUTING): включить описание CI-гейтов и `paths:` фильтра. ADR-index может описать монорепо workflow-структуру.
+- Ops setup перед merge в master: `secrets.REGISTRY_USERNAME`, `secrets.REGISTRY_PASSWORD`, `vars.REGISTRY_HOST` (docker push); `secrets.CHROMATIC_TOKEN` (visual regression). Без них jobs gracefully no-op.
+- SHA-пиннинг third-party actions (chromaui/*, docker/*) — рекомендовано для supply-chain защиты (code-reviewer N2). Можно вынести в отдельную infra-задачу.
+- Per-page size budgets: при регрессии можно уточнить через стабильные chunk names — сейчас Vite называет каждый `src/pages/*/index.tsx` → `index-[hash].js`. TODO.
+
+---
+
 ## FE-TASK-033 — Topbar + Breadcrumbs widgets + Error pages (2026-04-20)
 
 **Статус:** done

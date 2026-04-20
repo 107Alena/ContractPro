@@ -21,10 +21,89 @@
     "storybook": "storybook dev -p 6006 --no-open",
     "build-storybook": "storybook build",
     "chromatic": "chromatic --exit-zero-on-changes",
+    "size-limit": "size-limit",
     "gen:api": "openapi-typescript ../ApiBackendOrchestrator/architecture/api-specification.yaml -o src/shared/api/openapi.d.ts",
     "gen:api:check": "npm run gen:api && git diff --exit-code -- src/shared/api/openapi.d.ts",
     "prepare": "npm run gen:api && node scripts/prepare-husky.cjs"
   },
+  "size-limit": [
+    {
+      "name": "main bundle",
+      "path": "dist/assets/main-*.js",
+      "limit": "200 KB",
+      "gzip": true
+    },
+    {
+      "name": "chunks/admin",
+      "path": "dist/assets/chunks/admin-*.js",
+      "limit": "10 KB",
+      "gzip": true
+    },
+    {
+      "name": "chunks/diff-viewer",
+      "path": "dist/assets/chunks/diff-viewer-*.js",
+      "limit": "150 KB",
+      "gzip": true
+    },
+    {
+      "name": "chunks/pdf-preview",
+      "path": "dist/assets/chunks/pdf-preview-*.js",
+      "limit": "150 KB",
+      "gzip": true
+    },
+    {
+      "name": "vendor/react",
+      "path": "dist/assets/vendor/react-*.js",
+      "limit": "150 KB",
+      "gzip": true
+    },
+    {
+      "name": "vendor/router",
+      "path": "dist/assets/vendor/router-*.js",
+      "limit": "150 KB",
+      "gzip": true
+    },
+    {
+      "name": "vendor/query",
+      "path": "dist/assets/vendor/query-*.js",
+      "limit": "150 KB",
+      "gzip": true
+    },
+    {
+      "name": "vendor/i18n",
+      "path": "dist/assets/vendor/i18n-*.js",
+      "limit": "150 KB",
+      "gzip": true
+    },
+    {
+      "name": "vendor/sentry",
+      "path": "dist/assets/vendor/sentry-*.js",
+      "limit": "150 KB",
+      "gzip": true
+    },
+    {
+      "name": "vendor/ui-utils",
+      "path": "dist/assets/vendor/ui-utils-*.js",
+      "limit": "150 KB",
+      "gzip": true
+    },
+    {
+      "name": "lazy page chunks (total)",
+      "path": "dist/assets/index-*.js",
+      "limit": "100 KB",
+      "gzip": true
+    },
+    {
+      "name": "other async chunks (shared/workers)",
+      "path": [
+        "dist/assets/*.js",
+        "!dist/assets/main-*.js",
+        "!dist/assets/index-*.js"
+      ],
+      "limit": "80 KB",
+      "gzip": true
+    }
+  ],
   "lint-staged": {
     "*.{ts,tsx}": [
       "eslint --fix --max-warnings=0",
@@ -70,6 +149,7 @@
     "@eslint/compat": "^1.4.1",
     "@eslint/js": "^9.39.4",
     "@playwright/test": "^1.59.1",
+    "@size-limit/file": "^11.2.0",
     "@storybook/addon-a11y": "^8.6.18",
     "@storybook/addon-essentials": "^8.6.14",
     "@storybook/addon-interactions": "^8.6.18",
@@ -105,6 +185,7 @@
     "openapi-typescript": "^7.13.0",
     "postcss": "^8.5.10",
     "prettier": "^3.8.3",
+    "size-limit": "^11.2.0",
     "storybook": "^8.6.18",
     "tailwindcss": "^3.4.19",
     "typescript": "^5.4.5",

@@ -533,7 +533,50 @@
       "dependencies": [
         "FE-TASK-009"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-20",
+        "files_created": [
+          ".github/workflows/frontend-ci.yml — 3 job'а (quality/e2e/docker) согласно §13.3 high-architecture",
+          "Frontend/.nvmrc — node 20 (фиксация версии между локалью и CI через actions/setup-node node-version-file)"
+        ],
+        "files_modified": [
+          "Frontend/package.json — добавлены devDeps size-limit@^11.1.0 + @size-limit/file@^11.1.0; скрипт \"size-limit\"; секция \"size-limit\" с 12 бюджетами (main, chunks/*, vendor/*, lazy pages, catch-all other async)",
+          "Frontend/vite.config.ts — entryFileNames: 'assets/main-[hash].js' чтобы отличать main entry от lazy-страниц `src/pages/*/index.tsx` (которые Rollup также именует index-*). Требуется для stable size-limit glob-а main-*.js"
+        ],
+        "deviations": [
+          "Workflow размещён в корне монорепо `.github/workflows/frontend-ci.yml`, не во Frontend/.github/ — единственный рабочий вариант, так как GitHub Actions сканирует только корневой `.github/workflows/`. Через `paths: ['Frontend/**', '.github/workflows/frontend-ci.yml']` триггер ограничен релевантными изменениями.",
+          "Имя файла — `frontend-ci.yml`, не `ci.yml` (в монорепо несколько доменов: DocumentProcessing/DocumentManagement/ApiBackendOrchestrator будут добавлять свои workflow'ы). AC упоминает `ci.yml`, но §13.3 только пример.",
+          "Chromatic step имеет `exitZeroOnChanges: true` (соответствует существующему npm-скрипту `chromatic --exit-zero-on-changes`): визуальные диффы информативные, не блокируют PR. §13.3 не указывает exit-code behavior — выбрано non-blocking до настройки Chromatic project.",
+          "Docker-job и Chromatic-step gracefully no-op без секретов: step-level `if: env.SECRET != ''`. Позволяет CI проходить на форках/до настройки Ops, не блокирует merge в master. Для docker добавлен guard `vars.REGISTRY_HOST != ''` (code-reviewer N9).",
+          "gen:api:check вынесен в отдельный workflow-step (§15.2 требует его как CI-gate). Не указан в AC FE-TASK-010, но интегрирован как единственный логичный момент для drift-detection.",
+          "permissions: { contents: read } на workflow-уровне — least-privilege защита от supply-chain атаки на third-party actions (code-reviewer N1). В каноничной §13.3 не указано.",
+          "concurrency group `frontend-ci-${{ github.ref }}` с cancel-in-progress — экономит минуты на rapid pushes. Не в §13.3, но стандартная практика.",
+          "Playwright browsers кешируется через actions/cache@v4 на ~/.cache/ms-playwright, с fallback install-deps при cache-hit. §13.3 пример не упоминает кеширование.",
+          "Playwright report загружается как artifact при failure (upload-artifact@v4) — не в §13.3, но стандартная практика для debug упавших e2e.",
+          "size-limit конфиг расширен до 12 бюджетов вместо 2 из AC: добавлены отдельные лимиты для каждого vendor/* и chunks/*, plus catch-all `other async chunks` (code-reviewer C1) — без него 7 shared chunks оставались без бюджета (silent false-green).",
+          "`lazy page chunks (total)` ужесточён с 150 KB до 100 KB gzip (code-reviewer C2) — текущий total 53 KB, запас ~2x до регрессии. Per-page бюджеты не добавлены (hashed имена нестабильны), но aggregate limit теперь достаточно tight.",
+          "Makefile для Frontend отсутствует (проект использует npm scripts). `make <goal>` не применимо — все CI-гейты (typecheck/lint/test:ci/build/size-limit) прописаны как npm-скрипты и выполняются по шагам workflow."
+        ],
+        "verification": [
+          "npm run typecheck: 0 errors",
+          "npm run lint (--max-warnings=0): 0 errors, 0 warnings",
+          "npm run test:ci: 154/154 files, 1206/1206 tests passed (unchanged)",
+          "npm run build: dist/assets/main-0Ygwp4sz.js (main entry, 49.91 KB gzip) отделён от index-*.js (lazy pages). Все vendor/* и chunks/* на месте.",
+          "npx size-limit: 12/12 budgets pass. Main 49.85 KB / 200 KB; chunks/admin 1.4 KB / 10 KB; chunks/pdf-preview 57 KB / 150 KB; vendor/react 55.85 KB / 150 KB (крупнейший); other async chunks (catch-all) 13.32 KB / 80 KB.",
+          "YAML frontend-ci.yml: js-yaml parse OK — jobs=[quality, e2e, docker]; permissions=contents:read; on=[push, pull_request]",
+          "subagents: code-architect (план — SHIP с 4 корректировками: paths включает workflow, concurrency, playwright cache, .nvmrc, docker.context=./Frontend); code-reviewer (SHIP-WITH-NITS — 2 critical C1+C2 и 2 важных N1+N9 применены, 6 остальных nits задокументированы)"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-050 (Sentry): при `build.sourcemap='hidden'` source-maps будут лежать рядом с `main-[hash].js` и `index-[hash].js` — Vite entryFileNames-change (это task) не влияет на source-map-маппинг. Sentry release должен upload'ить source-maps и удалить их из dist/ перед Docker COPY (см. §14.2).",
+          "FE-TASK-056 (README/CONTRIBUTING): включить описание CI-гейтов (typecheck/lint/test:ci/build/size-limit/gen:api:check) и объяснить `paths:` фильтр. ADR-index можно добавить раздел про монорепо workflow-структуру.",
+          "Registry секреты (`secrets.REGISTRY_USERNAME`, `secrets.REGISTRY_PASSWORD`, `vars.REGISTRY_HOST`) нужно настроить в Ops когда появится production registry — пока docker-job no-op buildx smoke test.",
+          "Chromatic token (`secrets.CHROMATIC_TOKEN`) нужно настроить в GitHub → Settings → Secrets перед первым использованием Chromatic-проекта.",
+          "Если в будущем потребуется блокировать PR на visual changes — убрать `exitZeroOnChanges: true` из workflow (line 87) и/или изменить скрипт package.json.",
+          "Per-page size budgets: при регрессии можно уточнить `lazy page chunks (total)` через множество отдельных entries с стабильными именами через vite build.rollupOptions.output.chunkFileNames(chunkInfo) кастомизацию — сейчас Vite даёт `index-[hash].js` для любого `src/pages/*/index.tsx`. TODO.",
+          "SHA-pinning third-party actions (chromaui/*, docker/*) — рекомендовано для супплай-чейн защиты. Сейчас major-tag pins (code-reviewer N2, не blocking)."
+        ]
+      }
     },
     {
       "id": "FE-TASK-011",

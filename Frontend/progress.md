@@ -1,5 +1,76 @@
 # Frontend Implementation Progress
 
+## FE-TASK-056 — README quickstart + CONTRIBUTING.md + ADR index (§15.3) (2026-04-20)
+
+**Статус:** done
+**Категория:** documentation
+**Приоритет:** medium (из 5 pending: FE-TASK-002 high блокирован DESIGN-TASK-002; FE-TASK-048 medium требует Figma-макет «Отчёты»; выбрана FE-TASK-056 как самодостаточная, закрывающая §15.3 и критичная для onboarding после 50+ завершённых задач)
+**Зависимости:** FE-TASK-009 (Dockerfile + entrypoint.sh для runtime-env) — done. Все ссылки в README на nginx.conf, Dockerfile, entrypoint.sh, public/config.js, runtime-env.ts — live.
+
+**План реализации:**
+
+1. Выбор задачи: из 5 pending — FE-TASK-002 (high) блокирован DESIGN-TASK-002, FE-TASK-048 (medium) требует Figma-макет отчётов. Среди ready medium — FE-TASK-056 выбрана как самодостаточная документационная задача без внешних блокеров; закрывает явное требование §15.3 архитектуры (README / CONTRIBUTING / adr/).
+2. Research:
+   - package.json scripts: 20 скриптов (dev/dev:e2e/build/preview/typecheck/lint/lint:fix/format/format:check/test/test:ci/e2e/e2e:headed/e2e:ci/storybook/build-storybook/chromatic/size-limit/gen:api/gen:api:check/prepare).
+   - Node 20 LTS, `.nvmrc=20`; `engines` в package.json не объявлен (CI читает `.nvmrc` через `actions/setup-node@v4 node-version-file: Frontend/.nvmrc`).
+   - Runtime-env: `public/config.js` → `window.__ENV__`; ключи `API_BASE_URL`, `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `OTEL_ENDPOINT`, `FEATURES.{FEATURE_SSO, FEATURE_DOCX_UPLOAD}` (из runtime-env.ts после FE-TASK-050/051).
+   - Build-time: `VITE_GIT_SHA` (Sentry release tag), `VITE_ENABLE_MSW` (`.env.e2e`).
+   - CI workflow (.github/workflows/frontend-ci.yml): 3 job'а — quality / e2e / docker; секреты `CHROMATIC_TOKEN`, `REGISTRY_{USERNAME,PASSWORD,HOST}`.
+   - Husky: `scripts/prepare-husky.cjs` + commitlint 11 type-enum; lint-staged eslint+prettier на .ts/.tsx, prettier на .json/.md/.css/.html/.yaml/.yml.
+   - Существующие ADR: только `adr/010-sse-ticket-auth.md` (Proposed); таблица §21 high-architecture.md содержит ADR-FE-01..08 (01-07 Accepted, 08 Proposed) + 10 (Proposed); ADR-FE-09 упомянут в §8.2/tasks.json FE-TASK-019 (token pipeline), но в таблицу §21 не внесён — gap между 08 и 10.
+3. План (documentation-engineer):
+   - README.md: Overview → Prerequisites → Quickstart (5 мин) → NPM-скрипты (4 таблицы) → Env (Runtime/Build-time/CI) → Project structure → Troubleshooting → Links.
+   - CONTRIBUTING.md: Getting Started → FSD-правила (3-4 подраздела) → Conventional Commits → Ветки и PR → PR-гейты → Локальные проверки → Code Review Checklist (10-12 пунктов) → Dependencies → Security → Docs.
+   - adr/README.md: Что такое ADR → Статусы → Индекс-таблица (ID/Заголовок/Статус/Файл/Контекст) → Как добавить → Шаблон → TODO.
+   - §-якоря выверены вручную по high-architecture.md (скорректированы относительно плана documentation-engineer): §1.1/§2.1 FSD, §4.2 query-keys, §5.2/§5.5/§5.6 auth/RBAC, §7.1/§7.2/§7.7 API/SSE, §8.2 токены, §10.4 a11y, §13.3/§13.5 CI/runtime-env, §14 observability, §15.2/§15.3 docs.
+4. Реализация:
+   - `Frontend/README.md`: Quickstart 3 шага (nvm use → npm ci → npm run dev), блок role-override (tests/e2e/fixtures/auth-state.ts, §5.5), 4 таблицы npm-скриптов (Dev/Build 6, Quality 6, Tests 5, Storybook 3), runtime-env таблица (6 ключей с дефолтами), build-time таблица (2 ключа), CI-секреты (Chromatic + Registry), ASCII-дерево FSD-структуры, **Troubleshooting 7 кейсов**: `gen:api ERR: no such file` (отсутствует ApiBackendOrchestrator), `husky not found` (CI=true), Node engine mismatch, port 5173 busy, MSW worker 404 в e2e, openapi drift в CI, size-limit regression.
+   - `Frontend/CONTRIBUTING.md`: FSD обязательные правила (направление, public API, «one page», anti-prop-drilling); Conventional Commits (11 type-enum + scope + 4 примера); Ветки и PR; PR-гейты (job quality: gen:api:check → typecheck → lint → test:ci → build → size-limit → Chromatic; job e2e: playwright; job docker: buildx); Локальные проверки (one-liner + husky: lint-staged/commitlint/pre-push); **Code Review Checklist 17 пунктов** (копируемый в PR template): FSD-границы, Public API, OpenAPI-types, TS strict, TanStack Query, SSE, RBAC, i18n, A11y, Observability, Tests, Storybook, Size-limit, Runtime-конфиг, Figma-ссылка, ADR; Dependencies policy; Security; Docs.
+   - `Frontend/architecture/adr/README.md`: 4 статуса (Proposed/Accepted/Deprecated/Superseded) с определениями; **индекс-таблица ADR-FE-01..10**: ADR-FE-01 FSD Accepted, 02 TanStack Query+SSE Accepted, 03 JWT storage Accepted-deps-backend, 04 Radix+Tailwind Accepted, 05 OpenAPI codegen Accepted, 06 EventSource+polling Accepted, 07 Vite+SWC Accepted, 08 Figma-link в UI-PR Proposed, **09 Token pipeline "Не формализован"** (gap с TODO), 10 SSE ticket Proposed (файл adr/010); backend-side связанные (ADR-6 same-origin); секция «Как добавить» 6 шагов; **inline-шаблон ADR** (7 секций: Context/Decision/Alternatives/Trade-offs/План перехода/Метрики/Links) — без отдельного файла 000-template.md (TODO); блок TODO (ADR-FE-01..08 backfill + ADR-FE-09 formalize + 000-template.md).
+5. Тесты:
+   - Python-линкер (inline-скрипт) по 3 новым документам — проверка 13 уникальных relative-ссылок: ALL LINKS OK.
+   - Smoke: все §-якоря сверены `grep '^### N.N' high-architecture.md` → 62 subsection'а; использованные в документах §-ссылки подтверждены (§1.1, §2, §2.1, §3, §4, §4.2, §5.2, §5.5, §5.6, §7.1, §7.2, §7.7, §8.2, §8.5, §10.4, §12, §13, §13.1, §13.2, §13.3, §13.5, §14, §14.1, §14.2, §14.3, §15, §15.1, §15.2, §15.3, §21).
+6. Verify:
+   - typecheck ✓ (0 errors)
+   - lint ✓ (0 warnings)
+   - prettier --check README.md CONTRIBUTING.md adr/README.md → требовался --write для README.md (выравнивание markdown-таблиц) → применено; CONTRIBUTING и adr/README.md без изменений
+   - test:ci ✓ (1236/1236 passed, без регрессий — документация не трогает src/)
+   - build ✓ (1205 modules, 4.38s)
+   - size-limit ✓ (13/13 budgets pass, без изменений)
+
+### Ключевые решения
+
+- **Node 20 через `.nvmrc`, не `engines`.** `package.json` не декларирует `engines` (CI использует `actions/setup-node@v4 node-version-file: Frontend/.nvmrc`). README документирует `nvm use` как канонический способ + упоминает `fnm`/`volta` как альтернативы.
+- **E2E role-override — минимальное упоминание.** README ссылается на фикстуру `tests/e2e/fixtures/auth-state.ts` (§5.5) без детализации flow — чтобы не дублировать архитектуру.
+- **Troubleshooting — 7 наиболее вероятных проблем.** 5 плановых (gen:api, husky, node, port, MSW) + 2 добавленных из реального кода (openapi drift в CI, size-limit после добавления зависимости).
+- **Code Review Checklist — 17 пунктов (план: 12).** Добавлены Public API, SSE, Runtime-конфиг, Figma-ссылка, ADR. Каждый пункт с §-якорем → ревьюер сразу попадает в нужную секцию архитектуры.
+- **ADR-FE-09 gap сохранён.** Создание 009-token-pipeline.md вышло бы за рамки задачи (требует ui-designer для формализации extension-блока `tokens.css`). Зафиксирован как явная TODO-позиция в индексе и в блоке «TODO».
+- **Inline-шаблон ADR вместо 000-template.md.** Ссылка на 010-sse-ticket-auth.md как живой пример + inline-копируемый шаблон в индексе. Отдельный файл-болванка отложен до backfill'а ADR-FE-01..08.
+- **Вся документация на русском.** Следует конвенции проекта (CLAUDE.md: документация RU, код/идентификаторы EN). Таблицы и якоря в `high-architecture.md` тоже на русском.
+
+### Отклонения от плана documentation-engineer
+
+- **§-якоря выверены и скорректированы.** План предлагал §5 для FSD, §5 для RBAC, §8.2 для auth pipeline, §9 для RBAC, §10.4 для A11y, §11 для i18n, §12 для Storybook, §13 для Testing, §14 для Observability, §15.3 для Onboarding. Реальные: §1.1/§2.1 FSD, §5 вся — это auth, §5.5 RBAC, §7 API, §7.7 SSE, §8.2 токены дизайна, §8.5 состояния компонентов из Figma, §10 тестирование, §10.4 критерии качества тестов, §13 DevOps/CI, §14 Observability, §15 Документация.
+- **CONTRIBUTING Checklist расширен с 12 до 17 пунктов.** Добавлены Public API, SSE, Runtime-конфиг, Figma, ADR — все обязательны для UI-PR по архитектуре.
+- **README секция «Links» добавлена.** План этого не включал — добавлено как последняя секция для удобства навигации.
+
+### Subagents
+
+- **documentation-engineer** — план структуры 3 файлов (секции H2/H3, содержимое, troubleshooting, code review checklist, §-якоря). Якоря §-ссылок выверены вручную — часть исправлена.
+
+### Что разблокируется и заметки для следующих задач
+
+- **Onboarding нового разработчика закрыт.** От git clone до `npm run dev` на http://localhost:5173 — 3 шага и ~5 минут.
+- **Code Review Checklist** в CONTRIBUTING.md — готовый чек-лист для вставки в PR template (будущая задача: `.github/PULL_REQUEST_TEMPLATE.md`).
+- **ADR-index** — основа для будущих архитектурных решений. Следующий свободный номер — ADR-FE-11.
+- **Open follow-ups (зафиксированы в tasks.json completion_notes + adr/README.md TODO):**
+  - ADR-FE-09 token pipeline — `009-token-pipeline.md` с extension-блоком `tokens.css` (`--shadow-lg`, `--focus-ring-*`). Требует coordination с ui-designer.
+  - ADR-FE-01..08 — backfill отдельными файлами (сейчас живут только в таблице §21).
+  - `000-template.md` — создать при backfill первого из ADR-FE-01..08.
+- **PR template** (`.github/PULL_REQUEST_TEMPLATE.md`) — естественное продолжение Code Review Checklist; может быть отдельной DevX-задачей.
+
+---
+
 ## FE-TASK-051 — OpenTelemetry SDK + OTLP exporter + fetch/XHR instrumentations (§14.3) (2026-04-20)
 
 **Статус:** done

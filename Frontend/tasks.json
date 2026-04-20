@@ -3028,7 +3028,45 @@
       "dependencies": [
         "FE-TASK-009"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-20",
+        "files_created": [
+          "Frontend/README.md: Quickstart (nvm use → npm ci → npm run dev), 4 таблицы npm-скриптов (Dev/Build, Quality, Tests, Storybook), Runtime-env (6 ключей window.__ENV__) + Build-time (VITE_GIT_SHA, VITE_ENABLE_MSW) + CI-only секреты, ASCII-дерево FSD-структуры, Troubleshooting (7 симптомов: gen:api без ApiBackendOrchestrator, husky при CI=true, node mismatch, port 5173, MSW worker 404, openapi drift, size-limit regression).",
+          "Frontend/CONTRIBUTING.md: FSD-правила (направление зависимостей, public API, «one page», anti-prop-drilling), Conventional Commits (11 типов + scope + примеры), Ветки и PR, PR-гейты (jobs quality/e2e/docker с детализацией шагов), локальные проверки (husky: lint-staged/commitlint/pre-push), Code Review Checklist (17 пунктов копируемый в PR: FSD, Public API, OpenAPI, TS strict, TanStack Query, SSE, RBAC, i18n, A11y, Observability, Tests, Storybook, Size-limit, Runtime-конфиг, Figma, ADR), dependencies policy, security.",
+          "Frontend/architecture/adr/README.md: Статусы (Proposed/Accepted/Deprecated/Superseded), индекс-таблица ADR-FE-01..08, 10 с контекстом + backend-side связанные, явный gap ADR-FE-09 (token pipeline — не формализован, упомянут в §8.2) зафиксирован как TODO, шаблон нового ADR (7 секций), секция «Как добавить новый ADR» (6 шагов)."
+        ],
+        "plan": "1. Из 5 pending: FE-TASK-002 blocked DESIGN-TASK-002, FE-TASK-048 требует Figma, осталось medium FE-TASK-056 и FE-TASK-056. Выбрана FE-TASK-056 как самодостаточная, закрывающая §15.3 и критичная для onboarding. 2. documentation-engineer → план структуры 3 файлов. 3. Якоря §-ссылок выверены вручную по high-architecture.md (скорректированы: §2.1 для FSD-boundaries, §5.5 для RBAC, §8.2 для токенов, §13.5 для runtime-config). 4. ADR-лог: §21 таблица содержит ADR-FE-01..08 (Accepted, кроме 08 Proposed) + ADR-FE-10 (Proposed, adr/010-sse-ticket-auth.md); ADR-FE-09 упомянут в §8.2/§tasks.json как 'token pipeline' но НЕ включён в таблицу §21 — gap сохранён в индексе как явная TODO-позиция, без попытки backfill.",
+        "decisions": [
+          "README не декларирует `engines` в package.json — Node 20 берётся из `.nvmrc`. Документирован `nvm use` как канонический способ + ссылки на fnm/volta/nvm install.",
+          "E2E role-override описан как отсылка к `tests/e2e/fixtures/auth-state.ts` (§5.5) без деталей flow, чтобы избежать дублирования с CONTRIBUTING/архитектурой.",
+          "Troubleshooting `husky skipped` → зафиксирован кейс CI=true (scripts/prepare-husky.cjs) + ручной `npm run prepare` для fix'а.",
+          "Troubleshooting `openapi drift` → явный шаг `npm run gen:api` + commit результата (§15.2 CI-gate).",
+          "CONTRIBUTING Code Review Checklist — 17 пунктов (шире плана documentation-engineer на 12): добавлены Public API, SSE, Runtime-конфиг, Figma-ссылка, ADR — каждый пункт кликабельный с §-якорем.",
+          "ADR-index: сохранён gap ADR-FE-09 как явная TODO-позиция вместо backfill. Создание 009-token-pipeline.md вышло бы за рамки FE-TASK-056 и требует обсуждения с ui-designer (extension-блок в tokens.css).",
+          "Шаблон ADR НЕ выделен в отдельный файл 000-template.md (оставлен TODO) — ссылка на живой пример 010-sse-ticket-auth.md достаточна для следующего ADR.",
+          "Все 3 документа — на русском (как документация проекта, §-якоря в high-architecture.md тоже на русском)."
+        ],
+        "verify": [
+          "python-линкер (inline-скрипт) по 3 новым документам: ALL LINKS OK — все relative-ссылки резолвятся (13 уникальных целей проверено).",
+          "typecheck ✓ (0 errors)",
+          "lint ✓ (0 warnings с --max-warnings=0)",
+          "prettier --check → README.md требовал выравнивания таблиц → применён --write (tables aligned, CONTRIBUTING и adr/README.md остались без изменений — написаны с уже выравненными таблицами)",
+          "test:ci ✓ (1236/1236 passed, без регрессий)",
+          "build ✓ (1205 modules, 4.38s, без изменений размера)",
+          "size-limit ✓ (13/13 budgets pass)",
+          "Makefile в Frontend/ отсутствует — шаг N/A (все задачи через npm run *)",
+          "Соответствие §15.3 1:1: README.md (quickstart ✓) + high-architecture.md + adr/ (индекс ✓) + CONTRIBUTING.md (FSD-правила + commit-семантика ✓) — все 4 пункта §15.3 закрыты."
+        ],
+        "subagents": [
+          "documentation-engineer — план структуры README/CONTRIBUTING/ADR-index: секции H2/H3, содержимое, troubleshooting-кейсы, якоря §. Возвращённые §-ссылки выверены вручную (скорректированы: §2.1 вместо §5 для FSD, §5.5 для RBAC, §14 для observability, убрано несуществующее §17/§18/§19)."
+        ],
+        "open_followups": [
+          "ADR-FE-09 (token pipeline) — создать 009-token-pipeline.md и добавить в таблицу §21 архитектуры (coordinate with ui-designer, tokens.css extension-блок `--shadow-lg`, `--focus-ring-*`).",
+          "ADR-FE-01..08 — backfill отдельными файлами 001-...08-...md; сейчас решения живут только в таблице §21.",
+          "000-template.md — создать при backfill первого из ADR-FE-01..08."
+        ]
+      }
     }
   ]
 }

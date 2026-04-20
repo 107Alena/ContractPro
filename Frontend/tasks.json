@@ -2761,7 +2761,43 @@
       "dependencies": [
         "FE-TASK-030"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-20",
+        "files_created": [
+          "Frontend/src/shared/observability/scrubber.ts — privacy scrubber (redactValue recursive + regex для Bearer/JWT/query-token); публичная redactString",
+          "Frontend/src/shared/observability/scrubber.test.ts — 10 unit-тестов (headers/url/query/body/breadcrumbs/jwt/циклы/массивы/no-op)"
+        ],
+        "files_modified": [
+          "Frontend/src/shared/observability/sentry.ts — расширен: buildSentryConfig() (тестируемый pure builder), Sentry.replayIntegration {maskAllText, blockAllMedia, maskAllInputs, networkDetailAllowUrls:[], networkCaptureBodies:false}, release=`contractpro-frontend@<git-sha>`, sendDefaultPii:false, tracesSampleRate:0 (tracing через OTel §14.3), beforeSend: try/catch → null при падении scrubber'а",
+          "Frontend/src/shared/observability/sentry.test.ts — 11 тестов: DSN no-op, enabled gate, SENTRY_ENVIRONMENT override, release tagging, sample rates/sendDefaultPii, Replay integration present, beforeSend scrubber, beforeSend null при throw",
+          "Frontend/src/shared/config/runtime-env.ts — +SENTRY_ENVIRONMENT?:string в RuntimeEnv",
+          "Frontend/vite.config.ts — build.sourcemap='hidden', define __GIT_SHA__=JSON.stringify(resolveGitSha()) через process.env.VITE_GIT_SHA || git rev-parse HEAD",
+          "Frontend/Dockerfile — после npm run build: find /app/dist -name '*.map' -delete, с комментарием про CI-pipeline (docker build --target build --output → sentry-cli upload → docker build runtime)"
+        ],
+        "deviations": [
+          "tracesSampleRate:0 (вместо 0.1 в изначальном stub) — §14.3 переводит distributed tracing на OpenTelemetry (FE-TASK-051); Sentry Performance отключаем, чтобы не было двойного instrumentation fetch и конфликта traceparent. При желании включить Sentry Perf позднее — регистрировать Sentry.browserTracingIntegration отдельно.",
+          "Замысел code-architect'а включал `beforeSendReplay` для scrub URL в Replay network-events, но в @sentry/react v8 такого top-level option нет: API Replay v8 предоставляет `beforeAddRecordingEvent` на уровне rrweb-фреймов (слишком low-level для безопасной подстановки URL). Вместо этого полагаемся на `networkDetailAllowUrls:[]`+`networkCaptureBodies:false` (Replay не капчит бодики/хедеры) и application-дисциплину (токены в Authorization header, не query).",
+          "buildSentryConfig() выделен отдельной pure-функцией, поскольку `Sentry.init` — non-configurable-свойство в v8 (vi.spyOn падает с 'Cannot redefine property'). Тесты покрывают builder напрямую, initSentry() остаётся тонкой обёрткой.",
+          "SENSITIVE_KEY_RE расширен после code-review: +id_token, authentication, bearer (без -ization), x-access-token. BEARER_RE переведён с `[A-Za-z0-9._-]+` на `\\S+` — покрывает opaque OAuth-токены (не только JWT). QUERY_TOKEN_RE: +id_token/code/assertion/signature/sig + fragment-разделитель `#` (Implicit OAuth flow).",
+          "Dockerfile self-contained (npm run build внутри контейнера): source-map upload в Sentry требует extract dist на хост отдельным CI-job'ом (docker build --target build --output type=local,dest=dist → sentry-cli upload → docker build). Документировано в comment-блоке; реальный CI workflow — вне scope этой задачи."
+        ],
+        "verification": [
+          "npm run typecheck: 0 errors",
+          "npm run lint: 0 warnings (--max-warnings=0)",
+          "npm run test (vitest): 1223/1223 passed — 19 новых в observability (10 scrubber + 11 sentry, -2 заменены на builder-тесты)",
+          "npm run build: 26 .map файлов в dist/assets/; zero sourceMappingURL-ссылок в .js (hidden mode) — AC Шаг 2 выполнен",
+          "Scrubber test (AC Шаг 3): Authorization Bearer token.here.value → [Filtered]; JWT в message → [Filtered]; query ?token=/access_token=/refresh_token/id_token/code/assertion/signature/password scrubbed",
+          "npx size-limit: 12/12 budgets pass; vendor/sentry 66.53 kB gzip ≤ 150 kB; main 50.55 kB ≤ 200 kB; chunks/admin 1.40 kB ≤ 10 kB",
+          "subagents: code-architect (план), code-reviewer (SHIP-WITH-NITS → применены: расширение regex, sendDefaultPii:false, tracesSampleRate:0, try/catch wrapper)"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-051 (OpenTelemetry): tracing через OTel — tracesSampleRate в Sentry оставлен 0, чтобы не было двойного instrumentation fetch и конфликта traceparent headers. Init в src/shared/observability/otel.ts, аналогично initSentry — вызов из main.tsx после initSentry()",
+          "FE-TASK-052 (web-vitals + RUM): использовать `Sentry.captureMessage`/`addBreadcrumb` — DSN уже runtime-env, scrubber работает. Кастомные события (`contract.upload.started`, `sse.reconnect`, `auth.refresh.failed` из §14.4) также проходят через beforeSend → scrubber",
+          "CI-pipeline upload source-maps: docker build --target build --output type=local,dest=dist . → sentry-cli sourcemaps upload --release=$VITE_GIT_SHA dist/ → docker build . (runtime image уже без .map). VITE_GIT_SHA должен выставляться в CI env (GitHub Actions: ${{ github.sha }})",
+          "При поднятии Sentry Performance (браузерный tracing) — добавить Sentry.browserTracingIntegration в integrations[] и set tracesSampleRate > 0; одновременное сосуществование с OTel требует disable OTel-fetch-instrumentation или переключиться на Sentry-only tracing"
+        ]
+      }
     },
     {
       "id": "FE-TASK-051",

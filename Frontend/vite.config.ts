@@ -1,10 +1,32 @@
+import { execSync } from 'node:child_process';
 import path from 'node:path';
 
 import react from '@vitejs/plugin-react-swc';
 import { defineConfig } from 'vite';
 
+// §14.2 Sentry release tagging (FE-TASK-050). Приоритет — CI-env
+// (`VITE_GIT_SHA=$(git rev-parse HEAD)`), fallback — локальный `git rev-parse HEAD`.
+// В Docker build без git-контекста получаем пустую строку — Sentry init
+// пропустит release, и события сгруппируются в дефолтный release (ок для
+// локальной разработки без sentry-cli upload).
+function resolveGitSha(): string {
+  if (process.env.VITE_GIT_SHA) return process.env.VITE_GIT_SHA;
+  try {
+    return execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+  } catch {
+    return '';
+  }
+}
+
 export default defineConfig({
   plugins: [react()],
+  define: {
+    // Инжекция в bundle: `declare const __GIT_SHA__: string` в sentry.ts.
+    // JSON.stringify — чтобы значение стало строковым литералом (иначе Vite подставит как идентификатор).
+    __GIT_SHA__: JSON.stringify(resolveGitSha()),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -12,6 +34,12 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
+    // §14.2 source-maps загружаются в Sentry release, но не линкуются
+    // в bundle (отсутствует `//# sourceMappingURL=`). CI после build
+    // должен: (1) `sentry-cli sourcemaps upload --release=$GIT_SHA dist/`,
+    // (2) удалить `dist/assets/**/*.map` перед `docker build` (или
+    // исключить через .dockerignore). См. FE-TASK-050.
+    sourcemap: 'hidden',
     rollupOptions: {
       output: {
         // Отдельное имя для entry-chunk'а — отличает main от lazy-страниц

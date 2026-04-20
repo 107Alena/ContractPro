@@ -10,6 +10,7 @@ export type FeatureFlags = Partial<Record<FeatureFlag, boolean>>;
 export interface RuntimeEnv {
   API_BASE_URL?: string;
   SENTRY_DSN?: string;
+  SENTRY_ENVIRONMENT?: string;
   OTEL_ENDPOINT?: string;
   FEATURES?: FeatureFlags;
 }

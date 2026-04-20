@@ -45,6 +45,19 @@ RUN npm run typecheck \
  && npm run test:ci \
  && npm run build
 
+# §14.2 / FE-TASK-050: source-maps генерируются как `hidden` (без
+# `//# sourceMappingURL=` в bundle) для загрузки в Sentry release через
+# `sentry-cli sourcemaps upload --release=$GIT_SHA /app/dist`. В runtime-image
+# .map-файлы НЕ должны попадать — удаляем после upload-стадии.
+#
+# NB: текущий Dockerfile self-contained (build внутри контейнера). Для
+# реального upload source-maps CI-pipeline должен:
+#   (1) `docker build --target build --output type=local,dest=dist .` — вытянуть dist на хост;
+#   (2) `sentry-cli sourcemaps upload --release=$GIT_SHA dist/`;
+#   (3) `docker build .` (runtime image с уже удалёнными .map).
+# До тех пор .map удаляются всегда — это безопасный дефолт (не утечёт в CDN).
+RUN find /app/dist -name '*.map' -delete
+
 # ---- runtime stage ---------------------------------------------------------
 FROM nginx:1.27-alpine AS runtime
 

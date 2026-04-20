@@ -6,12 +6,13 @@ describe('i18n config', () => {
   it('инициализируется с русской локалью и namespace common', () => {
     expect(DEFAULT_LOCALE).toBe('ru');
     expect(DEFAULT_NAMESPACE).toBe('common');
-    expect(NAMESPACES).toEqual(['common', 'errors']);
+    expect(NAMESPACES).toEqual(['common', 'errors', 'topbar']);
   });
 
-  it('экспортирует ресурсы ru.common и ru.errors', () => {
+  it('экспортирует ресурсы ru.common, ru.errors и ru.topbar', () => {
     expect(I18N_RESOURCES.ru.common).toBeDefined();
     expect(I18N_RESOURCES.ru.errors).toBeDefined();
+    expect(I18N_RESOURCES.ru.topbar).toBeDefined();
   });
 
   it('i18n.isInitialized === true после импорта модуля', () => {
@@ -34,5 +35,10 @@ describe('i18n config', () => {
     expect(i18n.t('actions.reload', { ns: 'common' })).toBe('Обновить страницу');
     expect(i18n.t('actions.retry', { ns: 'common' })).toBe('Повторить');
     expect(i18n.t('actions.home', { ns: 'common' })).toBe('На главную');
+  });
+
+  it('topbar namespace содержит ключи userMenu/offline', () => {
+    expect(i18n.t('userMenu.logout', { ns: 'topbar' })).toBe('Выйти');
+    expect(i18n.t('offline.banner', { ns: 'topbar' })).toContain('Нет соединения');
   });
 });

@@ -1827,7 +1827,79 @@
         "FE-TASK-031",
         "FE-TASK-019"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-20",
+        "summary": "Topbar + Breadcrumbs widgets, sticky offline-banner через useOnlineStatus, доработка error-страниц (404 CTA 'К документам', 500 'Скопировать ID', /offline auto-detect). AppLayout расширен. i18n namespace topbar.json.",
+        "files_created": [
+          "Frontend/src/widgets/topbar/topbar.tsx — корневой виджет (sticky header + OfflineBanner + hamburger + optional search + notifications + UserMenu)",
+          "Frontend/src/widgets/topbar/user-menu.tsx — Radix Popover dropdown с данными пользователя + Logout button",
+          "Frontend/src/widgets/topbar/offline-banner.tsx — role=status aria-live=polite banner",
+          "Frontend/src/widgets/topbar/icons.tsx — inline SVG (ChevronDown, Menu, Bell, WifiOff, UserCircle)",
+          "Frontend/src/widgets/topbar/topbar.test.tsx — 10 unit-тестов (user-menu, logout, hamburger, offline events, search)",
+          "Frontend/src/widgets/topbar/topbar.stories.tsx — 7 stories (Default/WithSearch/WithNotifications/UserMenuOpen/Offline/BusinessUser/OrgAdmin)",
+          "Frontend/src/widgets/breadcrumbs/breadcrumbs.tsx — AppBreadcrumbs route-aware через useMatches() + guard через UNSAFE_DataRouterStateContext для test-compat",
+          "Frontend/src/widgets/breadcrumbs/resolve-crumbs.ts — pure helper UIMatch[] → BreadcrumbItem[]",
+          "Frontend/src/widgets/breadcrumbs/resolve-crumbs.test.ts — 5 pure-юнитов",
+          "Frontend/src/widgets/breadcrumbs/breadcrumbs.test.tsx — 5 integration через createMemoryRouter + RouterProvider",
+          "Frontend/src/widgets/breadcrumbs/breadcrumbs.stories.tsx — 5 stories (SingleLevel/TwoLevels/DynamicCrumb/DeepNesting/Collapsed)",
+          "Frontend/src/widgets/breadcrumbs/index.ts",
+          "Frontend/src/features/auth/logout/use-logout.ts — тонкая обёртка вокруг processes/auth-flow logout() с isPending guard",
+          "Frontend/src/features/auth/logout/use-logout.test.tsx — 4 теста (mock @/processes/auth-flow)",
+          "Frontend/src/features/auth/logout/index.ts",
+          "Frontend/src/shared/lib/use-online-status/use-online-status.ts — navigator.onLine + online/offline events",
+          "Frontend/src/shared/lib/use-online-status/use-online-status.test.tsx — 4 теста",
+          "Frontend/src/shared/lib/use-online-status/index.ts",
+          "Frontend/src/shared/i18n/locales/ru/topbar.json — новый namespace (userMenu/search/notifications/offline/mobile)"
+        ],
+        "files_modified": [
+          "Frontend/src/features/auth/index.ts — +re-export useLogout",
+          "Frontend/src/widgets/topbar/index.ts — заменён export {} на публичный API (Topbar/UserMenu/OfflineBanner)",
+          "Frontend/src/pages/errors/NotFound404.tsx — основная CTA 'К документам' (navigate /contracts) + дополнительная 'На главную'",
+          "Frontend/src/pages/errors/ServerError500.tsx — добавлена кнопка 'Скопировать ID' через useCopy",
+          "Frontend/src/pages/errors/Offline.tsx — auto-detect через useOnlineStatus(): при online показывает inline-CTA 'Вернуться' (navigate(-1) с fallback /contracts при history.length<=1)",
+          "Frontend/src/pages/errors/errors.test.tsx — обновлены тесты (404 +CTA, 500 +copy-button, Offline +online-hint)",
+          "Frontend/src/shared/i18n/config.ts — +topbar namespace",
+          "Frontend/src/shared/i18n/config.test.ts — обновлены ожидания",
+          "Frontend/src/shared/i18n/locales/ru/common.json — +breadcrumbs.label, +role.{LAWYER,BUSINESS_USER,ORG_ADMIN}",
+          "Frontend/src/shared/i18n/locales/ru/errors.json — +serverError.copied, +offline.onlineHint, +offline.backToPrevious",
+          "Frontend/src/app/router/AppLayout.tsx — +<Topbar/> +<Breadcrumbs/> между Sidebar и Outlet",
+          "Frontend/eslint.config.js — allow: features → processes с комментарием (для features/auth/logout импорта processes/auth-flow), аналогично существующему pages → processes"
+        ],
+        "deviations": [
+          "useMatches() в react-router-dom 6.22 привязан к data-router (RouterProvider). Но router.test.tsx использует MemoryRouter + useRoutes (см. комментарий в том файле про Node 20+undici несовместимость data-router в jsdom). Чтобы Breadcrumbs не ломали router-тесты — детектируем data-router через UNSAFE_DataRouterStateContext и в declarative-режиме не вызываем useMatches; возвращаем null (Breadcrumbs — декоративный элемент). TODO-комментарий в breadcrumbs.tsx о миграции router.test.tsx.",
+          "features/auth/logout — тонкий React-хук useLogout делегирует в processes/auth-flow logout() (happy-path POST /auth/logout + clear session + redirect /login уже реализованы там). Это потребовало точечного расширения eslint boundaries (features → processes), аналогично существующему pages → processes. Альтернатива — поднять React-хук в processes/auth-flow или разрешить widgets → processes — оба варианта хуже с точки зрения separation-of-concerns.",
+          "z-index Topbar'а: z-20 (Tailwind default), не z-modal. Обоснование: модалки из shared/ui/modal используют z-modal (1000) — sticky header не должен их перекрывать. Topbar поверх контента — достаточно z-20 > default 0.",
+          "Role override через defaultValue: t(`common:role.${user.role}`, { defaultValue: user.role }) — при drift enum'а в OpenAPI показываем raw-значение роли, не ломая UI. code-reviewer nit: стоит логировать drift через observability — follow-up.",
+          "Notifications-кнопка реализована как placeholder (Popover с «Нет новых уведомлений») — v1 без backend-контракта для notifications API. AC допускает '(опц)'. Включается через prop withNotifications.",
+          "Offline-баннер использует navigator.onLine + online/offline события, не SSE/heartbeat. §9.4 high-architecture: 'для v1 полноценный офлайн-режим не реализуется, только graceful degradation' — соответствует."
+        ],
+        "verification": [
+          "npm run typecheck — 0 errors (включая tests/e2e/tsconfig.json)",
+          "npm run lint — 0 errors, 0 warnings (--max-warnings=0)",
+          "npm run test (vitest) — 1206/1206 passed, 154 файла (35 новых тестов: 4 useLogout + 4 useOnlineStatus + 5 resolve-crumbs + 5 AppBreadcrumbs + 10 Topbar + 6 доработанных error-pages + 1 i18n)",
+          "npm run build — dist/ успешно; admin chunk 1.40 КБ gzip (unchanged), main index 49.89 КБ gzip; добавленный топбар+breadcrumbs инлайнится в main bundle (лежит в AppLayout, не lazy)",
+          "Makefile в Frontend/ отсутствует — этап N/A",
+          "subagents: code-architect (дизайн FSD boundaries, файловая структура, logout feature), code-reviewer (SHIP + 8 nits — применены #3 TODO, #7 navigate fallback, #8 z-index; остальные закрыты в deviations/future)"
+        ],
+        "architecture_alignment": [
+          "§6.4 Breadcrumbs — useMatches() + route.handle.crumb ✓",
+          "§8.3 Topbar — поиск (опц), уведомления (опц), профиль-меню ✓",
+          "§9.3 Offline UI — sticky-баннер «Нет соединения» в Topbar ✓",
+          "§9.4 Offline graceful degradation — navigator.onLine + events ✓",
+          "§17.1 Error pages — 403/404/500/offline с русскими CTA ✓",
+          "FSD boundaries: widgets → features/shared, features → processes/entities/shared ✓"
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-044+ (ContractsListPage, ReportsPage и другие list-страницы): если нужен глобальный поиск в Topbar — используйте prop search={value, onChange}. Сейчас по умолчанию скрыт (v1 без общего поиска).",
+          "FE-TASK-050 (Sentry): breadcrumbs.tsx TODO про удаление UNSAFE_DataRouterStateContext guard — можно закрыть после миграции router.test.tsx на createMemoryRouter + RouterProvider (блокер — потенциальная Node+undici проблема с AbortSignal; на Node 22 уже решено).",
+          "FE-TASK-051+ (observability): добавить логирование случаев t('common:role.X') с defaultValue (детекция OpenAPI drift).",
+          "features/auth/logout/ — теперь имеет публичный API useLogout; будущие места logout (settings page выход, inactivity-таймаут) импортируют оттуда, не напрямую из processes.",
+          "AppLayout теперь полный shell: Sidebar + Topbar + Breadcrumbs + Outlet. /contracts/:id loaders (FE-TASK-045/046) смогут использовать useMatches() handle напрямую.",
+          "При появлении DarkMode / theme-tokenов — cfb Topbar использует bg-bg/95 backdrop-blur — подстрочит под токены. Сейчас это предполагает только light-theme.",
+          "i18n-namespace topbar подключён в config.ts; NAMESPACES теперь ['common', 'errors', 'topbar']. Для следующих widgets с большим количеством strings — создавайте свой namespace, не захламляйте common."
+        ]
+      }
     },
     {
       "id": "FE-TASK-034",

@@ -48,10 +48,11 @@ describe('Error pages (403/404/500/offline)', () => {
     expect(screen.getByRole('button', { name: 'На главную' })).toBeDefined();
   });
 
-  it('NotFound404 показывает код 404 и кнопку "На главную"', () => {
+  it('NotFound404 показывает код 404 и CTA «К документам» + «На главную»', () => {
     render(wrap(<NotFound404 />));
     expect(screen.getByText('404')).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Страница не найдена' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'К документам' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'На главную' })).toBeDefined();
   });
 
@@ -62,7 +63,7 @@ describe('Error pages (403/404/500/offline)', () => {
     expect(screen.getByRole('button', { name: 'Обновить страницу' })).toBeDefined();
   });
 
-  it('ServerError500 показывает correlation_id когда передан через location.state', () => {
+  it('ServerError500 показывает correlation_id с кнопкой «Скопировать ID»', () => {
     render(
       <I18nProvider>
         <MemoryRouter initialEntries={[{ pathname: '/500', state: { correlationId: 'req-xyz' } }]}>
@@ -73,11 +74,21 @@ describe('Error pages (403/404/500/offline)', () => {
     const block = screen.getByTestId('correlation-id');
     expect(block).toBeDefined();
     expect(block.textContent).toContain('req-xyz');
+    expect(screen.getByTestId('copy-correlation-id')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Скопировать ID' })).toBeDefined();
   });
 
-  it('Offline показывает title и reload кнопку (нет кода)', () => {
-    render(wrap(<Offline />));
+  it('Offline показывает title и reload кнопку (нет кода); при online — CTA «Вернуться»', () => {
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
+    const { unmount } = render(wrap(<Offline />));
     expect(screen.getByRole('heading', { name: 'Нет соединения' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Обновить страницу' })).toBeDefined();
+    expect(screen.queryByTestId('offline-online-hint')).toBeNull();
+    unmount();
+
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true });
+    render(wrap(<Offline />));
+    expect(screen.getByTestId('offline-online-hint')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Вернуться' })).toBeDefined();
   });
 });

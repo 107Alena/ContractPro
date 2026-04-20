@@ -1,5 +1,50 @@
 # Frontend Implementation Progress
 
+## FE-TASK-033 — Topbar + Breadcrumbs widgets + Error pages (2026-04-20)
+
+**Статус:** done
+**Категория:** layout
+**Приоритет:** medium (FE-TASK-002 high, но заблокирован DESIGN-TASK-002 pending)
+**Зависимости:** FE-TASK-031 (router + handle.crumb), FE-TASK-019 (shared/ui) — done.
+**Разблокирует:** переход к полноценной shell-нагрузке страниц; `AppLayout` теперь полный (Sidebar + Topbar + Breadcrumbs + Outlet).
+
+**План реализации:**
+1. Выбор задачи: среди pending — FE-TASK-002 (high) блокирован DESIGN-TASK-002 (pending в Design/tasks.json). Среди medium — выбран FE-TASK-033 как самый фундаментальный (Topbar — shell для всех защищённых страниц).
+2. Архитектурный research (Explore-агент): выявлено, что shared/ui/breadcrumbs, shared/ui/search-input, shared/ui/popover, shared/auth useSession, processes/auth-flow logout — всё готово. widgets/topbar/ пуст; widgets/breadcrumbs/ не существовал; error-pages 403/404/500/offline готовы, но нужны доработки (404 CTA, 500 copy, offline auto-detect).
+3. Дизайн (code-architect): структура widgets/topbar/ {topbar,user-menu,offline-banner,icons}.tsx; widgets/breadcrumbs/ {breadcrumbs,resolve-crumbs}.tsx; новый slice features/auth/logout для тонкого React-хука useLogout над processes/auth-flow logout() — требует точечного allow в eslint boundaries (features → processes).
+4. Реализация shared-слоёв: useOnlineStatus (navigator.onLine + events), useLogout (делегат + isPending guard). i18n — новый namespace topbar.json + добавлены ключи в common/errors.
+5. Breadcrumbs: resolveCrumbs() pure helper + AppBreadcrumbs route-aware компонент. useMatches() в react-router-dom 6.22 привязан к data-router; router.test.tsx использует MemoryRouter+useRoutes — добавлен guard через UNSAFE_DataRouterStateContext.
+6. Topbar: sticky header (z-20) с hamburger (mobile), optional SearchInput, optional notifications (placeholder), UserMenu (popover с initials+name+role+email+org+Выйти), sticky OfflineBanner выше основного bar.
+7. Доработка error-pages: NotFound404 → primary CTA «К документам» + secondary «На главную»; ServerError500 → кнопка «Скопировать ID» через useCopy; Offline → auto-detect via useOnlineStatus с inline-CTA «Вернуться» (navigate(-1) + fallback /contracts при history.length<=1).
+8. AppLayout → добавлены Topbar + Breadcrumbs между Sidebar и Outlet.
+9. Тесты: unit — 29 новых тестов (useLogout/useOnlineStatus/resolve-crumbs/AppBreadcrumbs/Topbar/обновлены error-pages). Все 1206 тестов проходят.
+10. code-reviewer: SHIP, 8 nits — применены TODO-комментарий про UNSAFE_* миграцию, fallback для navigate(-1) deep-link, z-index понижен с z-modal до z-20. Остальные задокументированы как follow-up или deviations.
+
+**Verification:**
+- typecheck: 0 errors
+- lint (`--max-warnings=0`): 0 errors, 0 warnings
+- vitest: 1206/1206 passed (154 test files) — было 1177, +29 новых тестов
+- build: dist/ успешно, admin chunk 1.40 КБ gzip (unchanged), main 49.89 КБ gzip
+- Storybook: 7 stories для Topbar + 5 для Breadcrumbs — генерируются, визуально будут проверены Chromatic-ом
+
+**Ключевые решения:**
+- Breadcrumbs render-mode guard через UNSAFE_DataRouterStateContext: единственный способ не ломать router.test.tsx (data-router vs. declarative useRoutes). TODO в коде на миграцию тестов на createMemoryRouter.
+- features/auth/logout → тонкий React-хук, логика остаётся в processes/auth-flow. ESLint boundaries расширен: features → processes (аналогично существующему pages → processes).
+- z-20 для sticky Topbar (не z-modal), чтобы не перекрывать модалки из shared/ui/modal.
+- i18n namespace topbar.json — изолированный от common (6+ ключей). NAMESPACES теперь ['common','errors','topbar'].
+- role translation через defaultValue: t(`common:role.${user.role}`, { defaultValue: user.role }) — при drift enum'а в OpenAPI показываем raw-значение, не падаем.
+
+**Subagents вызваны:** Explore (research), code-architect (дизайн), code-reviewer (финальный review).
+
+**Notes for next tasks:**
+- FE-TASK-050 (Sentry): добавить логирование случаев t('common:role.X') с fallback defaultValue → детекция OpenAPI-drift.
+- FE-TASK-045/046 (ContractDetail loaders): AppLayout теперь полный shell; loaders могут использовать useMatches() handle в data-router mode без проблем.
+- FE-TASK-049 (SettingsPage): для кнопки «Выйти» импортируйте useLogout из @/features/auth — hook готов.
+- FE-TASK-044+ (list-pages): если нужен глобальный Topbar search — prop Topbar({search: {value, onChange}}). По умолчанию скрыт (v1 без global search).
+- TODO(FE-TASK-033-followup): удалить UNSAFE_DataRouterStateContext guard в widgets/breadcrumbs/breadcrumbs.tsx после миграции router.test.tsx на data-router. Node 22 уже снял ограничение undici с AbortSignal.
+
+---
+
 ## FE-TASK-001 — Admin placeholders (policies / checklists) (2026-04-19)
 
 **Статус:** done

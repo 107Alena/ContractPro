@@ -130,7 +130,13 @@ export default tseslint.config(
             },
             {
               from: 'features',
-              allow: ['entities', 'shared', sliceSame('features')],
+              // `processes` допустим для features по той же архитектурной
+              // договорённости, что и для pages: processes/auth-flow
+              // экспортирует logout() — используется features/auth/logout для
+              // делегирования (feature-хук useLogout). Без этого widgets
+              // вынужден был бы импортировать processes напрямую. Ограничиваем
+              // деформацию explicit allow-list.
+              allow: ['processes', 'entities', 'shared', sliceSame('features')],
             },
             {
               from: 'entities',

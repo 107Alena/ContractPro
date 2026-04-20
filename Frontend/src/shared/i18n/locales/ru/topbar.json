@@ -1,0 +1,25 @@
+{
+  "userMenu": {
+    "trigger": "Меню пользователя",
+    "roleLabel": "Роль",
+    "organizationLabel": "Организация",
+    "logout": "Выйти",
+    "loggingOut": "Выход…"
+  },
+  "search": {
+    "label": "Поиск",
+    "placeholder": "Поиск документов",
+    "clearLabel": "Очистить поиск"
+  },
+  "notifications": {
+    "trigger": "Уведомления",
+    "empty": "Нет новых уведомлений"
+  },
+  "offline": {
+    "banner": "Нет соединения с сервером. Некоторые действия недоступны до восстановления связи.",
+    "srAnnounce": "Соединение потеряно"
+  },
+  "mobile": {
+    "openMenu": "Открыть меню"
+  }
+}

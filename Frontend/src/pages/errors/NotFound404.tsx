@@ -14,6 +14,9 @@ export function NotFound404(): JSX.Element {
       title={t('notFound.title')}
       description={t('notFound.description')}
     >
+      <Button variant="primary" onClick={() => navigate('/contracts')}>
+        {t('common:actions.goToContracts')}
+      </Button>
       <Button variant="secondary" onClick={() => navigate('/')}>
         {t('common:actions.home')}
       </Button>

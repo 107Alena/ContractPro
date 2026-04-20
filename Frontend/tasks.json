@@ -2785,7 +2785,51 @@
         "FE-TASK-030",
         "FE-TASK-027"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-21",
+        "files_created": [
+          "Frontend/src/pages/settings/SettingsPage.test.tsx — 5 unit-тестов: Default (профиль/организация/роль/Выйти) / Loading (spinner при isLoading && !data) / Error (alert + «Повторить» вызывает refetch) / Logout (клик → logout()) / isPending (кнопка disabled + aria-busy + повторный клик игнорируется). Мокаем useMe (@/entities/user) и useLogout (@/features/auth/logout) напрямую — прямой контроль за query-state, обходит проблему observer'а TanStack-query, который затирает вручную выставленный error-state при mount'е.",
+          "Frontend/src/pages/settings/SettingsPage.stories.tsx — 5 stories: Default / Loading / ErrorState / BusinessUser / OrgAdmin. 2 role-варианта дают Chromatic-покрытие ROLE_LABEL-маппинга для Badge. Паттерн seed()+decorate() из DashboardPage.stories.tsx.",
+          "Frontend/tests/e2e/settings.spec.ts — 2 spec'а: (1) LAWYER на /settings видит заголовок + fixtures.users.lawyer (имя/email/организация/роль) + кнопку Выйти; (2) клик Выйти → waitForURL /login. MSW POST /auth/logout возвращает 204 (tests/msw/handlers/auth.ts:36)."
+        ],
+        "files_modified": [
+          "Frontend/src/pages/settings/SettingsPage.tsx — полная замена placeholder (17 lines → ~140 lines). 3 секции: Профиль (имя/email), Организация (название/роль-Badge), Сессия (кнопка «Выйти»). 3 состояния: Default, Loading (Spinner + aria-busy/aria-live + sr-only текст), Error (role=alert + «Повторить» → refetch). ROLE_LABEL-маппинг дублируется с widgets/dashboard-org-card/OrgCard.tsx (2 использования = premature abstraction по CLAUDE.md; комментарий указывает: вынести в shared при 3-м потребителе). data-testid=settings-logout-btn для e2e-стабильности. <dl>/<dt>/<dd> для семантики профиля."
+        ],
+        "plan": "1. Из 2 pending: FE-TASK-002 high блокирован DESIGN-TASK-002 (design-спек отсутствует). Выбрана FE-TASK-049 low — единственная actionable задача (deps FE-TASK-030/027 done). 2. code-architect: 3 секции, states Loading/Error/Default, Button variant=secondary+loading=isPending, inline error+«Повторить», без ConfirmDialog, без language switcher (единственный locale ru). 3. Отступление от плана архитектора: ROLE_LABEL остался дублированным (OrgCard не трогаем — 2 usages). 4. Тесты — мок useMe напрямую (query-cache injection затирается observer'ом на mount даже с refetchOnMount=false).",
+        "decisions": [
+          "Language switcher пропущен. src/shared/i18n/config.ts регистрирует только ru-locale; AC явно маркирует switcher как опциональный «если i18n будет содержать другие локали».",
+          "3 секции (Профиль / Организация / Сессия), а не одна общая карточка. Зеркалит UserProfile shape, использует существующий OrgCard-convention (<section aria-label=… rounded-md border…>), даёт e2e/screen readers чёткие landmarks, оставляет место под будущие добавления (пароль, 2FA) без рефакторинга.",
+          "ROLE_LABEL-маппинг продублирован из OrgCard, не вынесен в shared. 2 использования, 3 строки энумерации — CLAUDE.md: «Three similar lines is better than premature abstraction». Комментарий в файле указывает, когда вынести (3-й потребитель).",
+          "Button variant=secondary (не danger). Logout — benign-действие, destructive styling (red) alarmist. ConfirmDialog не вводим — одноклик-logout индустриальная конвенция, AC ничего не требует про подтверждение. loading={isPending} + disabled={isPending} защищают от double-submit.",
+          "Error recovery — inline-alert + refetch, а не ErrorBoundary. Ошибка сети recoverable; ErrorBoundary — для render-crashes. Sentry capture уже поднят глобальным onError query-клиента.",
+          "Loading-state: центрированный Spinner без skeleton. useMe pre-hydrated на login + 60s staleTime → Loading-путь краткосрочный на нормальном входе; skeleton — избыточно.",
+          "Тестирование error-state через моки useMe, а не через QueryCache.build().setState(). Observer при mount'е затирает вручную выставленный state (проверено: первая версия теста рендерила Loading вместо Error). Mock-подход стабильный и соответствует паттерну DashboardPage, где widget'ы тестируются с props error напрямую.",
+          "data-testid=settings-logout-btn — e2e-конвенция проекта (settings-loading, settings-error, page-settings сгруппированы одним префиксом).",
+          "aria-busy + aria-live=polite на loading-контейнере; sr-only «Загрузка профиля…» — screen reader получает явный announcement при переходе из idle в fetching."
+        ],
+        "verification": [
+          "npm run typecheck: 0 errors (tsc --noEmit + tests/e2e/tsconfig.json)",
+          "npm run lint: 0 warnings (--max-warnings=0); один автоисправленный error simple-import-sort/imports в test-файле",
+          "npm run test:ci (vitest): 1293/1293 passed (+5 новых: src/pages/settings/SettingsPage.test.tsx)",
+          "npm run build: vite build 3.31s успешно; dist/assets/ содержит сгенерированные lazy-chunks для settings",
+          "npx size-limit: 13/13 budgets pass. Settings попадает в «lazy page chunks (total)» 55.77/100 КБ gzip — headroom 44 КБ. Main bundle 51.65/200 КБ без изменений. Other budgets без регресса.",
+          "Makefile в Frontend/ отсутствует — шаг N/A (инфраструктурные и page-задачи используют npm scripts; паттерн FE-TASK-048/050/051/052)",
+          "Соответствие §17.1/§6.1 high-architecture: /settings маршрут auth-only, GET /users/me через useMe, RBAC не требуется, без отдельных API-endpoint'ов. Router уже подключал placeholder (router.tsx:172-174) — только замена компонента.",
+          "subagents: code-architect (план: 3 секции / states / Button variant / error-recovery), code-reviewer (SHIP-WITH-NITS → применён Nit #1 isPending=disabled test; #2 story-injection fragility и #3 login-helper duplication — общий паттерн проекта, не трогаем)."
+        ],
+        "subagents": [
+          "Explore — research окружения (useMe, useLogout, i18n config, UI kit, test/story/e2e паттерны, size-limit).",
+          "code-architect — план декомпозиции и 9 архитектурных решений. Отступление: ROLE_LABEL не вынесен в shared (оставлен дубль).",
+          "code-reviewer — SHIP-WITH-NITS финальный review. Применён Nit #1 (добавлен 5-й тест isPending=disabled + ignore второго клика)."
+        ],
+        "notes_for_next_tasks": [
+          "FE-TASK-002 (full admin UI) и DESIGN-TASK-002 — единственная оставшаяся pending-задача высокого приоритета, блокируется внешней дизайн-спекой. После появления DESIGN-TASK-002 можно: (1) поднять SettingsPage до полного UI (password reset / 2FA) если design-систему расширят; (2) вынести ROLE_LABEL в shared/ui/role-badge — будет уже 3 потребителя (OrgCard, SettingsPage, admin-users если появится). Сейчас 2-х недостаточно.",
+          "Pattern для mock-based тестов на TanStack-query-heavy pages: вместо QueryCache.build().setState() мокать сам entity-хук (vi.mock('@/entities/*', () => ({ useFoo: () => useFooMock() }))) — стабильно против observer-затирания состояния на mount. Переиспользуемо для будущих page-тестов, особенно где нужен быстрый error-state без MSW.",
+          "E2E loginAs + spaNavigate — общий хелпер дублируется в 4 spec-файлах (admin-placeholders, reports, settings, плюс не-полноценно в smoke/login). Кандидат на вынос в tests/e2e/fixtures/navigation.ts при 5-м дубле.",
+          "SettingsPage bundle footprint ~1-2 КБ gzip: лёгкая композиция Button+Badge+Spinner, ROLE_LABEL-3-entry dictionary. При добавлении форм (password, 2FA, notifications) держать в lazy-chunk под 10 КБ или ввести именованный budget chunks/settings (по аналогии с chunks/admin)."
+        ]
+      }
     },
     {
       "id": "FE-TASK-050",

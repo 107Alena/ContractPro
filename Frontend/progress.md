@@ -3933,3 +3933,69 @@ code-reviewer нашёл 5 P1 + 7 P2. Применены 4 P1 + 1 P2:
 - **FE-TASK-002 (admin OPM editor)** — частично разблокирован (ждёт FE-TASK-001 + DESIGN-TASK-002).
 - **LegalDisclaimer refactor (optional):** текст дублирован в widgets/legal-disclaimer. Если появится 2-я локация — вынести в shared/ui или в entities/contract/constants.
 - **Accordion fallback для `prefers-reduced-motion`** — уже есть через `motion-safe:` классы; прикруиваются только при отсутствии reduced-motion.
+
+## FE-TASK-049 — SettingsPage (2026-04-21)
+
+### Выбор и контекст
+
+Из 2 pending-задач: FE-TASK-002 (high) заблокирован DESIGN-TASK-002 (design-спек отсутствует), FE-TASK-049 (low) — единственная actionable (deps FE-TASK-030 App shell + FE-TASK-027 auth-flow done). SettingsPage placeholder жил как stub из FE-TASK-031 (17 строк), финальная имплементация отложена до этой задачи.
+
+### План (code-architect)
+
+1. **3 секции карточек**: Профиль (name/email) / Организация (organization_name/role-Badge) / Сессия (кнопка «Выйти»). Зеркалит UserProfile shape + оставляет место под 2FA/password.
+2. **3 состояния**: Default / Loading (`isLoading && !data` → Spinner + aria-busy + sr-only) / Error (`error && !data` → `role=alert` + «Повторить» через `refetch()`).
+3. **Button variant=secondary** (не danger), без ConfirmDialog (одноклик — индустриальная конвенция), `loading={isPending}` + `disabled={isPending}`.
+4. **Language switcher skipped**: `src/shared/i18n/config.ts` — только `ru`-locale; AC явно маркирует switcher как опциональный.
+5. **ROLE_LABEL duplication**: 2 usages (OrgCard + SettingsPage). CLAUDE.md: «three similar lines is better than premature abstraction». Extract → при 3-м потребителе.
+
+### Реализация
+
+#### `src/pages/settings/SettingsPage.tsx` (замена placeholder)
+- `useMe()` из `@/entities/user` + `useLogout()` из `@/features/auth/logout`.
+- 3 условных ветки: Loading / Error / Default — с fallback'ом на показ Сессии даже при error (user может выйти при падении /users/me).
+- Внутренний `<ProfileSections user={data}>` — extraction только чтобы вынести JSX секций Профиль/Организация вне тернарника.
+- a11y: `<dl>/<dt>/<dd>`, `aria-label` на секциях, `role="alert"` на error-контейнере, `aria-busy` + `aria-live="polite"` на loading, sr-only «Загрузка профиля…», `data-testid` на всех критичных точках (`page-settings`, `settings-loading`, `settings-error`, `settings-logout-btn`).
+- `ROLE_LABEL` дублирует дикт из `OrgCard.tsx` — с inline-комментарием про вынос при 3-м потребителе.
+
+#### `src/pages/settings/SettingsPage.test.tsx` (новый, 5 тестов)
+- **Подход**: мок `useMe` (`vi.mock('@/entities/user')`) и `useLogout` (`vi.mock('@/features/auth/logout')`) напрямую, без QueryClient.
+- **Почему не QueryCache injection**: первая версия теста использовала `qc.getQueryCache().build().setState({ status: 'error' })` — observer TanStack-query при mount'е перезапускает fetch (даже с `retry: false, refetchOnMount: false`), затирает вручную выставленный error-state. Компонент рендерит Loading вместо Error. Mock-подход стабилен и идиоматичен для page-уровня.
+- Case'ы: Default (имя/email/организация/роль/кнопка) / Loading (spinner testid) / Error (role=alert + refetch вызван) / Logout (logoutMock вызван) / **isPending=disabled + aria-busy + повторный клик игнорируется** (добавлено по Nit #1 от code-reviewer).
+
+#### `src/pages/settings/SettingsPage.stories.tsx` (новый, 5 stories)
+- Паттерн `seed()` + `decorate()` из `DashboardPage.stories.tsx`.
+- Default / Loading / ErrorState / BusinessUser / OrgAdmin. 2 role-варианта для Chromatic-покрытия ROLE_LABEL-маппинга и brand-Badge.
+
+#### `tests/e2e/settings.spec.ts` (новый, 2 spec'а)
+- `loginAs()` + `spaNavigate()` — хелперы по паттерну `admin-placeholders.spec.ts` / `reports.spec.ts`.
+- **Test #1**: LAWYER → /settings → `page-settings` + заголовок + fixtures.users.lawyer (Алина Юрьева / lawyer@contractpro.local / ООО «Контракт-Сервис» / Юрист) + Выйти-кнопка.
+- **Test #2**: клик Выйти → `waitForURL(/\/login$/)`. MSW POST /auth/logout возвращает 204 (tests/msw/handlers/auth.ts:36), happy-path.
+
+### Проверки
+
+- **typecheck** ✓ (0 errors; tsc --noEmit + tests/e2e/tsconfig.json)
+- **lint** ✓ (0 warnings; один автоисправленный simple-import-sort error в тесте)
+- **test:ci** ✓ (1293/1293 passed; +5 новых в SettingsPage.test.tsx)
+- **build** ✓ (vite 3.31s)
+- **size-limit** ✓ (13/13 budgets pass; lazy page chunks 55.77/100 КБ gzip — headroom 44 КБ; main bundle 51.65/200 КБ без изменений)
+- **Makefile** — N/A (в Frontend/ отсутствует; паттерн FE-TASK-048/050/051/052)
+- **Архитектура §17.1/§6.1** — `/settings` auth-only, GET /users/me через useMe, RBAC не требуется, router.tsx:172-174 уже подключал placeholder (lazyElement). Соответствие 1:1.
+- **Review**: code-architect (план) + code-reviewer (SHIP-WITH-NITS; применён Nit #1).
+
+### Ключевые решения (коротко)
+
+1. Language switcher пропущен — один locale.
+2. 3 секции, не одна карточка — зеркалит UserProfile shape.
+3. ROLE_LABEL дублируется — 2 usages < 3 (premature abstraction).
+4. Button variant=secondary без ConfirmDialog — logout benign.
+5. Error recovery — inline + refetch, не ErrorBoundary.
+6. Loading — Spinner без skeleton (useMe pre-hydrated + 60s staleTime).
+7. Тесты — мок useMe напрямую (QueryCache injection затирается observer'ом).
+8. data-testid — e2e-стабильность без CSS-селектор-coupling.
+
+### Заметки для следующих итераций
+
+- **FE-TASK-002 (Admin OPM editor, high)** — единственная оставшаяся pending-задача. Блокируется DESIGN-TASK-002 (внешний design-спек). При появлении DESIGN-TASK-002: (1) переписать AdminPoliciesPage/AdminChecklistsPage с EmptyState на формы; (2) при добавлении admin-users-screens — вынести ROLE_LABEL в `shared/ui/role-badge/` (будет 3-й потребитель: OrgCard + SettingsPage + admin-users).
+- **Pattern для mock-based тестов TanStack-query-heavy pages**: вместо `QueryCache.build().setState()` мокать сам entity-хук (`vi.mock('@/entities/*', () => ({ useFoo: () => useFooMock() }))`). Стабильно против observer-затирания состояния на mount даже с `retry=false, refetchOnMount=false`. Переиспользуемо для будущих page-тестов без MSW.
+- **E2E loginAs + spaNavigate helper** — дублируется уже в 4 spec-файлах (admin-placeholders, reports, settings + partial в login). При 5-м дубле — вынести в `tests/e2e/fixtures/navigation.ts` (паттерн `seedAuthenticatedSession`).
+- **SettingsPage bundle footprint ~1-2 КБ gzip**. При расширении (password reset, 2FA, notifications, share-permissions): держать lazy-chunk под 10 КБ или ввести именованный budget `chunks/settings` (по аналогии с `chunks/admin` = 10 КБ).

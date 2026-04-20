@@ -2716,7 +2716,55 @@
         "FE-TASK-021",
         "FE-TASK-039"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-20",
+        "files_created": [
+          "Frontend/src/pages/reports/ReportsPage.tsx — полная замена placeholder. Композиция: header + ExpiredLinkBanner + ReportsMetrics + (SearchInput + FilterChips) + (ReportsTable + PaginationControls | ReportDetailPanel) + ExportShareModal. Row-select state → selectedContract → ReportDetailPanel. Expired-banner читает ?share=expired и чистит qp при Dismiss. Error/Empty/Filtered-Empty паттерны 1:1 с ContractsListPage.",
+          "Frontend/src/pages/reports/ReportsPage.test.tsx — 8 unit-тестов: Default/Loading/Empty/Error/URL-search → params/ExpiredLinkBanner dismiss/Row-select → DetailPanel/state=PARTIALLY_FAILED-фильтр. Все мокают @/shared/api http.get, паттерн ContractsListPage.test.tsx.",
+          "Frontend/src/pages/reports/ReportsPage.stories.tsx — 10 stories: Default/Loading/Empty/FilteredEmpty/ErrorState/WithDetailPanel (с play-fn row-click)/ExpiredLink/LimitedAccess (BUSINESS_USER export_enabled=false)/Paginated/Tablet. Декоратор — прехидрированный QueryClient без MSW (паттерн ContractsListPage.stories.tsx).",
+          "Frontend/src/pages/reports/model/filter-definitions.ts — FilterDefinition[]: 'state' (single: READY|PARTIALLY_FAILED default READY, pinned) + 'period' (single: 7d/30d/90d/all default all, pinned).",
+          "Frontend/src/pages/reports/model/use-reports-list-query.ts — useReportsListQuery: обёртка над useContracts с фиксированным status=ACTIVE; клиентский filterReports(items, state, period) поверх серверной страницы (processing_status не поддерживается сервером, см. api-specification.yaml:180-193). Возвращает {items, rawItems, total, search, filters, pagination, state, period, isLoading/isFetching/isError/error, hasActiveFilters}. rawItems обёрнут в useMemo (для корректных deps другого useMemo).",
+          "Frontend/src/widgets/reports-metrics/{ui/ReportsMetrics.tsx, ui/ReportsMetrics.test.tsx (5), ui/ReportsMetrics.stories.tsx (3), index.ts} — 4 KPI-карточки: total (c сервера) / ready (на странице) / partial (на странице) / recent (7d). computeReportsCounters pure + test-override `now` для детерминированности. Loading (spinner) / Error (alert) / Populated.",
+          "Frontend/src/widgets/reports-table/{ui/ReportsTable.tsx, ui/ReportsTable.test.tsx (8), ui/ReportsTable.stories.tsx (6), model/columns.tsx, index.ts} — таблица с row-selection: клик по строке (+ Enter/Space keydown) вызывает onSelectRow; aria-selected/aria-current для выбранной. Default sort DESC by updated_at. Не виртуализирована (реестр отчётов меньше DocumentsTable). Колонки: Название (Link to /contracts/:id) / Статус обработки (StatusBadge) / Версия / Обновлён.",
+          "Frontend/src/widgets/report-detail-panel/{ui/ReportDetailPanel.tsx, ui/ReportDetailPanel.test.tsx (6), ui/ReportDetailPanel.stories.tsx (3), index.ts} — боковая панель: title/version/updated_at/StatusBadge + actions «Открыть результаты» (Link) и «Экспорт и отправка отчёта» (гейтится useCanExport, Pattern B). Escape закрывает, focus на Close при смене contract'а. Без отдельного API-вызова — данные из ContractSummary.",
+          "Frontend/src/widgets/expired-link-banner/{ui/ExpiredLinkBanner.tsx, ui/ExpiredLinkBanner.test.tsx (5), ui/ExpiredLinkBanner.stories.tsx (3), index.ts} — role=status + aria-live=polite, tone=warning. Dismiss-кнопка всегда; опциональный onRequestNew CTA. Show/hide управляется page-компонентом через searchParam ?share=expired.",
+          "Frontend/tests/e2e/reports.spec.ts — 2 e2e: (1) LAWYER /reports видит заголовок + metrics + таблицу; (2) ?share=expired → ExpiredLinkBanner + Dismiss чистит qp. Фикстуры MSW по умолчанию не содержат READY-контрактов — empty-state в e2e это приемлемо (AC: «таблица отображается»)."
+        ],
+        "plan": "1. Из 4 pending: FE-TASK-002 high блокирован DESIGN-TASK-002, FE-TASK-049/052 low. Выбрана FE-TASK-048 medium — единственная ready medium с deps FE-TASK-021/039 done. 2. code-architect → план 5 widgets (ReportsMetrics/ReportsTable/ReportDetailPanel/ExpiredLinkBanner + reuse export-share-modal) + 10 stories-состояний + use-reports-list-query обёртка. 3. Архитектурные решения: RBAC Pattern B (не Pattern A) — /reports остаётся auth-guarded в router.tsx, гейтинг шеринга внутри ReportDetailPanel через useCanExport(); параллель с /contracts. 4. Data-flow: processing_status не поддерживается сервером → клиентская фильтрация state=READY по умолчанию; status=ACTIVE жёстко в хуке. 5. ReportDetailPanel v1 без dedicated API-вызова — данные из ContractSummary текущей строки.",
+        "decisions": [
+          "RBAC Pattern B, а не Pattern A. Маршрут /reports остаётся auth-only (не оборачиваем RequireRole). Обоснование: security.md §2.2 не запрещает BUSINESS_USER смотреть свои готовые отчёты; экспорт/share — отдельный разрешённый action (useCanExport). Консистентно с /contracts. Upgrade-path до Pattern A тривиален: обернуть route в RequireRole + добавить 11-е Storybook-состояние AccessRestricted.",
+          "Серверный фильтр по processing_status НЕ поддерживается (api-specification.yaml:180-193 listContracts — только status+search). Фильтрация на клиенте через filterReports(). Принято как v1-компромисс: сотни договоров на организацию, не десятки тысяч. Честно указано в use-reports-list-query.ts комментарии.",
+          "status=ACTIVE зафиксирован в params (не настраиваемо через UI): архивные/удалённые контракты в реестре отчётов не показываются — отчёт непубликуем, если контракт в архиве.",
+          "ReportDetailPanel без dedicated API-вызова в v1: отображает данные из ContractSummary. Если дизайн потребует risk_profile/last_check_at/share-history — вводим useReportDetailQuery(contractId) в v1.1.",
+          "ReportsTable НЕ виртуализирована (в отличие от DocumentsTable). Реестр отчётов меньше — READY/PARTIALLY_FAILED обычно подмножество всех контрактов организации.",
+          "«Поделено» KPI-карточка заменена на «С предупреждениями» (PARTIALLY_FAILED count). Серверной share-метрики нет (нет endpoint'а «список выданных share-links»), а placeholder '—' не даёт пользователю сигнала. PARTIALLY_FAILED — честный продуктовый сигнал.",
+          "ExpiredLinkBanner как page-controlled компонент (не widget-self-controlled). Причина: searchParam — page-level concern; widget остаётся purely presentational (visible/onDismiss/onRequestNew).",
+          "Row-select в ReportsTable — page-level state (selectedId), не внутренний state таблицы. Нужен для WithDetailPanel story и чтобы page мог снять selection при закрытии панели.",
+          "processing_status=READY default-value в FilterDefinition даёт activeCount>0 для корректного FilteredEmpty state при пустом результате (filterReports возвращает [] для любых не-READY). Клиент увидит 'Сбросить фильтры', а не 'Готовых отчётов нет'.",
+          "onClick на action-колонке останавливает bubbling (cell.column.id === 'actions' → stopPropagation) — чтобы клик по кнопкам действий не открывал DetailPanel."
+        ],
+        "verify": [
+          "typecheck ✓ (0 errors: tsc --noEmit + tsconfig.e2e)",
+          "lint ✓ (0 warnings --max-warnings=0); два автоисправленных errors (simple-import-sort + jsx-a11y/no-redundant-roles на aside+role=complementary)",
+          "test:ci ✓ (1268/1268 passed, было 1236 — +32 новых теста: 5 metrics + 8 table + 6 detail-panel + 5 banner + 8 page)",
+          "build ✓ (успешно, vendor/otel 26.94KB, main 51.36KB gz)",
+          "size-limit ✓ (13/13 budgets pass: main 51.36/200KB, lazy pages 54.84/100KB — новые виджеты попадают в lazy chunk страницы)",
+          "Makefile в Frontend/ отсутствует — шаг N/A (все задачи через npm-скрипты)",
+          "Соответствие §17.4: ReportsPage ↔ ReportsMetrics/ReportsTable/ReportDetailPanel/ShareModal (через reuse ExportShareModal)/ExpiredLinkBanner — 5 виджетов реализованы 1:1 с архитектурой. 10 Storybook-состояний: Default/Loading/Empty/FilteredEmpty/ErrorState/WithDetailPanel/ExpiredLink/LimitedAccess/Paginated/Tablet.",
+          "E2E reports.spec.ts: 2 сценария (happy-path + expired-link) — не запускались локально (требуют dev-сервера и MSW workers); typecheck tsconfig.e2e ✓."
+        ],
+        "subagents": [
+          "code-architect — план декомпозиции (5 widgets, 10 stories-состояний, data-flow useReportsListQuery, RBAC-решение Pattern B, файловая структура). Принят с одним отклонением: KPI 'Поделено' заменён на 'С предупреждениями' (см. decisions)."
+        ],
+        "open_followups": [
+          "RBAC Pattern A — если дизайн-ревью Figma state 235:12 подтвердит full-route block: обернуть route в <RequireRole roles={['LAWYER','ORG_ADMIN']}> + добавить /reports в sidebar-navigation filter + 11-я story AccessRestricted.",
+          "Серверный processing_status-фильтр в GET /contracts — завести backend-тикет (после v1.1): убрать клиентскую filterReports(), унифицировать с server-side pagination.",
+          "ReportDetailPanel v1.1 — dedicated API-вызов useReportDetailQuery(contractId) если дизайн потребует risk_profile/last_check_at/share-history.",
+          "ExpiredLinkBanner — onRequestNew CTA в v1 отсутствует (нет backend-endpoint'а для resolve/regenerate share-link'ов). В v1.1 — интеграция с планируемым BE GET /share-links/{token}/meta и POST /share-links (см. ADR-FE-10 sse-ticket как эталон).",
+          "MSW-фикстуры contractSummaries содержат ANALYZING/AWAITING_USER_INPUT/FAILED — добавить READY/PARTIALLY_FAILED контракт для полноценного e2e happy-path с populated-таблицей (сейчас e2e покрывает только empty-state)."
+        ]
+      }
     },
     {
       "id": "FE-TASK-049",

@@ -1,5 +1,67 @@
 # Frontend Implementation Progress
 
+## FE-TASK-048 — ReportsPage (9) — 10 состояний Figma (§17.4) (2026-04-20)
+
+**Статус:** done
+**Категория:** page
+**Приоритет:** medium (из 4 pending: FE-TASK-002 high блокирован DESIGN-TASK-002; FE-TASK-049/052 low. Единственная ready medium с deps done — FE-TASK-021/039 ✓)
+**Зависимости:** FE-TASK-021 (entities/contract + useContracts) done, FE-TASK-039 (widgets/export-share-modal + features/share-link) done.
+
+**План реализации:**
+
+1. Выбор задачи: из 4 pending FE-TASK-002 блокирован DESIGN-TASK-002 (нет макета admin); FE-TASK-049/052 low. FE-TASK-048 — единственная ready medium. Все deps done.
+2. Research: §17.4 («9. Отчёты | 10 + 1 tablet | ReportsPage | ReportsMetrics, ReportsTable, ReportDetailPanel, ShareModal, ExpiredLinkBanner»), §17.1 (route `/reports` → GET /contracts + export endpoints — отдельного /reports-endpoint'а в OpenAPI нет), §5.6.1 Pattern A/B, §6.1 маршрут `/reports | auth`. Существующий паттерн — `/contracts` (ContractsListPage + ContractsMetricsStrip + DocumentsTable + use-contracts-list-query). `widgets/export-share-modal` (FE-TASK-039) готов для reuse.
+3. План (code-architect): 5 widgets (ReportsMetrics/ReportsTable/ReportDetailPanel/ExpiredLinkBanner + reuse ExportShareModal) + 10 Storybook-состояний + useReportsListQuery. RBAC Pattern B (Pattern A как upgrade-path).
+4. Реализация:
+   - `pages/reports/model/filter-definitions.ts` — 2 pinned фильтра: state (READY|PARTIALLY_FAILED, default READY) + period (7d/30d/90d/all, default all).
+   - `pages/reports/model/use-reports-list-query.ts` — обёртка над useContracts: server params={page,size,status:'ACTIVE',search}; клиентский `filterReports(items, state, period)` поверх страницы (processing_status сервером не поддерживается). Возвращает items/rawItems/total/filters/pagination/search/state/period. rawItems в useMemo (для стабильных deps другого useMemo).
+   - `widgets/reports-metrics/` — 4 KPI (total / ready / partial / recent 7d). Pure `computeReportsCounters` + test-override `now` для детерминизма. Loading (spinner) / Error (alert) / Populated.
+   - `widgets/reports-table/` — TanStack Table, default sort DESC by updated_at, row-selection через onClick+onKeyDown (Enter/Space); aria-selected/aria-current; click на actions-cell → stopPropagation. Колонки: Название (Link to /contracts/:id), Статус обработки (StatusBadge), Версия (v{n}), Обновлён. НЕ виртуализирована — реестр отчётов меньше DocumentsTable.
+   - `widgets/report-detail-panel/` — `<aside>` + aria-labelledby, Escape закрывает, focus на Close при смене contract. Actions: Link «Открыть результаты» (к /contracts/:id) + Button «Экспорт и отправка отчёта» (useCanExport, Pattern B). Disabled-state для BUSINESS_USER без export_enabled.
+   - `widgets/expired-link-banner/` — role=status + aria-live=polite, tone=warning. Dismiss-кнопка всегда; опциональный onRequestNew CTA (v1 не передаётся — нет BE endpoint'а). Page-controlled visible.
+   - `pages/reports/ReportsPage.tsx` — полная замена placeholder. Grid: header → ExpiredLinkBanner (по ?share=expired) → ReportsMetrics → (SearchInput+FilterChips) → main (ReportsTable+PaginationControls | ReportDetailPanel) → ExportShareModal. Row-click → selectedId → ReportDetailPanel. ExportShareModal открывается из detail-panel через onOpenShare callback. handleDismissExpired чистит searchParam.
+5. Тесты и stories:
+   - **32 новых unit-теста:** ReportsMetrics (5: compute pure ×2, loading/populated/error), ReportsTable (8: populated/loading/empty/filtered-empty/error+retry/row-click/row-Enter/selected aria), ReportDetailPanel (6: null-render/open/link href/close/share LAWYER/share BUSINESS_USER disabled), ExpiredLinkBanner (5: hidden/visible role/dismiss/no-retry/with-retry), ReportsPage (8: Default/Loading/Empty/Error/URL-search→params/Expired dismiss/Row→DetailPanel/state=PARTIALLY_FAILED).
+   - **10 Storybook-состояний ReportsPage:** Default / Loading / Empty / FilteredEmpty / ErrorState / WithDetailPanel (play-fn row-click) / ExpiredLink / LimitedAccess (BUSINESS_USER export_enabled=false) / Paginated / Tablet.
+   - **6 Storybook ReportsTable / 3 ReportsMetrics / 3 ReportDetailPanel / 3 ExpiredLinkBanner.**
+   - **2 e2e (reports.spec.ts):** (1) LAWYER /reports видит заголовок+metrics+таблицу; (2) ?share=expired → banner виден, Dismiss чистит qp. MSW-фикстуры по умолчанию без READY-контрактов — e2e покрывает empty-state-рендер (достаточно для AC «таблица отчётов отображается»).
+6. Verify:
+   - typecheck ✓ (0 errors)
+   - lint ✓ (0 warnings с --max-warnings=0); автоисправлены 2 ошибки (simple-import-sort + jsx-a11y/no-redundant-roles на aside+role=complementary — убрал redundant role, неявная complementary-роль от `<aside>` сохранена)
+   - test:ci ✓ (1268/1268 passed, было 1236 → +32)
+   - build ✓ (успешно, vendor/otel 26.94KB gz, main 51.36KB gz)
+   - size-limit ✓ (13/13 budgets pass: main 51.36/200KB, lazy pages 54.84/100KB — новые widgets попали в lazy chunk страницы /reports)
+
+### Ключевые решения
+
+- **RBAC Pattern B, а не Pattern A.** Маршрут /reports остаётся auth-only (не оборачиваем RequireRole). Обоснование: security.md §2.2 не запрещает BUSINESS_USER видеть свои READY-отчёты; экспорт/share гейтятся отдельно через useCanExport(). Консистентно с /contracts. Upgrade до Pattern A тривиален (RequireRole + 11-я story AccessRestricted).
+- **Клиентская фильтрация processing_status.** Сервер в GET /contracts поддерживает только status+search (api-specification.yaml:180-193). filterReports() применяется поверх страницы. Принято как v1-компромисс (сотни договоров на организацию), документировано в use-reports-list-query.ts.
+- **status=ACTIVE зафиксирован.** Архивные/удалённые контракты в реестре отчётов не показываются — отчёт непубликуем, если контракт в архиве.
+- **KPI «С предупреждениями» вместо «Поделено».** Серверной share-метрики нет (нет endpoint'а «список выданных share-links»); placeholder '—' даёт слабый сигнал. PARTIALLY_FAILED count — честный продуктовый сигнал.
+- **ReportDetailPanel v1 без dedicated API-вызова.** Отображает данные из ContractSummary текущей строки. Upgrade до useReportDetailQuery(contractId) — v1.1 (после дизайн-фидбека).
+- **ReportsTable НЕ виртуализирована** (в отличие от DocumentsTable): реестр отчётов = подмножество всех контрактов; virtualization overkill для v1.
+- **ExpiredLinkBanner page-controlled.** searchParam — page-level concern, widget остаётся pure presentational (visible/onDismiss/onRequestNew).
+- **Row-select = page-level state,** не внутренний state таблицы: нужен для синхронизации с ReportDetailPanel и WithDetailPanel story.
+- **processing_status=READY default-value** даёт корректный FilteredEmpty UX: activeCount>0 → клиент видит «Сбросить фильтры» вместо «Готовых отчётов нет».
+- **onClick на actions-cell → stopPropagation.** Клик по action-кнопкам внутри строки не должен открывать ReportDetailPanel.
+
+### Subagents
+
+- **code-architect** — план декомпозиции (5 widgets, 10 stories-состояний, data-flow useReportsListQuery, RBAC Pattern B, файловая структура). Принят с одним отклонением: KPI «Поделено» заменён на «С предупреждениями» (нет backend-share-метрики).
+
+### Что разблокируется и заметки для следующих задач
+
+- **`/reports` закрыт.** 5 widgets + page + 10 stories + 32 теста + 2 e2e. §17.4 строка 1382 полностью реализована.
+- **Open follow-ups (зафиксированы в tasks.json completion_notes):**
+  - RBAC Pattern A upgrade-path — если дизайн-ревью state 235:12 подтвердит full-route block (RequireRole + 11-я story AccessRestricted).
+  - Серверный processing_status-фильтр — backend-тикет (убрать клиентскую filterReports()).
+  - ReportDetailPanel v1.1 — dedicated useReportDetailQuery(contractId).
+  - ExpiredLinkBanner v1.1 — интеграция с BE GET /share-links/{token}/meta + POST /share-links (parallel с ADR-FE-10 sse-ticket).
+  - MSW-фикстуры — добавить READY/PARTIALLY_FAILED контракт для полноценного e2e happy-path.
+- **Pending осталось 3:** FE-TASK-002 (high, blocked), FE-TASK-049 (low, SettingsPage), FE-TASK-052 (low, web-vitals + logger).
+
+---
+
 ## FE-TASK-056 — README quickstart + CONTRIBUTING.md + ADR index (§15.3) (2026-04-20)
 
 **Статус:** done

@@ -20,6 +20,7 @@
 import type { AxiosInstance } from 'axios';
 
 import { sessionStore } from '@/shared/auth/session-store';
+import { emitRumEvent } from '@/shared/observability';
 
 import { http as defaultHttp } from './client';
 import { isOrchestratorError } from './errors';
@@ -190,10 +191,15 @@ export function createEventStreamOpener(deps: OpenEventStreamDeps = {}): OpenEve
 
       retry += 1;
       if (retry > SSE_MAX_RECONNECT_ATTEMPTS) {
+        // RUM: полный фейл SSE — отмечаем переход на polling-fallback.
+        emitRumEvent('sse.reconnect', { retry, delay_ms: 0, fallback: 'polling' });
         startPollingFallback();
         return;
       }
       const delay = Math.min(SSE_MAX_BACKOFF_MS, 2 ** retry * 1_000);
+      // RUM: sse.reconnect (§14.4). Событие испускается ДО setTimeout —
+      // retry-counter и delay актуальны в момент emit.
+      emitRumEvent('sse.reconnect', { retry, delay_ms: delay });
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         connect();

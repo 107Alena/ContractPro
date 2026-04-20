@@ -2925,7 +2925,56 @@
       "dependencies": [
         "FE-TASK-050"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-04-20",
+        "files_created": [
+          "Frontend/src/shared/observability/logger.ts — structured logger wrapper (debug/info/warn/error) с auto-enrichment { user_id, org_id, route, release, correlation_id? }. Dev → console.*; prod: warn → Sentry.addBreadcrumb(level:warning, category:log), error → captureException + captureMessage(level:error). Recursion guard (module-level inFlight) + fallback на console.error.",
+          "Frontend/src/shared/observability/logger.test.ts — 11 unit-тестов: dev (info prefix / user enrichment / guest / route / err в console.error); prod (debug+info no-op / warn breadcrumb / error capture+message / error без err / recursion guard / Sentry throw safe).",
+          "Frontend/src/shared/observability/rum-events.ts — emitRumEvent(name, attrs): Sentry.addBreadcrumb(category:rum) + trace.getActiveSpan()?.addEvent() (best-effort). RumEventName enum: contract.upload.started/completed, sse.reconnect, auth.refresh.failed. stripUndefined-helper.",
+          "Frontend/src/shared/observability/rum-events.test.ts — 5 unit: breadcrumb-shape / strip undefined / не бросает при Sentry.throw / span.addEvent при активном span / no-op без span.",
+          "Frontend/src/shared/observability/web-vitals.ts — initWebVitals() + reportMetric. Lazy-import web-vitals (onLCP/onINP/onCLS/onTTFB). reportMetric → Sentry.addBreadcrumb (level:info|warning по rating) + Sentry.captureMessage(\"web-vital.{NAME}\", tags:{metric, rating}, extra). Idempotency-guard (initialized flag) — StrictMode-safe.",
+          "Frontend/src/shared/observability/web-vitals.test.ts — 5 unit: initWebVitals enabled / idempotency / LCP good breadcrumb+captureMessage / INP poor → warning / capture throw safe."
+        ],
+        "files_modified": [
+          "Frontend/src/shared/observability/index.ts — добавлены экспорты logger/EnrichedContext/LogContext/Logger/LogLevel/__resetLoggerForTests, emitRumEvent/RumEventName/RumEventAttrs, initWebVitals/InitWebVitalsResult.",
+          "Frontend/src/main.tsx — initWebVitals() после initOtel() до createRoot (§14.4; порядок в docstring bootstrap обновлён).",
+          "Frontend/src/features/contract-upload/model/use-upload-contract.ts — emitRumEvent contract.upload.started в mutationFn (size_bytes, mime_type); startTimeRef = performance.now(); contract.upload.completed в onSuccess (duration_ms, contract_id, version_id).",
+          "Frontend/src/shared/api/sse.ts — emitRumEvent sse.reconnect в scheduleReconnect (retry, delay_ms, fallback?). Импорт из @/shared/observability.",
+          "Frontend/src/processes/auth-flow/actions.ts — emitRumEvent auth.refresh.failed в catch-ветках doRefresh (reason = no_token | OrchestratorError.error_code | network).",
+          "Frontend/package.json — добавлен dep web-vitals ^4.2.4."
+        ],
+        "decisions": [
+          "web-vitals → Sentry.addBreadcrumb + captureMessage, НЕ Sentry Performance. Причина: tracesSampleRate=0 (§14.2, sentry.ts:37-40 — distributed tracing покрывается OpenTelemetry §14.3). Sentry Custom Metrics deprecated в v8. captureMessage даёт Sentry issue, группируемый по metric=LCP|INP|CLS|TTFB; breadcrumb — контекст для error-events.",
+          "logger.correlation_id — передаётся вызывающим через ctx.correlation_id (обычно из err.correlation_id). Logger САМ не резолвит: в браузере нет AsyncLocalStorage, X-Correlation-Id живёт в axios-interceptor per-request и недоступен синхронно на произвольном callsite.",
+          "logger.route — window.location.pathname лениво при каждом вызове. В SPA каждый log-вызов уже актуален; history.pushState-subscriber не нужен.",
+          "logger dev без scrubber — acceptable risk: caller не должен класть raw-токены в ctx (JSDoc-контракт). В prod Sentry beforeSend scrubber (FE-TASK-050) применится автоматически.",
+          "Recursion guard (logger.ts inFlight) — module-level flag. Защищает от Sentry-beforeSend → logger → Sentry циклов. При рекурсии — прямой console.error с префиксом \"[contractpro] logger recursion:\", минуя и Sentry, и enrich.",
+          "initWebVitals() в main.tsx ПОСЛЕ initSentry (captureMessage работает) и ДО createRoot (PerformanceObserver должен быть установлен к первому paint). Вызов — вне React-дерева, StrictMode double-mount невозможен. Плюс module-level initialized-guard.",
+          "emitRumEvent = Sentry.addBreadcrumb, НЕ captureMessage: RUM-события высокочастотны (несколько в минуту на сессии), не нужны как issue-ы. Breadcrumb-ы оседают контекстом в следующей ошибке — то, что нужно для диагностики \"что пользователь делал перед багом\".",
+          "emitRumEvent поддерживает OTel span.addEvent best-effort. Для SSE/auth событий активного span нет (EventSource не инструментирован §14.3), вызов безвреден. Для fetch-based событий (contract.upload.*) span.addEvent привязывается к fetch-span OpenTelemetry и виден в trace.",
+          "RumEventAttrs = Record<string, string|number|boolean|undefined>; undefined отфильтровывается stripUndefined перед отправкой в Sentry/OTel (чтобы ключи не материализовались со значением \"undefined\").",
+          "vi.mock(\"@sentry/react\") во всех 3 новых тест-файлах — свойства Sentry-модуля non-configurable (ESM), vi.spyOn падает с \"Cannot redefine property\". Альтернатива — pure-builder через dependency injection, но это усложнило бы публичный API без выгоды."
+        ],
+        "verify": {
+          "typecheck": "0 errors",
+          "lint": "0 warnings (autofix: simple-import-sort + снятие избыточных no-console disable-директив)",
+          "test:ci": "1289/1289 passed (+21 к 1268)",
+          "build": "ok; web-vitals chunk 5.89KB / 2.25KB gz; main 160.32KB / 51.70KB gz",
+          "size-limit": "13/13 budgets pass (main 51.63/200 gz, vendor/sentry 66.57/150 gz, vendor/otel 26.95/100 gz, other async 21.65/80 gz)",
+          "makefile": "N/A (Makefile отсутствует в Frontend/)"
+        },
+        "subagents": [
+          "code-architect — план декомпозиции (3 файла + 4 точки интеграции + контракт logger). Решения: web-vitals → breadcrumb+captureMessage; route через window.location.pathname лениво; recursion guard; idempotency init. Принят без отклонений."
+        ],
+        "open_followups": [
+          "logger.correlation_id — можно расширить AxiosContext-интеграцией (передача id через useMutation-context), если в §14.1 появится requirement. v1 — caller передаёт явно.",
+          "Sentry.metrics API — если Sentry v9+ вернёт Custom Metrics, можно дополнительно пушить web-vitals как distribution-metric (заменит captureMessage). На v8.55 — deprecated, не используется.",
+          "EventSource instrumentation (OTel) — кастомная обёртка sse.ts для distributed trace. Пока correlation_id передаётся через payload (§4.4 StatusEvent.correlation_id). См. также ADR-FE-10.",
+          "RUM-дашборд в Sentry — настроить alert-ы: sse.reconnect > 10/min, auth.refresh.failed > 5/min, web-vital.LCP rating=poor > 10% сессий. DevOps-тикет.",
+          "web-vitals FCP/FID — добавить, если §14.4 расширится. v1 ограничен LCP/INP/CLS/TTFB (по §14.4)."
+        ]
+      }
     },
     {
       "id": "FE-TASK-053",

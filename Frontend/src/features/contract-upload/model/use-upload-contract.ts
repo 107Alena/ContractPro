@@ -29,6 +29,7 @@ import {
   type UseFormSetErrorLike,
   type UserMessage,
 } from '@/shared/api';
+import { emitRumEvent } from '@/shared/observability';
 
 import { uploadContract } from '../api/upload-contract';
 import { isFileFieldError, mapUploadFileError } from '../lib/map-upload-error';
@@ -39,9 +40,7 @@ import type {
   UploadProgress,
 } from './types';
 
-export interface UseUploadContractOptions<
-  TForm extends FieldValuesLike = UploadFormValues,
-> {
+export interface UseUploadContractOptions<TForm extends FieldValuesLike = UploadFormValues> {
   /**
    * react-hook-form-совместимая функция setError. Если передана, хук сам
    * проставит inline-ошибки для file-field-кодов и VALIDATION_ERROR.
@@ -59,11 +58,10 @@ export interface UseUploadContractOptions<
   onUploadProgress?: (progress: UploadProgress) => void;
 }
 
-export interface UseUploadContractResult
-  extends Omit<
-    UseMutationResult<UploadContractResponse, OrchestratorError, UploadContractInput>,
-    'mutate' | 'mutateAsync'
-  > {
+export interface UseUploadContractResult extends Omit<
+  UseMutationResult<UploadContractResponse, OrchestratorError, UploadContractInput>,
+  'mutate' | 'mutateAsync'
+> {
   /** Запустить upload. AbortController создаётся автоматически. */
   upload: (input: UploadContractInput) => void;
   /** Async-вариант для page, которой нужен await перед navigate. */
@@ -99,10 +97,20 @@ export function useUploadContract<TForm extends FieldValuesLike = UploadFormValu
     };
   }, []);
 
+  // Хранит performance.now() старта последней mutation для contract.upload.completed
+  // duration_ms. Не в state — не вызывает re-render; per-mutation, перезаписывается.
+  const startTimeRef = useRef<number>(0);
+
   const mutation = useMutation<UploadContractResponse, OrchestratorError, UploadContractInput>({
     mutationFn: (input) => {
       const controller = new AbortController();
       abortRef.current = controller;
+      startTimeRef.current = performance.now();
+      // RUM: contract.upload.started (§14.4). size_bytes/mime_type — без PII.
+      emitRumEvent('contract.upload.started', {
+        size_bytes: input.file.size,
+        mime_type: input.file.type || undefined,
+      });
       return uploadContract(input, {
         signal: controller.signal,
         onUploadProgress: (p) => optsRef.current.onUploadProgress?.(p),
@@ -113,6 +121,14 @@ export function useUploadContract<TForm extends FieldValuesLike = UploadFormValu
       // ContractsListPage. `qk.contracts.byId`/`versions` чужих контрактов
       // трогать не нужно (ревью M1).
       void queryClient.invalidateQueries({ queryKey: ['contracts', 'list'] });
+      // RUM: contract.upload.completed (§14.4). duration_ms — клиентский замер
+      // от start до 202. contract_id/version_id — непервичные идентификаторы,
+      // безопасно уходят в breadcrumb (Sentry scrubber их не трогает).
+      emitRumEvent('contract.upload.completed', {
+        duration_ms: Math.round(performance.now() - startTimeRef.current),
+        contract_id: data.contractId,
+        version_id: data.versionId,
+      });
       optsRef.current.onSuccess?.(data);
     },
     onError: (err) => {
@@ -146,10 +162,7 @@ export function useUploadContract<TForm extends FieldValuesLike = UploadFormValu
     },
   });
 
-  const upload = useCallback(
-    (input: UploadContractInput) => mutation.mutate(input),
-    [mutation],
-  );
+  const upload = useCallback((input: UploadContractInput) => mutation.mutate(input), [mutation]);
   const uploadAsync = useCallback(
     (input: UploadContractInput) => mutation.mutateAsync(input),
     [mutation],

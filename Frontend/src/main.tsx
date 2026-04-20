@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './app/App';
 import { initAuthFlow } from './processes/auth-flow';
-import { initOtel, initSentry } from './shared/observability';
+import { initOtel, initSentry, initWebVitals } from './shared/observability';
 
 /**
  * Bootstrap (§10.3 unified MSW для dev/test/Storybook/e2e, FE-TASK-055).
@@ -18,11 +18,14 @@ import { initOtel, initSentry } from './shared/observability';
  *   - `VITE_ENABLE_MSW === 'true'` — явный opt-in через `.env.e2e` или
  *     локальный `.env.development.local` для hand-on разработки без backend.
  *
- * Ordering (§5.1, §5.3, §14.3): worker.start → initSentry → initOtel → initAuthFlow → render.
+ * Ordering (§5.1, §5.3, §14.3, §14.4): worker.start → initSentry →
+ * initOtel → initWebVitals → initAuthFlow → render.
  * worker.start обязан завершиться ДО createRoot: React Router data-loaders
  * стартуют синхронно с mount'ом, и первый fetch должен попасть под mock.
  * initOtel обязан запуститься ДО первого fetch/XHR — автоматическая
  * инструментация патчит `window.fetch` / `XMLHttpRequest` (§14.3, FE-TASK-051).
+ * initWebVitals — после initSentry (иначе captureMessage no-op) и ДО первого
+ * paint (LCP/TTFB PerformanceObserver должен быть установлен к этому моменту).
  */
 async function bootstrap(): Promise<void> {
   if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_MSW === 'true') {
@@ -40,6 +43,7 @@ async function bootstrap(): Promise<void> {
 
   initSentry();
   initOtel();
+  initWebVitals();
   initAuthFlow();
 
   const container = document.getElementById('root');

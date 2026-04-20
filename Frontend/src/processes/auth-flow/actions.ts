@@ -21,13 +21,10 @@ import type { AxiosInstance } from 'axios';
 import { http, OrchestratorError, queryClient } from '@/shared/api';
 import type { components } from '@/shared/api/openapi';
 import { sessionStore } from '@/shared/auth/session-store';
+import { emitRumEvent } from '@/shared/observability';
 import { toast } from '@/shared/ui/toast';
 
-import {
-  clearRefreshToken,
-  getRefreshToken,
-  setRefreshToken,
-} from './refresh-token-storage';
+import { clearRefreshToken, getRefreshToken, setRefreshToken } from './refresh-token-storage';
 
 // Module-level http-инстанс. По умолчанию — shared `http` из `@/shared/api`.
 // Тесты могут переопределить через `__setHttpForTests` на инстанс
@@ -136,6 +133,9 @@ export async function login(credentials: LoginCredentials): Promise<UserProfile>
 export async function doRefresh(): Promise<string> {
   const refreshToken = getRefreshToken();
   if (!refreshToken) {
+    // RUM: auth.refresh.failed (§14.4) — причина "no_token" (пользователь
+    // зашёл без cookie / sessionStorage пуст).
+    emitRumEvent('auth.refresh.failed', { reason: 'no_token' });
     softLogout();
     throw new OrchestratorError({
       error_code: 'AUTH_REFRESH_FAILED',
@@ -155,6 +155,10 @@ export async function doRefresh(): Promise<string> {
     if (tokens.refresh_token) setRefreshToken(tokens.refresh_token);
     return tokens.access_token;
   } catch (err) {
+    // RUM: auth.refresh.failed (§14.4). reason — error_code из OrchestratorError
+    // (обычно AUTH_REFRESH_FAILED / AUTH_TOKEN_EXPIRED) либо "network".
+    const reason = err instanceof OrchestratorError ? err.error_code : 'network';
+    emitRumEvent('auth.refresh.failed', { reason });
     softLogout();
     if (err instanceof OrchestratorError) throw err;
     throw new OrchestratorError({

@@ -1,6 +1,8 @@
 # =============================================================================
-# ContractPro — Development Environment
+# ContractPro — Document Processing Development Environment
 # =============================================================================
+# Run from this directory (DocumentProcessing/development/).
+#
 # Usage:
 #   docker compose up --build        — build and start all services
 #   docker compose up -d             — start in background
@@ -9,7 +11,7 @@
 #   docker compose down -v           — stop and remove containers + volumes
 #
 # Prerequisites:
-#   cp DocumentProcessing/development/.env.example DocumentProcessing/development/.env
+#   cp .env.example .env
 #   # Fill in Yandex Cloud credentials (Storage + OCR) in .env
 # =============================================================================
 
@@ -56,10 +58,10 @@ services:
 
   dp-worker:
     build:
-      context: ./DocumentProcessing/development
+      context: .
     container_name: cp-dp-worker
     env_file:
-      - ./DocumentProcessing/development/.env
+      - .env
     environment:
       # Override addresses to point to compose network services.
       DP_BROKER_ADDRESS: amqp://guest:guest@rabbitmq:5672/

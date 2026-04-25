@@ -1,6 +1,8 @@
 # =============================================================================
-# ContractPro — Production Environment
+# ContractPro — Document Processing Production Environment
 # =============================================================================
+# Run from this directory (DocumentProcessing/development/).
+#
 # Usage:
 #   docker compose -f docker-compose.prod.yaml up -d
 #   docker compose -f docker-compose.prod.yaml logs -f dp-worker

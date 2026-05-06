@@ -61,21 +61,25 @@ type Handler struct {
 
 	redis    RedisPinger
 	broker   BrokerPinger
-	dmURL    string       // full URL: dmBaseURL + "/healthz"
+	dmURL    string       // full URL: dmHealthBaseURL + "/healthz"
 	dmClient *http.Client // dedicated HTTP client for DM probes
 }
 
 // NewHandler creates a Handler wired to the given dependencies.
-// dmBaseURL is the base URL of the Document Management service
-// (e.g. "http://dm-service:8080"); the handler appends "/healthz".
+//
+// dmHealthBaseURL is the base URL of the Document Management service for
+// HEALTH PROBES (e.g. "http://dm-service:8080"); the handler appends
+// "/healthz". DM exposes /healthz at its root, NOT under /api/v1 — so this
+// must be a different value than DMClient.BaseURL when the latter includes
+// the /api/v1 suffix. See config.DMClientConfig.HealthURL.
 //
 // The handler starts in a ready state. Call SetNotReady to transition
 // to not-ready during graceful shutdown.
-func NewHandler(redis RedisPinger, broker BrokerPinger, dmBaseURL string) *Handler {
+func NewHandler(redis RedisPinger, broker BrokerPinger, dmHealthBaseURL string) *Handler {
 	h := &Handler{
 		redis:  redis,
 		broker: broker,
-		dmURL:  strings.TrimRight(dmBaseURL, "/") + "/healthz",
+		dmURL:  strings.TrimRight(dmHealthBaseURL, "/") + "/healthz",
 		dmClient: &http.Client{
 			Timeout: dmHTTPTimeout,
 		},

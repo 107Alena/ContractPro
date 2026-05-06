@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // HTTPConfig holds HTTP server settings.
 type HTTPConfig struct {
@@ -140,8 +143,18 @@ func loadUploadConfig() UploadConfig {
 }
 
 // DMClientConfig holds DM REST API client settings.
+//
+// BaseURL points at the DM API root, including the version prefix
+// (e.g. "http://dm-service:8080/api/v1"). The dmclient.Client appends
+// resource paths like "/documents/..." to it.
+//
+// HealthURL points at the DM service root for health probes. DM exposes
+// /healthz at the root (not under /api/v1), so HealthURL must NOT contain
+// the /api/v1 suffix. If ORCH_DM_HEALTH_URL is not set, it is derived from
+// BaseURL by stripping a trailing /api/v1.
 type DMClientConfig struct {
 	BaseURL      string        // ORCH_DM_BASE_URL (required)
+	HealthURL    string        // ORCH_DM_HEALTH_URL (optional; derived from BaseURL when empty)
 	TimeoutRead  time.Duration // ORCH_DM_TIMEOUT_READ (default: 5s)
 	TimeoutWrite time.Duration // ORCH_DM_TIMEOUT_WRITE (default: 10s)
 	RetryMax     int           // ORCH_DM_RETRY_MAX (default: 3) — total attempts, not retry count
@@ -149,8 +162,14 @@ type DMClientConfig struct {
 }
 
 func loadDMClientConfig() DMClientConfig {
+	baseURL := envString("ORCH_DM_BASE_URL", "")
+	healthURL := envString("ORCH_DM_HEALTH_URL", "")
+	if healthURL == "" && baseURL != "" {
+		healthURL = strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/api/v1")
+	}
 	return DMClientConfig{
-		BaseURL:      envString("ORCH_DM_BASE_URL", ""),
+		BaseURL:      baseURL,
+		HealthURL:    healthURL,
 		TimeoutRead:  envDuration("ORCH_DM_TIMEOUT_READ", 5*time.Second),
 		TimeoutWrite: envDuration("ORCH_DM_TIMEOUT_WRITE", 10*time.Second),
 		RetryMax:     envInt("ORCH_DM_RETRY_MAX", 3),

@@ -44,6 +44,10 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	if cfg.DMClient.BaseURL != "http://dm:8080/api/v1" {
 		t.Errorf("DMClient.BaseURL = %q, want %q", cfg.DMClient.BaseURL, "http://dm:8080/api/v1")
 	}
+	// HealthURL not set explicitly → must be derived by stripping /api/v1.
+	if cfg.DMClient.HealthURL != "http://dm:8080" {
+		t.Errorf("DMClient.HealthURL (auto-derived) = %q, want %q", cfg.DMClient.HealthURL, "http://dm:8080")
+	}
 	if cfg.Broker.Address != "amqp://guest:guest@localhost:5672/" {
 		t.Errorf("Broker.Address = %q, want %q", cfg.Broker.Address, "amqp://guest:guest@localhost:5672/")
 	}
@@ -52,6 +56,34 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	}
 	if cfg.Redis.Address != "localhost:6379" {
 		t.Errorf("Redis.Address = %q, want %q", cfg.Redis.Address, "localhost:6379")
+	}
+}
+
+func TestLoad_DMHealthURL_ExplicitOverride(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ORCH_DM_BASE_URL", "http://dm:8080/api/v1")
+	t.Setenv("ORCH_DM_HEALTH_URL", "http://dm-health:9999")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if cfg.DMClient.HealthURL != "http://dm-health:9999" {
+		t.Errorf("DMClient.HealthURL (explicit) = %q, want %q", cfg.DMClient.HealthURL, "http://dm-health:9999")
+	}
+}
+
+func TestLoad_DMHealthURL_DerivedFromBareBaseURL(t *testing.T) {
+	// BaseURL без /api/v1 суффикса → HealthURL = BaseURL (TrimSuffix без эффекта).
+	setRequiredEnv(t)
+	t.Setenv("ORCH_DM_BASE_URL", "http://dm:8080")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if cfg.DMClient.HealthURL != "http://dm:8080" {
+		t.Errorf("DMClient.HealthURL (no suffix to strip) = %q, want %q", cfg.DMClient.HealthURL, "http://dm:8080")
 	}
 }
 

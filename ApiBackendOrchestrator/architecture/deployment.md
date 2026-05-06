@@ -139,7 +139,11 @@ ORCH_STORAGE_SECRET_KEY=minioadmin
 ORCH_STORAGE_REGION=ru-central1
 
 # DM Service (sync REST)
-ORCH_DM_BASE_URL=http://dm-service:8081
+# /api/v1 суффикс обязателен — dmclient.go строит URL как BaseURL + "/documents/...",
+# а DM экспонирует роуты под /api/v1/... Health-URL не задан явно, выводится
+# из BaseURL отрезанием /api/v1 (DM-healthz висит в корне, не под /api/v1).
+ORCH_DM_BASE_URL=http://dm-service:8081/api/v1
+# ORCH_DM_HEALTH_URL=http://dm-service:8081  # опционально, если auto-derive не подходит
 
 # OPM Service (sync REST) — опционально для dev
 ORCH_OPM_BASE_URL=http://opm-service:8082
@@ -374,7 +378,9 @@ ORCH_STORAGE_SECRET_KEY=<PRODUCTION_SECRET_KEY>
 ORCH_STORAGE_REGION=ru-central1
 
 # DM Service
-ORCH_DM_BASE_URL=http://dm-service:8081
+# /api/v1 суффикс обязателен — см. configuration.md (DM Client).
+ORCH_DM_BASE_URL=http://dm-service:8081/api/v1
+# ORCH_DM_HEALTH_URL=http://dm-service:8081  # опционально, по умолчанию выводится из BaseURL
 
 # OPM Service
 ORCH_OPM_BASE_URL=http://opm-service:8082

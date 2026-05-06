@@ -151,7 +151,8 @@ func NewApp(cfg *config.Config) (*App, error) {
 	s3Client := objectstorage.NewClient(cfg.Storage, cfg.CircuitBreaker, log)
 
 	// 5. Health handler — depends on Redis and broker for readiness probes.
-	healthHandler := health.NewHandler(kvClient, brokerClient, cfg.DMClient.BaseURL)
+	// HealthURL points at DM root (/healthz), not at the /api/v1 API base.
+	healthHandler := health.NewHandler(kvClient, brokerClient, cfg.DMClient.HealthURL)
 
 	// 6. JWT public key and auth middleware.
 	publicKey, err := auth.LoadPublicKey(cfg.JWT.PublicKeyPath)

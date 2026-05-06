@@ -1,0 +1,30 @@
+# =============================================================================
+# Grafana datasources — auto-provisioned at startup
+# =============================================================================
+# Файл монтируется в /etc/grafana/provisioning/datasources/. При первом
+# старте Grafana создаёт указанные datasource'ы; при последующих — синкает.
+# Менять datasource'ы через UI не имеет смысла: provisioning перезапишет.
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false
+    jsonData:
+      tracesToMetrics:
+        datasourceUid: prometheus

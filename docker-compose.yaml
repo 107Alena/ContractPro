@@ -1,0 +1,416 @@
+# =============================================================================
+# ContractPro — Unified Development Stack
+# =============================================================================
+# Запускает весь стек (DP + DM + Orchestrator + Frontend) поверх общей инфры
+# (Postgres, Redis, RabbitMQ). Object Storage — внешний Yandex Object Storage,
+# OCR — Yandex Cloud Vision OCR. Используется для интеграционных smoke-тестов,
+# демонстраций и онбординга.
+#
+# Для активной разработки используйте per-domain compose в каждом домене и
+# `npm run dev` для Frontend — это быстрее (HMR, нет полной пересборки).
+#
+# -----------------------------------------------------------------------------
+# Quickstart:
+# -----------------------------------------------------------------------------
+#   1. Сгенерировать JWT-ключи для Orchestrator (один раз):
+#        bash ApiBackendOrchestrator/development/scripts/generate-dev-jwt.sh
+#
+#   2. Создать в Yandex Cloud Console (или через `yc` CLI) три бакета:
+#        - dm-artifacts             (артефакты Document Management)
+#        - dp-artifacts             (временное хранилище Document Processing)
+#        - contractpro-uploads      (загрузки пользователей через Orchestrator)
+#      и сервис-аккаунт со static access key для S3 API.
+#
+#   3. Создать .env в корне:
+#        cp .env.example .env
+#      и заполнить Yandex Cloud OCR + Object Storage креды (см. .env.example).
+#      Без них стек не стартанёт.
+#
+#   4. Поднять стек:
+#        docker compose up --build               # foreground, видны все логи
+#        docker compose up -d --build            # background
+#        docker compose logs -f orchestrator     # следить за логами одного сервиса
+#        docker compose down                     # остановить
+#        docker compose down -v                  # остановить + удалить volumes (потеря данных)
+#
+#   5. Проверить:
+#        Frontend          http://localhost:3000
+#        Orchestrator API  http://localhost:8080/healthz
+#        DM API            http://localhost:8081/readyz
+#        DP health         http://localhost:8082/healthz
+#        RabbitMQ UI       http://localhost:15672  (guest/guest)
+#        pgAdmin           http://localhost:5050   (admin@contractpro.local / admin)
+#        Redis Insight     http://localhost:5540   (без auth)
+#        Prometheus        http://localhost:9091
+#        Grafana           http://localhost:3001   (admin / admin)
+#                          → Dashboards → ContractPro folder (3 предзагруженных)
+#        Jaeger UI         http://localhost:16686
+#        RabbitMQ metrics  http://localhost:15692/metrics  (rabbitmq_prometheus)
+#        Postgres          localhost:5432          (dm/dm_dev_password/dm_dev)
+#        Yandex Object Storage  через консоль Yandex Cloud
+#
+# Контейнерам нужен исходящий HTTPS на storage.yandexcloud.net и
+# ocr.api.cloud.yandex.net. В корпоративных сетях с прокси задайте
+# HTTP_PROXY/HTTPS_PROXY на уровне Docker daemon.
+#
+# -----------------------------------------------------------------------------
+# Перед запуском убедитесь, что не запущены per-domain compose:
+#   docker compose -f DocumentProcessing/development/docker-compose.yaml down
+#   docker compose -f DocumentManagement/development/docker-compose.yaml down
+#   docker compose -f ApiBackendOrchestrator/development/docker-compose.yaml down
+# Иначе будут конфликты container_name и портов.
+# =============================================================================
+
+services:
+
+  # ===========================================================================
+  # Shared Infrastructure
+  # ===========================================================================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cp-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: dm
+      POSTGRES_PASSWORD: dm_dev_password
+      POSTGRES_DB: dm_dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dm -d dm_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # pgAdmin 4 — веб-UI для администрирования Postgres.
+  # Открыть: http://localhost:5050  (admin@contractpro.local / admin)
+  # После входа добавить сервер: Host=postgres, Port=5432, User=dm,
+  # Password=dm_dev_password, Database=dm_dev. Настройки сохраняются в
+  # pgadmin-data volume и переживают рестарт.
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: cp-pgadmin
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@contractpro.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"           # single-user, без доп. логинов
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: cp-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Redis Insight — официальный веб-UI от Redis Inc.
+  # Открыть: http://localhost:5540
+  # При первом входе: Add Redis Database → Host=redis, Port=6379, без auth.
+  # Настройки и история запросов сохраняются в redis-insight-data volume.
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: cp-redis-insight
+    ports:
+      - "5540:5540"
+    volumes:
+      - redis-insight-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: cp-rabbitmq
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # Management UI
+      - "15692:15692"   # Prometheus exporter (плагин rabbitmq_prometheus)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      # Включает rabbitmq_management + rabbitmq_prometheus.
+      - ./observability/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ===========================================================================
+  # Document Management
+  # ===========================================================================
+
+  # Накатывает SQL-миграции до старта dm-service. Завершается с exit 0,
+  # depends_on ниже ждёт service_completed_successfully.
+  dm-migrate:
+    build:
+      context: ./DocumentManagement/development
+    container_name: cp-dm-migrate
+    entrypoint: ["/usr/local/bin/dm-migrate", "up"]
+    environment:
+      DM_DB_DSN: postgres://dm:dm_dev_password@postgres:5432/dm_dev?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  dm-service:
+    build:
+      context: ./DocumentManagement/development
+    container_name: cp-dm-service
+    environment:
+      DM_DB_DSN: postgres://dm:dm_dev_password@postgres:5432/dm_dev?sslmode=disable
+      DM_BROKER_ADDRESS: amqp://guest:guest@rabbitmq:5672/
+      DM_KVSTORE_ADDRESS: redis:6379
+      # Yandex Object Storage — креды берутся из root .env.
+      DM_STORAGE_ENDPOINT: ${YC_S3_ENDPOINT:-https://storage.yandexcloud.net}
+      DM_STORAGE_BUCKET: ${DM_BUCKET:-dm-artifacts}
+      DM_STORAGE_ACCESS_KEY: ${YC_S3_ACCESS_KEY:?set YC_S3_ACCESS_KEY in .env}
+      DM_STORAGE_SECRET_KEY: ${YC_S3_SECRET_KEY:?set YC_S3_SECRET_KEY in .env}
+      DM_STORAGE_REGION: ${YC_S3_REGION:-ru-central1}
+      DM_LOG_LEVEL: debug
+      # OTel → Jaeger (OTLP/HTTP, plaintext внутри compose-сети).
+      DM_TRACING_ENABLED: "true"
+      DM_TRACING_ENDPOINT: jaeger:4318
+      DM_TRACING_INSECURE: "true"
+    ports:
+      - "8081:8080"   # API + health
+      - "9091:9090"   # Metrics
+    depends_on:
+      dm-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # ===========================================================================
+  # Document Processing
+  # ===========================================================================
+  #
+  # ВНИМАНИЕ: dp-worker требует валидные Yandex Cloud креды (Object Storage +
+  # Vision OCR). Без них воркер упадёт на старте. Заполните .env в корне
+  # проекта.
+
+  dp-worker:
+    build:
+      context: ./DocumentProcessing/development
+    container_name: cp-dp-worker
+    environment:
+      DP_BROKER_ADDRESS: amqp://guest:guest@rabbitmq:5672/
+      DP_KVSTORE_ADDRESS: redis:6379
+      # Yandex Object Storage.
+      DP_STORAGE_ENDPOINT: ${YC_S3_ENDPOINT:-https://storage.yandexcloud.net}
+      DP_STORAGE_BUCKET: ${DP_BUCKET:-dp-artifacts}
+      DP_STORAGE_ACCESS_KEY: ${YC_S3_ACCESS_KEY:?set YC_S3_ACCESS_KEY in .env}
+      DP_STORAGE_SECRET_KEY: ${YC_S3_SECRET_KEY:?set YC_S3_SECRET_KEY in .env}
+      DP_STORAGE_REGION: ${YC_S3_REGION:-ru-central1}
+      # Yandex Cloud Vision OCR.
+      DP_OCR_ENDPOINT: ${DP_OCR_ENDPOINT:-https://ocr.api.cloud.yandex.net}
+      DP_OCR_API_KEY: ${DP_OCR_API_KEY:?set DP_OCR_API_KEY in .env}
+      DP_OCR_FOLDER_ID: ${DP_OCR_FOLDER_ID:?set DP_OCR_FOLDER_ID in .env}
+      DP_LOG_LEVEL: debug
+      # OTel → Jaeger (OTLP/HTTP, plaintext внутри compose-сети).
+      DP_TRACING_ENABLED: "true"
+      DP_TRACING_ENDPOINT: jaeger:4318
+      DP_TRACING_INSECURE: "true"
+    ports:
+      - "8082:8080"   # Health
+      - "9092:9090"   # Metrics
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ===========================================================================
+  # API Backend Orchestrator
+  # ===========================================================================
+  #
+  # ВАЖНО: service name ДОЛЖЕН оставаться `orchestrator` — Frontend nginx.conf
+  # проксирует /api/* на upstream `orchestrator:8080`. Переименование сломает
+  # роутинг.
+  #
+  # Перед первым запуском сгенерируйте JWT-ключи:
+  #   bash ApiBackendOrchestrator/development/scripts/generate-dev-jwt.sh
+
+  orchestrator:
+    build:
+      context: ./ApiBackendOrchestrator/development
+      args:
+        VERSION: dev
+    container_name: cp-orchestrator
+    environment:
+      ORCH_BROKER_ADDRESS: amqp://guest:guest@rabbitmq:5672/
+      ORCH_REDIS_ADDRESS: redis:6379
+      # Yandex Object Storage.
+      ORCH_STORAGE_ENDPOINT: ${YC_S3_ENDPOINT:-https://storage.yandexcloud.net}
+      ORCH_STORAGE_BUCKET: ${ORCH_BUCKET:-contractpro-uploads}
+      ORCH_STORAGE_ACCESS_KEY: ${YC_S3_ACCESS_KEY:?set YC_S3_ACCESS_KEY in .env}
+      ORCH_STORAGE_SECRET_KEY: ${YC_S3_SECRET_KEY:?set YC_S3_SECRET_KEY in .env}
+      ORCH_STORAGE_REGION: ${YC_S3_REGION:-ru-central1}
+      # Sync REST к DM внутри compose-сети.
+      # BaseURL: /api/v1 суффикс обязателен — dmclient.go строит URL как
+      # baseURL + "/documents/...", а DM экспонирует роуты под /api/v1/...
+      # HealthURL: указывает на корень DM (DM экспонирует /healthz в корне,
+      # не под /api/v1). Можно опустить — config.loadDMClientConfig авто-
+      # выводит из BaseURL отрезанием /api/v1. Здесь задано явно для ясности.
+      ORCH_DM_BASE_URL: http://dm-service:8080/api/v1
+      ORCH_DM_HEALTH_URL: http://dm-service:8080
+      ORCH_JWT_PUBLIC_KEY_PATH: /keys/jwt-public.pem
+      ORCH_LOG_LEVEL: debug
+      ORCH_RATELIMIT_ENABLED: "false"
+      ORCH_CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:5173"
+      # OTel → Jaeger (OTLP/HTTP, plaintext внутри compose-сети).
+      ORCH_TRACING_ENABLED: "true"
+      ORCH_TRACING_ENDPOINT: jaeger:4318
+      ORCH_TRACING_INSECURE: "true"
+    ports:
+      - "8080:8080"   # API + SSE
+      - "9090:9090"   # Metrics
+    volumes:
+      - ./ApiBackendOrchestrator/development/keys:/keys:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dm-service:
+        condition: service_started
+    stop_grace_period: 35s
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+  # ===========================================================================
+  # Frontend
+  # ===========================================================================
+  #
+  # Production-образ (nginx + статика). Первый build занимает 5–10 минут
+  # (typecheck + lint + tests + vite build внутри Dockerfile).
+  #
+  # Для активной разработки используйте `cd Frontend && npm run dev` — Vite
+  # на :5173 ходит через прокси на http://localhost:8080 (Orchestrator host
+  # port). См. Frontend/vite.config.ts.
+
+  frontend:
+    build:
+      context: ./Frontend
+    container_name: cp-frontend
+    ports:
+      - "3000:8080"
+    environment:
+      # entrypoint.sh инжектит это значение в /config.js → window.__ENV__.OTEL_ENDPOINT.
+      # Браузер из http://localhost:3000 шлёт span'ы на http://localhost:4318/v1/traces
+      # (хост-порт Jaeger OTLP HTTP receiver). Для разрешения cross-origin запроса
+      # на jaeger-сервисе включён CORS allowed-origins=http://localhost:3000.
+      VITE_OTEL_ENDPOINT: http://localhost:4318/v1/traces
+    depends_on:
+      orchestrator:
+        condition: service_started
+
+  # ===========================================================================
+  # Observability Stack
+  # ===========================================================================
+
+  # Prometheus — pull-модель: каждые 15s скрейпит /metrics у Orchestrator/DM/DP.
+  # UI:  http://localhost:9091  (порт 9091 на хосте, чтобы не конфликтовать
+  # с Orchestrator metrics на 9090).
+  # Конфиг: ./observability/prometheus/prometheus.yml
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cp-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'   # позволяет POST /-/reload без рестарта
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      orchestrator:
+        condition: service_started
+      dm-service:
+        condition: service_started
+      dp-worker:
+        condition: service_started
+
+  # Grafana — UI для метрик и трейсов. Datasources автопровижатся из
+  # ./observability/grafana/provisioning/datasources/.
+  # UI:  http://localhost:3001  (admin/admin при первом входе)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cp-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+      jaeger:
+        condition: service_started
+
+  # Jaeger all-in-one — collector + storage (in-memory) + UI.
+  # Принимает OTLP/HTTP на 4318 (используется Go-сервисами и Frontend через OTel).
+  # UI:  http://localhost:16686
+  # Данные in-memory — после рестарта трейсы теряются. Для prod нужен
+  # Jaeger + ElasticSearch/Cassandra или OpenTelemetry Collector + Tempo.
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: cp-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: memory
+      # CORS для OTLP HTTP — Frontend на :3000 (nginx) и :5173 (vite dev) шлёт
+      # span'ы из браузера cross-origin на http://localhost:4318/v1/traces.
+      # Без CORS preflight (OPTIONS) упадёт, span'ы тихо потеряются.
+      COLLECTOR_OTLP_HTTP_CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:5173"
+      COLLECTOR_OTLP_HTTP_CORS_ALLOWED_HEADERS: "Content-Type,traceparent,tracestate,baggage"
+    ports:
+      - "16686:16686"   # UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    # Внутренних данных нет (in-memory) — volume не нужен.
+
+volumes:
+  postgres-data:
+  pgadmin-data:
+  redis-data:
+  redis-insight-data:
+  rabbitmq-data:
+  prometheus-data:
+  grafana-data:

@@ -1,0 +1,72 @@
+{
+  "uid": "cp-dp",
+  "title": "ContractPro — DP Pipeline",
+  "tags": ["contractpro", "dp"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Job throughput by status (jobs/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (rate(dp_job_status_total[1m]))", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Job duration p50 / p95 / p99 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(dp_job_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(dp_job_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(dp_job_duration_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "OCR latency p95 by status (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, ocr_status) (rate(dp_ocr_duration_seconds_bucket[5m])))", "legendFormat": "{{ocr_status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Concurrency: active vs waiting",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "dp_concurrent_jobs_active", "legendFormat": "active" },
+        { "refId": "B", "expr": "dp_concurrent_jobs_waiting", "legendFormat": "waiting" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Incoming PDF size distribution (MB, p50/p95)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 16 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(dp_file_size_bytes_bucket[5m]))) / 1024 / 1024", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(dp_file_size_bytes_bucket[5m]))) / 1024 / 1024", "legendFormat": "p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "decmbytes" }, "overrides": [] }
+    }
+  ]
+}

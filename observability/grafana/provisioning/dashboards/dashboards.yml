@@ -1,0 +1,22 @@
+# =============================================================================
+# Grafana dashboard provisioning
+# =============================================================================
+# Загружает все JSON-файлы из /var/lib/grafana/dashboards (смонтировано из
+# observability/grafana/dashboards/). updateIntervalSeconds: 30 — изменения
+# в JSON подхватываются на лету без рестарта Grafana.
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name: ContractPro
+    orgId: 1
+    folder: ContractPro
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true     # позволяет редактировать в UI; изменения
+                             # переживут рестарт через "Save as" (новый UID).
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

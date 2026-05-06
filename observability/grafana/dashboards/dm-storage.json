@@ -1,0 +1,301 @@
+{
+  "uid": "cp-dm",
+  "title": "ContractPro — DM Storage",
+  "tags": ["contractpro", "dm"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Sync REST API",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "API request rate by route (req/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (route) (rate(dm_api_requests_total[1m]))", "legendFormat": "{{route}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "API error rate (4xx + 5xx, req/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (rate(dm_api_requests_total{status=~\"4..|5..\"}[1m]))", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "API duration p50 / p95 / p99 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(dm_api_request_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(dm_api_request_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(dm_api_request_duration_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Async Event Processing (RabbitMQ consumer)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Events received vs processed (msg/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(dm_events_received_total[1m]))", "legendFormat": "received" },
+        { "refId": "B", "expr": "sum(rate(dm_events_processed_total[1m]))", "legendFormat": "processed" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Event processing p95 by topic (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, topic) (rate(dm_event_processing_duration_seconds_bucket[5m])))", "legendFormat": "{{topic}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Transactional Outbox",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }
+    },
+    {
+      "id": 21,
+      "type": "stat",
+      "title": "Pending count",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 19 },
+      "targets": [{ "refId": "A", "expr": "dm_outbox_pending_count" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "Oldest pending age (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 19 },
+      "targets": [{ "refId": "A", "expr": "dm_outbox_oldest_pending_age_seconds" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 30 },
+              { "color": "red", "value": 300 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Outbox publish rate (success / failed / cleaned, msg/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 19 },
+      "targets": [
+        { "refId": "A", "expr": "rate(dm_outbox_published_total[1m])", "legendFormat": "published" },
+        { "refId": "B", "expr": "rate(dm_outbox_publish_failed_total[1m])", "legendFormat": "failed" },
+        { "refId": "C", "expr": "rate(dm_outbox_cleaned_up_total[1m])", "legendFormat": "cleaned" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "DLQ & Idempotency",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "DLQ messages rate (msg/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 26 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (topic) (rate(dm_dlq_messages_total[1m]))", "legendFormat": "{{topic}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Idempotency checks vs fallbacks (op/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 26 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(dm_idempotency_check_total[1m]))", "legendFormat": "checks" },
+        { "refId": "B", "expr": "sum(rate(dm_idempotency_fallback_total[1m]))", "legendFormat": "fallbacks (Redis down)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Storage Health",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 }
+    },
+    {
+      "id": 41,
+      "type": "stat",
+      "title": "Stuck versions",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 34 },
+      "targets": [{ "refId": "A", "expr": "dm_stuck_versions_count" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 42,
+      "type": "stat",
+      "title": "Orphan candidates",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 34 },
+      "targets": [{ "refId": "A", "expr": "dm_orphan_candidates_count" }]
+    },
+    {
+      "id": 43,
+      "type": "stat",
+      "title": "Integrity failures (5m)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 34 },
+      "targets": [{ "refId": "A", "expr": "increase(dm_integrity_check_failures_total[5m])" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 44,
+      "type": "stat",
+      "title": "Tenant mismatch (5m)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 34 },
+      "targets": [{ "refId": "A", "expr": "increase(dm_tenant_mismatch_total[5m])" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 50,
+      "type": "row",
+      "title": "Retention Jobs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 }
+    },
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "Blob / meta deletions rate (op/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 40 },
+      "targets": [
+        { "refId": "A", "expr": "rate(dm_retention_blob_deleted_total[5m])", "legendFormat": "blob deleted" },
+        { "refId": "B", "expr": "rate(dm_retention_meta_deleted_total[5m])", "legendFormat": "meta deleted" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Audit partitions created / dropped (1h)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 40 },
+      "targets": [
+        { "refId": "A", "expr": "increase(dm_retention_audit_partitions_created_total[1h])", "legendFormat": "created" },
+        { "refId": "B", "expr": "increase(dm_retention_audit_partitions_dropped_total[1h])", "legendFormat": "dropped" }
+      ]
+    },
+    {
+      "id": 60,
+      "type": "stat",
+      "title": "DM Circuit Breaker (0=closed, 1=half-open, 2=open)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 47 },
+      "targets": [
+        { "refId": "A", "expr": "dm_circuit_breaker_state", "legendFormat": "{{target}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

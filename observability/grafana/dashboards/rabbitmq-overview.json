@@ -1,0 +1,102 @@
+{
+  "uid": "cp-rabbitmq",
+  "title": "ContractPro — RabbitMQ",
+  "tags": ["contractpro", "rabbitmq"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Connections",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "rabbitmq_connections" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Channels",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "rabbitmq_channels" }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Queues",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "rabbitmq_queues" }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Total messages ready",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "sum(rabbitmq_queue_messages_ready)" }]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Publish rate (msg/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(rabbitmq_global_messages_received_total[1m]))", "legendFormat": "received" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Deliver rate (msg/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(rabbitmq_global_messages_delivered_total[1m]))", "legendFormat": "delivered" },
+        { "refId": "B", "expr": "sum(rate(rabbitmq_global_messages_acknowledged_total[1m]))", "legendFormat": "acked" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Queue depth (top 10)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 13 },
+      "targets": [
+        { "refId": "A", "expr": "topk(10, rabbitmq_queue_messages)", "legendFormat": "{{queue}}" }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Memory used (MB)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "rabbitmq_resident_memory_limit_bytes / 1024 / 1024", "legendFormat": "limit" },
+        { "refId": "B", "expr": "rabbitmq_process_resident_memory_bytes / 1024 / 1024", "legendFormat": "used" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "decmbytes" }, "overrides": [] }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "File descriptors used",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "rabbitmq_process_max_fds", "legendFormat": "max" },
+        { "refId": "B", "expr": "rabbitmq_process_open_fds", "legendFormat": "used" }
+      ]
+    }
+  ]
+}

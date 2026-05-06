@@ -1,0 +1,247 @@
+{
+  "uid": "cp-orch-internals",
+  "title": "ContractPro — Orchestrator Internals",
+  "tags": ["contractpro", "orchestrator"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "DM Backend Calls (sync REST)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "DM call rate by status (req/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (rate(orch_dm_requests_total[1m]))", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "DM call duration p50 / p95 / p99 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 12, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orch_dm_request_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orch_dm_request_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(orch_dm_request_duration_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Circuit Breaker (0=closed, 1=half-open, 2=open)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 4, "x": 20, "y": 1 },
+      "targets": [{ "refId": "A", "expr": "orch_dm_circuit_breaker_state" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "File Uploads",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Upload rate by status (op/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 10 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (rate(orch_upload_total[1m]))", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Upload size p50 / p95 (MB)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 10 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orch_upload_size_bytes_bucket[5m]))) / 1024 / 1024", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orch_upload_size_bytes_bucket[5m]))) / 1024 / 1024", "legendFormat": "p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "decmbytes" }, "overrides": [] }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Upload duration p95 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 10 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(orch_upload_duration_seconds_bucket[5m])))", "legendFormat": "p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Message Broker (RabbitMQ publisher)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Broker publish rate by topic (msg/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (topic) (rate(orch_broker_publish_total[1m]))", "legendFormat": "{{topic}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Broker publish duration p95 by topic (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, topic) (rate(orch_broker_publish_duration_seconds_bucket[5m])))", "legendFormat": "{{topic}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Server-Sent Events / Async Events",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 }
+    },
+    {
+      "id": 31,
+      "type": "stat",
+      "title": "Active SSE connections",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 27 },
+      "targets": [{ "refId": "A", "expr": "orch_sse_connections_active" }]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "SSE events pushed (msg/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 9, "x": 6, "y": 27 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (event_type) (rate(orch_sse_events_pushed_total[1m]))", "legendFormat": "{{event_type}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Events received from broker (msg/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 9, "x": 15, "y": 27 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (topic) (rate(orch_events_received_total[1m]))", "legendFormat": "{{topic}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Object Storage (S3) & Redis",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 }
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "S3 ops rate by operation (op/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 35 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (operation, status) (rate(orch_s3_operations_total[1m]))", "legendFormat": "{{operation}} {{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 42,
+      "type": "timeseries",
+      "title": "S3 op duration p95 by operation (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 35 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(orch_s3_operation_duration_seconds_bucket[5m])))", "legendFormat": "{{operation}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 43,
+      "type": "timeseries",
+      "title": "Redis ops rate by operation (op/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 42 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (operation, status) (rate(orch_redis_operations_total[1m]))", "legendFormat": "{{operation}} {{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 44,
+      "type": "timeseries",
+      "title": "Redis op duration p95 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 42 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(orch_redis_operation_duration_seconds_bucket[5m])))", "legendFormat": "{{operation}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 50,
+      "type": "row",
+      "title": "Security & Throttling",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 }
+    },
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "Rate limit hits (req/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 50 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (route) (rate(orch_rate_limit_hits_total[1m]))", "legendFormat": "{{route}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Auth failures by reason (req/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 50 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (reason) (rate(orch_auth_failures_total[1m]))", "legendFormat": "{{reason}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    }
+  ]
+}

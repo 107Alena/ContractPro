@@ -2662,3 +2662,51 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 **Итог:** ASSUMPTION-ORCH-14 полностью закрыто. Per-stage detection даёт lag 5–15 минут вместо прежних 30+ мин. Обратная совместимость сохранена через per-variable fallback на `DM_STALE_VERSION_TIMEOUT`. Мониторинг получил 4-стадийный прицел: `sum(dm_stuck_versions_count) > 0` (any-stage алерт) или `dm_stuck_versions_count{stage="<X>"} > 0` (точечный).
 
 ---
+
+## 2026-05-13: DM-TASK-054 — Persistent job_id в document_versions
+
+**Статус:** done
+
+**Что сделано:**
+Базовый слой инфраструктуры `job_id` в DM end-to-end: persistence (миграция) → domain → port → repository → application → REST API → outbound event → docs.
+
+**Изменённые файлы:**
+- `DocumentManagement/development/internal/infra/postgres/migrations/000001_initial_schema.up.sql` — в `CREATE TABLE document_versions` добавлена колонка `job_id UUID` (NULL допустим); `CREATE INDEX idx_versions_job_id ON document_versions(job_id) WHERE job_id IS NOT NULL` (partial — экономит место, готов под будущий lookup-by-job); `COMMENT ON COLUMN document_versions.job_id IS 'UUID processing-задачи. NULL для версий, созданных вне processing-flow. Immutable после CreateVersion.'`
+- `DocumentManagement/development/internal/infra/postgres/migrations/000001_initial_schema.down.sql` — без изменений. `DROP TABLE document_versions` каскадно удалит и колонку, и partial index — соответствует существующему паттерну остальных индексов в этой миграции (явные `DROP INDEX` не используются).
+- `DocumentManagement/development/internal/domain/model/version.go` — `DocumentVersion.JobID *string` с `json:"job_id,omitempty"`, go-doc о immutability после CreateVersion.
+- `DocumentManagement/development/internal/domain/model/event_outgoing.go` — `VersionCreated.JobID string` с `json:"job_id,omitempty"` — backward-compatible для Orchestrator.
+- `DocumentManagement/development/internal/domain/port/inbound.go` — `CreateVersionParams.JobID *string` (optional, immutable).
+- `DocumentManagement/development/internal/infra/postgres/version_repository.go` — `INSERT` расширен 15-й колонкой `job_id` (передаётся как `*string` напрямую, `nil` → SQL NULL); все 5 `SELECT` (FindByID, FindByIDForUpdate, List, FindStaleInIntermediateStatus, ListByDocument) и shared `scanVersion` обновлены: scan UUID NULL → `*string` через локальную переменную → `v.JobID = jobID`. `Update()` SQL остался `SET artifact_status = $1` — job_id не затрагивается (immutability на уровне application).
+- `DocumentManagement/development/internal/application/version/version.go` — `createVersionInTx`: `version.JobID = params.JobID` сразу после конструктора; для VersionCreated вычисляется `jobIDForEvent string` (dereference `*string`, "" если nil) → `omitempty` дропает поле из JSON при отсутствии.
+- `DocumentManagement/development/internal/ingress/api/handler.go` — `createVersionRequest.JobID *string`; новая helper-функция `isValidUUIDv4` + анкер-регекс `uuidV4Pattern` (`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`, без ReDoS-риска); невалидный UUID → 400 `INVALID_REQUEST` с русским сообщением «поле job_id должно быть валидным UUID v4»; добавлен импорт `regexp`.
+- `DocumentManagement/architecture/api-specification.yaml` — `CreateVersionRequest` получил optional `job_id` (uuid, nullable: true) с описанием; `DocumentVersion` response schema — добавлено optional `job_id`.
+- `DocumentManagement/architecture/high-architecture.md` §5.2 — новая строка `job_id` в таблице полей DocumentVersion + инвариант «одна версия → один `job_id` или `NULL`; `job_id` immutable после `CreateVersion` и не меняется при transitions `artifact_status`».
+- `DocumentManagement/architecture/event-catalog.md` §2.2 VersionCreated — payload расширен `job_id` + поясняющая таблица (omitempty для backward-compat).
+- `DocumentManagement/architecture/state-machine.md` — отдельный блок «Persistent job_id (DM-TASK-054)»: фиксирует, что `job_id` immutable при INSERT и не меняется при transitions (включая watchdog → PARTIALLY_AVAILABLE).
+- Тесты — `version_repository_test.go` (Insert_Success обновлён до 15 args, `Insert_WithJobID`/`Insert_NilJobID` — проверка позиции и типа аргумента; FindByID_Success обновлён до 15 scan-dests, `FindByID_WithJobID` — round-trip non-NULL; FindByIDForUpdate_Success обновлён); `application/version/version_test.go` (`HappyPath_WithJobID` — version.JobID + inserted.JobID + outbox event + JSON содержит `"job_id":"<UUID>"`; `NoJobID_OmitsFromEvent` — JSON не содержит `"job_id"`, inserted.JobID == nil); `ingress/api/api_test.go` (`WithJobID_Accepted` — params.JobID течёт через handler, response JSON содержит job_id; `WithoutJobID_OmitsField` — response не содержит job_id; `InvalidJobID_Rejected` — handler возвращает 400 INVALID_REQUEST, service не вызывается, message содержит "job_id").
+
+**План реализации:**
+1. Изучить структуру (миграции, model, repo, application, handler, события, документы).
+2. Расширить миграцию 000001 (колонка + partial index + COMMENT).
+3. Расширить Domain model (DocumentVersion.JobID, VersionCreated.JobID).
+4. Расширить Port (CreateVersionParams.JobID).
+5. Обновить INSERT/SELECT в repository + scanVersion.
+6. Application service — установить JobID в version и VersionCreated.
+7. REST API — schema + handler с UUID v4 валидацией.
+8. Документация — high-architecture, event-catalog, state-machine, api-spec.
+9. Тесты (3 пакета, ~6 новых тестов).
+10. `go test -race -count=1 ./...`, `make build/build-migrate/test/lint`.
+
+**Консультации:**
+- code-reviewer: критичных багов/уязвимостей не найдено. Рекомендации [LOW/MED] — все нефункциональные follow-up: интеграционный тест с реальным PG для round-trip pgx scan UUID NULL → `*string`; DB-level enforcement immutability через trigger; выравнивание языка API-error-messages (mix ru/en в handler); явное документирование назначения `idx_versions_job_id` под lookup-by-job (DM-TASK-055/056).
+
+**Тесты:**
+- `go build ./...` — OK
+- `go vet ./...` — OK
+- `go test -count=1 ./...` — ALL PASS (30 пакетов)
+- `go test -count=1 -race ./...` — ALL PASS
+- `make build build-migrate test lint` — ALL OK
+
+**Итог:** Базовый слой `job_id` в document_versions готов. Колонка immutable после CreateVersion, NULL допустим для версий вне processing-flow, partial index подготовлен под future lookup-by-job. Backward compatibility VersionCreated сохранена через `omitempty`. Координация с ORCH-TASK-052: Orchestrator теперь может передавать `job_id` в `CreateVersionRequest`. Разблокированы DM-TASK-055 (enrichment VersionProcessingArtifactsReady) и DM-TASK-056 (matching-инвариант event.job_id == version.job_id).
+
+---

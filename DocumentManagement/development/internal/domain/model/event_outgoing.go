@@ -143,6 +143,8 @@ type VersionReportsReady struct {
 
 // VersionCreated notifies the orchestrator that a new document
 // version has been created and is ready for processing.
+// JobID — optional, передаётся когда версия создаётся в рамках processing-flow.
+// omitempty гарантирует backward compatibility для consumers до DM-TASK-054.
 type VersionCreated struct {
 	EventMeta
 	DocumentID      string     `json:"document_id"`
@@ -151,6 +153,7 @@ type VersionCreated struct {
 	OrgID           string     `json:"organization_id"`
 	OriginType      OriginType `json:"origin_type"`
 	ParentVersionID string     `json:"parent_version_id,omitempty"`
+	JobID           string     `json:"job_id,omitempty"`
 	CreatedByUserID string     `json:"created_by_user_id"`
 }
 

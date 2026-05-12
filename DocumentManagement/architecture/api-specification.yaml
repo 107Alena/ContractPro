@@ -507,6 +507,15 @@ components:
         origin_description:
           type: string
           description: Дополнительный контекст (например, «рекомендация по п. 5.3»)
+        job_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            UUID processing-задачи, передаётся Orchestrator при создании версии
+            в рамках processing-flow. Immutable после CreateVersion. Опциональное
+            поле — для версий вне processing-flow (например, MANUAL_EDIT без
+            переобработки) допустимо отсутствие.
 
     Document:
       type: object
@@ -589,6 +598,13 @@ components:
           type: string
         artifact_status:
           $ref: '#/components/schemas/ArtifactStatus'
+        job_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            UUID processing-задачи. NULL для версий, созданных вне processing-flow.
+            Immutable после CreateVersion.
         created_by_user_id:
           type: string
           format: uuid

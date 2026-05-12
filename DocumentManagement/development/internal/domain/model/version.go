@@ -104,6 +104,10 @@ type DocumentVersion struct {
 	SourceFileSize   int64          `json:"source_file_size"`
 	SourceFileChecksum string       `json:"source_file_checksum"`
 	ArtifactStatus   ArtifactStatus `json:"artifact_status"`
+	// JobID — UUID processing-задачи. nil для версий, созданных вне processing-flow.
+	// job_id фиксируется при создании версии и не меняется при последующих
+	// transitions artifact_status.
+	JobID            *string        `json:"job_id,omitempty"`
 	CreatedByUserID  string         `json:"created_by_user_id"`
 	CreatedAt        time.Time      `json:"created_at"`
 }

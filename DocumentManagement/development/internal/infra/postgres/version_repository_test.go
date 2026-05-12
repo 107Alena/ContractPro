@@ -25,7 +25,8 @@ func TestVersionRepository_Insert_Success(t *testing.T) {
 	mock := &mockTx{
 		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 			assert.Contains(t, sql, "INSERT INTO document_versions")
-			assert.Len(t, args, 14)
+			assert.Contains(t, sql, "job_id")
+			assert.Len(t, args, 15)
 			return pgconn.NewCommandTag("INSERT 0 1"), nil
 		},
 	}
@@ -35,6 +36,53 @@ func TestVersionRepository_Insert_Success(t *testing.T) {
 		model.OriginTypeUpload, "key", "file.pdf", 1024, "sha256", "user-1")
 	err := NewVersionRepository().Insert(ctx, v)
 	assert.NoError(t, err)
+}
+
+func TestVersionRepository_Insert_WithJobID(t *testing.T) {
+	jobID := "11111111-1111-4111-8111-111111111111"
+	var captured []any
+	mock := &mockTx{
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			assert.Contains(t, sql, "INSERT INTO document_versions")
+			assert.Contains(t, sql, "job_id")
+			captured = args
+			return pgconn.NewCommandTag("INSERT 0 1"), nil
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	v := model.NewDocumentVersion("v-1", "doc-1", "org-1", 1,
+		model.OriginTypeUpload, "key", "file.pdf", 1024, "sha256", "user-1")
+	v.JobID = &jobID
+
+	require.NoError(t, NewVersionRepository().Insert(ctx, v))
+	require.Len(t, captured, 15)
+	// job_id is the 13th positional argument (index 12).
+	ptr, ok := captured[12].(*string)
+	require.True(t, ok, "job_id argument must be *string, got %T", captured[12])
+	require.NotNil(t, ptr)
+	assert.Equal(t, jobID, *ptr)
+}
+
+func TestVersionRepository_Insert_NilJobID(t *testing.T) {
+	var captured []any
+	mock := &mockTx{
+		execFn: func(_ context.Context, _ string, args ...any) (pgconn.CommandTag, error) {
+			captured = args
+			return pgconn.NewCommandTag("INSERT 0 1"), nil
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	v := model.NewDocumentVersion("v-1", "doc-1", "org-1", 1,
+		model.OriginTypeUpload, "key", "file.pdf", 1024, "sha256", "user-1")
+	// v.JobID intentionally nil
+
+	require.NoError(t, NewVersionRepository().Insert(ctx, v))
+	require.Len(t, captured, 15)
+	ptr, ok := captured[12].(*string)
+	require.True(t, ok)
+	assert.Nil(t, ptr, "nil JobID must be passed as nil *string to map to SQL NULL")
 }
 
 func TestVersionRepository_Insert_UniqueViolation(t *testing.T) {
@@ -74,6 +122,7 @@ func TestVersionRepository_FindByID_Success(t *testing.T) {
 	mock := &mockTx{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
 			assert.Contains(t, sql, "organization_id = $3")
+			assert.Contains(t, sql, "job_id")
 			assert.Equal(t, "v-1", args[0])
 			assert.Equal(t, "doc-1", args[1])
 			assert.Equal(t, "org-1", args[2])
@@ -91,8 +140,9 @@ func TestVersionRepository_FindByID_Success(t *testing.T) {
 					*dest[9].(*int64) = 1024
 					*dest[10].(*string) = "sha256"
 					*dest[11].(*string) = "PENDING"
-					*dest[12].(*string) = "user-1"
-					*dest[13].(*time.Time) = now
+					*dest[12].(**string) = nil // no job_id
+					*dest[13].(*string) = "user-1"
+					*dest[14].(*time.Time) = now
 					return nil
 				},
 			}
@@ -106,6 +156,42 @@ func TestVersionRepository_FindByID_Success(t *testing.T) {
 	assert.Equal(t, model.OriginTypeUpload, v.OriginType)
 	assert.Equal(t, model.ArtifactStatusPending, v.ArtifactStatus)
 	assert.Empty(t, v.ParentVersionID)
+	assert.Nil(t, v.JobID)
+}
+
+func TestVersionRepository_FindByID_WithJobID(t *testing.T) {
+	now := time.Now().UTC()
+	jobIDStored := "22222222-2222-4222-9222-222222222222"
+	mock := &mockTx{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return &mockRow{
+				scanFn: func(dest ...any) error {
+					*dest[0].(*string) = "v-1"
+					*dest[1].(*string) = "doc-1"
+					*dest[2].(*string) = "org-1"
+					*dest[3].(*int) = 1
+					*dest[4].(**string) = nil
+					*dest[5].(*string) = "UPLOAD"
+					*dest[6].(**string) = nil
+					*dest[7].(*string) = "key"
+					*dest[8].(*string) = "file.pdf"
+					*dest[9].(*int64) = 1024
+					*dest[10].(*string) = "sha256"
+					*dest[11].(*string) = "PENDING"
+					*dest[12].(**string) = &jobIDStored
+					*dest[13].(*string) = "user-1"
+					*dest[14].(*time.Time) = now
+					return nil
+				},
+			}
+		},
+	}
+	ctx := ctxWithMockTx(mock)
+
+	v, err := NewVersionRepository().FindByID(ctx, "org-1", "doc-1", "v-1")
+	require.NoError(t, err)
+	require.NotNil(t, v.JobID)
+	assert.Equal(t, jobIDStored, *v.JobID)
 }
 
 func TestVersionRepository_FindByID_NotFound(t *testing.T) {
@@ -242,8 +328,9 @@ func TestVersionRepository_FindByIDForUpdate_Success(t *testing.T) {
 					*dest[9].(*int64) = 1024
 					*dest[10].(*string) = "sha256"
 					*dest[11].(*string) = "PROCESSING_ARTIFACTS_RECEIVED"
-					*dest[12].(*string) = "user-1"
-					*dest[13].(*time.Time) = now
+					*dest[12].(**string) = nil // no job_id
+					*dest[13].(*string) = "user-1"
+					*dest[14].(*time.Time) = now
 					return nil
 				},
 			}

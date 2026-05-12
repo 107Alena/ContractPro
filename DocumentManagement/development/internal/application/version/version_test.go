@@ -468,6 +468,89 @@ func TestCreateVersion_HappyPath_WithParentVersion(t *testing.T) {
 	}
 }
 
+func TestCreateVersion_HappyPath_WithJobID(t *testing.T) {
+	d := newTestDeps()
+	d.withActiveDoc("org-1", "doc-1")
+	svc := d.newService()
+
+	jobID := "33333333-3333-4333-a333-333333333333"
+	params := defaultCreateParams()
+	params.JobID = &jobID
+
+	v, err := svc.CreateVersion(context.Background(), params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Version preserves job_id.
+	if v.JobID == nil {
+		t.Fatal("version.JobID is nil, want pointer")
+	}
+	if *v.JobID != jobID {
+		t.Errorf("version.JobID = %q, want %q", *v.JobID, jobID)
+	}
+
+	// Persistence: insert receives the same JobID.
+	if len(d.versionRepo.insertedVersions) != 1 {
+		t.Fatalf("expected 1 inserted version, got %d", len(d.versionRepo.insertedVersions))
+	}
+	if got := d.versionRepo.insertedVersions[0].JobID; got == nil || *got != jobID {
+		t.Errorf("inserted version.JobID = %v, want pointer to %q", got, jobID)
+	}
+
+	// Outbox: VersionCreated includes job_id.
+	notif, ok := d.outbox.written[0].Event.(model.VersionCreated)
+	if !ok {
+		t.Fatalf("outbox event is not VersionCreated: %T", d.outbox.written[0].Event)
+	}
+	if notif.JobID != jobID {
+		t.Errorf("VersionCreated.JobID = %q, want %q", notif.JobID, jobID)
+	}
+
+	// VersionCreated must serialize job_id when present.
+	raw, err := json.Marshal(notif)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"job_id":"`+jobID+`"`) {
+		t.Errorf("VersionCreated JSON missing job_id: %s", raw)
+	}
+}
+
+func TestCreateVersion_NoJobID_OmitsFromEvent(t *testing.T) {
+	d := newTestDeps()
+	d.withActiveDoc("org-1", "doc-1")
+	svc := d.newService()
+
+	// defaultCreateParams() leaves JobID nil.
+	_, err := svc.CreateVersion(context.Background(), defaultCreateParams())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	notif, ok := d.outbox.written[0].Event.(model.VersionCreated)
+	if !ok {
+		t.Fatalf("outbox event is not VersionCreated: %T", d.outbox.written[0].Event)
+	}
+	if notif.JobID != "" {
+		t.Errorf("VersionCreated.JobID = %q, want empty (no job_id)", notif.JobID)
+	}
+
+	// omitempty must drop the field from the wire payload.
+	raw, err := json.Marshal(notif)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"job_id"`) {
+		t.Errorf("VersionCreated JSON must omit job_id when empty: %s", raw)
+	}
+
+	// version.JobID preserved as nil.
+	if d.versionRepo.insertedVersions[0].JobID != nil {
+		t.Errorf("inserted version.JobID = %v, want nil", d.versionRepo.insertedVersions[0].JobID)
+	}
+}
+
 func TestCreateVersion_HappyPath_WithOriginDescription(t *testing.T) {
 	d := newTestDeps()
 	d.withActiveDoc("org-1", "doc-1")

@@ -503,9 +503,14 @@
   "organization_id": "string (UUID)",
   "origin_type": "string (UPLOAD | RE_UPLOAD | RECOMMENDATION_APPLIED | MANUAL_EDIT | RE_CHECK)",
   "parent_version_id": "string (UUID, optional)",
+  "job_id": "string (UUID, optional)",
   "created_by_user_id": "string (UUID)"
 }
 ```
+
+| Поле | Тип | Обязательное | Описание |
+|------|-----|--------------|----------|
+| `job_id` | UUID | нет (`omitempty`) | UUID processing-задачи, если версия создаётся в рамках processing-flow. `omitempty` при отсутствии — backward-compatible для consumers до DM-TASK-054. |
 
 ---
 

@@ -33,8 +33,8 @@ func (r *VersionRepository) Insert(ctx context.Context, version *model.DocumentV
 		`INSERT INTO document_versions
 			(version_id, document_id, organization_id, version_number, parent_version_id,
 			 origin_type, origin_description, source_file_key, source_file_name,
-			 source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+			 source_file_size, source_file_checksum, artifact_status, job_id, created_by_user_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		version.VersionID,
 		version.DocumentID,
 		version.OrganizationID,
@@ -47,6 +47,7 @@ func (r *VersionRepository) Insert(ctx context.Context, version *model.DocumentV
 		version.SourceFileSize,
 		version.SourceFileChecksum,
 		string(version.ArtifactStatus),
+		version.JobID,
 		version.CreatedByUserID,
 		version.CreatedAt,
 	)
@@ -69,7 +70,7 @@ func (r *VersionRepository) FindByID(ctx context.Context, organizationID, docume
 	row := conn.QueryRow(ctx,
 		`SELECT version_id, document_id, organization_id, version_number, parent_version_id,
 				origin_type, origin_description, source_file_key, source_file_name,
-				source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at
+				source_file_size, source_file_checksum, artifact_status, job_id, created_by_user_id, created_at
 		FROM document_versions
 		WHERE version_id = $1 AND document_id = $2 AND organization_id = $3`,
 		versionID, documentID, organizationID,
@@ -94,7 +95,7 @@ func (r *VersionRepository) FindByIDForUpdate(ctx context.Context, organizationI
 	row := conn.QueryRow(ctx,
 		`SELECT version_id, document_id, organization_id, version_number, parent_version_id,
 				origin_type, origin_description, source_file_key, source_file_name,
-				source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at
+				source_file_size, source_file_checksum, artifact_status, job_id, created_by_user_id, created_at
 		FROM document_versions
 		WHERE version_id = $1 AND document_id = $2 AND organization_id = $3
 		FOR UPDATE`,
@@ -120,7 +121,7 @@ func (r *VersionRepository) List(ctx context.Context, organizationID, documentID
 	rows, err := conn.Query(ctx,
 		`SELECT version_id, document_id, organization_id, version_number, parent_version_id,
 				origin_type, origin_description, source_file_key, source_file_name,
-				source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at,
+				source_file_size, source_file_checksum, artifact_status, job_id, created_by_user_id, created_at,
 				COUNT(*) OVER() AS total_count
 		FROM document_versions
 		WHERE document_id = $1 AND organization_id = $2
@@ -143,11 +144,12 @@ func (r *VersionRepository) List(ctx context.Context, organizationID, documentID
 			originDesc      *string
 			originType      string
 			artifactStatus  string
+			jobID           *string
 		)
 		if err := rows.Scan(
 			&v.VersionID, &v.DocumentID, &v.OrganizationID, &v.VersionNumber, &parentVersionID,
 			&originType, &originDesc, &v.SourceFileKey, &v.SourceFileName,
-			&v.SourceFileSize, &v.SourceFileChecksum, &artifactStatus, &v.CreatedByUserID, &v.CreatedAt,
+			&v.SourceFileSize, &v.SourceFileChecksum, &artifactStatus, &jobID, &v.CreatedByUserID, &v.CreatedAt,
 			&totalCount,
 		); err != nil {
 			return nil, 0, port.NewDatabaseError("scan version row", err)
@@ -156,6 +158,7 @@ func (r *VersionRepository) List(ctx context.Context, organizationID, documentID
 		v.OriginDescription = fromNullableString(originDesc)
 		v.OriginType = model.OriginType(originType)
 		v.ArtifactStatus = model.ArtifactStatus(artifactStatus)
+		v.JobID = jobID
 		versions = append(versions, &v)
 	}
 	if err := rows.Err(); err != nil {
@@ -255,7 +258,7 @@ func (r *VersionRepository) FindStaleInIntermediateStatus(ctx context.Context, c
 
 	query := `SELECT version_id, document_id, organization_id, version_number, parent_version_id,
 			origin_type, origin_description, source_file_key, source_file_name,
-			source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at
+			source_file_size, source_file_checksum, artifact_status, job_id, created_by_user_id, created_at
 		FROM document_versions
 		WHERE ` + strings.Join(conditions, " OR ") + `
 		ORDER BY created_at ASC
@@ -310,7 +313,7 @@ func (r *VersionRepository) ListByDocument(ctx context.Context, documentID strin
 	rows, err := conn.Query(ctx,
 		`SELECT version_id, document_id, organization_id, version_number, parent_version_id,
 				origin_type, origin_description, source_file_key, source_file_name,
-				source_file_size, source_file_checksum, artifact_status, created_by_user_id, created_at
+				source_file_size, source_file_checksum, artifact_status, job_id, created_by_user_id, created_at
 		FROM document_versions
 		WHERE document_id = $1
 		ORDER BY version_number ASC`,
@@ -346,11 +349,12 @@ func scanVersion(row pgx.Row) (*model.DocumentVersion, error) {
 		originDesc      *string
 		originType      string
 		artifactStatus  string
+		jobID           *string
 	)
 	err := row.Scan(
 		&v.VersionID, &v.DocumentID, &v.OrganizationID, &v.VersionNumber, &parentVersionID,
 		&originType, &originDesc, &v.SourceFileKey, &v.SourceFileName,
-		&v.SourceFileSize, &v.SourceFileChecksum, &artifactStatus, &v.CreatedByUserID, &v.CreatedAt,
+		&v.SourceFileSize, &v.SourceFileChecksum, &artifactStatus, &jobID, &v.CreatedByUserID, &v.CreatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -359,5 +363,6 @@ func scanVersion(row pgx.Row) (*model.DocumentVersion, error) {
 	v.OriginDescription = fromNullableString(originDesc)
 	v.OriginType = model.OriginType(originType)
 	v.ArtifactStatus = model.ArtifactStatus(artifactStatus)
+	v.JobID = jobID
 	return &v, nil
 }

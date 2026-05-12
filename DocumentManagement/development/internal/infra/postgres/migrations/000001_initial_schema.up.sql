@@ -45,6 +45,7 @@ CREATE TABLE document_versions (
     source_file_checksum TEXT       NOT NULL,
     organization_id     UUID        NOT NULL,
     artifact_status     TEXT        NOT NULL DEFAULT 'PENDING',
+    job_id              UUID,
     created_by_user_id  UUID        NOT NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
 
@@ -56,6 +57,13 @@ CREATE INDEX idx_versions_doc
 
 CREATE INDEX idx_versions_org
     ON document_versions (organization_id);
+
+CREATE INDEX idx_versions_job_id
+    ON document_versions (job_id)
+    WHERE job_id IS NOT NULL;
+
+COMMENT ON COLUMN document_versions.job_id IS
+    'UUID processing-задачи. NULL для версий, созданных вне processing-flow. Immutable после CreateVersion.';
 
 -- Deferred FK: documents.current_version_id → document_versions.version_id.
 -- Created after document_versions to resolve the circular dependency.

@@ -751,6 +751,122 @@ func TestCreateVersion_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestCreateVersion_WithJobID_Accepted(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+
+	jobID := "44444444-4444-4444-a444-444444444444"
+	var captured port.CreateVersionParams
+	d.versions.createVersion = func(_ context.Context, params port.CreateVersionParams) (*model.DocumentVersion, error) {
+		captured = params
+		v := model.NewDocumentVersion(
+			"v-1", params.DocumentID, params.OrganizationID, 1,
+			params.OriginType, params.SourceFileKey, params.SourceFileName,
+			params.SourceFileSize, params.SourceFileChecksum, params.CreatedByUserID,
+		)
+		v.JobID = params.JobID
+		return v, nil
+	}
+
+	body := createVersionRequest{
+		SourceFileKey:      "files/test.pdf",
+		SourceFileName:     "test.pdf",
+		SourceFileSize:     1024,
+		SourceFileChecksum: "abc123",
+		OriginType:         "UPLOAD",
+		JobID:              &jobID,
+	}
+
+	rr := doRequest(d.handler, "POST", "/api/v1/documents/doc-1/versions", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rr.Code, rr.Body.String())
+	}
+	if captured.JobID == nil || *captured.JobID != jobID {
+		t.Errorf("service JobID param = %v, want pointer to %q", captured.JobID, jobID)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["job_id"] != jobID {
+		t.Errorf("response job_id = %v, want %q", resp["job_id"], jobID)
+	}
+}
+
+func TestCreateVersion_WithoutJobID_OmitsField(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+
+	d.versions.createVersion = func(_ context.Context, params port.CreateVersionParams) (*model.DocumentVersion, error) {
+		v := model.NewDocumentVersion(
+			"v-1", params.DocumentID, params.OrganizationID, 1,
+			params.OriginType, params.SourceFileKey, params.SourceFileName,
+			params.SourceFileSize, params.SourceFileChecksum, params.CreatedByUserID,
+		)
+		v.JobID = params.JobID // nil
+		return v, nil
+	}
+
+	body := createVersionRequest{
+		SourceFileKey:      "files/test.pdf",
+		SourceFileName:     "test.pdf",
+		SourceFileSize:     1024,
+		SourceFileChecksum: "abc123",
+		OriginType:         "UPLOAD",
+	}
+
+	rr := doRequest(d.handler, "POST", "/api/v1/documents/doc-1/versions", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rr.Code)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := resp["job_id"]; ok {
+		t.Errorf("response must omit job_id when nil; got: %v", resp)
+	}
+}
+
+func TestCreateVersion_InvalidJobID_Rejected(t *testing.T) {
+	t.Parallel()
+	d := newTestDeps()
+	called := false
+	d.versions.createVersion = func(_ context.Context, _ port.CreateVersionParams) (*model.DocumentVersion, error) {
+		called = true
+		return nil, nil
+	}
+
+	badJobID := "not-a-uuid"
+	body := createVersionRequest{
+		SourceFileKey:      "files/test.pdf",
+		SourceFileName:     "test.pdf",
+		SourceFileSize:     1024,
+		SourceFileChecksum: "abc123",
+		OriginType:         "UPLOAD",
+		JobID:              &badJobID,
+	}
+
+	rr := doRequest(d.handler, "POST", "/api/v1/documents/doc-1/versions", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+	if called {
+		t.Error("service must not be called when job_id is invalid")
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["error_code"] != "INVALID_REQUEST" {
+		t.Errorf("error_code = %v, want INVALID_REQUEST", resp["error_code"])
+	}
+	if msg, _ := resp["message"].(string); !strings.Contains(msg, "job_id") {
+		t.Errorf("message must mention job_id (got %q)", msg)
+	}
+}
+
 func TestCreateVersion_DocNotFound(t *testing.T) {
 	t.Parallel()
 	d := newTestDeps()

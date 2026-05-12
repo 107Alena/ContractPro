@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -282,13 +283,14 @@ func (h *Handler) archiveDocument(w http.ResponseWriter, r *http.Request) {
 
 // createVersionRequest is the JSON body for POST /documents/{id}/versions.
 type createVersionRequest struct {
-	SourceFileKey      string `json:"source_file_key"`
-	SourceFileName     string `json:"source_file_name"`
-	SourceFileSize     int64  `json:"source_file_size"`
-	SourceFileChecksum string `json:"source_file_checksum"`
-	OriginType         string `json:"origin_type"`
-	OriginDescription  string `json:"origin_description"`
-	ParentVersionID    string `json:"parent_version_id"`
+	SourceFileKey      string  `json:"source_file_key"`
+	SourceFileName     string  `json:"source_file_name"`
+	SourceFileSize     int64   `json:"source_file_size"`
+	SourceFileChecksum string  `json:"source_file_checksum"`
+	OriginType         string  `json:"origin_type"`
+	OriginDescription  string  `json:"origin_description"`
+	ParentVersionID    string  `json:"parent_version_id"`
+	JobID              *string `json:"job_id,omitempty"`
 }
 
 func (h *Handler) createVersion(w http.ResponseWriter, r *http.Request) {
@@ -308,6 +310,13 @@ func (h *Handler) createVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// job_id опциональный; если передан — должен быть UUID v4.
+	if req.JobID != nil && !isValidUUIDv4(*req.JobID) {
+		writeErrorJSON(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"поле job_id должно быть валидным UUID v4")
+		return
+	}
+
 	version, err := h.versions.CreateVersion(r.Context(), port.CreateVersionParams{
 		OrganizationID:     ac.OrganizationID,
 		DocumentID:         docID,
@@ -318,6 +327,7 @@ func (h *Handler) createVersion(w http.ResponseWriter, r *http.Request) {
 		SourceFileName:     req.SourceFileName,
 		SourceFileSize:     req.SourceFileSize,
 		SourceFileChecksum: req.SourceFileChecksum,
+		JobID:              req.JobID,
 		CreatedByUserID:    ac.UserID,
 	})
 	if err != nil {
@@ -718,6 +728,17 @@ func isValidActorType(t model.ActorType) bool {
 		}
 	}
 	return false
+}
+
+// uuidV4Pattern matches a canonical UUID v4 representation:
+// 8-4-4-4-12 hex digits with version nibble 4 and variant nibble 8/9/a/b.
+var uuidV4Pattern = regexp.MustCompile(
+	`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`,
+)
+
+// isValidUUIDv4 returns true if s is a canonical UUID v4 string.
+func isValidUUIDv4(s string) bool {
+	return uuidV4Pattern.MatchString(s)
 }
 
 // ---------------------------------------------------------------------------

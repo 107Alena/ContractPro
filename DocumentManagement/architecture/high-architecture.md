@@ -325,6 +325,7 @@ DM — **центральный data hub** между вычислительны
 | `source_file_size` | int64 | Размер в байтах |
 | `source_file_checksum` | string | SHA-256 checksum |
 | `artifact_status` | enum | Статус готовности артефактов |
+| `job_id` | UUID (nullable) | ID processing-задачи. NULL для версий, созданных вне processing-flow. Immutable после CreateVersion. |
 | `created_by_user_id` | UUID | Кто инициировал создание версии |
 | `created_at` | timestamp | Когда создана |
 
@@ -354,6 +355,7 @@ DM — **центральный data hub** между вычислительны
 - `artifact_status` — единственное мутабельное поле; переходы только вперёд.
 - `version_number` монотонно возрастает в пределах документа.
 - `parent_version_id` ссылается только на версию того же документа.
+- Одна версия → один `job_id` или `NULL`; `job_id` immutable после `CreateVersion` и не меняется при transitions `artifact_status`.
 
 **Связи:**
 - `DocumentVersion` N→1 `Document`.

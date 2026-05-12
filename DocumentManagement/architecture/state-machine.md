@@ -98,6 +98,12 @@ allowed_transitions = {
 
 При `origin_type=RE_CHECK` создаётся **новая версия** с `artifact_status=PENDING`. Старая версия не затрагивается — её `artifact_status` остаётся в терминальном состоянии. State machine работает для новой версии с нуля.
 
+---
+
+## Persistent job_id (DM-TASK-054)
+
+`document_versions.job_id` фиксируется при INSERT в `CreateVersion` и **не меняется** при последующих transitions `artifact_status` (включая переход в `PARTIALLY_AVAILABLE` watchdog-ом). Это инвариант matching-логики: одна версия → один `job_id` или NULL. NULL допустим для версий, создаваемых вне processing-flow.
+
 ```mermaid
 stateDiagram-v2
     state "Version N (original)" as VN {

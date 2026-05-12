@@ -87,6 +87,10 @@ type CreateVersionParams struct {
 	SourceFileName     string
 	SourceFileSize     int64
 	SourceFileChecksum string
+	// JobID — UUID processing-задачи. nil для версий, создаваемых вне
+	// processing-flow (например, MANUAL_EDIT без последующей переобработки).
+	// Immutable после CreateVersion.
+	JobID              *string
 	CreatedByUserID    string
 }
 

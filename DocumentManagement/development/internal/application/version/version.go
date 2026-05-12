@@ -266,6 +266,7 @@ func (s *VersionManagementService) createVersionInTx(
 		)
 		version.ParentVersionID = params.ParentVersionID
 		version.OriginDescription = params.OriginDescription
+		version.JobID = params.JobID
 
 		if err := s.versionRepo.Insert(txCtx, version); err != nil {
 			return err
@@ -297,6 +298,12 @@ func (s *VersionManagementService) createVersionInTx(
 		}
 
 		// Outbox: VersionCreated notification event.
+		// JobID — omitempty: пустая строка не попадёт в JSON, сохраняя
+		// backward compatibility для consumers до DM-TASK-054.
+		var jobIDForEvent string
+		if params.JobID != nil {
+			jobIDForEvent = *params.JobID
+		}
 		notificationEvent := model.VersionCreated{
 			EventMeta: model.EventMeta{
 				CorrelationID: s.newUUID(),
@@ -308,6 +315,7 @@ func (s *VersionManagementService) createVersionInTx(
 			OrgID:           params.OrganizationID,
 			OriginType:      params.OriginType,
 			ParentVersionID: params.ParentVersionID,
+			JobID:           jobIDForEvent,
 			CreatedByUserID: params.CreatedByUserID,
 		}
 		return s.outbox.Write(txCtx, versionID, model.TopicDMEventsVersionCreated, notificationEvent)

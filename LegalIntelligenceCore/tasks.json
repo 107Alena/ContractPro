@@ -1,0 +1,1234 @@
+{
+  "agent_instructions": {
+    "before_start": [
+      "Прочитай этот файл и git log --oneline -20",
+      "Выбери ОДНУ задачу со статусом pending и наивысшим приоритетом",
+      "Проверь, что все dependencies этой задачи имеют статус done"
+    ],
+    "during_work": [
+      "Работай только над выбранной задачей",
+      "Делай коммиты после каждого логического изменения",
+      "Не трогай код, не связанный с текущей задачей"
+    ],
+    "before_finish": [
+      "Выполни ВСЕ test_steps из задачи",
+      "Меняй status на done ТОЛЬКО после успешного прохождения всех тестов",
+      "Напиши summary в progress.md",
+      "ЗАПРЕЩЕНО удалять или редактировать задачи — только менять status"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "LIC-TASK-001",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Scaffolding проекта LIC: Go-модуль, структура директорий, Makefile, Dockerfile-скелет",
+      "acceptance_criteria": [
+        "Go-модуль инициализирован: go.mod с module contractpro/legal-intelligence-core, Go 1.26.1",
+        "Entrypoint: cmd/lic-service/main.go со stub (log.Println + os.Exit)",
+        "Структура internal/: app/, config/, domain/{model,port}/, application/{pipeline,pendingconfirmation,dmawaiter,aggregator}/, agents/{prompts,schemas,promptbuilder,schemavalidator,tokenestimator,base,typeclassifier,keyparams,partyconsistency,mandatoryconditions,riskdetection,recommendation,summary,detailedreport,riskdelta}/, llm/{router,claude,openai,gemini,ratelimit,cost,pricing}/, ingress/{consumer,idempotency,router}/, egress/{publisher,dlq}/, infra/{broker,kvstore,observability,concurrency,health}/, integration/",
+        "Makefile с целями build, test, lint, docker-build (по DP-конвенции)",
+        "make build собирает бинарник bin/lic-service без ошибок",
+        "make test (go test ./...) проходит без ошибок",
+        "make lint (go vet ./...) проходит без ошибок"
+      ],
+      "test_steps": [
+        "Шаг 1: make build — бинарник создан",
+        "Шаг 2: make test — 0 errors",
+        "Шаг 3: make lint — 0 errors"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-002",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Загрузка конфигурации из переменных окружения с префиксом LIC_",
+      "acceptance_criteria": [
+        "Пакет internal/config с функцией Load() (*Config, error)",
+        "Загрузка .env через godotenv, env-переменные имеют приоритет",
+        "Required переменные: LIC_BROKER_URL, LIC_REDIS_URL, LIC_CLAUDE_API_KEY (если claude в FALLBACK), LIC_PROMPT_INJECTION_HASH_KEY, LIC_DLQ_HASH_KEY",
+        "Optional с дефолтами: LIC_CONFIDENCE_THRESHOLD=0.75, LIC_PIPELINE_CONCURRENCY=5, LIC_JOB_TIMEOUT=90s, LIC_PROVIDER_FALLBACK_ORDER=claude,openai,gemini, все 9 per-agent providers/timeouts, веса AGGREGATE_SCORE, RPS/burst лимиты, retry TTLs (см. configuration.md)",
+        "Production TLS enforcement: при LIC_ENV ∈ {staging,production} требуется LIC_REDIS_TLS=true, amqps:// в broker URL, https:// в LLM endpoints — иначе FATAL",
+        "Валидация: confidence threshold ∈ [0,1], timeouts > 0, для провайдеров из fallback цепи имеются ключи, LIC_MAX_INGESTED_BYTES ≥ 1MB",
+        "Tests: happy path, missing required, invalid values, defaults, TLS enforcement"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/config/... — все тесты проходят",
+        "Шаг 2: тест с полным env → Load() без ошибок",
+        "Шаг 3: тест без LIC_BROKER_URL → ошибка со списком недостающих",
+        "Шаг 4: тест с LIC_ENV=production + amqp:// → FATAL"
+      ],
+      "dependencies": ["LIC-TASK-001"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-003",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Multi-stage Dockerfile с distroless nonroot base",
+      "acceptance_criteria": [
+        "Dockerfile: stage 1 golang:1.26-alpine builder, stage 2 gcr.io/distroless/static-debian12:nonroot",
+        "CGO_ENABLED=0, ldflags -s -w -X main.version=${VERSION}",
+        "CA-certificates скопированы в runtime stage (для HTTPS к LLM)",
+        "USER nonroot, EXPOSE 8080",
+        "Build arg VERSION для git tag",
+        "docker build создает образ < 50 МБ",
+        "Образ запускается и падает с фейлом конфигурации (ожидаемо, без env)"
+      ],
+      "test_steps": [
+        "Шаг 1: docker build --build-arg VERSION=test -t lic:test . — успех",
+        "Шаг 2: docker images lic:test — размер < 50 МБ",
+        "Шаг 3: docker run lic:test — fail-fast на missing config"
+      ],
+      "dependencies": ["LIC-TASK-001"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-004",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Structured logger (slog или zerolog) с allowlist-стратегией для PII",
+      "acceptance_criteria": [
+        "Пакет internal/infra/observability/logger",
+        "JSON-формат на stdout",
+        "Обязательные поля: timestamp, level, service=lic-service, correlation_id, job_id, version_id, organization_id, component, message",
+        "Уровень из LIC_LOG_LEVEL (debug/info/warn/error/fatal)",
+        "Context-based helper WithRequestContext(ctx) извлекает correlation IDs из context",
+        "Sensitive data policy: запрещено логировать API-ключи, тело договора, raw LLM responses (см. security.md §6.2 allowlist)",
+        "Sanitize-функция: regex редактирует API ключи (sk-ant-..., sk-..., AIza..., Bearer ..., ?key=...) в error messages"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/observability/logger/... — все тесты проходят",
+        "Шаг 2: лог-запись содержит correlation_id из context",
+        "Шаг 3: sanitize редактирует API-ключ в error message"
+      ],
+      "dependencies": ["LIC-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-005",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Prometheus metrics registry с LIC-prefix conventions",
+      "acceptance_criteria": [
+        "Пакет internal/infra/observability/metrics с конструкторами для метрик из observability.md §3",
+        "Counter/Histogram/Gauge factories с lic_ prefix",
+        "Cardinality-safe: НЕ добавляется organization_id label (observability.md §3.10)",
+        "Базовый набор: lic_pipeline_*, lic_agent_*, lic_llm_*, lic_dm_*, lic_idempotency_*, lic_pending_*, lic_dlq_*, lic_consumer_messages_total, lic_publisher_messages_total, lic_build_info",
+        "Histogram buckets соответствуют specs (pipeline 1..120s, agent 0.5..20s, tokens 1k..64k)",
+        "lic_build_info{version, commit, go_version} инициализируется при старте"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/observability/metrics/... — все тесты проходят",
+        "Шаг 2: проверка cardinality (no organization_id в labels)",
+        "Шаг 3: histogram buckets валидны"
+      ],
+      "dependencies": ["LIC-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-006",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "OpenTelemetry tracer с W3C Trace Context propagation",
+      "acceptance_criteria": [
+        "Пакет internal/infra/observability/tracer с инициализацией OTel SDK",
+        "OTLP gRPC exporter с endpoint из LIC_OTEL_EXPORTER_OTLP_ENDPOINT",
+        "Sampler ParentBased(TraceIDRatio(LIC_OTEL_TRACES_SAMPLER_ARG))",
+        "Service name lic-service (LIC_OTEL_SERVICE_NAME)",
+        "Propagator TraceContext + Baggage (W3C standard)",
+        "Helpers: StartSpan(ctx, name, attrs), SpanFromContext, InjectIntoHeaders, ExtractFromHeaders",
+        "Graceful Shutdown() с flush traces"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/observability/tracer/... — все тесты проходят",
+        "Шаг 2: span создаётся с правильными attributes",
+        "Шаг 3: traceparent в headers корректно extract'ится"
+      ],
+      "dependencies": ["LIC-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-007",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Redis-клиент с поддержкой Lua scripts и TLS",
+      "acceptance_criteria": [
+        "Пакет internal/infra/kvstore с Redis-клиентом (go-redis/v9)",
+        "Конфигурация из LIC_REDIS_* (URL, DB, password, pool size, dial timeout, TLS)",
+        "Операции: Get, Set (с TTL), SetNX (с TTL), Delete, Expire, Eval (Lua script для token bucket)",
+        "Health check Ping() для readiness",
+        "Graceful Close()",
+        "Error mapping: ErrKeyNotFound sentinel, context passthrough",
+        "Tests с in-memory fake (redis mock) и integration с miniredis"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/kvstore/... — все тесты проходят",
+        "Шаг 2: SetNX с TTL → дублирующий SetNX возвращает false",
+        "Шаг 3: Eval Lua-script (тестовый) выполняется"
+      ],
+      "dependencies": ["LIC-TASK-002", "LIC-TASK-004"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-008",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "RabbitMQ broker client с publisher confirms, manual ACK, auto-reconnect, DLX-loop topology",
+      "acceptance_criteria": [
+        "Пакет internal/infra/broker (amqp091-go)",
+        "Connection из LIC_BROKER_URL с auto-reconnect (exponential backoff + jitter)",
+        "Publish с publisher confirms (Confirm mode + NotifyPublish), wait-for-broker-ack, retry 3 раза с backoff",
+        "Subscribe с manual ACK/NACK, prefetch (LIC_CONSUMER_PREFETCH=10)",
+        "Создание queues + bindings для LIC-топиков (integration-contracts.md §6.1): lic.q.version-artifacts-ready, lic.q.version-created, lic.q.artifacts-provided, lic.q.lic-persist-confirm, lic.q.lic-persist-fail, lic.q.user-confirmed-type",
+        "Queue policies: durable=true, x-message-ttl=86400000 (24h), x-dead-letter-exchange=contractpro.dlx",
+        "Retry queues для DLX-loop: lic.q.<topic>.retry.{1,2,3} с TTL 2s/10s/60s",
+        "Ping() health check, graceful Close()"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/broker/... — все тесты проходят",
+        "Шаг 2: publish → confirm → message в очереди (in-memory fake)",
+        "Шаг 3: reconnect после имитированного disconnect",
+        "Шаг 4: retry queues создаются с правильным TTL"
+      ],
+      "dependencies": ["LIC-TASK-002", "LIC-TASK-004"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-009",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Health check handler (/healthz, /readyz, /metrics) на отдельном HTTP-сервере",
+      "acceptance_criteria": [
+        "Пакет internal/infra/health с http.Handler",
+        "GET /healthz — всегда 200 (liveness)",
+        "GET /readyz — параллельные проверки Redis ping, RabbitMQ IsClosed, минимум 1 LLM-провайдер healthy",
+        "503 при недоступности критичной зависимости, JSON с per-dependency статусом",
+        "GET /metrics — Prometheus exposition handler (promhttp)",
+        "SetNotReady() для graceful shutdown — /readyz отвечает 503",
+        "Слушает на LIC_HTTP_PORT (default 8080)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/health/... — все тесты проходят",
+        "Шаг 2: GET /healthz → 200",
+        "Шаг 3: GET /readyz при доступных deps → 200",
+        "Шаг 4: SetNotReady → /readyz → 503"
+      ],
+      "dependencies": ["LIC-TASK-005", "LIC-TASK-007", "LIC-TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-010",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Concurrency limiter (semaphore-based) для job-level и LLM-level",
+      "acceptance_criteria": [
+        "Пакет internal/infra/concurrency с типом Semaphore",
+        "New(max int), Acquire(ctx), Release()",
+        "Job-level semaphore: LIC_PIPELINE_CONCURRENCY (default 5)",
+        "LLM-level semaphore per provider: LIC_LLM_CONCURRENCY_PER_PROVIDER (default 10)",
+        "Acquire respects ctx cancellation",
+        "Метрика lic_pipeline_concurrent_jobs gauge обновляется"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/concurrency/... — все тесты проходят",
+        "Шаг 2: N+1 одновременных Acquire — последний блокируется до Release",
+        "Шаг 3: ctx cancellation прерывает Acquire"
+      ],
+      "dependencies": ["LIC-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-011",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Domain types: статусы, стадии, agent IDs, error codes, DomainError",
+      "acceptance_criteria": [
+        "internal/domain/model/status.go: типы ExternalStatus (IN_PROGRESS/COMPLETED/FAILED) и Stage (STAGE_RECEIVED, STAGE_REQUESTING_ARTIFACTS, …, STAGE_AGENT_*, STAGE_AWAITING_USER_CONFIRMATION, STAGE_DONE — high-architecture.md §2.1.3)",
+        "internal/domain/model/agent.go: AgentID с 9 константами (AGENT_TYPE_CLASSIFIER, AGENT_KEY_PARAMS, AGENT_PARTY_CONSISTENCY, AGENT_MANDATORY_CONDITIONS, AGENT_RISK_DETECTION, AGENT_RECOMMENDATION, AGENT_SUMMARY, AGENT_DETAILED_REPORT, AGENT_RISK_DELTA)",
+        "internal/domain/model/contract_type.go: enum 12 значений whitelist (SERVICES, SUPPLY, WORK_CONTRACT, LEASE, NDA, SALE, LICENSE, AGENCY, LOAN, INSURANCE, EMPLOYMENT_CIVIL, OTHER) + regex validator ^[A-Z_]{1,32}$",
+        "internal/domain/model/errors.go: DomainError{Code, UserMessage, DevMessage, Retryable, Stage, Cause, Attributes}, errors.Is/As поддержка",
+        "internal/domain/model/error_codes.go: каталог 20+ ErrorCode с RU message + EN dev message (error-handling.md §3)",
+        "Tests: validator contract type, Error() / Unwrap()"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... — все тесты проходят",
+        "Шаг 2: contract_type whitelist validator принимает SERVICES, отвергает INVALID",
+        "Шаг 3: DomainError.Unwrap() возвращает Cause"
+      ],
+      "dependencies": ["LIC-TASK-001"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-012",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Domain models: PipelineState, AgentInput, типизированные артефакты, PendingTypeConfirmation",
+      "acceptance_criteria": [
+        "internal/domain/model/pipeline_state.go: PipelineState с полями correlation_id, job_id, document_id, version_id, organization_id, created_by_user_id, mode (INITIAL|RE_CHECK), origin_type, parent_version_id, current_stage, started_at, trace_context (W3C carrier), все AgentResult-ы",
+        "internal/domain/model/agent_input.go: AgentInput — общий контракт для агентов (correlation fields, artifacts, previous results)",
+        "internal/domain/model/artifacts.go: типизированные результаты — ClassificationResult, KeyParameters (с internal_extras), PartyConsistencyFindings, MandatoryConditionsReport, RiskAnalysis, Recommendations, Summary, DetailedReport, RiskDelta — JSON-сериализуемы (json tags), поля соответствуют ai-agents-pipeline.md schemas",
+        "internal/domain/model/derived.go: RiskProfile{overall_level, high_count, medium_count, low_count}, AggregateScore{score, label}",
+        "internal/domain/model/pending.go: PendingTypeConfirmation для сериализации в Redis (gzip+base64 encoded JSON)",
+        "Golden tests на JSON marshal/unmarshal каждой структуры"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/domain/model/... — все тесты проходят",
+        "Шаг 2: marshal/unmarshal каждой структуры round-trip без потерь",
+        "Шаг 3: PendingTypeConfirmation сжимается-разжимается без потерь"
+      ],
+      "dependencies": ["LIC-TASK-011"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-013",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Hexagonal ports — все internal interfaces",
+      "acceptance_criteria": [
+        "internal/domain/port/inbound.go: EventHandler (для consumer), ArtifactResponseHandler, UserConfirmedTypeHandler",
+        "internal/domain/port/llm.go: LLMProviderPort interface (ID(), Complete(ctx, req) (CompletionResponse, error), HealthCheck(ctx)) + Turn, CompletionRequest, CompletionResponse, StopReason, LLMProviderError (Code, Retryable, FallbackEligible, RetryAfter, Wrapped) + helpers — точно по llm-provider-abstraction.md §1",
+        "internal/domain/port/agents.go: Agent interface (ID(), Run(ctx, input) (AgentResult, error))",
+        "internal/domain/port/idempotency.go: IdempotencyStorePort (SetNX, Get, ExtendTTL, SetCompleted, SetPaused)",
+        "internal/domain/port/pending.go: PendingStatePort (Save, Load, Delete)",
+        "internal/domain/port/dm.go: ArtifactRequesterPort, ArtifactPersistencePort, DMResponseAwaiterPort",
+        "internal/domain/port/publisher.go: StatusPublisherPort, UncertaintyPublisherPort, DLQPublisherPort",
+        "internal/domain/port/router.go: ProviderRouterPort (Complete, CompleteRepair)"
+      ],
+      "test_steps": [
+        "Шаг 1: go vet ./internal/domain/port/... — без ошибок",
+        "Шаг 2: каждый порт имеет тест на compile-time проверку (var _ Port = (*stub)(nil))"
+      ],
+      "dependencies": ["LIC-TASK-012"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-014",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Claude provider adapter (Anthropic Messages API) с tool_use для structured outputs",
+      "acceptance_criteria": [
+        "Пакет internal/llm/claude с claudeProvider (compile-time check var _ port.LLMProviderPort = (*claudeProvider)(nil))",
+        "NewClaudeProvider(cfg ClaudeConfig) (*claudeProvider, error) — cfg с APIKey, BaseURL, Model, RPS, Burst, PromptCacheEnabled",
+        "Complete(ctx, req): builds Anthropic native format {system: req.System, messages: [...PriorTurns, {role:\"user\", content:req.User}]}",
+        "При req.JSONSchema != nil: использует tool_use с virtual tool (input_schema=JSONSchema) — strict structured outputs",
+        "При LIC_CLAUDE_PROMPT_CACHE_ENABLED=true: cache_control: {type:\"ephemeral\"} на system block",
+        "Error mapping: HTTP status → LLMProviderError с правильными Retryable/FallbackEligible признаками (401→Retryable=false/FallbackEligible=true, 429→Retryable=true с RetryAfter, 529→Retryable=true, 400 context_length→Retryable=false/FallbackEligible=false)",
+        "Response parsing: text content + usage (input_tokens, cache_read_input_tokens → CachedInputTokens, output_tokens), stop_reason mapping",
+        "HealthCheck(ctx): light request с max_tokens=10",
+        "Sanitize error messages (без API ключа)",
+        "TLS 1.2+ enforced"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/llm/claude/... — все тесты проходят (mock HTTP)",
+        "Шаг 2: 401 → LLMProviderError с IsAuthError()=true",
+        "Шаг 3: tool_use payload содержит правильную input_schema",
+        "Шаг 4: CachedInputTokens учитывается при parse usage"
+      ],
+      "dependencies": ["LIC-TASK-013"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-015",
+      "category": "functional",
+      "priority": "critical",
+      "description": "OpenAI provider adapter (Responses API) с response_format=json_schema strict",
+      "acceptance_criteria": [
+        "Пакет internal/llm/openai, var _ port.LLMProviderPort = (*openaiProvider)(nil)",
+        "NewOpenAIProvider(cfg)",
+        "Native format: {input: [{role:\"developer\", content:System}, ...PriorTurns, {role:\"user\", content:User}]}",
+        "При JSONSchema: response_format: {type:\"json_schema\", strict:true, schema:<JSONSchema>}",
+        "Error mapping: 401, 429 (с Retry-After), 5xx, content_policy_violation",
+        "Authorization: Bearer header",
+        "HealthCheck via /v1/responses light call",
+        "CachedInputTokens=0 в v1 (implicit cache не отслеживается)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/llm/openai/... — все тесты проходят",
+        "Шаг 2: developer role в input",
+        "Шаг 3: strict json_schema передается"
+      ],
+      "dependencies": ["LIC-TASK-013"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-016",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Gemini provider adapter (generateContent с responseSchema)",
+      "acceptance_criteria": [
+        "Пакет internal/llm/gemini, var _ port.LLMProviderPort = (*geminiProvider)(nil)",
+        "NewGeminiProvider(cfg)",
+        "Native format: {systemInstruction:{parts:[{text:System}]}, contents:[...PriorTurns (Assistant→\"model\"), {role:\"user\", parts:[{text:User}]}]}",
+        "При JSONSchema: generationConfig.responseSchema:<JSONSchema>, responseMimeType:\"application/json\"",
+        "Auth: ?key=<API_KEY> query или x-goog-api-key header",
+        "Error mapping: 401, 429, 5xx, blocked content",
+        "HealthCheck via :generateContent light call",
+        "Role mapping Assistant→\"model\""
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/llm/gemini/... — все тесты проходят",
+        "Шаг 2: PriorTurn Assistant маппится в \"model\"",
+        "Шаг 3: responseSchema передается"
+      ],
+      "dependencies": ["LIC-TASK-013"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-017",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Rate limiter — token bucket в Redis с atomic Lua script",
+      "acceptance_criteria": [
+        "Пакет internal/llm/ratelimit с TokenBucket{provider, redis}",
+        "Atomic Lua script: get tokens, refill based on elapsed, decrement if available, return allowed/denied + retry-after",
+        "Key: lic:rate:{provider}",
+        "Параметры из LIC_LLM_RPS_<PROVIDER>, LIC_LLM_BURST_<PROVIDER>",
+        "Wait(ctx, providerID) error — блокирующее ожидание токена в пределах ctx deadline",
+        "При истечении ctx → return error wrapping context.DeadlineExceeded",
+        "Метрика lic_llm_rate_limited_total{provider} инкрементируется при denied"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/llm/ratelimit/... — все тесты проходят (miniredis)",
+        "Шаг 2: bucket sustains RPS=10 over 1s",
+        "Шаг 3: burst допускается до limit",
+        "Шаг 4: ctx cancelled → return error"
+      ],
+      "dependencies": ["LIC-TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-018",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Cost & Usage Tracker — Prometheus метрики с pricing table loader",
+      "acceptance_criteria": [
+        "Пакет internal/llm/cost с Tracker",
+        "Загрузка pricing table из LIC_PRICING_TABLE_PATH (YAML): per-model InputPerMTokenUSD, CachedInputPerMTokenUSD, OutputPerMTokenUSD",
+        "После каждого Complete: counter increments lic_llm_input_tokens_total{provider,model,agent}, lic_llm_cached_tokens_total{provider,model,agent}, lic_llm_output_tokens_total, lic_llm_cost_usd_total{provider,model,agent}",
+        "Формула: cost = (input*Input + cached*CachedInput + output*Output) / 1_000_000",
+        "Histogram lic_llm_latency_seconds{provider,model,agent}",
+        "Counter lic_llm_calls_total{provider,model,agent,outcome} (outcome ∈ success|repair|fail|fallback)",
+        "organization_id НЕ в Prometheus labels (cardinality); per-tenant cost — через OTel span attributes"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/llm/cost/... — все тесты проходят",
+        "Шаг 2: cost формула на claude-sonnet-4-6 с input=10000, output=1000 → правильное значение USD",
+        "Шаг 3: cached tokens используют CachedInputPerMTokenUSD (0.30 vs 3.00 для Claude)"
+      ],
+      "dependencies": ["LIC-TASK-005", "LIC-TASK-013"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-019",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Provider Router — per-agent default + global fallback chain, healthy registry, Complete + CompleteRepair (sticky)",
+      "acceptance_criteria": [
+        "Пакет internal/llm/router с ProviderRouter (var _ port.ProviderRouterPort = (*ProviderRouter)(nil))",
+        "Config: per-agent primary (map AgentID→LLMProviderID), global fallback order",
+        "Complete(ctx, req) → {Response, UsedProvider}: chain = [primary, ...fallback без дублей]; per provider: skip if unhealthy, Wait на rate limiter, retry на same provider 1 раз, fallback если FallbackEligible=true, fail при ErrCodeContextTooLong/MalformedRequest",
+        "CompleteRepair(ctx, req, usedProvider): sticky на тот же провайдер; при provider error в repair — НЕ переходим к fallback (sticky semantics)",
+        "In-memory healthy registry: {providerID → {healthy, permanent, last_check_at, consecutive_failures}}",
+        "MarkPermanentlyUnhealthy(providerID) при ErrCodeInvalidAPIKey",
+        "Background healthcheck goroutine: каждые 30s вызывает HealthCheck для каждого провайдера, обновляет registry",
+        "Метрики: lic_llm_provider_fallback_total{from,to,agent}, lic_llm_provider_skipped_unhealthy_total, lic_llm_provider_failed_total{provider,code}, lic_llm_provider_health_status{provider,state}"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/llm/router/... — все тесты проходят",
+        "Шаг 2: primary возвращает 5xx → fallback на secondary → success",
+        "Шаг 3: CompleteRepair использует UsedProvider, не primary",
+        "Шаг 4: INVALID_API_KEY → mark permanent unhealthy",
+        "Шаг 5: ALL_PROVIDERS_FAILED после исчерпания chain"
+      ],
+      "dependencies": ["LIC-TASK-014", "LIC-TASK-015", "LIC-TASK-016", "LIC-TASK-017", "LIC-TASK-018"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-020",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Embed system prompts и JSON schemas через embed.FS",
+      "acceptance_criteria": [
+        "internal/agents/prompts/ содержит 9 файлов .txt: type_classifier, key_params, party_consistency, mandatory_conditions, risk_detection, recommendation, summary, detailed_report, risk_delta (полные тексты из ai-agents-pipeline.md §1-9)",
+        "internal/agents/schemas/ содержит 9 файлов .json со схемами из ai-agents-pipeline.md",
+        "internal/agents/prompts/prompts.go экспортирует //go:embed *.txt через embed.FS",
+        "internal/agents/schemas/schemas.go экспортирует //go:embed *.json через embed.FS",
+        "Loader API: LoadPrompt(agentID) (string, error), LoadSchema(agentID) ([]byte, error)",
+        "Validation: все 9 prompts и schemas присутствуют (test fail при missing)",
+        "Schemas валидны как JSON Schema draft-07"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/prompts/... ./internal/agents/schemas/... — все тесты проходят",
+        "Шаг 2: LoadPrompt(AGENT_TYPE_CLASSIFIER) возвращает non-empty",
+        "Шаг 3: LoadSchema(AGENT_RISK_DETECTION) — валидный JSON Schema"
+      ],
+      "dependencies": ["LIC-TASK-011"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-021",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Token Estimator — оценка длины input и усечение по head/tail",
+      "acceptance_criteria": [
+        "Пакет internal/agents/tokenestimator с Estimator",
+        "EstimateTokens(text string) int — приближённо 1 token ≈ 3.5 RU chars (либо tiktoken-style)",
+        "Truncate(text string, maxTokens int) (truncated, wasTruncated, droppedBytes): head 60% + tail 40%",
+        "Глобальный лимит LIC_MAX_INPUT_TOKENS (default 150000); per-agent LIC_MAX_AGENT_INPUT_TOKENS (default 120000)",
+        "Hard ingest limit LIC_MAX_INGESTED_BYTES (default 10 МБ); CheckIngestSize(artifacts) → DocumentTooLarge при превышении",
+        "При truncation — warning INPUT_TRUNCATED{truncated_bytes, total_bytes} для DETAILED_REPORT"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/tokenestimator/... — все тесты проходят",
+        "Шаг 2: text 200K tokens → Truncate возвращает 150K (head/tail proportions correct)",
+        "Шаг 3: ingest size 11 МБ → DocumentTooLarge error"
+      ],
+      "dependencies": ["LIC-TASK-011"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-022",
+      "category": "security",
+      "priority": "critical",
+      "description": "Prompt Builder — XML envelope с mandatory < escaping (защита от prompt injection layer 2)",
+      "acceptance_criteria": [
+        "Пакет internal/agents/promptbuilder с Builder",
+        "Build(agentID, system, userParts) (CompletionRequest, error) — собирает System (зашитый промпт) + User (XML envelope)",
+        "Mandatory escaping: all user-controlled content проходит < → &lt; replace ДО embedding в envelope (high-architecture.md §6.7.1)",
+        "Применяется к: EXTRACTED_TEXT, SEMANTIC_TREE (после JSON serialize), KEY_PARAMETERS, PROCESSING_WARNINGS, findings/parameters",
+        "НЕ применяется к зашитым тегам envelope и <metadata>",
+        "Envelope структура: <input><metadata>...</metadata><contract_document>{escaped}</contract_document></input> (с агент-специфичными блоками <semantic_tree>, <key_parameters>, и т.д.)",
+        "Pre-LLM ИНН/ОГРН validation (для агента 3): <validation_facts> с детерминированными checksums (Go алгоритм ФНС) — high-architecture.md §6.7.2",
+        "Метрика lic_party_validation_total{type,valid} (inn|ogrn × true|false)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/promptbuilder/... — все тесты проходят",
+        "Шаг 2: content </contract_document> → &lt;/contract_document&gt; в envelope",
+        "Шаг 3: валидный ИНН 7707083893 → validation_facts inn_valid=true",
+        "Шаг 4: невалидный ОГРН → ogrn_valid=false"
+      ],
+      "dependencies": ["LIC-TASK-020"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-023",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Schema Validator + Repair Loop (1-shot)",
+      "acceptance_criteria": [
+        "Пакет internal/agents/schemavalidator с Validator (kaptinlin/jsonschema или xeipuuv/gojsonschema)",
+        "Validate(schema, content) error — JSON Schema draft-07 validation",
+        "RepairLoop helper: при validation fail — формирует repair_prompt с validation_errors, вызывает router.CompleteRepair(ctx, req с PriorTurns=[{Assistant, invalid}, {User, repair_prompt}], usedProvider)",
+        "Repair-prompt: \"Твой предыдущий ответ не прошёл валидацию по схеме. Ошибки: {errors}. Исправь ответ. Возвращай ТОЛЬКО валидный JSON по исходной схеме, без объяснений и preamble.\"",
+        "Limit: N=1; при 2-й неудаче → error AGENT_OUTPUT_INVALID (Retryable=true)",
+        "При provider error в repair — escalate без switch на fallback",
+        "Метрики: lic_agent_repair_attempts_total{agent,provider}, lic_agent_repair_outcome_total{agent,provider,outcome} (repaired_ok|repair_failed|repair_provider_error)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/schemavalidator/... — все тесты проходят",
+        "Шаг 2: invalid JSON → repair вызывается с правильным PriorTurns",
+        "Шаг 3: после repair success → repaired_ok метрика",
+        "Шаг 4: 2nd invalid → AGENT_OUTPUT_INVALID error"
+      ],
+      "dependencies": ["LIC-TASK-019", "LIC-TASK-020"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-024",
+      "category": "functional",
+      "priority": "critical",
+      "description": "BaseAgent runner — общая логика для всех 9 агентов (Run() workflow)",
+      "acceptance_criteria": [
+        "Пакет internal/agents/base с BaseAgent struct: agentID, router, promptBuilder, validator, schema (loaded), timeout, temperature, maxTokens",
+        "Run(ctx, input) (AgentResult, error): token estimate + truncate; build CompletionRequest через promptBuilder; set JSONSchema, MaxTokens, Temperature; ctx = context.WithTimeout(ctx, agentTimeout); router.Complete; schema validation; repair loop через router.CompleteRepair(ctx, req, UsedProvider); parse final JSON в типизированный AgentResult",
+        "OTel span-per-agent с attributes: agent_id, provider, model, input_tokens, output_tokens, latency_ms, outcome",
+        "Метрики: lic_agent_invocations_total{agent,outcome} (success|repair_success|invalid_output|provider_error|timeout), lic_agent_duration_seconds, lic_agent_input_tokens, lic_agent_output_tokens",
+        "Тесты с mock router"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/base/... — все тесты проходят",
+        "Шаг 2: success path → AgentResult возвращён, метрики обновлены",
+        "Шаг 3: timeout → AGENT_TIMEOUT error",
+        "Шаг 4: repair_success path → правильная метрика"
+      ],
+      "dependencies": ["LIC-TASK-022", "LIC-TASK-023"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-025",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Agent 1 — Contract Type Classifier",
+      "acceptance_criteria": [
+        "Пакет internal/agents/typeclassifier с Classifier (var _ port.Agent = (*Classifier)(nil))",
+        "ID() == AGENT_TYPE_CLASSIFIER",
+        "Wraps BaseAgent: provider=LIC_AGENT_TYPE_CLASSIFIER_PROVIDER (default claude), timeout=5s, temperature=0.0, max_tokens=400",
+        "Input: EXTRACTED_TEXT (head 4000 + tail 1000) + DOCUMENT_STRUCTURE.sections[].title",
+        "Schema validation против ClassificationResult schema",
+        "Output: ClassificationResult{contract_type ∈ 12 whitelist, confidence ∈ [0,1], alternatives[], rationale, prompt_injection_detected}"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/typeclassifier/... — все тесты проходят",
+        "Шаг 2: integration с mock provider — корректный envelope",
+        "Шаг 3: invalid contract_type в response → repair triggered"
+      ],
+      "dependencies": ["LIC-TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-026",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Agent 2 — Key Parameters Extractor",
+      "acceptance_criteria": [
+        "Пакет internal/agents/keyparams",
+        "Provider=LIC_AGENT_KEY_PARAMS_PROVIDER, timeout=8s, temperature=0.0, max_tokens=2000",
+        "Input: SEMANTIC_TREE + EXTRACTED_TEXT (с усечением при >80K токенов)",
+        "Output: KeyParameters{parties, subject, price, duration, penalties, jurisdiction, internal_extras{applicable_law, termination, acceptance_procedure, party_roles[], key_dates[]}, prompt_injection_detected}",
+        "Tests с mock provider"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/keyparams/... — все тесты проходят",
+        "Шаг 2: party_roles содержит ИНН/ОГРН (как-есть, без валидации)"
+      ],
+      "dependencies": ["LIC-TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-027",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Agent 3 — Party Data Consistency",
+      "acceptance_criteria": [
+        "Пакет internal/agents/partyconsistency",
+        "Provider=LIC_AGENT_PARTY_CONSISTENCY_PROVIDER, timeout=6s, temperature=0.0, max_tokens=1000",
+        "Input: DOCUMENT_STRUCTURE.party_details + EXTRACTED_TEXT + KeyParameters.internal_extras.party_roles + <validation_facts> блок (детерминированные ИНН/ОГРН checksums)",
+        "Output: PartyConsistencyFindings{findings[{type ∈ PARTY_*, severity, description, party_name, clause_ref, legal_basis}], summary, prompt_injection_detected}",
+        "Severity маппинг: PARTY_AUTHORITY_MISSING → high; остальные → medium",
+        "Non-critical агент (graceful degradation при timeout)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/partyconsistency/... — все тесты проходят",
+        "Шаг 2: validation_facts блок присутствует в envelope"
+      ],
+      "dependencies": ["LIC-TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-028",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Agent 4 — Mandatory Conditions Checker",
+      "acceptance_criteria": [
+        "Пакет internal/agents/mandatoryconditions",
+        "Provider=LIC_AGENT_MANDATORY_CONDITIONS_PROVIDER, timeout=8s, temperature=0.0, max_tokens=3000",
+        "Input: SEMANTIC_TREE + EXTRACTED_TEXT + ClassificationResult.contract_type + KeyParameters",
+        "Output: MandatoryConditionsReport{contract_type, conditions[{code (regex ^MC_[A-Z0-9_]+$), label, status ∈ FOUND_OK|FOUND_AMBIGUOUS|MISSING, legal_basis, found_in[], issue_description}], summary, prompt_injection_detected}",
+        "Условия по типам договоров — встроены в system prompt"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/mandatoryconditions/... — все тесты проходят",
+        "Шаг 2: code соответствует regex ^MC_[A-Z0-9_]+$"
+      ],
+      "dependencies": ["LIC-TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-029",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Agent 5 — Risk Detection & Severity Scoring",
+      "acceptance_criteria": [
+        "Пакет internal/agents/riskdetection",
+        "Provider=LIC_AGENT_RISK_DETECTION_PROVIDER, timeout=12s, temperature=0.0, max_tokens=3500",
+        "Input: SEMANTIC_TREE + EXTRACTED_TEXT + PROCESSING_WARNINGS + ClassificationResult.contract_type + KeyParameters",
+        "Output: RiskAnalysis{risks[{id (regex ^R-[0-9]{3,}$), level ∈ high|medium|low, description, clause_ref, legal_basis, category ∈ 13-enum, rationale}], summary, prompt_injection_detected}",
+        "Critical agent (FAILED stops pipeline)",
+        "При prompt_injection_detected=true агент также добавляет риск category=PROMPT_INJECTION_ATTEMPT level=medium"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/riskdetection/... — все тесты проходят",
+        "Шаг 2: ids монотонно растут R-001, R-002, …"
+      ],
+      "dependencies": ["LIC-TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-030",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Agent 6 — Recommendation",
+      "acceptance_criteria": [
+        "Пакет internal/agents/recommendation",
+        "Provider=LIC_AGENT_RECOMMENDATION_PROVIDER, timeout=10s, temperature=0.2, max_tokens=3000",
+        "Input: SEMANTIC_TREE + merged risks[] (после Result Aggregator step 1-3 — с R-NNN, R-PNNN, R-MNNN) + MandatoryConditionsReport + KeyParameters",
+        "Output: Recommendations[{risk_id (regex ^R-(P|M)?[0-9]{3,}$), original_text, recommended_text, explanation}]",
+        "risk_id должен ссылаться на существующий элемент в merged risks[]"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/recommendation/... — все тесты проходят",
+        "Шаг 2: risk_id формат R-, R-P, или R-M"
+      ],
+      "dependencies": ["LIC-TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-031",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Agent 7 — Business Summary",
+      "acceptance_criteria": [
+        "Пакет internal/agents/summary",
+        "Provider=LIC_AGENT_SUMMARY_PROVIDER, timeout=6s, temperature=0.3, max_tokens=1000",
+        "Input: EXTRACTED_TEXT (head 4000+tail 1000) + KeyParameters + RiskAnalysis + MandatoryConditionsReport + ClassificationResult",
+        "Output: Summary{text (200..3000 chars)} — простой язык без юр-жаргона, без ссылок на статьи"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/summary/... — все тесты проходят",
+        "Шаг 2: text length ∈ [200, 3000]"
+      ],
+      "dependencies": ["LIC-TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-032",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Agent 8 — Detailed Report",
+      "acceptance_criteria": [
+        "Пакет internal/agents/detailedreport",
+        "Provider=LIC_AGENT_DETAILED_REPORT_PROVIDER, timeout=12s, temperature=0.0, max_tokens=5000",
+        "Input: все upstream agent results + PROCESSING_WARNINGS + re_check_meta + SEMANTIC_TREE",
+        "Output: DetailedReport{sections[{section_code ∈ 7-enum, title, items[{title, content, severity, clause_ref, legal_basis, linked_risk_id, linked_recommendation}]}], warnings (object-map, агент оставляет пустым — Result Aggregator merges)}",
+        "7 секций: OVERVIEW, KEY_PARAMETERS, PARTY_DATA, MANDATORY_CONDITIONS, RISKS, RECOMMENDATIONS_SUMMARY, WARNINGS",
+        "Critical agent"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/detailedreport/... — все тесты проходят",
+        "Шаг 2: все 7 секций присутствуют (даже если items=[])"
+      ],
+      "dependencies": ["LIC-TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-033",
+      "category": "functional",
+      "priority": "high",
+      "description": "Agent 9 — Risk Delta (для версий с parent_version_id, режим RE_CHECK)",
+      "acceptance_criteria": [
+        "Пакет internal/agents/riskdelta",
+        "Provider=LIC_AGENT_RISK_DELTA_PROVIDER, timeout=8s, temperature=0.0, max_tokens=1500",
+        "Input: base_risk_analysis (от parent version), target_risk_analysis (текущей), base_version_id, target_version_id",
+        "Output: RiskDelta{base_version_id, target_version_id, added[risk_ref], removed[risk_ref], changed[{target_id, base_id, old_level, new_level, old_clause_ref, new_clause_ref, explanation}], profile_change{old/new counts, old/new overall_level}, summary}",
+        "Запускается ТОЛЬКО при parent_version_id != null AND parent RISK_ANALYSIS получен",
+        "Non-critical (graceful degradation при cache miss / parent missing — pipeline продолжает с warning)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/agents/riskdelta/... — все тесты проходят",
+        "Шаг 2: profile_change counts соответствуют входным rates"
+      ],
+      "dependencies": ["LIC-TASK-024"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-034",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Stage Executor — errgroup-based параллелизм для Stages 1/3/5, sequential для 2/4/6",
+      "acceptance_criteria": [
+        "Пакет internal/application/pipeline/stages с Executor",
+        "RunStage1(ctx, state): errgroup для TypeClassifier ‖ KeyParamsExtractor — оба must succeed",
+        "RunStage2(ctx, state): PartyConsistency sequential (non-critical на timeout — set warning, продолжаем)",
+        "RunStage3(ctx, state): errgroup для MandatoryConditions ‖ RiskDetection — оба must succeed",
+        "RunStage4(ctx, state): Recommendation (после merge risks[])",
+        "RunStage5(ctx, state): errgroup для Summary ‖ DetailedReport — оба must succeed",
+        "RunStage6(ctx, state): RiskDelta — только при state.Mode==RE_CHECK AND parentRiskAnalysis != nil",
+        "Errgroup использует WithContext — при fail в одной goroutine, остальные cancel'ятся",
+        "Метрика lic_pipeline_stage_duration_seconds{stage} для каждой стадии",
+        "OTel span-per-stage"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/pipeline/stages/... — все тесты проходят",
+        "Шаг 2: Stage 1 параллелит 2 агента (assertion timing < sum of timeouts)",
+        "Шаг 3: fail в одном агенте Stage 1 → второй отменяется"
+      ],
+      "dependencies": ["LIC-TASK-025", "LIC-TASK-026", "LIC-TASK-027", "LIC-TASK-028", "LIC-TASK-029", "LIC-TASK-030", "LIC-TASK-031", "LIC-TASK-032", "LIC-TASK-033"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-035",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Result Aggregator — id namespace resolution, RISK_PROFILE & AGGREGATE_SCORE calc, stripping internal fields, warnings merge",
+      "acceptance_criteria": [
+        "Пакет internal/application/aggregator с Aggregator",
+        "Step 1: copy RiskDetection.risks[] (ids R-NNN от агента)",
+        "Step 2: для каждого finding агента 3 → append с id R-P{idx:03d}; severity маппинг (PARTY_AUTHORITY_MISSING→high, остальные→medium); category=finding.type",
+        "Step 3: для каждого finding агента 4 со status≠FOUND_OK → append с id R-M{idx:03d}; level=high (MISSING) / medium (AMBIGUOUS); category=MANDATORY_CONDITION_MISSING / MANDATORY_CONDITION_AMBIGUOUS; preserve mandatory_condition_code",
+        "Step 4: RISK_PROFILE = {high_count, medium_count, low_count, overall_level (high>0→high; иначе medium>0→medium; иначе low)}",
+        "Step 5: AGGREGATE_SCORE: score = clamp(100 - 25*high - 10*medium - 3*low - 15*missing_mandatory - 5*ambiguous_mandatory, 0, 100) / 100.0; label (low if score≥0.75 else medium if ≥0.45 else high); веса из env",
+        "Step 6: stripping: remove risks[].rationale, key_parameters.internal_extras, prompt_injection_detected (агентского уровня)",
+        "Step 7: prompt_injection warnings aggregation: при ≥1 true — добавить DETAILED_REPORT.warnings.PROMPT_INJECTION_DETECTED{detected, detected_by_agents (sorted), detection_count, user_message (RU)}",
+        "Step 8: cross-agent verification: CLASSIFICATION_PARAMS_MISMATCH, RECOMMENDATION_ORPHAN_REF, INPUT_TRUNCATED, RE_CHECK_PARENT_ANALYSIS_MISSING",
+        "Метрика lic_prompt_injection_detected_total{agent} инкремент per-agent"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/aggregator/... — все тесты проходят",
+        "Шаг 2: 3 risks + 2 party findings + 1 missing mandatory → 6 элементов в risks[], правильные id",
+        "Шаг 3: aggregate score: 1 high, 1 medium → 100-25-10=65 → score=0.65 label=medium",
+        "Шаг 4: 2 агента с prompt_injection_detected=true → warning с detected_by_agents=[sorted]"
+      ],
+      "dependencies": ["LIC-TASK-012", "LIC-TASK-005"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-036",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Pipeline Orchestrator — основной flow happy path (INITIAL + RE_CHECK без pause)",
+      "acceptance_criteria": [
+        "Пакет internal/application/pipeline с Orchestrator",
+        "Run(ctx, trigger VersionArtifactsReady): acquire job-level semaphore; ctx.WithTimeout(LIC_JOB_TIMEOUT=90s); publish IN_PROGRESS{stage=STAGE_REQUESTING_ARTIFACTS}; request artifacts от DM; wait для ArtifactsProvided через DM Artifact Awaiter; check LIC_MAX_INGESTED_BYTES; получить parent_version_id из cache; если mode=RE_CHECK — запросить parent RISK_ANALYSIS; RunStage1; Confidence check; RunStage2; RunStage3; Result Aggregator merge для risks[]; RunStage4; RunStage5; RunStage6 conditional; Final Aggregator → payload; publish lic.artifacts.analysis-ready; wait для LegalAnalysisArtifactsPersisted (LIC_DM_PERSIST_CONFIRM_TIMEOUT=30s); publish COMPLETED; ACK",
+        "На любой ошибке → publish FAILED с DomainError details",
+        "Метрики: lic_pipeline_started_total{mode}, lic_pipeline_total_duration_seconds{mode,outcome}, lic_pipeline_outcome_total{mode,outcome,error_code}, lic_pipeline_concurrent_jobs",
+        "OTel span-per-pipeline с child spans для каждой стадии"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/pipeline/... — все тесты проходят (с mock infra)",
+        "Шаг 2: happy path INITIAL — публикуется analysis-ready и COMPLETED",
+        "Шаг 3: happy path RE_CHECK — Stage 6 запускается",
+        "Шаг 4: timeout job-level → FAILED ANALYSIS_TIMEOUT"
+      ],
+      "dependencies": ["LIC-TASK-034", "LIC-TASK-035", "LIC-TASK-010", "LIC-TASK-006"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-037",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Pause-and-Resume для low confidence (Pending Type Confirmation Manager)",
+      "acceptance_criteria": [
+        "Пакет internal/application/pendingconfirmation",
+        "Pause(ctx, state): SET lic-pending-state:{version_id} <gzip+base64 JSON с trace_context> EX 25h; publish lic.events.classification-uncertain с publisher confirms; publish lic.events.status-changed IN_PROGRESS{stage=STAGE_AWAITING_USER_CONFIRMATION}; SET lic-trigger:{version_id}=PAUSED EX 25h; ACK исходного version-artifacts-ready (строгий порядок, recovery-safe)",
+        "Resume(ctx, cmd UserConfirmedType): idempotency lic-user-confirmed:{version_id} SETNX PROCESSING (90s TTL); mandatory validation contract_type (regex ^[A-Z_]{1,32}$ + whitelist 12); mismatch → DLQ invalid-message + FAILED INVALID_CONTRACT_TYPE; GET lic-pending-state; miss → FAILED USER_CONFIRMATION_EXPIRED (is_retryable=false); decompress state; восстановить OTel-span с child link к saved trace_context; override ClassificationResult.contract_type=cmd.contract_type, confidence=1.0; publish IN_PROGRESS{STAGE_AGENT_PARTY_CONSISTENCY}; Pipeline продолжает Stage 2..5 с новым ctx=context.WithTimeout(parent, LIC_JOB_TIMEOUT)",
+        "После COMPLETED: DELETE lic-pending-state, SET lic-trigger=COMPLETED, SET lic-user-confirmed=COMPLETED, ACK",
+        "Restart semantics: при redelivery version-artifacts-ready после crash во время pause → детект lic-trigger=PAUSED, перепубликация events, ACK без перезапуска Stage 1",
+        "Метрики: lic_pending_state_count, lic_pending_state_age_seconds_max, lic_user_confirmation_received_total{outcome}"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/pendingconfirmation/... — все тесты проходят",
+        "Шаг 2: Pause сохраняет state в Redis с правильным TTL",
+        "Шаг 3: Resume с valid contract_type → pipeline продолжается с Stage 2",
+        "Шаг 4: Resume с invalid contract_type → DLQ + INVALID_CONTRACT_TYPE",
+        "Шаг 5: TTL miss → USER_CONFIRMATION_EXPIRED"
+      ],
+      "dependencies": ["LIC-TASK-036", "LIC-TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-038",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Idempotency Guard с 4 статусами и heartbeat",
+      "acceptance_criteria": [
+        "Пакет internal/ingress/idempotency с Guard",
+        "4 статуса для lic-trigger:{version_id}: отсутствует / PROCESSING / PAUSED / COMPLETED",
+        "CheckAndAcquire(ctx, key) → (status, alreadyExists, err); SETNX PROCESSING EX 150s (LIC_IDEMPOTENCY_PROCESSING_TTL)",
+        "StartHeartbeat(ctx, key) — goroutine с тикером LIC_IDEMPOTENCY_HEARTBEAT_INTERVAL=30s, EXPIRE key 150s каждый tick; stop при ctx.Done()",
+        "SetCompleted(key) SET=COMPLETED EX 24h (LIC_IDEMPOTENCY_TTL)",
+        "SetPaused(key) SET=PAUSED EX 25h (LIC_PENDING_CONFIRMATION_TTL)",
+        "Other idempotency keys (lic-version-created, lic-artifacts-resp, lic-persist-resp, lic-persist-fail, lic-user-confirmed) — simplified 2-status (PROCESSING/COMPLETED)",
+        "Метрики: lic_idempotency_lookups_total{result} (new|in_progress|completed|fallback_db), lic_idempotency_fallback_total"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/idempotency/... — все тесты проходят (miniredis)",
+        "Шаг 2: SETNX повторно → in_progress result",
+        "Шаг 3: heartbeat продлевает TTL",
+        "Шаг 4: stop heartbeat → TTL естественно expirit"
+      ],
+      "dependencies": ["LIC-TASK-007"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-039",
+      "category": "integration",
+      "priority": "critical",
+      "description": "Event Consumer — десериализация, валидация envelope, передача в dispatcher",
+      "acceptance_criteria": [
+        "Пакет internal/ingress/consumer",
+        "Подписки на 6 топиков: dm.events.version-artifacts-ready, dm.events.version-created, dm.responses.artifacts-provided, dm.responses.lic-artifacts-persisted, dm.responses.lic-artifacts-persist-failed, orch.commands.user-confirmed-type",
+        "JSON unmarshal в типизированные структуры; required fields validation (correlation_id, job_id, document_id, version_id, organization_id присутствуют + UUIDs валидны)",
+        "На invalid → DLQ lic.dlq.invalid-message + ACK (не отбрасываем permanently без логирования)",
+        "На valid → передача в Event Router (LIC-TASK-040)",
+        "Manual ACK только после успешной обработки (или сохранения в DLQ)",
+        "Auto-reconnect через broker client",
+        "Метрика lic_consumer_messages_total{topic,outcome} (success|invalid|nacked)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/consumer/... — все тесты проходят",
+        "Шаг 2: invalid JSON → DLQ + ACK",
+        "Шаг 3: missing required field → DLQ",
+        "Шаг 4: valid message → dispatched"
+      ],
+      "dependencies": ["LIC-TASK-008", "LIC-TASK-011", "LIC-TASK-012"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-040",
+      "category": "integration",
+      "priority": "critical",
+      "description": "Event Router (Dispatcher) — маршрутизация событий + idempotency check + DLX-loop NACK",
+      "acceptance_criteria": [
+        "Пакет internal/ingress/router с EventRouter",
+        "Routing table: VersionProcessingArtifactsReady → Pipeline Orchestrator.Run(); VersionCreated → Version Meta Cache writer (Redis SET lic-version-meta:{version_id} TTL 24h); ArtifactsProvided → DM Artifact Awaiter (correlation_id matching); LegalAnalysisArtifactsPersisted / ...PersistFailed → DM Confirmation Awaiter (job_id matching); UserConfirmedType → Pending Confirmation Manager.Resume()",
+        "Pre-routing idempotency check через Guard (LIC-TASK-038)",
+        "Concurrency control: acquire semaphore (LIC_PIPELINE_CONCURRENCY) для pipeline-triggering messages",
+        "Transient error → DLX-loop NACK (read x-death count, route to retry.1/2/3 или DLQ при >3)",
+        "Permanent error → DLQ + ACK",
+        "Restart semantics для PAUSED state: переопубликовать events + ACK без перезапуска"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/ingress/router/... — все тесты проходят",
+        "Шаг 2: каждое событие routed в правильный handler",
+        "Шаг 3: idempotency COMPLETED → ACK без обработки",
+        "Шаг 4: PAUSED + valid pending state → re-publish events + ACK"
+      ],
+      "dependencies": ["LIC-TASK-039", "LIC-TASK-038"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-041",
+      "category": "integration",
+      "priority": "critical",
+      "description": "DM Artifact Awaiter + DM Confirmation Awaiter — in-process registry для async response matching",
+      "acceptance_criteria": [
+        "Пакет internal/application/dmawaiter",
+        "ArtifactAwaiter: in-process registry map[correlation_id]chan ArtifactsProvided с TTL 30s (LIC_DM_REQUEST_TIMEOUT)",
+        "Await(correlationID) (ArtifactsProvided, error) — блокирует до response или timeout",
+        "Deliver(correlationID, response) — вызывается consumer при получении ArtifactsProvided",
+        "Timeout → DM_ARTIFACTS_TIMEOUT error, is_retryable=true",
+        "ConfirmationAwaiter аналогично: для LegalAnalysisArtifactsPersisted / ...PersistFailed по job_id, TTL 30s",
+        "При PersistFailed.is_retryable=false → fatal FAILED DM_PERSIST_FAILED",
+        "При unknown artifact_type=RISK_DELTA error → retry без RISK_DELTA + warning RISK_DELTA_PERSIST_PENDING (ADR-LIC-05)",
+        "Метрики: lic_dm_request_duration_seconds{op}, lic_dm_request_outcome_total{op,outcome}"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/application/dmawaiter/... — все тесты проходят",
+        "Шаг 2: response через 1s → Await возвращает",
+        "Шаг 3: timeout 30s → DM_ARTIFACTS_TIMEOUT",
+        "Шаг 4: concurrent Await на разные correlation_ids"
+      ],
+      "dependencies": ["LIC-TASK-011"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-042",
+      "category": "integration",
+      "priority": "critical",
+      "description": "DM Artifact Requester — публикация lic.requests.artifacts",
+      "acceptance_criteria": [
+        "Пакет internal/egress/publisher/dm с ArtifactRequester",
+        "RequestArtifacts(ctx, correlationID, versionID, artifactTypes []string) error",
+        "Payload: GetArtifactsRequest (FROZEN DM event-catalog §1.4) с correlation_id, version_id, artifact_types",
+        "Publish в lic.requests.artifacts с publisher confirms, wait-for-broker-ack",
+        "Для RE_CHECK: дополнительный отдельный request для parent RISK_ANALYSIS (с другим correlation_id-suffix)",
+        "Метрика lic_publisher_messages_total{topic,outcome}",
+        "Базовый набор artifact_types: SEMANTIC_TREE, EXTRACTED_TEXT, DOCUMENT_STRUCTURE, PROCESSING_WARNINGS"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/publisher/dm/... — все тесты проходят",
+        "Шаг 2: payload содержит правильный artifact_types list",
+        "Шаг 3: publisher confirms ожидаются"
+      ],
+      "dependencies": ["LIC-TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-043",
+      "category": "integration",
+      "priority": "critical",
+      "description": "DM Artifact Publisher — публикация lic.artifacts.analysis-ready",
+      "acceptance_criteria": [
+        "Пакет internal/egress/publisher/dm с AnalysisReadyPublisher",
+        "PublishAnalysisReady(ctx, payload LegalAnalysisArtifactsReady) error",
+        "Поддержка extension v1.1: optional поле risk_delta (ADR-LIC-05)",
+        "JSON marshal с omitempty (backward-compat с DM v1.0)",
+        "Publisher confirms, wait-for-broker-ack",
+        "Размер payload typically < 1 МБ; inline в RabbitMQ frame",
+        "Метрика lic_dm_artifacts_published_size_bytes histogram"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/publisher/dm/... — все тесты проходят",
+        "Шаг 2: payload без risk_delta — поле отсутствует (omitempty)",
+        "Шаг 3: payload с risk_delta — поле присутствует"
+      ],
+      "dependencies": ["LIC-TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-044",
+      "category": "integration",
+      "priority": "critical",
+      "description": "Status Event Publisher — публикация lic.events.status-changed (IN_PROGRESS/COMPLETED/FAILED)",
+      "acceptance_criteria": [
+        "Пакет internal/egress/publisher/orch с StatusPublisher",
+        "PublishStatusChanged(ctx, event LICStatusChangedEvent) error",
+        "Validation: status ∈ {IN_PROGRESS, COMPLETED, FAILED}, error_code/error_message/is_retryable только при FAILED",
+        "correlation_id, job_id, document_id, version_id, organization_id переписываются из incoming event",
+        "error_message — RU локализованное (mapping из error_codes catalog)",
+        "Publisher confirms, wait-for-broker-ack",
+        "JSON schema валидируется in-house (LICStatusChangedEvent — event-catalog.md §1.1)"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/publisher/orch/... — все тесты проходят",
+        "Шаг 2: COMPLETED без error fields → валидно",
+        "Шаг 3: FAILED с error_code → правильная RU error_message"
+      ],
+      "dependencies": ["LIC-TASK-008", "LIC-TASK-011"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-045",
+      "category": "integration",
+      "priority": "critical",
+      "description": "Uncertainty Publisher — публикация lic.events.classification-uncertain",
+      "acceptance_criteria": [
+        "Пакет internal/egress/publisher/orch с UncertaintyPublisher",
+        "PublishClassificationUncertain(ctx, event ClassificationUncertain) error",
+        "Payload: correlation/job/document/version/organization IDs + suggested_type (∈ 12 whitelist) + confidence + threshold + alternatives[]",
+        "JSON schema validation (event-catalog.md §1.2)",
+        "Publisher confirms, wait-for-broker-ack",
+        "Идемпотентно: публикуется один раз на версию (Orchestrator-side idempotency lic-uncertain:{version_id})"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/publisher/orch/... — все тесты проходят",
+        "Шаг 2: suggested_type в whitelist; иначе fail",
+        "Шаг 3: confidence ∈ [0,1]"
+      ],
+      "dependencies": ["LIC-TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-046",
+      "category": "integration",
+      "priority": "high",
+      "description": "DLQ Publisher с PII-safe envelopes (HMAC hashing для full payload)",
+      "acceptance_criteria": [
+        "Пакет internal/egress/dlq с DLQPublisher",
+        "Топики: lic.dlq.invalid-message, lic.dlq.consumer-failed, lic.dlq.publish-failed, lic.dlq.agent-output-invalid",
+        "PII-safe envelope: original_topic, original_message_hash (HMAC-SHA-256 c LIC_DLQ_HASH_KEY, first 64 chars hex), original_message_size_bytes, error_code, error_message, retry_count, correlation_id, job_id, document_id, version_id, organization_id, agent_id (optional), raw_llm_response_hash (optional, HMAC), failed_at",
+        "Для lic.dlq.publish-failed: full payload (LegalAnalysisArtifactsReady с PII) логируется как warning + alert; в v1 объектное хранилище опционально",
+        "Метрика lic_dlq_published_total{topic,reason}"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/egress/dlq/... — все тесты проходят",
+        "Шаг 2: envelope без оригинального payload (только hash)",
+        "Шаг 3: HMAC reproducible с одинаковым key"
+      ],
+      "dependencies": ["LIC-TASK-008"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-047",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Application wiring + main.go + graceful shutdown",
+      "acceptance_criteria": [
+        "internal/app/app.go с App struct (все clients, publishers, agents, orchestrator)",
+        "New(cfg *config.Config) (*App, error) — assembly с DI",
+        "Order: config → logger → metrics → tracer → kvstore → broker → provider registry (3 providers) → router → agents (9) → idempotency guard → pending manager → dmawaiter → consumers → publishers → pipeline orchestrator → health handler",
+        "Run(ctx) запускает: HTTP server (health/metrics), Consumer goroutines, healthcheck loop (provider router), heartbeat-routines per pipeline",
+        "Shutdown(ctx) graceful sequence: /readyz → 503 (SetNotReady); RabbitMQ consumer cancel; wait для in-flight pipelines (LIC_SHUTDOWN_TIMEOUT=120s); при deadline → NACK с requeue; close RabbitMQ; close Redis; flush OTel traces",
+        "cmd/lic-service/main.go: config load → app.New() → signal handler (SIGTERM/SIGINT → Shutdown; SIGHUP → reload secrets)",
+        "SIGHUP handler: reload LIC_*_API_KEY values, recreate HTTP clients without dropping in-flight requests"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/app/... — все тесты проходят (с in-memory fakes)",
+        "Шаг 2: app starts, /healthz=200",
+        "Шаг 3: SIGTERM → graceful shutdown < 130s",
+        "Шаг 4: SIGHUP → secrets reloaded"
+      ],
+      "dependencies": ["LIC-TASK-009", "LIC-TASK-036", "LIC-TASK-037", "LIC-TASK-039", "LIC-TASK-040", "LIC-TASK-041", "LIC-TASK-042", "LIC-TASK-043", "LIC-TASK-044", "LIC-TASK-045", "LIC-TASK-046"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-048",
+      "category": "functional",
+      "priority": "high",
+      "description": "Integration test framework — in-memory fakes для Redis, RabbitMQ, LLM providers, DM",
+      "acceptance_criteria": [
+        "Пакет internal/integration/fakes",
+        "FakeBroker: in-memory pub/sub с manual ACK semantics",
+        "FakeKVStore: in-memory map с TTL simulation (real time, не frozen)",
+        "FakeLLMProvider: deterministic responses keyed по (AgentID, model); inject errors per call; supports JSONSchema strict mode simulation",
+        "FakeDM: симулирует ArtifactsProvided / LegalAnalysisArtifactsPersisted ответы",
+        "Helper BuildTestApp(t): wires fakes в App",
+        "Verifier: assertion на publish'и (matches topic + payload schema)",
+        "Test data: фикстуры с realistic SEMANTIC_TREE, EXTRACTED_TEXT"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/integration/fakes/... — все тесты проходят",
+        "Шаг 2: FakeLLMProvider inject error → router fallback works",
+        "Шаг 3: FakeBroker manual ACK — message redelivered при NACK"
+      ],
+      "dependencies": ["LIC-TASK-047"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-049",
+      "category": "functional",
+      "priority": "high",
+      "description": "Integration test — happy path INITIAL pipeline",
+      "acceptance_criteria": [
+        "Test: подаётся VersionProcessingArtifactsReady с INITIAL mode",
+        "FakeDM возвращает ArtifactsProvided с canned SEMANTIC_TREE, EXTRACTED_TEXT, DOCUMENT_STRUCTURE",
+        "FakeLLMProvider возвращает valid JSON по схеме для агентов 1-8 (агент 9 не вызывается)",
+        "Assertion: publishes IN_PROGRESS → analysis-ready → COMPLETED в правильном порядке",
+        "Assertion: payload содержит все 8 артефактов (classification_result, key_parameters, risk_analysis с merged risks, risk_profile, recommendations, summary, detailed_report, aggregate_score)",
+        "Assertion: RISK_PROFILE & AGGREGATE_SCORE правильно расчитаны",
+        "Assertion: ACK для trigger message"
+      ],
+      "test_steps": [
+        "Шаг 1: запуск теста — finished < 30s",
+        "Шаг 2: 3 publishes (IN_PROGRESS, analysis-ready, COMPLETED)",
+        "Шаг 3: ACK счётчик = 1"
+      ],
+      "dependencies": ["LIC-TASK-048"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-050",
+      "category": "functional",
+      "priority": "high",
+      "description": "Integration test — low confidence pause + resume",
+      "acceptance_criteria": [
+        "FakeLLMProvider для Agent 1 возвращает confidence=0.5 (< 0.75 threshold)",
+        "Assertion: после Stage 1 публикуется classification-uncertain + status-changed IN_PROGRESS{STAGE_AWAITING_USER_CONFIRMATION}",
+        "Assertion: Redis содержит lic-pending-state:{version_id} с правильными данными",
+        "Assertion: lic-trigger:{version_id} = PAUSED",
+        "Подаётся UserConfirmedType с valid contract_type",
+        "Assertion: Stage 2..5 запускается с overridden contract_type, confidence=1.0",
+        "Assertion: финальный COMPLETED + cleanup keys",
+        "Дополнительный sub-test: UserConfirmedType с invalid contract_type → DLQ + FAILED INVALID_CONTRACT_TYPE"
+      ],
+      "test_steps": [
+        "Шаг 1: запуск — pause достигается",
+        "Шаг 2: pending state в Redis",
+        "Шаг 3: UserConfirmedType → resume + COMPLETED",
+        "Шаг 4: invalid contract_type → DLQ + FAILED"
+      ],
+      "dependencies": ["LIC-TASK-049"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-051",
+      "category": "functional",
+      "priority": "high",
+      "description": "Integration tests — RE_CHECK, agent failure/repair, provider fallback, timeout, DLQ, prompt injection",
+      "acceptance_criteria": [
+        "Test RE_CHECK: VersionCreated с parent_version_id → cache → version-artifacts-ready → orchestrator запрашивает parent RISK_ANALYSIS → Agent 9 запускается → risk_delta в payload",
+        "Test agent failure + repair: первый response invalid JSON → repair вызывается → success → lic_agent_repair_outcome_total{repaired_ok}=1",
+        "Test agent failure repair-failed: 2nd invalid → AGENT_OUTPUT_INVALID error → publish FAILED + DLQ agent-output-invalid",
+        "Test provider fallback: FakeLLMProvider claude returns 5xx → router fallback openai → success → lic_llm_provider_fallback_total{from=claude,to=openai}=1",
+        "Test timeout: pipeline ctx.WithTimeout(1ms) → ANALYSIS_TIMEOUT → FAILED",
+        "Test invalid envelope: malformed JSON → DLQ invalid-message + ACK",
+        "Test PROMPT_INJECTION_DETECTED: 2 agents set flag → DETAILED_REPORT.warnings.PROMPT_INJECTION_DETECTED detection_count=2",
+        "Test DOCUMENT_TOO_LARGE: artifacts size > 10 МБ → FAILED без LLM calls"
+      ],
+      "test_steps": [
+        "Шаг 1: каждый сценарий — отдельный test func",
+        "Шаг 2: метрики и publish-патены ассертятся",
+        "Шаг 3: DLQ envelopes валидны (HMAC hash present)"
+      ],
+      "dependencies": ["LIC-TASK-050"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-052",
+      "category": "security",
+      "priority": "critical",
+      "description": "PII redaction validation в логах (allowlist-strategy enforcement)",
+      "acceptance_criteria": [
+        "Unit-test для logger: попытка залогировать key_parameters, risks[].description, parties, raw LLM response, API ключ → редактируется или log fails",
+        "Static analyzer / test helper: no log.Info().Interface(\"contract_text\", ...) patterns",
+        "Audit test для каждого agent.Run() → проверка, что только allowed fields присутствуют в captured log output (использовать observer/test hook на logger)",
+        "raw_response_hash logging при invalid output: HMAC-SHA-256 first 1024 chars",
+        "Error sanitization (LIC-TASK-004) проверена end-to-end: имитируем LLM error с API key в URL → log clean"
+      ],
+      "test_steps": [
+        "Шаг 1: go test ./internal/infra/observability/logger/... — security tests passes",
+        "Шаг 2: попытка log content of KeyParameters → field NOT present в JSON",
+        "Шаг 3: error с API ключ → редакция в logged message"
+      ],
+      "dependencies": ["LIC-TASK-004"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-053",
+      "category": "security",
+      "priority": "critical",
+      "description": "Prompt injection 5-layer defense end-to-end verification",
+      "acceptance_criteria": [
+        "Layer 1: каждый из 9 промптов содержит секцию 'Защита от инструкций' (assert via prompt loader test)",
+        "Layer 2: Prompt Builder escapes < → &lt; для contract content (test: input </contract_document> → &lt;/contract_document&gt; в envelope); НЕ escapes envelope tags",
+        "Layer 3: JSONSchema передаётся ВСЕМ агентам в CompletionRequest (test: для каждого AgentID — req.JSONSchema != nil)",
+        "Layer 4: prompt_injection_detected field присутствует в schemas агентов 1, 2, 3, 4, 5, 8 (test: parse schema, assert)",
+        "Layer 5: Result Aggregator при ≥1 prompt_injection_detected=true создаёт DETAILED_REPORT.warnings.PROMPT_INJECTION_DETECTED с правильной структурой (integration check)",
+        "Audit log для prompt injection: при detected=true — log с raw_fragment_hash (HMAC-SHA-256 c LIC_PROMPT_INJECTION_HASH_KEY)",
+        "Метрика lic_prompt_injection_detected_total{agent} incremented"
+      ],
+      "test_steps": [
+        "Шаг 1: integration test — contract с </contract_document> в теле → escaping verified",
+        "Шаг 2: response с prompt_injection_detected=true для 2 agents → warning в payload, метрика +2",
+        "Шаг 3: audit log содержит HMAC hash, не raw content"
+      ],
+      "dependencies": ["LIC-TASK-022", "LIC-TASK-035"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-054",
+      "category": "security",
+      "priority": "high",
+      "description": "Tenant isolation checks — organization_id propagation + cross-event matching",
+      "acceptance_criteria": [
+        "Test: organization_id из incoming event пробрасывается во все outgoing (status-changed, classification-uncertain, analysis-ready)",
+        "Test: при получении ArtifactsProvided — проверка organization_id == pipeline state.organization_id; mismatch → DLQ invalid-message + alert",
+        "Test: при получении UserConfirmedType — проверка organization_id == saved pending state.organization_id; mismatch → DLQ + alert (security.md §11.2)",
+        "Tests OTel attributes: каждый span содержит lic.pipeline.organization_id (но НЕ в Prometheus labels)",
+        "Test: organization_id передаётся в Metadata LLM-вызова, но НЕ в messages (LLM не должен «знать»)"
+      ],
+      "test_steps": [
+        "Шаг 1: integration test propagation",
+        "Шаг 2: spoofed organization_id в ArtifactsProvided → DLQ",
+        "Шаг 3: OTel span attribute check"
+      ],
+      "dependencies": ["LIC-TASK-049"],
+      "status": "pending"
+    },
+    {
+      "id": "LIC-TASK-055",
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Docker Compose integration для local dev",
+      "acceptance_criteria": [
+        "Обновление корневого docker-compose.yaml добавлением lic-service block (deployment.md §3)",
+        "Build context: ./LegalIntelligenceCore/development",
+        "Depends_on: rabbitmq, redis, otel-collector (с healthcheck conditions)",
+        "Environment: LIC_BROKER_URL, LIC_REDIS_URL, LIC_PIPELINE_CONCURRENCY=2, LIC_CONFIDENCE_THRESHOLD=0.75, LIC_CLAUDE_API_KEY (required), LIC_OPENAI_API_KEY/LIC_GEMINI_API_KEY (optional), LIC_OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317, LIC_OTEL_EXPORTER_OTLP_INSECURE=true",
+        "Healthcheck: HTTP GET /healthz через 15s interval",
+        "Ports: 8081:8080 (для не-коллизии с другими сервисами)",
+        "Restart: unless-stopped"
+      ],
+      "test_steps": [
+        "Шаг 1: docker compose up --build lic-service — успешный старт",
+        "Шаг 2: curl localhost:8081/healthz → 200",
+        "Шаг 3: curl localhost:8081/readyz → 200 (при rabbitmq/redis up)"
+      ],
+      "dependencies": ["LIC-TASK-003", "LIC-TASK-047"],
+      "status": "pending"
+    }
+  ]
+}

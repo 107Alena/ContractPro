@@ -73,27 +73,32 @@ sequenceDiagram
     participant DM as Document Management
     participant LIC as LIC Service
     participant Redis as Redis
+    participant Broker as RabbitMQ
     participant LLM as LLM Provider Router
     participant Orch as Orchestrator
 
     DM->>LIC: dm.events.version-artifacts-ready
-    LIC->>Redis: SETNX lic-trigger:{version_id} PROCESSING
+    LIC->>Redis: SETNX lic-trigger:{version_id} = PROCESSING (90s TTL)
     LIC->>Orch: lic.events.status-changed (IN_PROGRESS)
     LIC->>DM: lic.requests.artifacts
     DM-->>LIC: dm.responses.artifacts-provided
     par Stage 1 (parallel)
         LIC->>LLM: TypeClassifier
-        LLM-->>LIC: ClassificationResult\n(confidence=0.62 < 0.75)
+        LLM-->>LIC: ClassificationResult<br/>(confidence=0.62 &lt; 0.75)
     and
         LIC->>LLM: KeyParamsExtractor
         LLM-->>LIC: KeyParameters
     end
-    Note over LIC: confidence < threshold → pause
-    LIC->>Redis: SET lic-pending-state:{version_id}\n(serialized state, ttl 25h)
-    LIC->>Orch: lic.events.classification-uncertain\n{suggested_type, confidence, threshold, alternatives}
-    LIC->>Orch: lic.events.status-changed\n{status:IN_PROGRESS, stage:STAGE_AWAITING_USER_CONFIRMATION}
-    LIC->>Redis: SET lic-trigger:{version_id} COMPLETED (ttl 24h)
-    Note over LIC: ACK исходного сообщения\n(не держим long-running consumer)
+    Note over LIC: confidence < threshold → pause<br/>(см. high-architecture §6.5 / §6.10)
+    LIC->>Redis: 1. SET lic-pending-state:{version_id}<br/>= serialized state<br/>EX 25h
+    LIC->>Broker: 2. publish classification-uncertain<br/>(publisher confirms)
+    Broker-->>LIC: broker ack
+    LIC->>Orch: classification-uncertain<br/>{suggested_type, confidence, threshold, alternatives}
+    LIC->>Broker: 3. publish status-changed.IN_PROGRESS<br/>{stage:STAGE_AWAITING_USER_CONFIRMATION}<br/>(publisher confirms)
+    Broker-->>LIC: broker ack
+    LIC->>Orch: status-changed (IN_PROGRESS / AWAITING)
+    LIC->>Redis: 4. SET lic-trigger:{version_id} = PAUSED EX 25h<br/>(заменяет PROCESSING)
+    Note over LIC: 5. ACK исходного сообщения<br/>(не держим long-running consumer 24h)
 ```
 
 ### 2.2 Resume после UserConfirmedType
@@ -107,20 +112,23 @@ sequenceDiagram
     participant LLM as LLM Provider Router
     participant DM as Document Management
 
-    Orch->>LIC: orch.commands.user-confirmed-type\n{contract_type:"SUPPLY"}
-    LIC->>Redis: SETNX lic-user-confirmed:{version_id} PROCESSING
-    LIC->>LIC: Validate contract_type against whitelist
+    Orch->>LIC: orch.commands.user-confirmed-type<br/>{contract_type:"SUPPLY"}
+    LIC->>Redis: SETNX lic-user-confirmed:{version_id} = PROCESSING (90s TTL)
+    LIC->>LIC: Validate contract_type against whitelist<br/>(ASSUMPTION-LIC-16, mandatory)
     LIC->>Redis: GET lic-pending-state:{version_id}
-    Note over LIC: Override ClassificationResult.contract_type\nclassification.confidence = 1.0
-    LIC->>Orch: lic.events.status-changed (IN_PROGRESS)
-    Note over LIC: Stage 2 — Stage 5 как в §1
+    Redis-->>LIC: serialized state (decompress)
+    Note over LIC: Restore OTel trace_context (W3C)<br/>Override ClassificationResult.contract_type<br/>classification.confidence = 1.0
+    LIC->>Orch: lic.events.status-changed (IN_PROGRESS / Stage 2)
+    Note over LIC: Stage 2 — Stage 5 как в §1<br/>ctx = WithTimeout(LIC_JOB_TIMEOUT=90s)
     LIC->>LLM: PartyConsistency
     LIC->>LLM: ... (и далее цепочка)
     LIC->>DM: lic.artifacts.analysis-ready
     DM-->>LIC: dm.responses.lic-artifacts-persisted
     LIC->>Orch: lic.events.status-changed (COMPLETED)
-    LIC->>Redis: SET lic-user-confirmed:{version_id} COMPLETED (ttl 24h)
-    Note over LIC: ACK
+    LIC->>Redis: DELETE lic-pending-state:{version_id}<br/>(cleanup — state больше не нужен)
+    LIC->>Redis: SET lic-trigger:{version_id} = COMPLETED EX 24h<br/>(переключение PAUSED → COMPLETED)
+    LIC->>Redis: SET lic-user-confirmed:{version_id} = COMPLETED EX 24h
+    Note over LIC: ACK UserConfirmedType
 ```
 
 ### 2.3 TTL expired до UserConfirmedType
@@ -132,16 +140,63 @@ sequenceDiagram
     participant LIC as LIC Service
     participant Redis as Redis
 
-    Note over Redis: lic-pending-state:{version_id}\nexpires after 25h
-    Orch->>LIC: orch.commands.user-confirmed-type\n(приходит спустя 26 часов)
-    LIC->>Redis: SETNX lic-user-confirmed:{version_id}
+    Note over Redis: lic-pending-state:{version_id}<br/>expires after 25h
+    Orch->>LIC: orch.commands.user-confirmed-type<br/>(приходит спустя 26 часов)
+    LIC->>Redis: SETNX lic-user-confirmed:{version_id} = PROCESSING (90s TTL)
     LIC->>Redis: GET lic-pending-state:{version_id}
     Redis-->>LIC: nil (expired)
-    LIC->>Orch: lic.events.status-changed\n{status:FAILED, error_code:USER_CONFIRMATION_EXPIRED, is_retryable:false,\n error_message:"Время на подтверждение типа договора истекло. Запустите проверку заново."}
+    LIC->>Orch: lic.events.status-changed<br/>{status:FAILED, error_code:USER_CONFIRMATION_EXPIRED, is_retryable:false,<br/>error_message:"Время на подтверждение типа договора истекло. Запустите проверку заново."}
+    LIC->>Redis: SET lic-user-confirmed:{version_id} = COMPLETED EX 24h
     Note over LIC: ACK сообщения, audit-лог
 ```
 
 > Прим.: Orchestrator-watchdog (TTL 24h) обычно срабатывает раньше LIC TTL (25h, см. ASSUMPTION-LIC-05) и сам уведомляет пользователя; LIC TTL — safety net на случай watchdog drift.
+
+### 2.4 Crash recovery (рестарт-семантика при повторной доставке version-artifacts-ready во время паузы)
+
+Соответствует `high-architecture.md` §6.5 «Рестарт-семантика». Демонстрирует сценарий: LIC упал между шагами 1 (SET pending-state) и 5 (ACK) исходной паузы — broker redeliver, новый инстанс LIC должен корректно обработать сообщение без повторного запуска Stage 1.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant DM as Document Management
+    participant LIC as LIC Service (new instance)
+    participant Redis as Redis
+    participant Broker as RabbitMQ
+    participant Orch as Orchestrator
+
+    Note over LIC: Предыдущий инстанс упал между шагами 1-5 §2.1<br/>Исходное version-artifacts-ready НЕ ACK'нуто
+    DM->>LIC: dm.events.version-artifacts-ready (redeliver)
+    LIC->>Redis: GET lic-trigger:{version_id}
+
+    alt lic-trigger = PAUSED (events опубликованы, ACK не выполнен)
+        Redis-->>LIC: PAUSED
+        LIC->>Redis: GET lic-pending-state:{version_id}
+        Redis-->>LIC: serialized state (есть)
+        Note over LIC: Stage 1 не перезапускаем —<br/>state уже в Redis
+        LIC->>Broker: publish classification-uncertain<br/>(publisher confirms)
+        Broker-->>LIC: broker ack
+        LIC->>Orch: classification-uncertain<br/>(Orch дедуплицирует через lic-uncertain:{version_id})
+        LIC->>Broker: publish status-changed.IN_PROGRESS / AWAITING<br/>(publisher confirms)
+        Broker-->>LIC: broker ack
+        LIC->>Orch: status-changed (idempotent на Orch-стороне)
+        Note over LIC: ACK исходного сообщения
+    else lic-trigger = PROCESSING (crash до SET PAUSED)
+        Redis-->>LIC: PROCESSING (90s TTL ещё не истёк)
+        Note over LIC: NACK с retry-DLX —<br/>дождаться TTL expiry или completion
+    else lic-trigger отсутствует, lic-pending-state есть (race — TTL expired)
+        Redis-->>LIC: nil
+        LIC->>Redis: GET lic-pending-state:{version_id}
+        Redis-->>LIC: serialized state (safety-net hit)
+        LIC->>Redis: SET lic-trigger:{version_id} = PAUSED EX 25h<br/>(восстанавливаем инвариант)
+        LIC->>Broker: publish classification-uncertain + status-changed<br/>(publisher confirms)
+        Broker-->>LIC: broker acks
+        Note over LIC: ACK исходного сообщения
+    else оба ключа отсутствуют (полный rollback)
+        Redis-->>LIC: nil
+        Note over LIC: SETNX lic-trigger = PROCESSING<br/>Запуск Stage 1 с нуля<br/>(легитимный rollback, cost ~2× для агентов 1-2)
+    end
+```
 
 ---
 
@@ -158,14 +213,15 @@ sequenceDiagram
     participant LLM as LLM Provider Router
     participant Orch as Orchestrator
 
-    Note over DM: Пользователь запросил RE_CHECK\nDM создаёт новую версию version_id=N+1
-    DM->>LIC: dm.events.version-created\n{origin_type:"RE_CHECK",\nparent_version_id:N,\nversion_id:N+1}
-    LIC->>Redis: SET lic-version-meta:{N+1}\n{origin_type:RE_CHECK, parent_version_id:N}\n(ttl 24h)
+    Note over DM: Пользователь запросил повторную проверку<br/>DM создаёт новую версию version_id=N+1<br/>(origin_type ∈ DM-enum, parent_version_id=N)
+    DM->>LIC: dm.events.version-created<br/>{parent_version_id:N,<br/>origin_type:"<DM enum, opaque>",<br/>version_id:N+1}
+    LIC->>Redis: SET lic-version-meta:{N+1}<br/>{parent_version_id:N, origin_type:&lt;opaque&gt;}<br/>(ttl 24h)
     Note over LIC: ACK
     Note over DM: DP обрабатывает; артефакты сохранены
-    DM->>LIC: dm.events.version-artifacts-ready\n(version_id=N+1)
+    DM->>LIC: dm.events.version-artifacts-ready<br/>(version_id=N+1)
     LIC->>Redis: GET lic-version-meta:{N+1}
-    Redis-->>LIC: {origin_type:RE_CHECK, parent_version_id:N}
+    Redis-->>LIC: {parent_version_id:N, origin_type:&lt;opaque&gt;}
+    Note over LIC: parent_version_id != null → mode=RE_CHECK
     par Two artifact requests in parallel
         LIC->>DM: lic.requests.artifacts\n(version_id=N+1, types=base set)
         DM-->>LIC: dm.responses.artifacts-provided\n(target artifacts)
@@ -217,36 +273,48 @@ sequenceDiagram
 
 ## 5. Невалидный JSON → repair loop
 
-Соответствует `high-architecture.md` §8.5.
+Соответствует `high-architecture.md` §6.8 / §8.5.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant LIC as LIC Pipeline
     participant Agent as Agent (RiskDetection)
-    participant LLM as LLM Provider
+    participant Router as Provider Router
+    participant LLM as LLM (used_provider)
     participant Validator as Schema Validator
     participant DLQ as DLQ Publisher
     participant Orch as Orchestrator
 
     LIC->>Agent: Run(input)
-    Agent->>LLM: Complete (1st)
-    LLM-->>Agent: Raw response (non-JSON or schema violation)
+    Agent->>Router: Complete(req с JSONSchema)
+    Router->>LLM: Complete (primary call)
+    LLM-->>Router: Raw response<br/>(JSON содержит schema violation)
+    Router-->>Agent: PrimaryCallResult{Response, UsedProvider}
     Agent->>Validator: Validate(response)
     Validator-->>Agent: ValidationError
-    Note over Agent: Repair Loop × 1
-    Agent->>LLM: Complete (repair)\n"Твой ответ не прошёл валидацию: <errors>.\nИсправь под исходную схему."
-    LLM-->>Agent: New response
+    Note over Agent: Repair Loop × 1<br/>(SAME provider — OQ-10)
+    Agent->>Router: CompleteRepair(req+PriorTurns, UsedProvider)
+    Note over Router: PriorTurns = [<br/>{Assistant, invalid_response},<br/>{User, "Исправь JSON под схему: &lt;errors&gt;"}]
+    Router->>LLM: Complete (repair, same provider)
+    LLM-->>Router: New response
+    Router-->>Agent: CompletionResponse
     Agent->>Validator: Validate
     alt repair succeeded
         Validator-->>Agent: OK
         Agent-->>LIC: AgentResult
-    else repair failed
+    else repair failed (still invalid JSON)
         Validator-->>Agent: ValidationError again
         Agent-->>LIC: ErrAgentOutputInvalid
-        LIC->>Orch: lic.events.status-changed\n{status:FAILED, error_code:AGENT_OUTPUT_INVALID, is_retryable:true,\n error_message:"Не удалось получить корректный анализ. Запустите повторную проверку."}
-        LIC->>DLQ: lic.dlq.agent-output-invalid\n{agent_id, raw_response_hash}
+        LIC->>Orch: lic.events.status-changed<br/>{status:FAILED, error_code:AGENT_OUTPUT_INVALID, is_retryable:true,<br/>error_message:"Не удалось получить корректный анализ. Запустите повторную проверку."}
+        LIC->>DLQ: lic.dlq.agent-output-invalid<br/>{agent_id, used_provider, raw_response_hash}
         Note over LIC: ACK исходного сообщения
+    else repair provider error (5xx/timeout)
+        Router-->>Agent: LLMProviderError
+        Note over Agent: НЕ переключаемся на fallback —<br/>нарушит conversation continuity
+        Agent-->>LIC: ErrAgentOutputInvalid
+        LIC->>Orch: status-changed FAILED<br/>(тот же error_code, is_retryable=true)
+        Note over LIC: ACK
     end
 ```
 
@@ -288,13 +356,13 @@ sequenceDiagram
     participant DM as Document Management
     participant LLM as LLM Provider
 
-    Note over LIC: RE_CHECK обнаружен;\nзапрашиваем родительский RISK_ANALYSIS
-    LIC->>DM: lic.requests.artifacts\n(version_id=N, types=[RISK_ANALYSIS])
-    DM-->>LIC: dm.responses.artifacts-provided\n{artifacts:{}, missing_types:["RISK_ANALYSIS"]}
-    Note over LIC: Skip Stage 6 (RiskDelta)\nrisk_delta=null\nadd warning RE_CHECK_PARENT_ANALYSIS_MISSING
-    Note over LIC: Stage 1-5 продолжаются\nDetailedReport получает warning
+    Note over LIC: parent_version_id != null обнаружен в кэше;<br/>запрашиваем родительский RISK_ANALYSIS
+    LIC->>DM: lic.requests.artifacts<br/>(version_id=N, types=[RISK_ANALYSIS])
+    DM-->>LIC: dm.responses.artifacts-provided<br/>{artifacts:{}, missing_types:["RISK_ANALYSIS"]}
+    Note over LIC: Skip Stage 6 (RiskDelta)<br/>risk_delta=null<br/>add warning RE_CHECK_PARENT_ANALYSIS_MISSING
+    Note over LIC: Stage 1-5 продолжаются<br/>DetailedReport получает warning
     LIC->>LLM: ... (regular pipeline without RiskDelta)
-    LIC->>DM: lic.artifacts.analysis-ready\n(risk_delta absent)
+    LIC->>DM: lic.artifacts.analysis-ready<br/>(risk_delta absent)
 ```
 
 ---

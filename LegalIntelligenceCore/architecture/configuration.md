@@ -37,7 +37,10 @@
 | `LIC_BROKER_EXCHANGE_COMMANDS` | no | `contractpro.commands` | Topic exchange для commands |
 | `LIC_BROKER_EXCHANGE_DLX` | no | `contractpro.dlx` | DLX exchange |
 | `LIC_CONSUMER_PREFETCH` | no | `10` | RabbitMQ consumer prefetch count |
-| `LIC_CONSUMER_MAX_REDELIVERIES` | no | `3` | Max сообщение redeliveries до DLQ |
+| `LIC_CONSUMER_MAX_REDELIVERIES` | no | `3` | Max сообщение redeliveries до DLQ. Соответствует количеству retry-уровней в DLX-loop (см. `integration-contracts.md` §6.4) |
+| `LIC_CONSUMER_RETRY_TTL_1` | no | `2s` | TTL для первой retry-queue в DLX-loop (`lic.q.<topic>.retry.1`); exponential backoff layer 1 |
+| `LIC_CONSUMER_RETRY_TTL_2` | no | `10s` | TTL для второй retry-queue; backoff layer 2 |
+| `LIC_CONSUMER_RETRY_TTL_3` | no | `60s` | TTL для третьей retry-queue; backoff layer 3. Total max delay перед DLQ ≈ 72 секунды |
 | `LIC_PUBLISHER_CONFIRM_TIMEOUT` | no | `5s` | Publisher confirm timeout |
 | `LIC_PUBLISH_BUFFER_SIZE` | no | `100` | In-memory публикационный buffer (при отказе broker) |
 
@@ -56,8 +59,9 @@
 
 | Var | Required | Default | Описание |
 |-----|----------|---------|----------|
-| `LIC_IDEMPOTENCY_TTL` | no | `24h` | TTL ключей идемпотентности |
-| `LIC_IDEMPOTENCY_PROCESSING_TTL` | no | `90s` | TTL для статуса `PROCESSING` |
+| `LIC_IDEMPOTENCY_TTL` | no | `24h` | TTL ключей идемпотентности (статусы `COMPLETED`, `PAUSED`) |
+| `LIC_IDEMPOTENCY_PROCESSING_TTL` | no | `150s` | TTL для статуса `PROCESSING`. Должен превышать `LIC_JOB_TIMEOUT (90s) + LIC_DM_PERSIST_CONFIRM_TIMEOUT (30s) + buffer (30s) = 150s` — гарантирует, что ключ не expirit'ит во время самого долгого happy-path. Heartbeat (см. ниже) продлевает TTL каждые 30s |
+| `LIC_IDEMPOTENCY_HEARTBEAT_INTERVAL` | no | `30s` | Периодичность heartbeat'а: каждые 30s pipeline продлевает TTL `lic-trigger:{version_id}` через `EXPIRE` команду Redis. При crash инстанса heartbeat останавливается → TTL естественно истекает через max 30s (heartbeat_interval) + remaining_ttl |
 | `LIC_IDEMPOTENCY_FALLBACK_ENABLED` | no | `false` | Fallback на DB-based проверку при недоступности Redis (DB у LIC нет — фактический эффект: ack без проверки + alert) |
 
 ### 2.5 Pipeline orchestration
@@ -146,6 +150,7 @@ Per-agent выбор primary провайдера (см. ADR-LIC-03):
 | `LIC_CONFIDENCE_THRESHOLD` | `0.75` | Порог confidence для запроса подтверждения типа (FR-2.1.3) |
 | `LIC_MAX_INPUT_TOKENS` | `150000` | Глобальный лимит токенов на входе пайплайна |
 | `LIC_MAX_AGENT_INPUT_TOKENS` | `120000` | Лимит на агентский вызов (с усечением выше) |
+| `LIC_MAX_INGESTED_BYTES` | `10485760` (10 МБ) | **Hard limit** на суммарный размер входящих артефактов от DM (`SEMANTIC_TREE_JSON + EXTRACTED_TEXT + DOCUMENT_STRUCTURE_JSON + PROCESSING_WARNINGS_JSON`). Превышение → немедленный FAILED `DOCUMENT_TOO_LARGE`, агенты не запускаются. См. `security.md` §5.2 |
 
 ### 2.13 Aggregate score weights
 
@@ -212,8 +217,15 @@ gemini-2.5-pro:
 6. Веса AGGREGATE_SCORE — числовые.
 7. `LIC_CONFIDENCE_THRESHOLD` ∈ [0.0, 1.0].
 8. `LIC_PIPELINE_CONCURRENCY` ≥ 1.
+9. `LIC_MAX_INGESTED_BYTES` ≥ 1 МБ (нижняя разумная граница).
+10. **Production TLS enforcement** (закрывает F-8.7):
+    - Если `LIC_ENV ∈ {staging, production}`:
+      - `LIC_REDIS_TLS=true` — иначе `FATAL: Redis TLS обязателен в production`.
+      - `LIC_BROKER_TLS=true` (или `amqps://` в `LIC_BROKER_ADDRESS`) — иначе `FATAL: RabbitMQ TLS обязателен в production`.
+      - `LIC_LLM_*_API_BASE_URL` начинается с `https://` — иначе `FATAL`.
+11. **`LIC_PROMPT_INJECTION_HASH_KEY` присутствует** (HMAC-secret для PII fragment hash, см. `security.md` §4.3 и §6.4) — иначе `FATAL`.
 
-Любая ошибка → `FATAL log + exit 1` (fail-fast).
+Любая ошибка → `FATAL log + exit 1` (fail-fast). Goal — поймать misconfiguration на deployment-этапе, не silently работать в небезопасной конфигурации.
 
 ---
 
@@ -240,6 +252,7 @@ LIC_PIPELINE_CONCURRENCY=2
 LIC_JOB_TIMEOUT=90s
 LIC_CONFIDENCE_THRESHOLD=0.75
 LIC_MAX_INPUT_TOKENS=150000
+LIC_MAX_INGESTED_BYTES=10485760
 
 # LLM — Claude (default)
 LIC_CLAUDE_API_KEY=sk-ant-***-replace-with-real-key***

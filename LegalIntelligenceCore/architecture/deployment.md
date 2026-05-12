@@ -418,7 +418,7 @@ LIC stateless → добавление pods даёт линейное масшт
 | 10 000 / день | 5 | Пиковая нагрузка ~10 jobs/min |
 | 100 000 / день | 20 | Hits HPA max — нужно поднять |
 
-Bottleneck — НЕ LIC, а LLM rate limits провайдеров. При нагрузке 100К/день — нужно увеличить квоты у Anthropic/OpenAI или добавить on-premise провайдер.
+Bottleneck — НЕ LIC, а LLM rate limits провайдеров. При нагрузке 100К/день — нужно увеличить квоты у Anthropic/OpenAI.
 
 ### 7.2 Идемпотентность при scale
 

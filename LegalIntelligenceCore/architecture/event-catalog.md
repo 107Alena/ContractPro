@@ -165,9 +165,25 @@
 
 LIC публикует:
 - `GetArtifactsRequest` в `lic.requests.artifacts` — полная схема в `DocumentManagement/architecture/event-catalog.md` §1.4.
-- `LegalAnalysisArtifactsReady` в `lic.artifacts.analysis-ready` — полная схема в `DocumentManagement/architecture/event-catalog.md` §1.5 + расширение `risk_delta` (см. ADR-LIC-05).
+- `LegalAnalysisArtifactsReady` в `lic.artifacts.analysis-ready` — полная схема в `DocumentManagement/architecture/event-catalog.md` §1.5 + LIC-side ужесточения форматов (см. §2.1 ниже) + расширение `risk_delta` (см. ADR-LIC-05, §2.2 ниже).
 
-**Расширение схемы `LegalAnalysisArtifactsReady` для `risk_delta` (v1.1):**
+### 2.1 LIC-side ужесточения форматов
+
+FROZEN DM-контракт `LegalAnalysisArtifactsReady.risk_analysis.risks[].id` объявляет поле как `string` без regex. LIC применяет более строгий формат на стороне публикации:
+
+| Поле | LIC outbound regex | Семантика |
+|------|--------------------|-----------|
+| `risk_analysis.risks[].id` | `^R-(P|M)?[0-9]{3,}$` | `R-NNN` — от агента 5; `R-PNNN` — от агента 3 (Party Consistency); `R-MNNN` — от агента 4 (Mandatory Conditions). Алгоритм сборки — `high-architecture.md` §6.11.1 |
+| `risk_analysis.risks[].category` | enum 22 значения | 13 от агента 5 + 7 PARTY_* + 2 MANDATORY_*. Полный список — `high-architecture.md` §6.11.2 |
+| `recommendations[].risk_id` | `^R-(P|M)?[0-9]{3,}$` | Ссылается на существующий элемент `risk_analysis.risks[]`; Result Aggregator валидирует existence перед публикацией |
+| `risk_analysis.risks[].mandatory_condition_code` | `^MC_[A-Z0-9_]+$` (optional) | Только для `R-MNNN`-элементов; копируется из оригинального finding'а агента 4 для UI-фильтрации в DETAILED_REPORT |
+
+**Stripping LIC-внутренних полей перед публикацией** (см. §6.11 шаг 5):
+- `risks[].rationale` — удаляется (внутренняя метаинформация LLM).
+- `key_parameters.internal_extras`, `key_parameters.prompt_injection_detected` — удаляются.
+- `prompt_injection_detected: true` от любого агента → конвертируется в warning `DETAILED_REPORT.warnings.PROMPT_INJECTION_DETECTED`, само поле в outbound не публикуется.
+
+### 2.2 Расширение схемы `LegalAnalysisArtifactsReady` для `risk_delta` (v1.1)
 
 LIC отправляет дополнительное optional-поле `risk_delta` на верхнем уровне payload. Полная JSON-схема расширения — см. `ai-agents-pipeline.md` (агент 9, RiskDelta).
 

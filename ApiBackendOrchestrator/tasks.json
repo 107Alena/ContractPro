@@ -1284,6 +1284,108 @@
       "completion_date": "2026-04-16",
       "implementation_summary": "Обновлён CORS middleware в соответствии с ADR-6 и security.md §5: (1) internal/ingress/api/middleware.go — константы corsAllowHeaders = 'Authorization, Content-Type, X-Correlation-Id, traceparent, tracestate' (5 значений), corsExposeHeaders = 'X-Request-Id, Retry-After, traceparent' (3 значения); добавлена константа requestIDHeader = 'X-Request-Id'; CORSMiddleware при пустом AllowedOrigins возвращает полный no-op (`return func(next) { return next }`) — OPTIONS идёт по обычному цепочке маршрутизатора (same-origin deployment ADR-6); SecurityHeadersMiddleware пишет h.Set(requestIDHeader, cid) вместо 'X-Request-ID'. (2) internal/config/config.go Validate() — wildcard '*' в ORCH_CORS_ALLOWED_ORIGINS → error (жёсткая блокировка startup вместо silent ignore); duplicate origins → error. Middleware сохраняет defence-in-depth silent-ignore '*' + warn-лог. (3) Унификация case: headerCorrelationID = 'X-Correlation-Id' в dmclient/opmclient/uomclient (Go http.Header case-insensitive — wire-совместимо). (4) Docs — observability.md §3.2/§6.3, integration-contracts.md §1.1/§1.2/§3.2/§3.3, security.md §10.3/§11: X-Correlation-ID → X-Correlation-Id, X-Request-ID → X-Request-Id (mixed case). Audit grep по internal/ подтвердил 0 совпадений старого case.",
       "test_results": "Unit-тесты CORS middleware (дополнения): 3 новых — TestCORS_EmptyOrigins_OptionsReachesHandler (OPTIONS с Origin и Access-Control-Request-Method при пустом AllowedOrigins доходит до handler + нет CORS-headers + нет Vary), TestCORS_Preflight_AllowsTraceparentHeader (preflight с Access-Control-Request-Headers='traceparent, tracestate, x-correlation-id' → 204 + Allow-Headers содержит traceparent и tracestate), TestCORS_ExposeHeaders_IncludesTraceparent. Обновлены: TestCORS_ExposeHeaders_ContainsRequired (проверяет X-Request-Id, Retry-After, traceparent вместо старых 3), TestCORS_AllowHeaders_ContainsRequired (5 значений). Config-тесты (5 новых): TestValidate_CORSWildcardRejected, TestValidate_CORSDuplicatesRejected, TestValidate_CORSEmptyOriginsOK, TestValidate_CORSValidOriginsOK, TestLoad_CORSWildcardRejectedFromEnv. SecurityHeaders-тесты обновлены на X-Request-Id (case-insensitive Get() совместим). Результаты: go test -count=1 ./... → все 35 пакетов PASS. go vet ./... → 0 warnings. make build / make test / make lint → PASS. Code review (code-reviewer): verdict approve — no critical findings, double-defense wildcard rejection корректен, no-op path безопасен, rename header case wire-совместим (Go http.Header canonicalizes)."
+    },
+    {
+      "id": "ORCH-TASK-052",
+      "category": "infrastructure",
+      "priority": "critical",
+      "description": "Job ID infrastructure: helper для генерации UUID v4 + расширение DM-client CreateVersionRequest полем JobID",
+      "context": "Базовая инфраструктура для end-to-end сквозного job_id через processing-цепочку. Не меняет существующие application flows — только готовит инструменты. Интеграция в конкретные flows — отдельные задачи (ORCH-TASK-053 upload, ORCH-TASK-054 re-check). Не зависит от DM-TASK-054 (только добавляет поле в payload — DM-сторона должна его принимать; см. зависимости 053/054). Можно делать первой в этой группе.",
+      "acceptance_criteria": [
+        "Создан package internal/application/jobid/ с функцией NewJobID() returns string — генерирует UUID v4 (использовать github.com/google/uuid, который уже в go.mod проекта)",
+        "Сигнатура и контракт документированы в Go-doc комментарии: «NewJobID returns a fresh UUID v4 for a new processing flow. The returned value is used as a stable correlation key across DM (CreateVersionRequest.job_id), DP (ProcessDocumentRequested.job_id), LIC и downstream-публикаций.»",
+        "DM-client (internal/egress/dmclient/, конкретно структура CreateVersionRequest или эквивалент): добавлено поле JobID string `json:\"job_id,omitempty\"`. omitempty — для backward-compatibility с DM до DM-TASK-054",
+        "Существующие вызовы DM-client'а не меняются (поле omitempty при пустом значении). Никакие application flows не модифицируются в рамках этой задачи",
+        "Тест ./internal/application/jobid/: NewJobID возвращает строку, удовлетворяющую UUID v4 regex (`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`); 100 параллельных вызовов дают 100 уникальных значений",
+        "Тест ./internal/egress/dmclient/: при JobID=\"\" сериализованный JSON НЕ содержит ключа job_id (omitempty); при JobID=\"<uuid>\" — содержит",
+        "Минимальная документация: development/internal/application/CLAUDE.md (или package CLAUDE.md) — упомянуть jobid package с описанием его роли"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -count=1 ./internal/application/jobid/... — все тесты PASS",
+        "Шаг 2: go test -count=1 ./internal/egress/dmclient/... — все тесты PASS (включая новые на omitempty)",
+        "Шаг 3: go test -count=1 -race ./... — никаких regressions в существующих пакетах",
+        "Шаг 4: go vet ./...; make build / make test / make lint — без ошибок"
+      ],
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-053",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Job ID integration в upload flow: генерация job_id до DM CreateVersion + проброс в ProcessDocumentRequested",
+      "context": "Wire-up инфраструктуры из ORCH-TASK-052 в upload-flow (новый документ). Гарантирует, что один и тот же job_id используется в DM REST-вызове и в DP RabbitMQ-команде. Не затрагивает re-check / recommendation / manual-edit flows (см. ORCH-TASK-054).",
+      "acceptance_criteria": [
+        "В upload application (internal/application/upload/ или эквивалент): порядок изменён на (1) validate file → (2) upload в Object Storage → (3) jobid.NewJobID() → (4) DM POST /documents/{id}/versions с CreateVersionRequest.JobID = jobID → (5) publish ProcessDocumentRequested с тем же jobID в DP → (6) return 202 Accepted клиенту. Один и тот же jobID используется в шагах 4 и 5",
+        "Передача jobID между компонентами реализована явно через application context / параметры функций (не через global state)",
+        "Существующий контракт ProcessDocumentRequested не меняется (job_id уже required в event-catalog.md §1.1) — только заполняется тем значением, что было использовано в DM CreateVersion",
+        "Integration test (internal/integration/upload_test.go или эквивалент): POST /documents с тестовым файлом → перехват DM-client mock'а → проверка JobID непуст и matches UUID v4 regex → перехват DP-publisher mock'а → проверка ProcessDocumentRequested.job_id == DM CreateVersionRequest.job_id",
+        "Concurrency test: 5 параллельных POST /documents → 5 уникальных job_id; никаких коллизий и race conditions",
+        "Документация: architecture/sequence-diagrams.md, диаграмма Upload flow — добавлен шаг «Orchestrator generates job_id» перед DM CreateVersion; на стрелке в DM и в DP — пометка \"with job_id=X\"",
+        "Документация: architecture/integration-contracts.md — описан end-to-end путь job_id для upload-сценария (Orchestrator generates → DM stores via CreateVersionRequest → DP receives via ProcessDocumentRequested → одно значение)",
+        "Документация: architecture/high-architecture.md (ASSUMPTION-ORCH-XX или подраздел §3 Архитектурные допущения) — зафиксирован инвариант: «Orchestrator генерирует UUID v4 job_id до создания версии в DM; одно значение используется в CreateVersionRequest и в ProcessDocumentRequested. Immutable в течение processing-flow.»"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -count=1 ./internal/application/upload/... — все тесты включая новый integration PASS",
+        "Шаг 2: go test -count=1 ./internal/integration/... — upload end-to-end test PASS",
+        "Шаг 3: concurrency-тест: t.Parallel() с 5 одновременными upload → все job_id уникальны (проверка через map[string]struct{} в тесте)",
+        "Шаг 4: go test -count=1 -race ./... ALL PASS; go vet OK; make build/test/lint OK"
+      ],
+      "dependencies": ["ORCH-TASK-052", "DM-TASK-054"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-054",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Job ID integration в re-check / recommendation / manual-edit flows: генерация job_id для новых версий с parent + проброс в ProcessDocumentRequested",
+      "context": "Wire-up инфраструктуры jobid в остальные processing-flows (помимо upload). Любой создаваемый flow, который запускает processing на новой версии (origin_type ∈ {RE_UPLOAD, RECOMMENDATION_APPLIED, MANUAL_EDIT, RE_CHECK}), должен генерировать собственный job_id. Тот же паттерн что в ORCH-TASK-053, но для других endpoints.",
+      "acceptance_criteria": [
+        "Каждый processing-flow в Orchestrator (re-check endpoint, recommendation-applied endpoint, manual-edit endpoint — конкретный список определяется текущим состоянием internal/application/) использует jobid.NewJobID() ДО REST-вызова DM CreateVersion",
+        "Один и тот же jobID пробрасывается в CreateVersionRequest и в последующий ProcessDocumentRequested для конкретного flow",
+        "Любые другие existing flows (если есть), которые публикуют ProcessDocumentRequested без сопутствующего создания версии — также используют jobid.NewJobID() для генерации correlation-key",
+        "Integration test на каждый non-upload flow (минимум один per endpoint): POST /<endpoint> → проверка что DM-client mock получил CreateVersionRequest с jobID matching UUID v4 → проверка что DP-publisher mock получил ProcessDocumentRequested с тем же jobID",
+        "Документация: architecture/sequence-diagrams.md — обновить диаграммы re-check / recommendation / manual-edit flows (или эквивалентные сценарии, если они в одной general-purpose диаграмме) — добавлен шаг «generate job_id» с пометкой \"with job_id=X\" на стрелках",
+        "Документация: architecture/integration-contracts.md — расширить секцию «сквозной job_id» (созданную в ORCH-TASK-053) — описать что инвариант применяется ко всем processing-flows, не только upload",
+        "Документация: ASSUMPTION-ORCH-XX (из ORCH-TASK-053) расширена до общей формулировки «для любого processing-flow»"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -count=1 ./internal/application/<each-flow>/... — все тесты PASS",
+        "Шаг 2: go test -count=1 ./internal/integration/... — все non-upload integration-тесты PASS, новые E2E проверки job_id present",
+        "Шаг 3: grep -rn 'ProcessDocumentRequested' internal/application — каждое место использует jobid.NewJobID() (audit вручную)",
+        "Шаг 4: go test -count=1 -race ./... ALL PASS; go vet OK; make build/test/lint OK"
+      ],
+      "dependencies": ["ORCH-TASK-052", "DM-TASK-054"],
+      "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-055",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Серверная нормализация contract_type RU→EN при обработке POST /contracts/{id}/confirm-type для публикации UserConfirmedType",
+      "context": "Пользователь в UI выбирает русский лейбл («услуги»), LIC ждёт английский enum (SERVICES). Закрывает наименование на стыке Orchestrator↔LIC. Полностью независимая функциональная область — не использует jobid helper, не пересекается с upload/re-check flows.",
+      "acceptance_criteria": [
+        "Создан package internal/application/typeconfirmation/normalize.go (или эквивалент): функция NormalizeContractType(input string) (string, error). Маппинг 12 пар русский→английский enum ASSUMPTION-LIC-16: «услуги»→SERVICES, «поставка»→SUPPLY, «подряд»→WORK_CONTRACT, «аренда»→LEASE, «NDA»→NDA, «купля-продажа»→SALE, «лицензия»→LICENSE, «агентский»→AGENCY, «займ»→LOAN, «страхование»→INSURANCE, «трудовой»→EMPLOYMENT_CIVIL, «иное»→OTHER",
+        "Маппинг case-insensitive по русскому ключу: «Услуги», «УСЛУГИ», «услуги» — все маппятся в SERVICES",
+        "Если на вход пришло уже английское значение из enum (whitelist 12 значений) — функция возвращает его as-is (pass-through, для UI/API-клиентов, которые передают английский enum напрямую)",
+        "Невалидный ввод (пустая строка, неизвестный лейбл) → ErrInvalidContractType с message на русском (см. NFR-5.2)",
+        "Type Confirmation Handler (internal/application/typeconfirmation handler или §6.15a high-architecture): принимает contract_type из REST-запроса POST /contracts/{id}/confirm-type → вызывает NormalizeContractType() → если err → HTTP 400 с error_code=INVALID_CONTRACT_TYPE и russian error_message → если ok → publish UserConfirmedType в RabbitMQ с английским enum в поле contract_type",
+        "OpenAPI architecture/api-specification.yaml ConfirmTypeRequest: схема contract_type — schema string без strict enum (принимает как русский label, так и английский enum). В description добавлено: «Сервер нормализует русские лейблы из UI в английский enum LIC до публикации UserConfirmedType в RabbitMQ. Whitelist 12 значений см. в integration-contracts.md / event-catalog.md UserConfirmedType.»",
+        "Тесты ./internal/application/typeconfirmation/...: TestNormalizeContractType_AllRussianValues (12 случаев), TestNormalizeContractType_AllEnglishPassthrough (12 случаев), TestNormalizeContractType_CaseInsensitive (3-5 вариаций), TestNormalizeContractType_Invalid (пустая строка, абракадабра, частичное совпадение)",
+        "Integration test handler-уровня: POST /contracts/{id}/confirm-type с body {\"contract_type\":\"услуги\"} → перехват DP-publisher mock'а → проверка UserConfirmedType.contract_type == \"SERVICES\". POST с body {\"contract_type\":\"абракадабра\"} → 400 с error_code=INVALID_CONTRACT_TYPE и русским message. POST с body {\"contract_type\":\"SERVICES\"} (английский уже) → pass-through, UserConfirmedType.contract_type == \"SERVICES\"",
+        "Документация: architecture/event-catalog.md §1.3 UserConfirmedType — описано что contract_type в payload — английский enum (12 значений ASSUMPTION-LIC-16); серверная нормализация выполняется Orchestrator'ом. Добавлена таблица маппинга RU↔EN (12 пар)",
+        "Документация: architecture/sequence-diagrams.md, диаграмма Type Confirmation flow (или раздел high-architecture §8.x): добавлен шаг «Normalize RU→EN» в Orchestrator после получения запроса, до publish UserConfirmedType",
+        "Документация: architecture/integration-contracts.md — описана точка нормализации (Type Confirmation Handler) и инвариант: payload UserConfirmedType всегда содержит английский enum, а не русский label"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -count=1 ./internal/application/typeconfirmation/... — все unit-тесты PASS",
+        "Шаг 2: integration test handler-уровня — POST с русским contract_type → UserConfirmedType содержит правильный английский enum",
+        "Шаг 3: POST с невалидным contract_type → 400 + INVALID_CONTRACT_TYPE + русский error_message",
+        "Шаг 4: POST с английским enum → pass-through (для backward-compatibility с API-клиентами, которые передают enum напрямую)",
+        "Шаг 5: go test -count=1 -race ./... ALL PASS; go vet OK; make build/test/lint OK"
+      ],
+      "dependencies": [],
+      "status": "pending"
     }
   ]
 }

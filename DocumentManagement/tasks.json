@@ -1199,6 +1199,155 @@
       "status": "done",
       "completed_at": "2026-04-16",
       "summary": "Per-stage таймауты в Stale Version Watchdog (ASSUMPTION-ORCH-14 — реализовано). 4 новые env vars: DM_STALE_TIMEOUT_PROCESSING=5m (PENDING→PROCESSING_ARTIFACTS_RECEIVED), DM_STALE_TIMEOUT_ANALYSIS=10m, DM_STALE_TIMEOUT_REPORTS=5m, DM_STALE_TIMEOUT_FINALIZATION=5m (добавлен DM для 4-й стадии REPORTS_READY→FULLY_READY). Legacy DM_STALE_VERSION_TIMEOUT сохранён как per-variable fallback (каждая из 4 переменных, если не задана, берёт fallback; если и он не задан — собственный default). config: new helper envDurationWithFallback (config.go), WatchdogConfig расширен 4 полями + StaleVersionFallback (sub_configs.go), TimeoutConfig.StaleVersion помечен deprecated. port: FindStaleInIntermediateStatus сигнатура — map[ArtifactStatus]time.Time вместо одного cutoff (outbound.go). Каскадно обновлено 7 реализаций/моков: postgres/version_repository.go (SQL с disjunction: WHERE (status=$i AND created_at<$i+1) OR ... детерминированный порядок по knownOrder slice), main.go (poolVersionRepository wrapper + wiring NewStaleVersionWatchdog без cfg.Timeout.StaleVersion), integration/testinfra.go (memoryVersionRepository), watchdog_test.go/version_test.go/diff_test.go/ingestion_test.go моки. metrics: StuckVersionsCount Gauge→GaugeVec{stage}, StuckVersionsTotal Counter→CounterVec{stage}; bridge-методы IncStuckVersionsTotal(stage,count) и SetStuckVersionsCount(stage,count). watchdog.scan(): строит cutoffs per-status, группирует найденные по stage (processing/analysis/reports/finalization), сбрасывает все 4 gauge в 0 каждый scan, инкрементирует counter per-stage после успеха, логирует structured field stage при переводе в PARTIALLY_AVAILABLE и в итогах scan (per_stage_found/per_stage_success). Audit record details добавлен stage. Event ErrorMessage использует per-stage timeout. Тесты: config_test (TestLoad_WatchdogPerStageExplicit + TestLoad_WatchdogMixedFallback + проверка defaults), watchdog_test (TestScan_PerStageCutoffsPassedToRepo, TestScan_ZeroTimeout_DisablesStage, TestStageFromStatus, TestAllStagesCoversKnownStatuses, покрыты все 4 статуса с per-stage metric/gauge), metrics_test (dm_stuck_versions_total добавлен в counters list, GaugeVec/CounterVec seeded через bridge-методы). Документация: configuration.md (4 новых env vars в таблице Watchdog + пример .env + DM_STALE_VERSION_TIMEOUT помечен fallback в Timeouts), state-machine.md (полностью переписана секция Stale Version Watchdog — таблица переходов, worst-case lag formula, new alert expressions), deployment.md (label stage в dm_stuck_versions_count + новый dm_stuck_versions_total, per-stage env в прод-примере), development/.env.example (блок per-stage watchdog), internal/infra/CLAUDE.md (label stage в metrics), internal/application/CLAUDE.md (расширенное описание watchdog), ApiBackendOrchestrator/high-architecture.md (ASSUMPTION-ORCH-14 → 'Реализовано в DM-TASK-053', 4-й таймаут FINALIZATION добавлен DM как расширение ORCH-формулировки с обоснованием; ASSUMPTION-ORCH-13 обобщён до 'per-stage DM Watchdog'). Ревью: postgres-pro (disjunction form — одобрена, index (artifact_status, created_at) рекомендован но не обязателен при <100k rows), code-architect (план валидирован acceptance criteria), documentation-engineer (3 несоответствия исправлены: ORCH-13 '30-минутного' обобщён; 'ко всем 4 стадиям' → 'ко всем незаданным стадиям' в .env.example и deployment.md), code-reviewer (clean — все [LOW] замечания соответствуют acceptance criteria или существующим паттернам проекта). go test -count=1 -race ./... ALL PASS (30 пакетов). go vet OK. make build/build-migrate/test/lint — ALL OK."
+    },
+    {
+      "id": "DM-TASK-054",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Persistent job_id в document_versions: миграция БД + Domain model + Repository + REST API CreateVersionRequest + VersionCreated event с job_id",
+      "context": "Базовый слой инфраструктуры job_id в DM: persistence + input (REST) + один outbound event (VersionCreated). Без этой задачи остальные части (обогащение VersionProcessingArtifactsReady, matching-инвариант) не могут быть реализованы — они читают job_id из document_versions. Гарантировано: ни одна тест-БД нигде не создана, CI пересоздаёт БД на каждом запуске — изменение initial migration безопасно (без отдельной миграции 000005). Координируется с ORCH-TASK-052 — Orchestrator передаёт job_id в CreateVersionRequest.",
+      "acceptance_criteria": [
+        "Миграция 000001_initial_schema.up.sql расширена: в CREATE TABLE document_versions добавлена колонка `job_id UUID NULL` + создан `CREATE INDEX idx_versions_job_id ON document_versions(job_id) WHERE job_id IS NOT NULL` + `COMMENT ON COLUMN document_versions.job_id IS 'UUID processing-задачи. NULL для версий, созданных вне processing-flow. Immutable после CreateVersion.'`",
+        "000001_initial_schema.down.sql скорректирована соответственно (drop index если объявлен явно)",
+        "Domain model (internal/domain/model/version.go): DocumentVersion.JobID *string (nullable, immutable). Go-doc комментарий к полю: «job_id фиксируется при создании версии и не меняется при последующих transitions artifact_status»",
+        "Domain model (internal/domain/model/event_outgoing.go): VersionCreated расширено полем JobID string `json:\"job_id,omitempty\"`",
+        "Port (internal/domain/port/inbound.go): CreateVersionParams расширен опциональным JobID *string",
+        "Repository (internal/infra/postgres/version_repository.go): INSERT в document_versions расширен колонкой job_id (передача NULL при params.JobID==nil); SELECT/scan читают job_id обратно в DocumentVersion.JobID (sql.NullString → *string mapping)",
+        "Application service (internal/application/version/version.go, createVersionInTx): version.JobID = params.JobID при INSERT; VersionCreated.JobID = params.JobID при формировании события",
+        "REST API (architecture/api-specification.yaml): CreateVersionRequest получает optional поле `job_id: string (uuid, nullable: true)` с описанием; DocumentVersion response schema — добавлено optional job_id",
+        "Handler (internal/ingress/api/handler.go) CreateVersion: распарсить job_id из request body; при наличии — validate UUID v4 (либо отдельным regexp, либо google/uuid.Parse), невалидный → 400 INVALID_REQUEST с русским error_message",
+        "Тесты version_repository_test.go: INSERT/SELECT с job_id=<UUID> → читается обратно; INSERT с job_id=nil → читается как nil",
+        "Тесты version_test.go: createVersionInTx с params.JobID=<UUID> → VersionCreated.JobID = тот же; createVersionInTx без JobID → VersionCreated сериализуется без ключа job_id (omitempty)",
+        "Тесты api_test.go: POST /documents/{id}/versions с body содержащим job_id=<UUID> → 201 Created + GET version → response содержит job_id. POST без job_id → 201 Created, response не содержит job_id. POST с невалидным UUID → 400 INVALID_REQUEST",
+        "Документация architecture/high-architecture.md §5.2 (DocumentVersion таблица полей): добавлена строка `job_id` (UUID nullable, immutable). В инварианты добавлено: «одна версия → один job_id или null; job_id immutable после CreateVersion»",
+        "Документация architecture/event-catalog.md §2.2 VersionCreated: payload-таблица расширена optional полем job_id (описание: «UUID processing-задачи, если версия создаётся в рамках processing-flow; omitempty при отсутствии»)",
+        "Документация architecture/state-machine.md: упомянуто, что job_id фиксируется при INSERT и не меняется при transitions artifact_status",
+        "Backward compatibility: VersionCreated.job_id — optional с omitempty; существующие consumers (Orchestrator) при отсутствии поля работают без изменений"
+      ],
+      "test_steps": [
+        "Шаг 1: docker-compose down -v && go test -count=1 ./internal/infra/postgres/... — миграция применяется, колонка job_id создаётся, version_repository_test PASS",
+        "Шаг 2: POST /documents/{id}/versions с body содержащим job_id=<UUID> → 201 Created; GET version → response содержит job_id",
+        "Шаг 3: POST с невалидным UUID в job_id → 400 INVALID_REQUEST + русский error_message",
+        "Шаг 4: POST без поля job_id → 201 Created, version.job_id = null; VersionCreated сериализован без ключа job_id (омientempty)",
+        "Шаг 5: go test -count=1 -race ./... ALL PASS; go vet OK; make build/build-migrate/test/lint OK"
+      ],
+      "dependencies": ["DM-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-055",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Обогащение VersionProcessingArtifactsReady полями job_id, origin_type, parent_version_id, created_by_user_id (загрузка из document_versions при формировании события)",
+      "context": "LIC требует все 4 поля для downstream-публикаций. Поля уже присутствуют в БД (origin_type, parent_version_id, created_by_user_id — с момента DM-TASK-002; job_id — с момента DM-TASK-054). Эта задача добавляет их в payload outbound события VersionProcessingArtifactsReady при обработке DocumentProcessingArtifactsReady от DP. Matching-инвариант (event.job_id == version.job_id) — отдельная задача DM-TASK-056.",
+      "acceptance_criteria": [
+        "Domain model (internal/domain/model/event_outgoing.go): VersionProcessingArtifactsReady расширено 4 полями — JobID string `json:\"job_id\"` (required), OriginType OriginType `json:\"origin_type\"` (required), ParentVersionID string `json:\"parent_version_id,omitempty\"` (optional), CreatedByUserID string `json:\"created_by_user_id\"` (required)",
+        "Application service ingestion handler (internal/application/ingestion/* — конкретный файл определяется текущим состоянием кода): при формировании VersionProcessingArtifactsReady — загрузить DocumentVersion по version_id из repository (методом GetByID или эквивалент); обогатить событие 4 полями (JobID, OriginType, ParentVersionID, CreatedByUserID — каждое из соответствующего поля DocumentVersion)",
+        "Если version.JobID == nil (легитимный сценарий для версий, созданных вне processing-flow) — event.JobID остаётся пустой строкой; это приемлемо для текущей задачи (matching см. DM-TASK-056)",
+        "Тесты unit ingestion handler: формирование VersionProcessingArtifactsReady из DocumentProcessingArtifactsReady + загруженной DocumentVersion → event payload содержит все 4 поля корректно",
+        "Тесты integration full_pipeline_test (или новый dedicated тест): создать версию через REST API с origin_type=UPLOAD, parent_version_id=null, created_by_user_id=<UUID>, job_id=<UUID> → симулировать DocumentProcessingArtifactsReady → перехват outbound event → проверка что VersionProcessingArtifactsReady содержит все 4 поля с правильными значениями",
+        "Тесты integration с parent: создать первую версию (UPLOAD), затем вторую с parent_version_id=<UUID первой> → симулировать ингестию → VersionProcessingArtifactsReady второй версии содержит непустой parent_version_id",
+        "Документация architecture/event-catalog.md §2.2 VersionProcessingArtifactsReady: payload полностью обновлён — добавлены 4 новых поля с описанием в таблице (job_id required, origin_type required, parent_version_id optional, created_by_user_id required); раздел «Источник значений» — поля загружаются из document_versions при формировании события",
+        "Документация architecture/integration-contracts.md: краткое описание процесса обогащения (ingestion handler читает DocumentVersion по version_id для формирования полного payload outbound события)",
+        "Backward compatibility: VersionProcessingArtifactsReady — это outbound DM event для LIC; LIC начинает потребление одновременно с этим расширением — нет existing consumers, которые сломаются"
+      ],
+      "test_steps": [
+        "Шаг 1: unit-тест ingestion handler — стандартный сценарий обогащения, все 4 поля корректны",
+        "Шаг 2: integration full_pipeline: версия с parent_version_id=null → VersionProcessingArtifactsReady.parent_version_id omitempty в JSON",
+        "Шаг 3: integration: версия с parent_version_id=<UUID> → VersionProcessingArtifactsReady содержит parent_version_id",
+        "Шаг 4: integration: версия с job_id=<UUID> → VersionProcessingArtifactsReady.job_id == <UUID>",
+        "Шаг 5: go test -count=1 -race ./... ALL PASS; go vet OK; make build/test/lint OK"
+      ],
+      "dependencies": ["DM-TASK-054"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-056",
+      "category": "functional",
+      "priority": "high",
+      "description": "Matching-инвариант event.job_id == version.job_id при обработке DocumentProcessingArtifactsReady + DLQ при mismatch",
+      "context": "Защита data integrity на стыке DP→DM. Гарантирует, что job_id, переданный в DocumentProcessingArtifactsReady от DP, совпадает с stored document_versions.job_id (заполненным Orchestrator'ом ещё при CreateVersion). Mismatch = сигнал о баге в Orchestrator/DP (например, race с другой задачей) или о попытке cross-job ingestion. Отделена от DM-TASK-055 поскольку реализует defensive code path и DLQ — независимая от обогащения event.",
+      "acceptance_criteria": [
+        "Application service ingestion handler (internal/application/ingestion/*): при обработке DocumentProcessingArtifactsReady, после загрузки DocumentVersion по version_id и ДО публикации VersionProcessingArtifactsReady — выполнить проверку: если version.JobID != nil И event.JobID != version.JobID → отказать в обработке: НЕ обновлять artifact_status версии, НЕ сохранять артефакты, НЕ публиковать VersionProcessingArtifactsReady, отправить в DLQ (lic-artifacts-mismatch.dlq или эквивалент) + structured-log с error_code=JOB_ID_MISMATCH",
+        "Если version.JobID == nil — допустимо (legacy/будущие сценарии вне processing-flow): обработка продолжается без проверки",
+        "Если event.JobID пустая строка (теоретический случай при отсутствии job_id в event) → структурированный warn-log, обработка продолжается (нет mismatch — есть отсутствие)",
+        "DLQ envelope содержит: original event payload, error_code=JOB_ID_MISMATCH, expected_job_id (из БД), received_job_id (из event), timestamp, correlation_id",
+        "Метрика: dm_ingestion_job_id_mismatch_total counter (без cardinality-полей), инкрементируется при mismatch",
+        "Тесты integration (новый или расширение error_scenarios_test.go): создать версию с job_id=A → симулировать DocumentProcessingArtifactsReady с job_id=B → проверка: DLQ запись присутствует с error_code=JOB_ID_MISMATCH, version.artifact_status НЕ изменился, VersionProcessingArtifactsReady НЕ опубликован, metric dm_ingestion_job_id_mismatch_total инкрементирован",
+        "Тесты integration: создать версию с job_id=null → симулировать DocumentProcessingArtifactsReady с job_id=A → обработка происходит как обычно (нет mismatch, поскольку stored=nil)",
+        "Документация architecture/event-catalog.md §1.4 DocumentProcessingArtifactsReady (incoming): добавлена секция «Matching-инвариант job_id». Описано: «event.job_id проверяется на соответствие stored document_versions.job_id. При mismatch (stored != null И event != stored) — событие отправляется в DLQ, состояние версии не меняется»",
+        "Документация architecture/high-architecture.md §5.2 DocumentVersion: инвариант job_id расширен — «mismatch incoming event.job_id и stored document_versions.job_id = data integrity violation → DLQ + alert»",
+        "Документация observability runbook (если есть, или раздел в high-architecture.md): описание реакции оператора на алёрт dm_ingestion_job_id_mismatch_total > 0 (проверить Orchestrator + DP логи на race condition / dual processing)"
+      ],
+      "test_steps": [
+        "Шаг 1: integration: stored job_id=A, event job_id=B → DLQ запись + version status НЕ меняется + metric +1",
+        "Шаг 2: integration: stored job_id=null, event job_id=A → обработка как обычно, нет DLQ, version обновляется",
+        "Шаг 3: integration: stored job_id=A, event job_id=A → обработка как обычно",
+        "Шаг 4: проверить структурированный лог error_code=JOB_ID_MISMATCH + поля expected_job_id, received_job_id, correlation_id",
+        "Шаг 5: go test -count=1 -race ./... ALL PASS; go vet OK; make build/test/lint OK"
+      ],
+      "dependencies": ["DM-TASK-054"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-057",
+      "category": "functional",
+      "priority": "high",
+      "description": "Регистрация RISK_DELTA в ArtifactType enum (поддержка LIC v1.1 — risk_delta artifact)",
+      "context": "LIC при анализе версий с непустым parent_version_id публикует артефакт risk_delta в составе LegalAnalysisArtifactsReady v1.1 (см. ADR-LIC-05). DM должен принять этот artifact_type и сохранить в ArtifactDescriptor. Полностью независимая задача — не пересекается с job_id-цепочкой.",
+      "acceptance_criteria": [
+        "Domain model (internal/domain/model/artifact.go или эквивалент): ArtifactType enum расширен значением RISK_DELTA. Регистрация в перечне валидных типов (если есть слайс/мапа known types — обновить); в JSON-маршалинге/unmarshalинге enum значение распознаётся",
+        "Repository (internal/infra/postgres/artifact_repository.go или эквивалент): SQL не требует изменений если artifact_type хранится как TEXT (что обычно так в проекте); но проверить enum constraints — если в БД есть CHECK constraint на artifact_type, расширить его (через миграцию 000001 — поскольку гарантировано чистое состояние)",
+        "Тесты: artifact_repository_test.go — INSERT ArtifactDescriptor с artifact_type=RISK_DELTA → SELECT обратно успешно; ArtifactType.UnmarshalJSON корректно парсит \"RISK_DELTA\" в enum",
+        "Документация architecture/event-catalog.md (раздел ArtifactType enum или аналогичный список валидных типов): добавлено значение RISK_DELTA с описанием — «Дельта изменений риск-профиля по сравнению с родительской версией; публикуется LIC в составе LegalAnalysisArtifactsReady v1.1 для версий с непустым parent_version_id (см. LIC ADR-LIC-05)»",
+        "Документация architecture/high-architecture.md (раздел ArtifactDescriptor или ArtifactType): RISK_DELTA добавлен в список поддерживаемых типов"
+      ],
+      "test_steps": [
+        "Шаг 1: unit-тест ArtifactType: UnmarshalJSON(\"RISK_DELTA\") → ArtifactTypeRiskDelta (или эквивалент); MarshalJSON(ArtifactTypeRiskDelta) → \"RISK_DELTA\"",
+        "Шаг 2: integration artifact_repository: INSERT с artifact_type=RISK_DELTA → no SQL error; SELECT → читается обратно",
+        "Шаг 3: smoke-тест: симулировать LegalAnalysisArtifactsReady с risk_delta артефактом → DM сохраняет ArtifactDescriptor с artifact_type=RISK_DELTA",
+        "Шаг 4: go test -count=1 -race ./... ALL PASS; go vet OK; make build/build-migrate/test/lint OK"
+      ],
+      "dependencies": ["DM-TASK-002"],
+      "status": "pending"
+    },
+    {
+      "id": "DM-TASK-058",
+      "category": "functional",
+      "priority": "high",
+      "description": "Re-publish direct response confirmation из IdempotencyRecord.result_snapshot при повторной доставке producer event (закрывает гонку crash в acknowledgment window)",
+      "context": "Сценарий: producer (LIC/RE/DP) опубликовал event (LegalAnalysisArtifactsReady / ReportsArtifactsReady / DocumentProcessingArtifactsReady), DM сохранил, опубликовал confirmation. Producer упал ДО получения confirmation. RabbitMQ redeliver → producer повторно публикует event. Сейчас DM при duplicate просто ACK без обработки и НЕ переотправляет confirmation (BRE-002 в high-architecture.md line 1026). Producer ждёт confirmation 30s → timeout → ложный FAILED при фактически сохранённых данных. Это критический gap на стороне DM, выявленный в LIC architecture review (review-legal-intelligence-core-report.md TOP-2 / F-7.1 / OQ-8). Inconsistency в текущей DM-документации: для diff scenario (high-architecture.md line 978) DM УЖЕ переотправляет DocumentVersionDiffPersisted при duplicate, а для artifacts — нет. Унификация: применить diff-подход ко всем producer→DM confirmation flow. Поле IdempotencyRecord.result_snapshot уже существует (см. domain/model + kvstore/client_test.go) — спроектировано именно для этого use case, просто не используется в Skip code path для artifacts/reports. LIC-сторона дополнительно использует defensive layer (heartbeat + увеличенный TTL idempotency PROCESSING) — закрывает ~80% сценариев; DM-TASK-058 закрывает оставшиеся ~20% (window между публикацией artifacts и получением persisted-confirmation). Together = 100% coverage critical TOP-2.",
+      "acceptance_criteria": [
+        "Domain model (internal/domain/model/idempotency.go): IdempotencyRecord.ResultSnapshot — поле уже существует (JSON-сериализованная строка). Без изменений.",
+        "Port (internal/domain/port/inbound.go или эквивалент): CheckResult расширена опциональным полем StoredSnapshot *string (nil если status=Process/Reprocess, заполнено если status=Skip и snapshot был сохранён при предыдущей обработке)",
+        "Idempotency Guard (internal/ingress/idempotency/idempotency.go): Check() при status=COMPLETED — читает record.ResultSnapshot и возвращает в CheckResult.StoredSnapshot. Если snapshot пуст (legacy записи без snapshot или snapshot не был сохранён) → StoredSnapshot=nil, поведение как было раньше (просто Skip без re-publish)",
+        "MarkCompleted (internal/ingress/idempotency/idempotency.go): сигнатура расширена опциональным аргументом resultSnapshot string. При завершении первой обработки producer-event Application Service передаёт сериализованный confirmation event для сохранения. Backward compat: при resultSnapshot=\"\" — поле в записи остаётся пустым (legacy behavior)",
+        "Application Service (internal/application/ingestion/ingestion.go): при successful обработке LegalAnalysisArtifactsReady / ReportsArtifactsReady / DocumentProcessingArtifactsReady — формирует confirmation event (как обычно публикуется через ConfirmationPublisherPort), сериализует в JSON и сохраняет вместе с MarkCompleted. Размер snapshot ~500 байт JSON",
+        "Consumer (internal/ingress/consumer/consumer.go) — processWithIdempotency: при ResultSkip + StoredSnapshot != nil → десериализовать snapshot в confirmation event → опубликовать через ConfirmationPublisherPort.Publish (тот же путь, что и при first-time success) → метрика dm_idempotency_republished_confirmations_total{topic} → ACK. При StoredSnapshot=nil → текущее поведение (просто ACK без re-publish)",
+        "Применяется к 3 producer→DM topics с confirmation: dp.artifacts.processing-ready (DocumentProcessingArtifactsPersisted), lic.artifacts.analysis-ready (LegalAnalysisArtifactsPersisted), re.artifacts.reports-ready (ReportsArtifactsPersisted). Также для dp.artifacts.diff-ready (DocumentVersionDiffPersisted) — унификация с уже существующим re-publish в diff scenario (high-architecture.md line 978)",
+        "НЕ применяется к downstream notifications (dm.events.version-analysis-ready, dm.events.version-reports-ready, dm.events.version-created): они публикуются через Outbox Poller ровно один раз при first-time success — это сохраняет BRE-002 защиту от дублирования downstream notifications. Re-publish ТОЛЬКО direct response confirmation к producer",
+        "Метрика: dm_idempotency_republished_confirmations_total{topic} counter — для operator awareness. Высокий rate сигнализирует о crash incidents на стороне producer (LIC/RE/DP)",
+        "Тесты unit (idempotency_test.go, kvstore client_test.go): MarkCompleted с resultSnapshot — поле сохраняется и читается; Check() при COMPLETED возвращает StoredSnapshot корректно; backward compat — legacy записи без snapshot работают",
+        "Тесты unit (consumer_test.go): при ResultSkip + StoredSnapshot != nil вызывается ConfirmationPublisherPort.Publish с распакованным event; при StoredSnapshot=nil — НЕ вызывается. Mock ConfirmationPublisher проверяет получение",
+        "Тесты integration (например, lic_artifacts_test.go): сценарий — publish LegalAnalysisArtifactsReady #1 → DM persists + publishes confirmation #1 → publish тот же event #2 (duplicate) → DM re-publishes confirmation #2 (тот же payload); LIC mock получает оба confirmations с одинаковым job_id. Аналогично для DP artifacts и RE reports",
+        "Тесты integration: downstream notification (dm.events.version-analysis-ready) НЕ дублируется при duplicate producer event — Outbox Poller выполняет publish ровно один раз (verified count)",
+        "Документация architecture/high-architecture.md §8.5 (LIC artifacts), §8.6 (RE reports), §8.8 (повторная доставка): унифицировать формулировку — DM переотправляет direct response confirmation из result_snapshot для всех producer→DM flow. BRE-002 переформулировать: «дублирование downstream notifications предотвращается через Outbox Poller (FIFO ровно один раз); direct response confirmation к producer переотправляется при duplicate event — это защищает producer от ложного TIMEOUT при crash в acknowledgment window»",
+        "Документация architecture/event-catalog.md: к каждому *Persisted event добавить примечание «может быть delivered более одного раза при at-least-once delivery + crash producer в acknowledgment window; consumer обязан обрабатывать идемпотентно (LIC использует lic-persist-resp:{job_id}, RE использует re-persist-resp:{job_id})»",
+        "Backward compatibility: existing записи в Redis без ResultSnapshot обрабатываются как раньше (StoredSnapshot=nil → no re-publish). Migration не требуется. После выкатки новые success-processings сохраняют snapshot; через 24h TTL все записи будут с snapshot. Никаких breaking changes для consumers"
+      ],
+      "test_steps": [
+        "Шаг 1: unit-тест idempotency_test: TestMarkCompleted_WithSnapshot_Stored — после MarkCompleted с непустым snapshot, Check() возвращает StoredSnapshot",
+        "Шаг 2: unit-тест idempotency_test: TestMarkCompleted_WithoutSnapshot_BackwardCompat — после MarkCompleted с пустым snapshot, Check() возвращает StoredSnapshot=nil",
+        "Шаг 3: unit-тест consumer_test: TestProcessWithIdempotency_Skip_RepublishesConfirmation — ResultSkip+StoredSnapshot вызывает ConfirmationPublisher.Publish с распакованным event",
+        "Шаг 4: integration lic_artifacts_test (или новый): producer публикует LegalAnalysisArtifactsReady дважды → DM публикует LegalAnalysisArtifactsPersisted дважды (с тем же payload); persistence в БД произошла один раз (verified через SELECT)",
+        "Шаг 5: integration: то же для DocumentProcessingArtifactsReady (DP-side) и ReportsArtifactsReady (RE-side)",
+        "Шаг 6: integration: dm.events.version-analysis-ready публикуется РОВНО ОДИН РАЗ (через Outbox Poller) при duplicate producer event — verified count assertion",
+        "Шаг 7: metric assertion: dm_idempotency_republished_confirmations_total{topic=\"lic.artifacts.analysis-ready\"} инкрементирована на 1 при duplicate",
+        "Шаг 8: go test -count=1 -race ./... ALL PASS; go vet OK; make build/build-migrate/test/lint OK",
+        "Шаг 9: ревью изменений документации archirecture/high-architecture.md §8.5/§8.6/§8.8 и event-catalog.md — формулировки согласованы между секциями"
+      ],
+      "dependencies": ["DM-TASK-002", "DM-TASK-035"],
+      "status": "pending"
     }
   ]
 }

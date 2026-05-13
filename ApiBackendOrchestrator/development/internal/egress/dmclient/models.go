@@ -15,7 +15,14 @@ type CreateDocumentRequest struct {
 }
 
 // CreateVersionRequest is the payload for POST /documents/{document_id}/versions.
+//
+// JobID is the Orchestrator-generated UUID v4 correlation key for the processing
+// flow associated with the new version. DM persists it (DM-TASK-054) so that
+// downstream DP events (ProcessDocumentRequested.job_id) and DM consumers can
+// reconcile on a single identifier. Use omitempty for backward-compatibility
+// with DM deployments that pre-date DM-TASK-054.
 type CreateVersionRequest struct {
+	JobID              string `json:"job_id,omitempty"`
 	SourceFileKey      string `json:"source_file_key"`
 	SourceFileName     string `json:"source_file_name"`
 	SourceFileSize     int64  `json:"source_file_size"`

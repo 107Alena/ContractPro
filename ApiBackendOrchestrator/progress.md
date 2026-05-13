@@ -1920,3 +1920,59 @@ happy path, no auth (401), invalid contract_id/version_id (400), invalid JSON (4
 
 ### Следующие задачи
 - Все задачи в tasks.json завершены (ORCH-TASK-001..051, включая ORCH-TASK-048/049/050/051).
+
+---
+
+## ORCH-TASK-052 — Job ID infrastructure (UUID v4 helper + JobID в CreateVersionRequest)
+
+**Завершено:** 2026-05-14
+**Категория:** infrastructure
+**Приоритет:** critical
+**Зависимости:** нет
+
+### Контекст
+Подготовка фундамента для сквозного `job_id` в processing-цепочке Orchestrator → DM (REST) → DP (RabbitMQ). Само wire-up — отдельные задачи ORCH-TASK-053 (upload-flow) и ORCH-TASK-054 (re-check / recommendation / manual-edit). 052 — только инструменты, никакие application-flows не меняются.
+
+### План реализации
+1. Создать `internal/application/jobid/` с `NewJobID() string` поверх `uuid.NewString()` (google/uuid v1.6.0 уже в go.mod, идиома `uuid.New().String()` уже используется в middleware/auth, sse/handler, integration/fakes).
+2. Добавить `JobID string \`json:"job_id,omitempty"\`` в `CreateVersionRequest` (internal/egress/dmclient/models.go) — первым полем для логической читаемости, omitempty для backward-compat до DM-TASK-054.
+3. Unit-тесты пакета jobid: regex UUID v4 shape + 100-параллельных-уникальных (sync.WaitGroup, writes в distinct slots — race-friendly).
+4. Unit-тесты dmclient: omitempty (substring + map decode) и presence + exact value.
+5. Минимальная документация — `internal/application/jobid/CLAUDE.md` (роль пакета, инвариант immutability, anti-pattern «uuid.NewString() напрямую в application»).
+
+### Реализация
+- `internal/application/jobid/jobid.go` — единственная функция `NewJobID() string`, doc-comment по тексту acceptance criteria.
+- `internal/application/jobid/jobid_test.go` — `TestNewJobID_MatchesUUIDv4Shape`, `TestNewJobID_ConcurrentUniqueness`.
+- `internal/application/jobid/CLAUDE.md` — package-level доки.
+- `internal/egress/dmclient/models.go` — поле `JobID` добавлено первым в `CreateVersionRequest` + doc-comment с отсылкой к DM-TASK-054.
+- `internal/egress/dmclient/models_test.go` (новый файл) — `TestCreateVersionRequest_JobIDOmittedWhenEmpty`, `TestCreateVersionRequest_JobIDPresentWhenSet`.
+
+### Архитектура
+Никаких изменений архитектурных доков в рамках 052. `event-catalog.md` уже фиксирует, что `job_id` генерируется Orchestrator-ом — 052 даёт инфраструктуру под существующее предположение. Обновления `sequence-diagrams.md`, `integration-contracts.md` (раздел «end-to-end job_id»), `high-architecture.md` ASSUMPTION-ORCH-XX — относятся к ORCH-TASK-053 и расширяются в ORCH-TASK-054.
+
+### Дизайн-решения
+- Без `Validate(s string) bool` — YAGNI; нет потребителя; в DM/DP `job_id` opaque correlation. Добавим в момент, когда появится callsite, которому нужна валидация на границе.
+- Без injectable generator (function variable) — глобальная мутируемая переменная с race-hazards; downstream-тесты могут assert UUID v4 shape (тот же regex) либо capture-and-reuse из mock'а; при реальной потребности — функциональная опция в конкретном конструкторе.
+- `JobID` — первое поле в `CreateVersionRequest` (correlation key должен читаться перед payload).
+- `uuid.NewString()` (а не `uuid.New().String()`) — одна allocation меньше, более идиоматично в google/uuid v1.6.
+
+### Тесты
+- **internal/application/jobid/jobid_test.go (2):**
+  - `TestNewJobID_MatchesUUIDv4Shape` — regex `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`.
+  - `TestNewJobID_ConcurrentUniqueness` — 100 goroutines, writes в distinct `ids[i]` slot, проверка уникальности через map после `wg.Wait()`.
+- **internal/egress/dmclient/models_test.go (2):**
+  - `TestCreateVersionRequest_JobIDOmittedWhenEmpty` — `strings.Contains(json, "job_id") == false` + map decode без ключа `job_id`.
+  - `TestCreateVersionRequest_JobIDPresentWhenSet` — map decode, exact equality `v == jobID`.
+- Результаты: `go test -count=1 -race ./...` → 38 пакетов PASS. `go vet ./...` → clean. `make build` / `make test` / `make lint` → PASS.
+
+### Code review
+- code-reviewer: verdict approve — нет issues. Regex корректен (variant `[89ab]`, version `4`); concurrent test race-friendly; omitempty placement правильный; mixed RU/EN CLAUDE.md соответствует repo convention.
+
+### Субагенты
+- golang-pro — дизайн-ревью (выбор простейшей реализации, отказ от Validate/generator-injection, placement JobID первым полем).
+- code-reviewer — финальный quality/security review.
+
+### Следующие задачи
+- ORCH-TASK-053 (Job ID integration в upload flow) — зависит от ORCH-TASK-052 + DM-TASK-054 (обе done).
+- ORCH-TASK-054 (Job ID integration в re-check / recommendation / manual-edit flows).
+- ORCH-TASK-055 (Серверная нормализация contract_type RU→EN для POST /contracts/{id}/confirm-type).

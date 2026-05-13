@@ -1307,7 +1307,10 @@
         "Шаг 4: go vet ./...; make build / make test / make lint — без ошибок"
       ],
       "dependencies": [],
-      "status": "pending"
+      "status": "done",
+      "completion_date": "2026-05-14",
+      "implementation_summary": "Создан package internal/application/jobid (jobid.go) с единственной функцией NewJobID() string → uuid.NewString() (Google UUID v1.6.0, уже в go.mod). Package doc-comment по тексту acceptance criteria — стабильный correlation-key DM CreateVersionRequest.job_id → DP ProcessDocumentRequested.job_id → LIC. Дизайн утверждён golang-pro: без Validate-хелперов и без injectable generator (YAGNI; downstream-тесты могут проверять UUID v4 shape напрямую или capture-and-reuse значение). В internal/egress/dmclient/models.go в CreateVersionRequest добавлено поле JobID string `json:\"job_id,omitempty\"` (первым полем) с doc-comment, отсылающим к DM-TASK-054 и объясняющим omitempty — backward-compat с DM до DM-TASK-054. Существующие call sites dmclient'а не модифицированы (пустой JobID серилизуется в отсутствие ключа). Минимальная документация: internal/application/jobid/CLAUDE.md (роль пакета, инвариант immutability job_id в течение processing-flow, запрет использования uuid.NewString() напрямую в application/handler коде).",
+      "test_results": "Unit-тесты ./internal/application/jobid/: TestNewJobID_MatchesUUIDv4Shape (regex ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$), TestNewJobID_ConcurrentUniqueness (100 goroutines → 100 уникальных, race-friendly: write в distinct ids[i] slot до wg.Wait()). Unit-тесты ./internal/egress/dmclient/ (новый models_test.go): TestCreateVersionRequest_JobIDOmittedWhenEmpty (substring check + map-decode — defence от \"job_id\":\"\"), TestCreateVersionRequest_JobIDPresentWhenSet (exact value equality после map decode). Шаг 1 — go test -count=1 ./internal/application/jobid/... → PASS. Шаг 2 — go test -count=1 ./internal/egress/dmclient/... → PASS (включая новые omitempty/present). Шаг 3 — go test -count=1 -race ./... → все 38 пакетов PASS. Шаг 4 — make build / make test / make lint → PASS; go vet ./... → 0 warnings. Code review (code-reviewer): verdict approve — нет issues, regex корректен, omitempty placement правильный, mixed RU/EN CLAUDE.md соответствует repo convention."
     },
     {
       "id": "ORCH-TASK-053",

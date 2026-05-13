@@ -25,10 +25,17 @@ type subscription struct {
 	handler func(ctx context.Context, body []byte) error
 }
 
+type publishedMessage struct {
+	topic   string
+	payload []byte
+}
+
 type mockBroker struct {
 	mu            sync.Mutex
 	subscriptions []subscription
 	failOn        string // topic name that should fail
+	published     []publishedMessage
+	publishErr    error
 }
 
 func (m *mockBroker) Subscribe(topic string, handler func(ctx context.Context, body []byte) error) error {
@@ -39,6 +46,41 @@ func (m *mockBroker) Subscribe(topic string, handler func(ctx context.Context, b
 	}
 	m.subscriptions = append(m.subscriptions, subscription{topic: topic, handler: handler})
 	return nil
+}
+
+func (m *mockBroker) Publish(_ context.Context, topic string, payload []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.publishErr != nil {
+		return m.publishErr
+	}
+	cp := make([]byte, len(payload))
+	copy(cp, payload)
+	m.published = append(m.published, publishedMessage{topic: topic, payload: cp})
+	return nil
+}
+
+func (m *mockBroker) publishedCount(topic string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, p := range m.published {
+		if p.topic == topic {
+			n++
+		}
+	}
+	return n
+}
+
+func (m *mockBroker) lastPublished(topic string) (publishedMessage, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.published) - 1; i >= 0; i-- {
+		if m.published[i].topic == topic {
+			return m.published[i], true
+		}
+	}
+	return publishedMessage{}, false
 }
 
 func (m *mockBroker) handlerFor(topic string) func(ctx context.Context, body []byte) error {
@@ -58,11 +100,12 @@ type mockIdempotency struct {
 	markErr     error
 	cleanupErr  error
 
-	mu           sync.Mutex
-	checkCalls   int
-	markCalls    int
-	cleanupCalls int
-	lastKey      string
+	mu               sync.Mutex
+	checkCalls       int
+	markCalls        int
+	cleanupCalls     int
+	lastKey          string
+	lastMarkSnapshot string
 }
 
 func (m *mockIdempotency) Check(_ context.Context, key string, _ string, _ idempotency.FallbackChecker) (idempotency.CheckResult, error) {
@@ -73,11 +116,12 @@ func (m *mockIdempotency) Check(_ context.Context, key string, _ string, _ idemp
 	return m.checkResult, m.checkErr
 }
 
-func (m *mockIdempotency) MarkCompleted(_ context.Context, key string) error {
+func (m *mockIdempotency) MarkCompleted(_ context.Context, key string, snapshot string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.markCalls++
 	m.lastKey = key
+	m.lastMarkSnapshot = snapshot
 	return m.markErr
 }
 
@@ -261,9 +305,10 @@ type metricsEntry struct {
 }
 
 type mockMetrics struct {
-	mu        sync.Mutex
-	received  []string
-	processed []metricsEntry
+	mu          sync.Mutex
+	received    []string
+	processed   []metricsEntry
+	republished []string
 }
 
 func (m *mockMetrics) IncEventsReceived(topic string) {
@@ -278,6 +323,12 @@ func (m *mockMetrics) IncEventsProcessed(topic string, status string) {
 	m.processed = append(m.processed, metricsEntry{topic: topic, status: status})
 }
 
+func (m *mockMetrics) IncRepublishedConfirmations(topic string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.republished = append(m.republished, topic)
+}
+
 func (m *mockMetrics) hasProcessed(topic, status string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -287,6 +338,18 @@ func (m *mockMetrics) hasProcessed(topic, status string) bool {
 		}
 	}
 	return false
+}
+
+func (m *mockMetrics) republishedCount(topic string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, t := range m.republished {
+		if t == topic {
+			n++
+		}
+	}
+	return n
 }
 
 type mockDLQ struct {
@@ -352,7 +415,7 @@ type testDeps struct {
 func newTestDeps() *testDeps {
 	return &testDeps{
 		broker:       &mockBroker{},
-		idempotency:  &mockIdempotency{checkResult: idempotency.ResultProcess},
+		idempotency:  &mockIdempotency{checkResult: idempotency.CheckResult{Status: idempotency.ResultProcess}},
 		logger:       &mockLogger{},
 		metrics:      &mockMetrics{},
 		dlq:          &mockDLQ{},
@@ -373,7 +436,7 @@ func defaultRetryConfig() config.RetryConfig {
 
 func (d *testDeps) newConsumer() *EventConsumer {
 	return NewEventConsumer(
-		d.broker, d.idempotency, d.logger, d.metrics, d.dlq,
+		d.broker, d.broker, d.idempotency, d.logger, d.metrics, d.dlq,
 		d.ingestion, d.query, d.diff,
 		d.artifactRepo, d.diffRepo,
 		defaultTopics(),
@@ -503,40 +566,43 @@ func TestNewEventConsumer_PanicOnNilDeps(t *testing.T) {
 		name    string
 		factory func()
 	}{
-		{"nil broker", func() {
-			NewEventConsumer(nil, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+		{"nil subscriber", func() {
+			NewEventConsumer(nil, d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+		}},
+		{"nil publisher", func() {
+			NewEventConsumer(d.broker, nil, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil idempotency", func() {
-			NewEventConsumer(d.broker, nil, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+			NewEventConsumer(d.broker, d.broker, nil, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil logger", func() {
-			NewEventConsumer(d.broker, d.idempotency, nil, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+			NewEventConsumer(d.broker, d.broker, d.idempotency, nil, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil metrics", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, nil, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+			NewEventConsumer(d.broker, d.broker, d.idempotency, d.logger, nil, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil DLQ", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, nil, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+			NewEventConsumer(d.broker, d.broker, d.idempotency, d.logger, d.metrics, nil, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil ingestion", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, nil, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+			NewEventConsumer(d.broker, d.broker, d.idempotency, d.logger, d.metrics, d.dlq, nil, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil query", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, nil, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+			NewEventConsumer(d.broker, d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, nil, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil diff handler", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, nil, d.artifactRepo, d.diffRepo, topics, rc)
+			NewEventConsumer(d.broker, d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, nil, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 		{"nil artifact repo", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, nil, d.diffRepo, topics, rc)
+			NewEventConsumer(d.broker, d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, nil, d.diffRepo, topics, rc)
 		}},
 		{"nil diff repo", func() {
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, nil, topics, rc)
+			NewEventConsumer(d.broker, d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, nil, topics, rc)
 		}},
 		{"empty topic", func() {
 			topics := defaultTopics()
 			topics.DPArtifactsReady = ""
-			NewEventConsumer(d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
+			NewEventConsumer(d.broker, d.broker, d.idempotency, d.logger, d.metrics, d.dlq, d.ingestion, d.query, d.diff, d.artifactRepo, d.diffRepo, topics, rc)
 		}},
 	}
 
@@ -1068,7 +1134,7 @@ func TestHandleDPArtifacts_MultipleFieldsMissing(t *testing.T) {
 
 func TestHandleDPArtifacts_IdempotencySkip(t *testing.T) {
 	d := newTestDeps()
-	d.idempotency.checkResult = idempotency.ResultSkip
+	d.idempotency.checkResult = idempotency.CheckResult{Status: idempotency.ResultSkip}
 	c := d.newConsumer()
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
@@ -1104,7 +1170,7 @@ func TestHandleDPArtifacts_IdempotencySkip(t *testing.T) {
 
 func TestHandleDPArtifacts_IdempotencyReprocess(t *testing.T) {
 	d := newTestDeps()
-	d.idempotency.checkResult = idempotency.ResultReprocess
+	d.idempotency.checkResult = idempotency.CheckResult{Status: idempotency.ResultReprocess}
 	c := d.newConsumer()
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
@@ -2057,7 +2123,7 @@ func TestBackoff_RetryableError_AppliesDelay(t *testing.T) {
 		BackoffBase: 10 * time.Millisecond, // small for test
 	}
 	c := NewEventConsumer(
-		d.broker, d.idempotency, d.logger, d.metrics, d.dlq,
+		d.broker, d.broker, d.idempotency, d.logger, d.metrics, d.dlq,
 		d.ingestion, d.query, d.diff,
 		d.artifactRepo, d.diffRepo,
 		defaultTopics(), rc,
@@ -2092,7 +2158,7 @@ func TestBackoff_ContextCancelled_SkipsDelay(t *testing.T) {
 		BackoffBase: 5 * time.Second, // would block if not cancelled
 	}
 	c := NewEventConsumer(
-		d.broker, d.idempotency, d.logger, d.metrics, d.dlq,
+		d.broker, d.broker, d.idempotency, d.logger, d.metrics, d.dlq,
 		d.ingestion, d.query, d.diff,
 		d.artifactRepo, d.diffRepo,
 		defaultTopics(), rc,
@@ -2135,5 +2201,375 @@ func TestBackoff_ZeroBackoff_NoDelay(t *testing.T) {
 
 	if elapsed > 100*time.Millisecond {
 		t.Errorf("expected immediate return with zero backoff, got %v", elapsed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Snapshot persistence on first-time success (DM-TASK-058)
+// ---------------------------------------------------------------------------
+
+// TestSnapshotPersisted_DPArtifacts_FirstTimeSuccess verifies that after the
+// DP handler succeeds the consumer encodes the confirmation event and passes
+// it to MarkCompleted so duplicate deliveries can re-publish it.
+func TestSnapshotPersisted_DPArtifacts_FirstTimeSuccess(t *testing.T) {
+	d := newTestDeps()
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	d.idempotency.mu.Lock()
+	snapshot := d.idempotency.lastMarkSnapshot
+	d.idempotency.mu.Unlock()
+
+	if snapshot == "" {
+		t.Fatal("expected non-empty confirmation snapshot persisted on first-time success")
+	}
+
+	snap, err := idempotency.DecodeConfirmationSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("decode persisted snapshot: %v", err)
+	}
+	if snap.Topic != model.TopicDMResponsesArtifactsPersisted {
+		t.Errorf("snapshot.Topic = %q, want %q", snap.Topic, model.TopicDMResponsesArtifactsPersisted)
+	}
+	var payload model.DocumentProcessingArtifactsPersisted
+	if err := json.Unmarshal(snap.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.JobID != event.JobID || payload.DocumentID != event.DocumentID {
+		t.Errorf("payload mismatch: got %+v, want job_id=%q doc_id=%q",
+			payload, event.JobID, event.DocumentID)
+	}
+}
+
+// TestSnapshotPersisted_LICArtifacts_FirstTimeSuccess covers the LIC topic.
+func TestSnapshotPersisted_LICArtifacts_FirstTimeSuccess(t *testing.T) {
+	d := newTestDeps()
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validLICArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicLICArtifactsAnalysisReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	d.idempotency.mu.Lock()
+	snapshot := d.idempotency.lastMarkSnapshot
+	d.idempotency.mu.Unlock()
+
+	if snapshot == "" {
+		t.Fatal("expected non-empty snapshot for LIC artifacts")
+	}
+	snap, err := idempotency.DecodeConfirmationSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if snap.Topic != model.TopicDMResponsesLICArtifactsPersisted {
+		t.Errorf("Topic = %q, want %q", snap.Topic, model.TopicDMResponsesLICArtifactsPersisted)
+	}
+}
+
+// TestSnapshotPersisted_REArtifacts_FirstTimeSuccess covers the RE topic.
+func TestSnapshotPersisted_REArtifacts_FirstTimeSuccess(t *testing.T) {
+	d := newTestDeps()
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validREArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicREArtifactsReportsReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	d.idempotency.mu.Lock()
+	snapshot := d.idempotency.lastMarkSnapshot
+	d.idempotency.mu.Unlock()
+
+	snap, err := idempotency.DecodeConfirmationSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if snap.Topic != model.TopicDMResponsesREReportsPersisted {
+		t.Errorf("Topic = %q, want %q", snap.Topic, model.TopicDMResponsesREReportsPersisted)
+	}
+}
+
+// TestSnapshotPersisted_DiffReady_FirstTimeSuccess covers the diff topic.
+func TestSnapshotPersisted_DiffReady_FirstTimeSuccess(t *testing.T) {
+	d := newTestDeps()
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDiffReadyEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsDiffReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	d.idempotency.mu.Lock()
+	snapshot := d.idempotency.lastMarkSnapshot
+	d.idempotency.mu.Unlock()
+
+	snap, err := idempotency.DecodeConfirmationSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if snap.Topic != model.TopicDMResponsesDiffPersisted {
+		t.Errorf("Topic = %q, want %q", snap.Topic, model.TopicDMResponsesDiffPersisted)
+	}
+}
+
+// TestSnapshot_NotPersisted_ForQueryTopics verifies that semantic-tree request
+// and get-artifacts request do NOT persist a snapshot (snapshotBuilder=nil).
+// These topics emit responses via the handler itself, not via re-publish.
+func TestSnapshot_NotPersisted_ForQueryTopics(t *testing.T) {
+	cases := []struct {
+		name  string
+		event any
+		topic string
+	}{
+		{"semantic-tree", validGetSemanticTreeEvent(), model.TopicDPRequestsSemanticTree},
+		{"lic-request-artifacts", validGetArtifactsEvent(), model.TopicLICRequestsArtifacts},
+		{"re-request-artifacts", validGetArtifactsEvent(), model.TopicRERequestsArtifacts},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTestDeps()
+			c := d.newConsumer()
+			if err := c.Start(); err != nil {
+				t.Fatal(err)
+			}
+			handler := d.broker.handlerFor(tc.topic)
+			_ = handler(context.Background(), mustMarshal(t, tc.event))
+
+			d.idempotency.mu.Lock()
+			snapshot := d.idempotency.lastMarkSnapshot
+			d.idempotency.mu.Unlock()
+
+			if snapshot != "" {
+				t.Errorf("query topic %s must not persist snapshot, got %q", tc.topic, snapshot)
+			}
+		})
+	}
+}
+
+// TestSnapshot_NotPersisted_OnHandlerFailure verifies that failed handlers do
+// not call MarkCompleted at all (cleanup path is taken instead).
+func TestSnapshot_NotPersisted_OnHandlerFailure(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.dpErr = port.NewDocumentNotFoundError("org-1", "doc-1")
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	d.idempotency.mu.Lock()
+	defer d.idempotency.mu.Unlock()
+	if d.idempotency.markCalls != 0 {
+		t.Errorf("MarkCompleted should not be called on handler failure, got %d", d.idempotency.markCalls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Re-publish stored confirmation on duplicate (DM-TASK-058)
+// ---------------------------------------------------------------------------
+
+// buildSnapshot is a test helper that encodes a confirmation event into the
+// snapshot envelope used by the consumer.
+func buildSnapshot(t *testing.T, topic string, event any) string {
+	t.Helper()
+	s, err := idempotency.EncodeConfirmationSnapshot(topic, event)
+	if err != nil {
+		t.Fatalf("EncodeConfirmationSnapshot: %v", err)
+	}
+	return s
+}
+
+// TestProcessWithIdempotency_Skip_RepublishesConfirmation_LIC verifies that
+// when the idempotency guard returns ResultSkip with a non-nil StoredSnapshot,
+// the consumer decodes the envelope and re-publishes the confirmation to the
+// stored topic, increments the metric, and does NOT invoke the handler.
+func TestProcessWithIdempotency_Skip_RepublishesConfirmation_LIC(t *testing.T) {
+	d := newTestDeps()
+	event := validLICArtifactsEvent()
+	stored := buildSnapshot(t, model.TopicDMResponsesLICArtifactsPersisted,
+		model.LegalAnalysisArtifactsPersisted{
+			EventMeta:  model.EventMeta{CorrelationID: event.CorrelationID},
+			JobID:      event.JobID,
+			DocumentID: event.DocumentID,
+		})
+	d.idempotency.checkResult = idempotency.CheckResult{
+		Status:         idempotency.ResultSkip,
+		StoredSnapshot: &stored,
+	}
+
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := d.broker.handlerFor(model.TopicLICArtifactsAnalysisReady)
+	if err := handler(context.Background(), mustMarshal(t, event)); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	// Handler MUST NOT be invoked on duplicate.
+	d.ingestion.mu.Lock()
+	if d.ingestion.licCalls != 0 {
+		t.Errorf("LIC handler called on duplicate: %d", d.ingestion.licCalls)
+	}
+	d.ingestion.mu.Unlock()
+
+	// Confirmation re-published to LIC topic.
+	if got := d.broker.publishedCount(model.TopicDMResponsesLICArtifactsPersisted); got != 1 {
+		t.Errorf("publishedCount(lic-persisted) = %d, want 1", got)
+	}
+	msg, ok := d.broker.lastPublished(model.TopicDMResponsesLICArtifactsPersisted)
+	if !ok {
+		t.Fatal("expected published message")
+	}
+	var payload model.LegalAnalysisArtifactsPersisted
+	if err := json.Unmarshal(msg.payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.JobID != event.JobID {
+		t.Errorf("payload.JobID = %q, want %q", payload.JobID, event.JobID)
+	}
+
+	// Metric incremented.
+	if got := d.metrics.republishedCount(model.TopicDMResponsesLICArtifactsPersisted); got != 1 {
+		t.Errorf("republishedCount = %d, want 1", got)
+	}
+	if !d.metrics.hasProcessed(model.TopicLICArtifactsAnalysisReady, "skipped") {
+		t.Error("expected skipped metric on duplicate")
+	}
+}
+
+// TestProcessWithIdempotency_Skip_NoSnapshot_NoRepublish covers the
+// backward-compatibility path: a Skip without StoredSnapshot still emits
+// a silent ACK with no re-publish (legacy records before DM-TASK-058).
+func TestProcessWithIdempotency_Skip_NoSnapshot_NoRepublish(t *testing.T) {
+	d := newTestDeps()
+	d.idempotency.checkResult = idempotency.CheckResult{Status: idempotency.ResultSkip}
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validLICArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicLICArtifactsAnalysisReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if got := d.broker.publishedCount(model.TopicDMResponsesLICArtifactsPersisted); got != 0 {
+		t.Errorf("publishedCount = %d, want 0 (no snapshot → no re-publish)", got)
+	}
+	if got := d.metrics.republishedCount(model.TopicDMResponsesLICArtifactsPersisted); got != 0 {
+		t.Errorf("republishedCount = %d, want 0", got)
+	}
+}
+
+// TestProcessWithIdempotency_Skip_RepublishesConfirmation_Diff covers the
+// diff topic, completing parity for the 4 producer→DM confirmation flows.
+func TestProcessWithIdempotency_Skip_RepublishesConfirmation_Diff(t *testing.T) {
+	d := newTestDeps()
+	event := validDiffReadyEvent()
+	stored := buildSnapshot(t, model.TopicDMResponsesDiffPersisted,
+		model.DocumentVersionDiffPersisted{
+			EventMeta:  model.EventMeta{CorrelationID: event.CorrelationID},
+			JobID:      event.JobID,
+			DocumentID: event.DocumentID,
+		})
+	d.idempotency.checkResult = idempotency.CheckResult{
+		Status:         idempotency.ResultSkip,
+		StoredSnapshot: &stored,
+	}
+
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := d.broker.handlerFor(model.TopicDPArtifactsDiffReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if got := d.broker.publishedCount(model.TopicDMResponsesDiffPersisted); got != 1 {
+		t.Errorf("publishedCount(diff-persisted) = %d, want 1", got)
+	}
+	if got := d.metrics.republishedCount(model.TopicDMResponsesDiffPersisted); got != 1 {
+		t.Errorf("republishedCount = %d, want 1", got)
+	}
+	d.diff.mu.Lock()
+	if d.diff.calls != 0 {
+		t.Errorf("diff handler called on duplicate: %d", d.diff.calls)
+	}
+	d.diff.mu.Unlock()
+}
+
+// TestProcessWithIdempotency_Skip_RepublishFails_StillACK verifies that a
+// publish failure during re-publish is logged but never propagated — the
+// message must still be ACKed (the consumer's always-nil contract).
+func TestProcessWithIdempotency_Skip_RepublishFails_StillACK(t *testing.T) {
+	d := newTestDeps()
+	d.broker.publishErr = errors.New("broker temporarily down")
+	event := validLICArtifactsEvent()
+	stored := buildSnapshot(t, model.TopicDMResponsesLICArtifactsPersisted,
+		model.LegalAnalysisArtifactsPersisted{JobID: event.JobID, DocumentID: event.DocumentID})
+	d.idempotency.checkResult = idempotency.CheckResult{
+		Status:         idempotency.ResultSkip,
+		StoredSnapshot: &stored,
+	}
+
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := d.broker.handlerFor(model.TopicLICArtifactsAnalysisReady)
+	if err := handler(context.Background(), mustMarshal(t, event)); err != nil {
+		t.Fatalf("expected nil even on publish failure, got: %v", err)
+	}
+	if !d.logger.hasMessage("failed to re-publish confirmation") {
+		t.Error("expected log about re-publish failure")
+	}
+	if got := d.metrics.republishedCount(model.TopicDMResponsesLICArtifactsPersisted); got != 0 {
+		t.Errorf("republished metric must not increment on publish failure, got %d", got)
+	}
+}
+
+// TestProcessWithIdempotency_Skip_CorruptSnapshot_StillACK verifies that an
+// undecodable snapshot does not break the consumer; it logs and ACKs.
+func TestProcessWithIdempotency_Skip_CorruptSnapshot_StillACK(t *testing.T) {
+	d := newTestDeps()
+	corrupted := "{not valid json"
+	d.idempotency.checkResult = idempotency.CheckResult{
+		Status:         idempotency.ResultSkip,
+		StoredSnapshot: &corrupted,
+	}
+
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validLICArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicLICArtifactsAnalysisReady)
+	if err := handler(context.Background(), mustMarshal(t, event)); err != nil {
+		t.Fatalf("handler must return nil even with corrupt snapshot, got: %v", err)
+	}
+	if !d.logger.hasMessage("failed to decode confirmation snapshot") {
+		t.Error("expected log about decode failure")
+	}
+	if got := d.broker.publishedCount(model.TopicDMResponsesLICArtifactsPersisted); got != 0 {
+		t.Errorf("no message should be published, got %d", got)
 	}
 }

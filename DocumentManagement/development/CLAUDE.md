@@ -39,8 +39,10 @@ internal/
                       orphancleanup, retention (3 jobs)
   infra/            — external clients: postgres (repos, migrator), broker, objectstorage,
                       kvstore, observability, health, concurrency, circuitbreaker
-  ingress/          — consumer (7 RabbitMQ topics), api (REST + auth + rate limiting),
-                      idempotency (Redis guard + DB fallback)
+  ingress/          — consumer (7 RabbitMQ topics, re-publishes confirmation on
+                      duplicate via stored snapshot — DM-TASK-058), api (REST +
+                      auth + rate limiting), idempotency (Redis guard + DB
+                      fallback + confirmation snapshot envelope)
   egress/           — confirmation (10 types), notification (5 types),
                       outbox (writer + poller + metrics), dlq (sender)
   config/           — env-based config with DM_ prefix + validation

@@ -9,13 +9,13 @@ import (
 	"contractpro/document-management/internal/domain/port"
 )
 
-// CheckResult represents the outcome of an idempotency check.
-type CheckResult int
+// CheckStatus is the discrete decision returned by IdempotencyGuard.Check.
+type CheckStatus int
 
 const (
 	// ResultProcess means no prior record exists; the caller should proceed.
 	// The guard has atomically claimed a PROCESSING record with ProcessingTTL.
-	ResultProcess CheckResult = iota
+	ResultProcess CheckStatus = iota
 
 	// ResultSkip means the event is already COMPLETED or another worker is
 	// currently processing it. The caller should ACK without re-processing.
@@ -27,9 +27,9 @@ const (
 	ResultReprocess
 )
 
-// String returns a human-readable label for the check result.
-func (r CheckResult) String() string {
-	switch r {
+// String returns a human-readable label for the check status.
+func (s CheckStatus) String() string {
+	switch s {
 	case ResultProcess:
 		return "process"
 	case ResultSkip:
@@ -39,6 +39,19 @@ func (r CheckResult) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// CheckResult bundles the idempotency decision (Status) with the persisted
+// confirmation snapshot (DM-TASK-058).
+//
+// StoredSnapshot is non-nil only when Status == ResultSkip and the prior
+// COMPLETED record carried a non-empty ResultSnapshot. Callers must re-publish
+// the snapshot's confirmation payload to its topic when a duplicate is
+// detected, closing the producer-crash-in-acknowledgment-window race for the
+// 4 producer→DM confirmation flows (DP/LIC/RE artifacts + DP diff).
+type CheckResult struct {
+	Status         CheckStatus
+	StoredSnapshot *string
 }
 
 // FallbackChecker is a function that checks the database for evidence that an
@@ -102,7 +115,7 @@ func NewIdempotencyGuard(
 // Decision matrix:
 //   - Key not found           → atomic SETNX PROCESSING (ProcessingTTL) → ResultProcess
 //   - SETNX fails (claimed)   → re-read → evaluate COMPLETED / PROCESSING
-//   - COMPLETED               → ResultSkip
+//   - COMPLETED               → ResultSkip (StoredSnapshot set when record carries one)
 //   - PROCESSING, age < stuck → ResultSkip (another worker is handling it)
 //   - PROCESSING, age ≥ stuck → overwrite with SET → ResultReprocess
 //   - Redis error             → DB fallback via checker → ResultProcess or ResultSkip
@@ -110,9 +123,13 @@ func NewIdempotencyGuard(
 //
 // The topic parameter is used only for metrics labeling on the fallback path.
 // The fallback checker is optional; nil means "always process on Redis failure".
+//
+// CheckResult.StoredSnapshot is populated only on the COMPLETED→Skip path and
+// only when the prior record persisted a confirmation snapshot (DM-TASK-058).
+// All other paths return StoredSnapshot=nil for backward compatibility.
 func (g *IdempotencyGuard) Check(ctx context.Context, key string, topic string, fallback FallbackChecker) (CheckResult, error) {
 	if err := ctx.Err(); err != nil {
-		return ResultSkip, fmt.Errorf("idempotency check: %w", err)
+		return CheckResult{Status: ResultSkip}, fmt.Errorf("idempotency check: %w", err)
 	}
 
 	// Attempt atomic claim via SETNX.
@@ -123,7 +140,7 @@ func (g *IdempotencyGuard) Check(ctx context.Context, key string, topic string, 
 	}
 	if acquired {
 		g.metrics.IncCheckTotal("process")
-		return ResultProcess, nil
+		return CheckResult{Status: ResultProcess}, nil
 	}
 
 	// Key already exists — read the existing record.
@@ -135,12 +152,17 @@ func (g *IdempotencyGuard) Check(ctx context.Context, key string, topic string, 
 	// Key expired between SETNX and GET — treat as new.
 	if record == nil {
 		g.metrics.IncCheckTotal("process")
-		return ResultProcess, nil
+		return CheckResult{Status: ResultProcess}, nil
 	}
 
 	if record.Status == model.IdempotencyStatusCompleted {
 		g.metrics.IncCheckTotal("skip")
-		return ResultSkip, nil
+		result := CheckResult{Status: ResultSkip}
+		if record.ResultSnapshot != "" {
+			snapshot := record.ResultSnapshot
+			result.StoredSnapshot = &snapshot
+		}
+		return result, nil
 	}
 
 	// Status == PROCESSING
@@ -154,20 +176,27 @@ func (g *IdempotencyGuard) Check(ctx context.Context, key string, topic string, 
 				"key", key, "error", setErr)
 		}
 		g.metrics.IncCheckTotal("reprocess")
-		return ResultReprocess, nil
+		return CheckResult{Status: ResultReprocess}, nil
 	}
 
 	// PROCESSING and not stuck — another worker is handling it
 	g.metrics.IncCheckTotal("skip")
-	return ResultSkip, nil
+	return CheckResult{Status: ResultSkip}, nil
 }
 
-// MarkCompleted transitions the key to COMPLETED status with the configured TTL (24h).
-// Called after the handler returns success. Errors are logged but not propagated
-// because the business transaction has already committed via outbox.
-func (g *IdempotencyGuard) MarkCompleted(ctx context.Context, key string) error {
+// MarkCompleted transitions the key to COMPLETED status with the configured
+// TTL (24h). Called after the handler returns success.
+//
+// resultSnapshot is the optional confirmation envelope to persist alongside
+// the COMPLETED record so that future duplicate deliveries can re-publish the
+// same confirmation payload (DM-TASK-058). Pass "" for events that do not
+// produce a direct response confirmation (query topics, downstream-only flows).
+//
+// Errors are logged but not propagated because the business transaction has
+// already committed via outbox.
+func (g *IdempotencyGuard) MarkCompleted(ctx context.Context, key string, resultSnapshot string) error {
 	record := model.NewIdempotencyRecord(key)
-	record.MarkCompleted("")
+	record.MarkCompleted(resultSnapshot)
 	if err := g.store.Set(ctx, record, g.cfg.TTL); err != nil {
 		g.logger.Warn("failed to mark idempotency record as COMPLETED",
 			"key", key, "error", err)
@@ -196,7 +225,7 @@ func (g *IdempotencyGuard) handleRedisFailure(ctx context.Context, key, topic st
 
 	if fallback == nil {
 		g.metrics.IncCheckTotal("fallback_process")
-		return ResultProcess, nil
+		return CheckResult{Status: ResultProcess}, nil
 	}
 
 	alreadyProcessed, err := fallback(ctx)
@@ -204,14 +233,14 @@ func (g *IdempotencyGuard) handleRedisFailure(ctx context.Context, key, topic st
 		g.logger.Warn("DB fallback check failed, allowing processing",
 			"key", key, "error", err)
 		g.metrics.IncCheckTotal("fallback_process")
-		return ResultProcess, nil
+		return CheckResult{Status: ResultProcess}, nil
 	}
 
 	if alreadyProcessed {
 		g.metrics.IncCheckTotal("fallback_skip")
-		return ResultSkip, nil
+		return CheckResult{Status: ResultSkip}, nil
 	}
 
 	g.metrics.IncCheckTotal("fallback_process")
-	return ResultProcess, nil
+	return CheckResult{Status: ResultProcess}, nil
 }

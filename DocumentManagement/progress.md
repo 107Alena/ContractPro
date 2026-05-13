@@ -2862,3 +2862,53 @@ LIC при анализе версий с непустым `parent_version_id` (
 LIC v1.1 RE_CHECK события с `risk_delta` теперь корректно обрабатываются DM: артефакт сохраняется как `ArtifactDescriptor{artifact_type=RISK_DELTA, producer=LIC}`, попадает в `VersionAnalysisReady.artifact_types`, доступен через GetArtifacts. Изменение полностью обратно совместимо — LIC v1.0 события без `risk_delta` продолжают работать без изменений.
 
 ---
+
+## DM-TASK-058: Re-publish direct response confirmation из IdempotencyRecord.result_snapshot при duplicate producer event (приоритет: high)
+
+**Дата:** 2026-05-13
+**Статус:** done
+**Зависимости:** DM-TASK-002 (done), DM-TASK-035 (done)
+
+### Цель
+Закрыть критический gap (TOP-2 из LIC architecture review): producer (LIC/RE/DP) опубликовал `*Ready` event, DM сохранил данные и опубликовал `*Persisted` confirmation, но producer упал ДО получения confirmation. RabbitMQ переотправляет `*Ready` → DM сейчас просто ACK без re-publish → producer ловит ложный TIMEOUT при фактически сохранённых данных. Для diff аналогичный re-publish уже был — задача унифицирует подход для всех 4 producer→DM confirmation flows (DP/LIC/RE artifacts + DP diff).
+
+### План реализации (одобрен code-architect)
+
+1. **Domain model** — без изменений: `IdempotencyRecord.ResultSnapshot string` уже существует.
+2. **`internal/ingress/idempotency/snapshot.go` (новый)**: тип `ConfirmationSnapshot{SchemaVersion, Topic, Payload}`. EncodeConfirmationSnapshot валидирует topic/event, лимит 64 KiB, guard против typed-nil → JSON null. DecodeConfirmationSnapshot forward-compat по schema_version.
+3. **`internal/ingress/idempotency/idempotency.go`**: `CheckResult` стал struct `{Status CheckStatus, StoredSnapshot *string}`. CheckStatus — enum (ResultProcess/ResultSkip/ResultReprocess). На COMPLETED→Skip пути StoredSnapshot заполняется только при непустом `record.ResultSnapshot`. MarkCompleted(ctx, key, snapshot) — пустая строка = backward compat для legacy записей.
+4. **`internal/ingress/consumer/consumer.go`**: добавлена зависимость `BrokerPublisher` (broker.Client уже умеет и Subscribe, и Publish). TopicConfig расширен 4 confirmation topics (DPArtifactsPersisted/LICArtifactsPersisted/REReportsPersisted/DiffPersisted) для устранения silent divergence между outbox и re-publish при override env-vars. MetricsCollector расширен `IncRepublishedConfirmations(topic)`. processWithIdempotency принимает `snapshotBuilder func() (string, error)` (nil для query topics). На Skip+StoredSnapshot декодирует envelope и публикует через `broker.Publish` на **detached-context (context.WithoutCancel + 5s timeout)** — переживает graceful shutdown. На first-time success consumer формирует snapshot из конфигурируемого topic + EventMeta входного event.
+5. **`internal/infra/observability/metrics.go`**: новый counter `dm_idempotency_republished_confirmations_total{topic}` + bridge `IncRepublishedConfirmations`.
+6. **`cmd/dm-service/main.go`**: broker.Client прокинут как publisher, confirmation topics из BrokerConfig переданы в TopicConfig.
+
+### Результат
+
+**Файлы:**
+- Новые: `internal/ingress/idempotency/snapshot.go`, `snapshot_test.go`, `internal/integration/republish_confirmation_test.go`.
+- Изменены: `idempotency.go`, `consumer.go`, `metrics.go`, `main.go`, `idempotency_test.go`, `consumer_test.go`, `testinfra.go`, `dp_ingestion_test.go`, `error_scenarios_test.go`, документация (high-architecture.md §5.6/§8.4/§8.5/§8.6/§8.8, event-catalog.md §2.1, CLAUDE.md).
+
+**Тесты:**
+- snapshot_test.go: 9 тестов (encode/decode round-trip, empty topic, nil event, typed-nil payload guard, oversize, invalid JSON, missing topic/payload, unknown schema_version forward-compat).
+- idempotency_test.go: + TestMarkCompleted_WithSnapshot_StoredAndRead, + TestMarkCompleted_WithoutSnapshot_BackwardCompat, + TestCheck_Completed_NoSnapshot_BackwardCompat. Адаптированы все существующие тесты на `result.Status != ResultX` и `MarkCompleted(..., "")`.
+- consumer_test.go: + 4 теста snapshot persistence для DP/LIC/RE/diff, + 1 для query topics (snapshot=""), + 1 для handler failure (MarkCompleted не вызывается), + 5 re-publish сценариев (LIC happy, Diff happy, no-snapshot legacy, corrupt snapshot, publish failure). Адаптирован mockBroker с Publish + список published сообщений; mockMetrics с IncRepublishedConfirmations.
+- republish_confirmation_test.go (integration): 4 теста end-to-end через реальный EventConsumer и harness — TestRepublish_{LIC,DP,RE,Diff}Artifacts_DuplicateRedelivers_Confirmation. Проверяется: side effects (artifacts/outbox/audit) не дублируются, confirmation re-published exactly once, метрика инкрементирована, **downstream notification version-analysis-ready/version-reports-ready/etc. остаётся at-most-once через Outbox Poller** (BRE-002 не нарушен).
+
+**Метрики:** `dm_idempotency_republished_confirmations_total{topic}` — 4 значения label (dm.responses.artifacts-persisted, dm.responses.lic-artifacts-persisted, dm.responses.re-reports-persisted, dm.responses.diff-persisted). Высокий rate сигнализирует о crash incidents на producer-стороне.
+
+**Code-reviewer:** одобрил, 0 blocking. Применены 3 ключевые правки: (1) configurable confirmation topics в TopicConfig (устраняет silent divergence между outbox и re-publish при ENV override), (2) detached context для re-publish (Publish переживает cancel inbound ctx при graceful shutdown), (3) null-payload guard в EncodeConfirmationSnapshot.
+
+**Проверки:**
+- `go test -count=1 -race ./...` — ALL PASS (30 пакетов).
+- `make build` / `make build-migrate` / `make lint` / `make test` — все OK.
+- Re-publish тесты: `go test -run "Republish|Snapshot" ./...` — 22 теста PASS.
+
+### Backward compatibility
+- Legacy записи в Redis с пустым `ResultSnapshot` обрабатываются как раньше (silent ACK без re-publish). Migration не требуется.
+- TopicConfig: 4 confirmation topics опциональны (default — model.TopicDM* константы); existing callers продолжают работать.
+- После выкатки новые success-processings сохраняют snapshot; через 24h TTL все записи будут с snapshot.
+- Downstream notifications (`dm.events.version-*-ready`) защищены от дублирования через Outbox Poller (FIFO ровно один раз) — re-publish из ResultSnapshot не затрагивает outbox.
+
+### Итог
+TOP-2 critical gap из LIC architecture review полностью закрыт. Together with LIC-side defensive layer (heartbeat + увеличенный TTL idempotency PROCESSING) даёт 100% coverage сценария crash-in-acknowledgment-window. Решение унифицировано между DP artifacts / LIC artifacts / RE reports / DP diff — diff-подход из §8.4 теперь работает через тот же snapshot-механизм, что и три новых.
+
+---

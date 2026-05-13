@@ -246,8 +246,11 @@ func TestCheck_KeyNotFound_AtomicClaimAndReturnsProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultProcess {
-		t.Errorf("result = %v, want ResultProcess", result)
+	if result.Status != ResultProcess {
+		t.Errorf("result.Status = %v, want ResultProcess", result.Status)
+	}
+	if result.StoredSnapshot != nil {
+		t.Errorf("StoredSnapshot should be nil on first claim, got %v", *result.StoredSnapshot)
 	}
 
 	rec := store.getRecord(key)
@@ -283,11 +286,42 @@ func TestCheck_Completed_ReturnsSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultSkip {
-		t.Errorf("result = %v, want ResultSkip", result)
+	if result.Status != ResultSkip {
+		t.Errorf("result.Status = %v, want ResultSkip", result.Status)
+	}
+	if result.StoredSnapshot == nil {
+		t.Fatalf("StoredSnapshot should be non-nil when record carries a snapshot")
+	}
+	if *result.StoredSnapshot != "persisted" {
+		t.Errorf("StoredSnapshot = %q, want %q", *result.StoredSnapshot, "persisted")
 	}
 	if metrics.getCheckCount("skip") != 1 {
 		t.Errorf("check_total(skip) = %d, want 1", metrics.getCheckCount("skip"))
+	}
+}
+
+// TestCheck_Completed_NoSnapshot_BackwardCompat verifies that legacy COMPLETED
+// records persisted before DM-TASK-058 (empty ResultSnapshot) are returned with
+// StoredSnapshot=nil — preserving the silent-ACK behavior for consumers.
+func TestCheck_Completed_NoSnapshot_BackwardCompat(t *testing.T) {
+	store := newMockStore()
+	metrics := newMockMetrics()
+	g := newGuard(store, metrics, newMockLogger())
+
+	key := "dm:idem:dp-art:job-legacy"
+	rec := model.NewIdempotencyRecord(key)
+	rec.MarkCompleted("") // legacy: no snapshot stored
+	store.seedRecord(key, rec, 24*time.Hour)
+
+	result, err := g.Check(context.Background(), key, model.TopicDPArtifactsProcessingReady, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != ResultSkip {
+		t.Errorf("result.Status = %v, want ResultSkip", result.Status)
+	}
+	if result.StoredSnapshot != nil {
+		t.Errorf("StoredSnapshot should be nil for legacy record, got %q", *result.StoredSnapshot)
 	}
 }
 
@@ -308,8 +342,8 @@ func TestCheck_ProcessingFresh_ReturnsSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultSkip {
-		t.Errorf("result = %v, want ResultSkip", result)
+	if result.Status != ResultSkip {
+		t.Errorf("result.Status = %v, want ResultSkip", result.Status)
 	}
 }
 
@@ -332,8 +366,8 @@ func TestCheck_ProcessingStuck_ReturnsReprocess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultReprocess {
-		t.Errorf("result = %v, want ResultReprocess", result)
+	if result.Status != ResultReprocess {
+		t.Errorf("result.Status = %v, want ResultReprocess", result.Status)
 	}
 
 	newRec := store.getRecord(key)
@@ -367,8 +401,8 @@ func TestCheck_ConcurrentSETNX_SecondCallerGetsSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Check error: %v", err)
 	}
-	if r1 != ResultProcess {
-		t.Errorf("first Check = %v, want ResultProcess", r1)
+	if r1.Status != ResultProcess {
+		t.Errorf("first Check = %v, want ResultProcess", r1.Status)
 	}
 
 	// Second call — SETNX fails, sees PROCESSING (fresh) → skip
@@ -376,8 +410,11 @@ func TestCheck_ConcurrentSETNX_SecondCallerGetsSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Check error: %v", err)
 	}
-	if r2 != ResultSkip {
-		t.Errorf("second Check = %v, want ResultSkip", r2)
+	if r2.Status != ResultSkip {
+		t.Errorf("second Check = %v, want ResultSkip", r2.Status)
+	}
+	if r2.StoredSnapshot != nil {
+		t.Error("StoredSnapshot should be nil when prior record is still PROCESSING")
 	}
 }
 
@@ -398,8 +435,8 @@ func TestCheck_RedisDown_NilFallback_ReturnsProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultProcess {
-		t.Errorf("result = %v, want ResultProcess", result)
+	if result.Status != ResultProcess {
+		t.Errorf("result.Status = %v, want ResultProcess", result.Status)
 	}
 	if metrics.getFallbackCount(topic) != 1 {
 		t.Errorf("fallback_total(%s) = %d, want 1", topic, metrics.getFallbackCount(topic))
@@ -432,8 +469,8 @@ func TestCheck_RedisDown_FallbackAlreadyProcessed_ReturnsSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultSkip {
-		t.Errorf("result = %v, want ResultSkip", result)
+	if result.Status != ResultSkip {
+		t.Errorf("result.Status = %v, want ResultSkip", result.Status)
 	}
 	if metrics.getCheckCount("fallback_skip") != 1 {
 		t.Errorf("check_total(fallback_skip) = %d, want 1", metrics.getCheckCount("fallback_skip"))
@@ -460,8 +497,8 @@ func TestCheck_RedisDown_FallbackNotProcessed_ReturnsProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultProcess {
-		t.Errorf("result = %v, want ResultProcess", result)
+	if result.Status != ResultProcess {
+		t.Errorf("result.Status = %v, want ResultProcess", result.Status)
 	}
 	if metrics.getCheckCount("fallback_process") != 1 {
 		t.Errorf("check_total(fallback_process) = %d, want 1", metrics.getCheckCount("fallback_process"))
@@ -489,8 +526,8 @@ func TestCheck_RedisDown_FallbackError_ReturnsProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultProcess {
-		t.Errorf("result = %v, want ResultProcess", result)
+	if result.Status != ResultProcess {
+		t.Errorf("result.Status = %v, want ResultProcess", result.Status)
 	}
 	if !logger.hasLog("DB fallback check failed") {
 		t.Error("expected WARN log about DB fallback failure")
@@ -520,8 +557,8 @@ func TestCheck_GetFailsAfterSETNXFalse_FallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultProcess {
-		t.Errorf("result = %v, want ResultProcess (fallback on GET error)", result)
+	if result.Status != ResultProcess {
+		t.Errorf("result.Status = %v, want ResultProcess (fallback on GET error)", result.Status)
 	}
 	if metrics.getFallbackCount(topic) != 1 {
 		t.Error("expected fallback metric to be incremented")
@@ -548,8 +585,8 @@ func TestCheck_StuckOverwriteFails_StillReturnsReprocess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != ResultReprocess {
-		t.Errorf("result = %v, want ResultReprocess", result)
+	if result.Status != ResultReprocess {
+		t.Errorf("result.Status = %v, want ResultReprocess", result.Status)
 	}
 	if !logger.hasLog("failed to overwrite stuck") {
 		t.Error("expected WARN log about failed overwrite")
@@ -571,8 +608,8 @@ func TestCheck_ContextCancelled_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on cancelled context")
 	}
-	if result != ResultSkip {
-		t.Errorf("result = %v, want ResultSkip on cancelled context", result)
+	if result.Status != ResultSkip {
+		t.Errorf("result.Status = %v, want ResultSkip on cancelled context", result.Status)
 	}
 	if !strings.Contains(err.Error(), "context canceled") {
 		t.Errorf("error = %q, want context canceled", err.Error())
@@ -588,7 +625,7 @@ func TestMarkCompleted_Success(t *testing.T) {
 	g := newGuard(store, newMockMetrics(), newMockLogger())
 
 	key := "dm:idem:dp-art:job-complete"
-	err := g.MarkCompleted(context.Background(), key)
+	err := g.MarkCompleted(context.Background(), key, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -603,6 +640,68 @@ func TestMarkCompleted_Success(t *testing.T) {
 	if store.getTTL(key) != 24*time.Hour {
 		t.Errorf("TTL = %v, want 24h", store.getTTL(key))
 	}
+	if rec.ResultSnapshot != "" {
+		t.Errorf("ResultSnapshot should be empty for backward-compat call, got %q", rec.ResultSnapshot)
+	}
+}
+
+// TestMarkCompleted_WithSnapshot_StoredAndRead verifies that a confirmation
+// snapshot persisted at first-time success is returned by a subsequent Check
+// (DM-TASK-058).
+func TestMarkCompleted_WithSnapshot_StoredAndRead(t *testing.T) {
+	store := newMockStore()
+	g := newGuard(store, newMockMetrics(), newMockLogger())
+
+	key := "dm:idem:lic-art:job-snap"
+	snapshot := `{"schema_version":"1.0","topic":"dm.responses.lic-artifacts-persisted","payload":{"job_id":"job-snap"}}`
+	if err := g.MarkCompleted(context.Background(), key, snapshot); err != nil {
+		t.Fatalf("MarkCompleted error: %v", err)
+	}
+
+	rec := store.getRecord(key)
+	if rec == nil {
+		t.Fatal("expected COMPLETED record")
+	}
+	if rec.ResultSnapshot != snapshot {
+		t.Errorf("ResultSnapshot = %q, want %q", rec.ResultSnapshot, snapshot)
+	}
+
+	result, err := g.Check(context.Background(), key, model.TopicLICArtifactsAnalysisReady, nil)
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if result.Status != ResultSkip {
+		t.Fatalf("Check status = %v, want ResultSkip", result.Status)
+	}
+	if result.StoredSnapshot == nil {
+		t.Fatal("StoredSnapshot should not be nil after MarkCompleted with snapshot")
+	}
+	if *result.StoredSnapshot != snapshot {
+		t.Errorf("StoredSnapshot = %q, want %q", *result.StoredSnapshot, snapshot)
+	}
+}
+
+// TestMarkCompleted_WithoutSnapshot_BackwardCompat verifies that omitting the
+// snapshot (legacy code path) does not break duplicate-detection behavior.
+func TestMarkCompleted_WithoutSnapshot_BackwardCompat(t *testing.T) {
+	store := newMockStore()
+	g := newGuard(store, newMockMetrics(), newMockLogger())
+
+	key := "dm:idem:dp-tree:job-no-snap"
+	if err := g.MarkCompleted(context.Background(), key, ""); err != nil {
+		t.Fatalf("MarkCompleted error: %v", err)
+	}
+
+	result, err := g.Check(context.Background(), key, model.TopicDPRequestsSemanticTree, nil)
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if result.Status != ResultSkip {
+		t.Errorf("Status = %v, want ResultSkip", result.Status)
+	}
+	if result.StoredSnapshot != nil {
+		t.Errorf("StoredSnapshot should be nil for legacy MarkCompleted, got %q", *result.StoredSnapshot)
+	}
 }
 
 func TestMarkCompleted_StoreError_ReturnsError(t *testing.T) {
@@ -612,7 +711,7 @@ func TestMarkCompleted_StoreError_ReturnsError(t *testing.T) {
 	g := newGuard(store, newMockMetrics(), logger)
 
 	key := "dm:idem:dp-art:job-mark-fail"
-	err := g.MarkCompleted(context.Background(), key)
+	err := g.MarkCompleted(context.Background(), key, "")
 	if err == nil {
 		t.Error("expected error from MarkCompleted when store fails")
 	}
@@ -660,22 +759,22 @@ func TestCleanup_StoreError_ReturnsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CheckResult String
+// CheckStatus String
 // ---------------------------------------------------------------------------
 
-func TestCheckResult_String(t *testing.T) {
+func TestCheckStatus_String(t *testing.T) {
 	tests := []struct {
-		result CheckResult
+		status CheckStatus
 		want   string
 	}{
 		{ResultProcess, "process"},
 		{ResultSkip, "skip"},
 		{ResultReprocess, "reprocess"},
-		{CheckResult(99), "unknown"},
+		{CheckStatus(99), "unknown"},
 	}
 	for _, tt := range tests {
-		if got := tt.result.String(); got != tt.want {
-			t.Errorf("CheckResult(%d).String() = %q, want %q", tt.result, got, tt.want)
+		if got := tt.status.String(); got != tt.want {
+			t.Errorf("CheckStatus(%d).String() = %q, want %q", tt.status, got, tt.want)
 		}
 	}
 }
@@ -696,12 +795,12 @@ func TestFullLifecycle_ProcessThenSkipOnRedelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Check error: %v", err)
 	}
-	if result != ResultProcess {
-		t.Errorf("first Check = %v, want ResultProcess", result)
+	if result.Status != ResultProcess {
+		t.Errorf("first Check = %v, want ResultProcess", result.Status)
 	}
 
 	// Mark completed
-	if err := g.MarkCompleted(context.Background(), key); err != nil {
+	if err := g.MarkCompleted(context.Background(), key, ""); err != nil {
 		t.Fatalf("MarkCompleted error: %v", err)
 	}
 
@@ -710,8 +809,8 @@ func TestFullLifecycle_ProcessThenSkipOnRedelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Check error: %v", err)
 	}
-	if result != ResultSkip {
-		t.Errorf("second Check = %v, want ResultSkip", result)
+	if result.Status != ResultSkip {
+		t.Errorf("second Check = %v, want ResultSkip", result.Status)
 	}
 }
 
@@ -730,8 +829,8 @@ func TestFullLifecycle_FailCleanupThenReprocess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Check error: %v", err)
 	}
-	if result != ResultProcess {
-		t.Errorf("first Check = %v, want ResultProcess", result)
+	if result.Status != ResultProcess {
+		t.Errorf("first Check = %v, want ResultProcess", result.Status)
 	}
 
 	// Handler fails → cleanup
@@ -744,7 +843,7 @@ func TestFullLifecycle_FailCleanupThenReprocess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Check error: %v", err)
 	}
-	if result != ResultProcess {
-		t.Errorf("second Check = %v, want ResultProcess (after cleanup)", result)
+	if result.Status != ResultProcess {
+		t.Errorf("second Check = %v, want ResultProcess (after cleanup)", result.Status)
 	}
 }

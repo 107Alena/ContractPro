@@ -7,7 +7,7 @@ import "github.com/prometheus/client_golang/prometheus"
 // default registry, which simplifies testing and handler wiring.
 //
 // Metrics implements the consumer-side interfaces defined across DM packages:
-//   - consumer.MetricsCollector (IncEventsReceived, IncEventsProcessed)
+//   - consumer.MetricsCollector (IncEventsReceived, IncEventsProcessed, IncRepublishedConfirmations)
 //   - idempotency.MetricsCollector (IncFallbackTotal, IncCheckTotal)
 //   - outbox.OutboxMetrics (SetPendingCount, SetOldestPendingAge, IncPublished, IncPublishFailed, IncCleanedUp)
 type Metrics struct {
@@ -71,6 +71,13 @@ type Metrics struct {
 	// IdempotencyCheckTotal counts idempotency check outcomes by result
 	// (process/skip/reprocess/error).
 	IdempotencyCheckTotal *prometheus.CounterVec
+
+	// IdempotencyRepublishedConfirmations counts direct response confirmations
+	// re-emitted on duplicate producer event delivery (DM-TASK-058). The
+	// `topic` label is the confirmation topic (4 values: artifacts-persisted,
+	// lic-artifacts-persisted, re-reports-persisted, diff-persisted).
+	// Elevated rate indicates producer crashes in the acknowledgment window.
+	IdempotencyRepublishedConfirmations *prometheus.CounterVec
 
 	// --- Version health ---
 
@@ -231,6 +238,11 @@ func NewMetrics() *Metrics {
 			Help: "Total number of idempotency check outcomes by result.",
 		}, []string{"result"}),
 
+		IdempotencyRepublishedConfirmations: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "dm_idempotency_republished_confirmations_total",
+			Help: "Total number of direct response confirmations re-emitted on duplicate producer event delivery (DM-TASK-058).",
+		}, []string{"topic"}),
+
 		StuckVersionsCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "dm_stuck_versions_count",
 			Help: "Current number of versions stuck in an intermediate artifact status, by pipeline stage.",
@@ -325,6 +337,7 @@ func NewMetrics() *Metrics {
 		m.MissingVersionIDTotal,
 		m.IdempotencyFallbackTotal,
 		m.IdempotencyCheckTotal,
+		m.IdempotencyRepublishedConfirmations,
 		m.StuckVersionsCount,
 		m.StuckVersionsTotal,
 		m.IntegrityCheckFailures,
@@ -378,6 +391,14 @@ func (m *Metrics) IncFallbackTotal(topic string) {
 // IncCheckTotal increments dm_idempotency_check_total for the given result.
 func (m *Metrics) IncCheckTotal(result string) {
 	m.IdempotencyCheckTotal.WithLabelValues(result).Inc()
+}
+
+// IncRepublishedConfirmations increments
+// dm_idempotency_republished_confirmations_total for the given confirmation
+// topic (DM-TASK-058). Called when a duplicate producer event triggers
+// re-publish of a stored confirmation snapshot.
+func (m *Metrics) IncRepublishedConfirmations(topic string) {
+	m.IdempotencyRepublishedConfirmations.WithLabelValues(topic).Inc()
 }
 
 // ---------------------------------------------------------------------------

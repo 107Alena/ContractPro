@@ -485,7 +485,7 @@ DM — **центральный data hub** между вычислительны
 |------|-----|----------|
 | `idempotency_key` | string | Составной ключ (например, `{job_id}:{event_type}`) |
 | `status` | enum | `PROCESSING`, `COMPLETED`, `FAILED` |
-| `result_snapshot` | JSONB (nullable) | Сохранённый результат для повторного ответа |
+| `result_snapshot` | string (nullable) | JSON-envelope direct response confirmation для повторной отправки producer-у при duplicate (DM-TASK-058). Формат: `{schema_version, topic, payload}`. Пустая строка для query-топиков и legacy-записей |
 | `created_at` | timestamp | Когда создана запись |
 | `expires_at` | timestamp | TTL для автоочистки |
 
@@ -979,7 +979,7 @@ Sequence diagrams для каждого сценария — см. [sequence-dia
 
 ### Альтернативные ветки
 
-**Diff уже существует (повторная доставка):** → Idempotency Guard: `COMPLETED` → повторная публикация `DocumentVersionDiffPersisted`. ACK.
+**Diff уже существует (повторная доставка):** → Idempotency Guard: `COMPLETED` со снапшотом → консьюмер десериализует снапшот и переотправляет `DocumentVersionDiffPersisted` через broker.Publish (DM-TASK-058). ACK. Транзакция не открывается, blob не загружается, downstream notifications не дублируются. Метрика: `dm_idempotency_republished_confirmations_total{topic="dm.responses.diff-persisted"}`.
 
 **Версия не найдена:** → Publish `DocumentVersionDiffPersistFailed` с `error_code=VERSION_NOT_FOUND`, `is_retryable=false`.
 
@@ -995,6 +995,7 @@ Sequence diagrams для каждого сценария — см. [sequence-dia
 - artifact_status: `PROCESSING_ARTIFACTS_RECEIVED` → `ANALYSIS_ARTIFACTS_RECEIVED`.
 - Notification: `dm.events.version-analysis-ready` для RE.
 - Confirmation: `dm.responses.lic-artifacts-persisted` / `dm.responses.lic-artifacts-persist-failed` для LIC.
+- **Повторная доставка (DM-TASK-058):** при дубликате `LegalAnalysisArtifactsReady` Idempotency Guard возвращает `Skip` со снапшотом, консьюмер декодирует и переотправляет `LegalAnalysisArtifactsPersisted` с тем же `job_id`/`correlation_id` напрямую через broker.Publish. Обработка артефактов и transactional outbox не выполняются — downstream `version-analysis-ready` остаётся at-most-once. Метрика: `dm_idempotency_republished_confirmations_total{topic="dm.responses.lic-artifacts-persisted"}`.
 
 ## 8.6 Сохранение результатов Reporting Engine
 
@@ -1008,6 +1009,7 @@ Sequence diagrams для каждого сценария — см. [sequence-dia
 - artifact_status: `ANALYSIS_ARTIFACTS_RECEIVED` → `REPORTS_READY` (или `FULLY_READY`, если это последний этап).
 - Notification: `dm.events.version-reports-ready` для оркестратора.
 - Confirmation: `dm.responses.re-reports-persisted` / `dm.responses.re-reports-persist-failed` для RE.
+- **Повторная доставка (DM-TASK-058):** при дубликате `ReportsArtifactsReady` консьюмер переотправляет `ReportsArtifactsPersisted` из снапшота напрямую через broker.Publish; outbox-нотификации не повторяются. Метрика: `dm_idempotency_republished_confirmations_total{topic="dm.responses.re-reports-persisted"}`.
 
 **Как RE получает данные для формирования отчёта:**
 
@@ -1021,13 +1023,27 @@ API/Backend-оркестратор читает метаданные и арте
 
 ## 8.8 Повторная доставка одного и того же события
 
-**Trigger:** At-least-once delivery → дубликат `DocumentProcessingArtifactsReady`.
+**Trigger:** At-least-once delivery → дубликат producer-события (DP/LIC/RE artifacts или DP diff). Самый критичный сценарий — producer (LIC/RE/DP) опубликовал `*Ready`, DM сохранил и опубликовал `*Persisted`, но producer упал ДО получения подтверждения. RabbitMQ переотправляет `*Ready` → producer ждёт подтверждение с тем же `job_id`.
 
-1. Event Consumer → десериализация.
-2. Idempotency Guard: ключ `dp-artifacts:{job_id}` найден, статус = `COMPLETED`.
-3. ACK. Обработка не выполняется повторно. Confirmation уже доставлен через Outbox Poller при первой обработке.
+### Алгоритм (DM-TASK-058)
 
-**Стоимость:** один lookup в Redis. Повторная публикация confirmation **не выполняется** — это предотвращает дублирование notifications (BRE-002).
+1. Event Consumer → десериализация и валидация.
+2. Idempotency Guard: ключ найден, статус = `COMPLETED`.
+3. Если `IdempotencyRecord.ResultSnapshot != ""` (заполняется при первом успехе) → консьюмер десериализует JSON-envelope `{schema_version, topic, payload}` и публикует payload в `topic` напрямую через broker.Publish — это переотправляет ИМЕННО direct response confirmation (`DocumentProcessingArtifactsPersisted` / `LegalAnalysisArtifactsPersisted` / `ReportsArtifactsPersisted` / `DocumentVersionDiffPersisted`) с тем же `job_id`, `document_id`, `correlation_id`, что и при первом успехе. Метрика: `dm_idempotency_republished_confirmations_total{topic}`.
+4. Если `ResultSnapshot == ""` (legacy запись до DM-TASK-058 или query-топик) → silent ACK без переотправки.
+5. Обработка артефактов **не выполняется**: транзакция не открывается, blob не загружается, выходные топики `dm.events.version-*-ready` НЕ повторяются.
+
+**Размер снапшота:** ~200–500 байт JSON (envelope + EventMeta + ids). Лимит: 64 КиБ; при превышении на этапе формирования снапшота генерируется ошибка, и MarkCompleted сохраняет пустой snapshot — поведение деградирует до legacy silent ACK.
+
+**Schema evolution:** Поле `schema_version` в envelope позволяет отличать форматы между релизами. Несовпадение версии не блокирует переотправку — консьюмер логирует WARN и публикует payload как есть (downstream consumers всё равно идемпотентны).
+
+### Защита от дублирования downstream notifications (переформулированный BRE-002)
+
+`dm.events.version-analysis-ready`, `dm.events.version-reports-ready`, `dm.events.version-artifacts-ready`, `dm.events.version-created` и `dm.events.version-partially-available` пишутся в **transactional outbox** при первой обработке и публикуются Outbox Poller (FIFO + FOR UPDATE SKIP LOCKED) ровно один раз. Re-publish из ResultSnapshot не затрагивает outbox — поэтому downstream-домены не получают дубликатов даже при duplicate `*Ready`. **Direct response confirmation к producer переотправляется** при duplicate event — это закрывает crash в acknowledgment window и не нарушает at-most-once гарантию для downstream notifications.
+
+**Связь с защитой LIC:** LIC дополнительно использует defensive layer (heartbeat + увеличенный `lic-persist-resp:{job_id}` TTL); RE использует `re-persist-resp:{job_id}`. Вместе с DM re-publish это закрывает 100% TOP-2 сценария.
+
+**Стоимость:** один Redis lookup + один broker.Publish (при наличии снапшота). Снапшот хранится в Redis ровно столько, сколько живёт COMPLETED-запись (24h TTL).
 
 ## 8.9 Ошибка частичного сохранения
 

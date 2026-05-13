@@ -351,6 +351,7 @@ func run() int {
 
 	eventConsumer := consumer.NewEventConsumer(
 		brokerSub,
+		brokerClient, // BrokerPublisher for re-publishing confirmations on duplicate (DM-TASK-058)
 		idemGuard,
 		obs.Logger.With("component", "consumer"),
 		obs.Metrics,
@@ -361,13 +362,17 @@ func run() int {
 		artifactRepo,
 		diffRepo,
 		consumer.TopicConfig{
-			DPArtifactsReady:    cfg.Broker.TopicDPArtifactsProcessingReady,
-			DPSemanticTreeReq:   cfg.Broker.TopicDPRequestsSemanticTree,
-			DPDiffReady:         cfg.Broker.TopicDPArtifactsDiffReady,
-			LICArtifactsReady:   cfg.Broker.TopicLICArtifactsAnalysisReady,
-			LICRequestArtifacts: cfg.Broker.TopicLICRequestsArtifacts,
-			REArtifactsReady:    cfg.Broker.TopicREArtifactsReportsReady,
-			RERequestArtifacts:  cfg.Broker.TopicRERequestsArtifacts,
+			DPArtifactsReady:      cfg.Broker.TopicDPArtifactsProcessingReady,
+			DPSemanticTreeReq:     cfg.Broker.TopicDPRequestsSemanticTree,
+			DPDiffReady:           cfg.Broker.TopicDPArtifactsDiffReady,
+			LICArtifactsReady:     cfg.Broker.TopicLICArtifactsAnalysisReady,
+			LICRequestArtifacts:   cfg.Broker.TopicLICRequestsArtifacts,
+			REArtifactsReady:      cfg.Broker.TopicREArtifactsReportsReady,
+			RERequestArtifacts:    cfg.Broker.TopicRERequestsArtifacts,
+			DPArtifactsPersisted:  cfg.Broker.TopicDMResponsesArtifactsPersisted,
+			LICArtifactsPersisted: cfg.Broker.TopicDMResponsesLICArtifactsPersisted,
+			REReportsPersisted:    cfg.Broker.TopicDMResponsesREReportsPersisted,
+			DiffPersisted:         cfg.Broker.TopicDMResponsesDiffPersisted,
 		},
 		cfg.Retry,
 	)

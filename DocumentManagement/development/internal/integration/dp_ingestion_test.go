@@ -272,8 +272,8 @@ func TestDPIngestion_IdempotencyDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotency Check #1 failed: %v", err)
 	}
-	if result != idempotency.ResultProcess {
-		t.Fatalf("expected ResultProcess, got %v", result)
+	if result.Status != idempotency.ResultProcess {
+		t.Fatalf("expected ResultProcess, got %v", result.Status)
 	}
 
 	err = h.ingestion.HandleDPArtifacts(context.Background(), event)
@@ -281,7 +281,7 @@ func TestDPIngestion_IdempotencyDedup(t *testing.T) {
 		t.Fatalf("HandleDPArtifacts #1 returned error: %v", err)
 	}
 
-	err = h.idempotencyGuard.MarkCompleted(context.Background(), idemKey)
+	err = h.idempotencyGuard.MarkCompleted(context.Background(), idemKey, "")
 	if err != nil {
 		t.Fatalf("MarkCompleted failed: %v", err)
 	}
@@ -299,8 +299,8 @@ func TestDPIngestion_IdempotencyDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotency Check #2 failed: %v", err)
 	}
-	if result2 != idempotency.ResultSkip {
-		t.Fatalf("expected ResultSkip on duplicate, got %v", result2)
+	if result2.Status != idempotency.ResultSkip {
+		t.Fatalf("expected ResultSkip on duplicate, got %v", result2.Status)
 	}
 
 	// Verify: no additional artifacts, outbox entries, or audit records.
@@ -643,15 +643,15 @@ func TestDPIngestion_EndToEndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check #1: %v", err)
 	}
-	if result != idempotency.ResultProcess {
-		t.Fatalf("expected ResultProcess, got %d", result)
+	if result.Status != idempotency.ResultProcess {
+		t.Fatalf("expected ResultProcess, got %v", result.Status)
 	}
 
 	err = h.ingestion.HandleDPArtifacts(context.Background(), event)
 	if err != nil {
 		t.Fatalf("HandleDPArtifacts #1: %v", err)
 	}
-	_ = h.idempotencyGuard.MarkCompleted(context.Background(), idemKey)
+	_ = h.idempotencyGuard.MarkCompleted(context.Background(), idemKey, "")
 
 	snapshotArtifacts := len(h.artifactRepo.allArtifacts())
 	snapshotOutbox := len(h.outboxRepo.allEntries())
@@ -662,8 +662,8 @@ func TestDPIngestion_EndToEndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check #2: %v", err)
 	}
-	if result2 != idempotency.ResultSkip {
-		t.Fatalf("expected ResultSkip on duplicate, got %d", result2)
+	if result2.Status != idempotency.ResultSkip {
+		t.Fatalf("expected ResultSkip on duplicate, got %v", result2.Status)
 	}
 
 	// B-3: Verify no side effects after dedup.

@@ -620,6 +620,17 @@ func (r *memoryDiffRepository) DeleteByDocument(ctx context.Context, orgID, docI
 	return nil
 }
 
+// allDiffs returns a snapshot copy of all stored diff references — used by
+// integration tests to assert that idempotent re-deliveries don't insert
+// duplicates.
+func (r *memoryDiffRepository) allDiffs() []*model.VersionDiffReference {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*model.VersionDiffReference, len(r.diffs))
+	copy(out, r.diffs)
+	return out
+}
+
 var _ port.DiffRepository = (*memoryDiffRepository)(nil)
 
 // ---------------------------------------------------------------------------
@@ -1041,8 +1052,16 @@ var _ port.DocumentFallbackResolver = (*memoryFallbackResolver)(nil)
 // ---------------------------------------------------------------------------
 
 type captureBroker struct {
-	mu       sync.RWMutex
-	handlers map[string]func(ctx context.Context, body []byte) error
+	mu        sync.RWMutex
+	handlers  map[string]func(ctx context.Context, body []byte) error
+	published []capturedPublish
+}
+
+// capturedPublish records a Publish call for assertion in re-publish tests
+// (DM-TASK-058).
+type capturedPublish struct {
+	topic   string
+	payload []byte
 }
 
 func newCaptureBroker() *captureBroker {
@@ -1056,7 +1075,38 @@ func (b *captureBroker) Subscribe(topic string, handler func(ctx context.Context
 	return nil
 }
 
-func (b *captureBroker) Publish(ctx context.Context, topic string, payload []byte) error {
+func (b *captureBroker) Publish(_ context.Context, topic string, payload []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cp := make([]byte, len(payload))
+	copy(cp, payload)
+	b.published = append(b.published, capturedPublish{topic: topic, payload: cp})
+	return nil
+}
+
+// publishedToTopic returns the number of Publish calls captured for the given topic.
+func (b *captureBroker) publishedToTopic(topic string) int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	n := 0
+	for _, p := range b.published {
+		if p.topic == topic {
+			n++
+		}
+	}
+	return n
+}
+
+// lastPublishedTo returns the payload of the most recent Publish call for the
+// given topic, or nil if none.
+func (b *captureBroker) lastPublishedTo(topic string) []byte {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for i := len(b.published) - 1; i >= 0; i-- {
+		if b.published[i].topic == topic {
+			return b.published[i].payload
+		}
+	}
 	return nil
 }
 

@@ -281,6 +281,9 @@
 
 ### 2.1 Confirmations (ответы на входящие события)
 
+> **At-least-once delivery (DM-TASK-058).** События `DocumentProcessingArtifactsPersisted`, `LegalAnalysisArtifactsPersisted`, `ReportsArtifactsPersisted`, `DocumentVersionDiffPersisted` могут быть delivered более одного раза при at-least-once + crash producer в acknowledgment window. DM хранит JSON-envelope confirmation в `IdempotencyRecord.ResultSnapshot` при первом успехе и переотправляет ИДЕНТИЧНУЮ payload (тот же `job_id`, `document_id`, `correlation_id`) при duplicate `*Ready`. Consumer обязан обрабатывать confirmation идемпотентно: LIC использует ключ `lic-persist-resp:{job_id}`, RE — `re-persist-resp:{job_id}`. Метрика: `dm_idempotency_republished_confirmations_total{topic}` (см. `DocumentManagement/architecture/high-architecture.md` §8.8).
+
+
 #### DocumentProcessingArtifactsPersisted
 
 **Топик:** `dm.responses.artifacts-persisted`

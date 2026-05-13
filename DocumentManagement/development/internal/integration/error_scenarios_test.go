@@ -351,8 +351,8 @@ func TestErrorScenario_RedisUnavailable_FallbackToDB_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotency Check with failing Redis returned error: %v", err)
 	}
-	if result != idempotency.ResultProcess {
-		t.Fatalf("expected ResultProcess on Redis failure with DB fallback, got %v", result)
+	if result.Status != idempotency.ResultProcess {
+		t.Fatalf("expected ResultProcess on Redis failure with DB fallback, got %v", result.Status)
 	}
 
 	// Process the event (ingestion service uses in-memory fakes, not Redis).

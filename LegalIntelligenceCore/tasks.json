@@ -38,7 +38,24 @@
         "Шаг 3: make lint — 0 errors"
       ],
       "dependencies": [],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-14",
+      "completion_notes": {
+        "summary": "Scaffolding LIC-сервиса: Go-модуль contractpro/legal-intelligence-core (Go 1.26.1), entrypoint cmd/lic-service/main.go (stub log.Printf + os.Exit(0) с version ldflag), полное дерево internal/ (47 директорий, .gitkeep в leaf-пакетах), Makefile (build/test/lint/docker-build), скелет Dockerfile (alpine builder + alpine runtime — distroless/nonroot реализуется в LIC-TASK-003).",
+        "test_results": {
+          "make_build": "ok — bin/lic-service ~1.6 MB",
+          "make_test": "ok — 0 errors (no test files yet)",
+          "make_lint": "ok — 0 errors"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/go.mod",
+          "LegalIntelligenceCore/development/Makefile",
+          "LegalIntelligenceCore/development/Dockerfile",
+          "LegalIntelligenceCore/development/cmd/lic-service/main.go",
+          "LegalIntelligenceCore/development/internal/**/.gitkeep (41 placeholders)"
+        ],
+        "notes": "Dockerfile намеренно скелет — полная distroless/nonroot реализация в LIC-TASK-003. Используются .gitkeep, а не пустые .go-файлы (рекомендация code-architect: чтобы не блокировать будущие задачи). Module path следует DP-конвенции (contractpro/<domain>)."
+      }
     },
     {
       "id": "LIC-TASK-002",

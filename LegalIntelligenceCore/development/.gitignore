@@ -1,0 +1,10 @@
+# Compiled binaries (Makefile outputs to bin/; root-level binary kept for parity with DP)
+/bin/
+/lic-service
+
+# Environment files (may contain secrets)
+.env
+
+# Test coverage
+coverage.out
+coverage.html

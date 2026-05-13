@@ -183,13 +183,16 @@ func TestFullPipeline_ListArtifactsAtEachStage(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFullPipeline_VersionProcessingArtifactsReady_EnrichedFields(t *testing.T) {
+	// DM-TASK-056: event.job_id and version.job_id must match by invariant,
+	// so this test now uses a single shared job_id. Enrichment is still verified
+	// by asserting notif.JobID equals the shared job_id (sourced from the
+	// version row, not the event payload).
 	const (
 		orgID         = "org-fp-055"
 		docID         = "doc-fp-055"
 		versionID     = "ver-fp-055"
-		versionJobID  = "job-stored-on-version-055"
+		jobID         = "job-stored-on-version-055"
 		userID        = "user-uploader-055"
-		dpJobID       = "job-dp-055"
 		correlationID = "corr-055"
 	)
 
@@ -199,11 +202,11 @@ func TestFullPipeline_VersionProcessingArtifactsReady_EnrichedFields(t *testing.
 	// First version: UPLOAD, no parent, persisted job_id.
 	ver := defaultVersion(orgID, docID, versionID)
 	ver.CreatedByUserID = userID
-	storedJobID := versionJobID
+	storedJobID := jobID
 	ver.JobID = &storedJobID
 	h.seedVersion(ver)
 
-	dpEvent := defaultDPEvent(orgID, docID, versionID, dpJobID, correlationID)
+	dpEvent := defaultDPEvent(orgID, docID, versionID, jobID, correlationID)
 	if err := h.ingestion.HandleDPArtifacts(context.Background(), dpEvent); err != nil {
 		t.Fatalf("HandleDPArtifacts: %v", err)
 	}
@@ -219,7 +222,7 @@ func TestFullPipeline_VersionProcessingArtifactsReady_EnrichedFields(t *testing.
 		t.Fatalf("unmarshal notification: %v", err)
 	}
 
-	assertEqual(t, "notif.JobID", versionJobID, notif.JobID)
+	assertEqual(t, "notif.JobID", jobID, notif.JobID)
 	assertEqual(t, "notif.OriginType", string(model.OriginTypeUpload), string(notif.OriginType))
 	assertEqual(t, "notif.ParentVersionID", "", notif.ParentVersionID)
 	assertEqual(t, "notif.CreatedByUserID", userID, notif.CreatedByUserID)
@@ -240,15 +243,16 @@ func TestFullPipeline_VersionProcessingArtifactsReady_EnrichedFields(t *testing.
 }
 
 func TestFullPipeline_VersionProcessingArtifactsReady_WithParent(t *testing.T) {
+	// DM-TASK-056: event.job_id and version.job_id must match by invariant —
+	// the test uses a single shared job_id for v2 ingestion.
 	const (
-		orgID            = "org-fp-055b"
-		docID            = "doc-fp-055b"
-		v1ID             = "ver-fp-055b-v1"
-		v2ID             = "ver-fp-055b-v2"
-		v2JobID          = "job-stored-v2-055"
-		v2User           = "user-rec-055"
-		dpJobID          = "job-dp-055b"
-		correlationID    = "corr-055b"
+		orgID         = "org-fp-055b"
+		docID         = "doc-fp-055b"
+		v1ID          = "ver-fp-055b-v1"
+		v2ID          = "ver-fp-055b-v2"
+		v2JobID       = "job-stored-v2-055"
+		v2User        = "user-rec-055"
+		correlationID = "corr-055b"
 	)
 
 	h := newTestHarness(t)
@@ -266,7 +270,7 @@ func TestFullPipeline_VersionProcessingArtifactsReady_WithParent(t *testing.T) {
 	v2.JobID = &storedJobID
 	h.seedVersion(v2)
 
-	dpEvent := defaultDPEvent(orgID, docID, v2ID, dpJobID, correlationID)
+	dpEvent := defaultDPEvent(orgID, docID, v2ID, v2JobID, correlationID)
 	if err := h.ingestion.HandleDPArtifacts(context.Background(), dpEvent); err != nil {
 		t.Fatalf("HandleDPArtifacts: %v", err)
 	}

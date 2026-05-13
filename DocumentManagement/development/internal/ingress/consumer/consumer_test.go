@@ -1991,6 +1991,39 @@ func TestDLQ_MissingVersionID_SemanticTree(t *testing.T) {
 	}
 }
 
+// DM-TASK-056: when ingestion returns JOB_ID_MISMATCH (non-retryable), the
+// consumer must route the message to dm.dlq.ingestion-failed with the
+// JOB_ID_MISMATCH error code preserved.
+func TestDLQ_JobIDMismatch_SentToIngestionDLQ(t *testing.T) {
+	d := newTestDeps()
+	d.ingestion.dpErr = port.NewJobIDMismatchError("ver-1", "job-stored", "job-incoming")
+	c := d.newConsumer()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	event := validDPArtifactsEvent()
+	handler := d.broker.handlerFor(model.TopicDPArtifactsProcessingReady)
+	_ = handler(context.Background(), mustMarshal(t, event))
+
+	if d.dlq.count() != 1 {
+		t.Fatalf("expected 1 DLQ record, got %d", d.dlq.count())
+	}
+	rec, _ := d.dlq.lastRecord()
+	if rec.Category != model.DLQCategoryIngestion {
+		t.Errorf("category = %q, want ingestion", rec.Category)
+	}
+	if rec.ErrorCode != port.ErrCodeJobIDMismatch {
+		t.Errorf("error_code = %q, want %s", rec.ErrorCode, port.ErrCodeJobIDMismatch)
+	}
+	if rec.JobID != event.JobID {
+		t.Errorf("job_id = %q, want %s", rec.JobID, event.JobID)
+	}
+	if rec.CorrelationID != event.CorrelationID {
+		t.Errorf("correlation_id = %q, want %s", rec.CorrelationID, event.CorrelationID)
+	}
+}
+
 func TestDLQ_MissingBaseTargetVersionID_DiffReady(t *testing.T) {
 	d := newTestDeps()
 	c := d.newConsumer()

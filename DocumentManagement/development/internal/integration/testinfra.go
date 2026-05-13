@@ -42,6 +42,7 @@ type testHarness struct {
 	diffRepo        *memoryDiffRepository
 	fallback        *memoryFallbackResolver
 	orphanInserter  *recordingOrphanInserter // BRE-008 / DM-TASK-047
+	mismatchMetrics *recordingMismatchMetrics // DM-TASK-056
 
 	// Real application services.
 	ingestion       *appIngestion.ArtifactIngestionService
@@ -75,10 +76,11 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		idemStore:      newMemoryIdempotencyStore(),
 		dlqPort:        newRecordingDLQPort(),
 		diffRepo:       newMemoryDiffRepository(),
-		fallback:       newMemoryFallbackResolver(),
-		orphanInserter: newRecordingOrphanInserter(),
-		broker:         newCaptureBroker(),
-		logger:         newRecordingLogger(),
+		fallback:        newMemoryFallbackResolver(),
+		orphanInserter:  newRecordingOrphanInserter(),
+		mismatchMetrics: newRecordingMismatchMetrics(),
+		broker:          newCaptureBroker(),
+		logger:          newRecordingLogger(),
 	}
 
 	h.outboxWriter = outbox.NewOutboxWriter(h.outboxRepo)
@@ -93,6 +95,7 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		h.outboxWriter,
 		h.fallback,
 		&noopFallbackMetrics{},
+		h.mismatchMetrics, // DM-TASK-056
 		h.docRepo,
 		&noopTenantMetrics{},
 		h.orphanInserter,
@@ -1231,6 +1234,39 @@ func (l *recordingLogger) hasMessage(substr string) bool {
 	return false
 }
 
+// findEntry returns a pointer to the first log entry matching the given level
+// and message substring, or nil if none is found.
+func (l *recordingLogger) findEntry(level, msgSubstr string) *logEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := range l.entries {
+		if l.entries[i].level == level && strings.Contains(l.entries[i].msg, msgSubstr) {
+			out := l.entries[i]
+			return &out
+		}
+	}
+	return nil
+}
+
+// assertLogField checks that a recorded log entry carries a key/value pair
+// matching the given key and value. Keys are expected at even indices and
+// values at the subsequent odd index (slog/logr convention).
+func assertLogField(t *testing.T, entry *logEntry, key string, want any) {
+	t.Helper()
+	if entry == nil {
+		t.Fatalf("assertLogField(%q): entry is nil", key)
+	}
+	for i := 0; i+1 < len(entry.args); i += 2 {
+		if k, ok := entry.args[i].(string); ok && k == key {
+			if entry.args[i+1] != want {
+				t.Errorf("log field %q = %v, want %v", key, entry.args[i+1], want)
+			}
+			return
+		}
+	}
+	t.Errorf("log field %q not present in entry %q (args=%v)", key, entry.msg, entry.args)
+}
+
 // ---------------------------------------------------------------------------
 // Noop metrics stubs
 // ---------------------------------------------------------------------------
@@ -1246,6 +1282,29 @@ func (m *noopTenantMetrics) IncTenantMismatch() {}
 type noopIntegrityMetrics struct{}
 
 func (m *noopIntegrityMetrics) IncIntegrityCheckFailures() {}
+
+// recordingMismatchMetrics implements ingestion.MismatchMetrics and counts
+// IncJobIDMismatch calls for assertion in DM-TASK-056 tests. Thread-safe.
+type recordingMismatchMetrics struct {
+	mu    sync.Mutex
+	count int
+}
+
+func newRecordingMismatchMetrics() *recordingMismatchMetrics {
+	return &recordingMismatchMetrics{}
+}
+
+func (m *recordingMismatchMetrics) IncJobIDMismatch() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.count++
+}
+
+func (m *recordingMismatchMetrics) jobIDMismatchCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.count
+}
 
 // recordingOrphanInserter records orphan candidate INSERTs for test verification.
 // Thread-safe for use with -race.

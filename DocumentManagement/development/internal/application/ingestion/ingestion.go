@@ -34,6 +34,13 @@ type FallbackMetrics interface {
 	IncMissingVersionID()
 }
 
+// MismatchMetrics tracks the DP→DM ingestion integrity invariant: the
+// event's job_id must equal the stored document version's job_id when both
+// are present (DM-TASK-056). Mismatches are routed to the ingestion DLQ.
+type MismatchMetrics interface {
+	IncJobIDMismatch()
+}
+
 // OrphanCandidateInserter is the subset of port.OrphanCandidateRepository
 // needed by ArtifactIngestionService — used to register orphan blob
 // candidates when compensation cannot immediately delete them (BRE-008).
@@ -54,6 +61,7 @@ type ArtifactIngestionService struct {
 	outboxWriter     *outbox.OutboxWriter
 	fallbackResolver port.DocumentFallbackResolver
 	fallbackMetrics  FallbackMetrics
+	mismatchMetrics  MismatchMetrics // DM-TASK-056
 	docRepo          tenant.DocumentExistenceChecker
 	tenantMetrics    tenant.Metrics
 	orphanRepo       OrphanCandidateInserter // BRE-008 / DM-TASK-047
@@ -77,6 +85,7 @@ func NewArtifactIngestionService(
 	outboxWriter *outbox.OutboxWriter,
 	fallbackResolver port.DocumentFallbackResolver,
 	fallbackMetrics FallbackMetrics,
+	mismatchMetrics MismatchMetrics,
 	docRepo tenant.DocumentExistenceChecker,
 	tenantMetrics tenant.Metrics,
 	orphanRepo OrphanCandidateInserter,
@@ -108,6 +117,9 @@ func NewArtifactIngestionService(
 	if fallbackMetrics == nil {
 		panic("ingestion: fallbackMetrics must not be nil")
 	}
+	if mismatchMetrics == nil {
+		panic("ingestion: mismatchMetrics must not be nil")
+	}
 	if docRepo == nil {
 		panic("ingestion: docRepo must not be nil")
 	}
@@ -135,6 +147,7 @@ func NewArtifactIngestionService(
 		outboxWriter:     outboxWriter,
 		fallbackResolver: fallbackResolver,
 		fallbackMetrics:  fallbackMetrics,
+		mismatchMetrics:  mismatchMetrics,
 		docRepo:          docRepo,
 		tenantMetrics:    tenantMetrics,
 		orphanRepo:       orphanRepo,
@@ -183,14 +196,15 @@ func (s *ArtifactIngestionService) HandleDPArtifacts(ctx context.Context, event 
 	savedTypes := itemTypes(artifacts)
 
 	return s.processIngestion(ctx, ingestionParams{
-		orgID:         event.OrgID,
-		docID:         event.DocumentID,
-		versionID:     event.VersionID,
-		jobID:         event.JobID,
-		correlationID: event.CorrelationID,
-		producer:      model.ProducerDomainDP,
-		targetStatus:  model.ArtifactStatusProcessingArtifactsReceived,
-		artifacts:     artifacts,
+		orgID:           event.OrgID,
+		docID:           event.DocumentID,
+		versionID:       event.VersionID,
+		jobID:           event.JobID,
+		correlationID:   event.CorrelationID,
+		producer:        model.ProducerDomainDP,
+		targetStatus:    model.ArtifactStatusProcessingArtifactsReceived,
+		artifacts:       artifacts,
+		validateVersion: s.dpJobIDInvariant(event),
 		buildOutbox: func(version *model.DocumentVersion) []outbox.TopicEvent {
 			// DM-TASK-055: enrich VersionProcessingArtifactsReady with immutable
 			// fields read from the locked version row. JobID is empty string when
@@ -226,6 +240,50 @@ func (s *ArtifactIngestionService) HandleDPArtifacts(ctx context.Context, event 
 			}
 		},
 	})
+}
+
+// dpJobIDInvariant returns the validateVersion callback enforcing
+// event.job_id == stored version.job_id (DM-TASK-056).
+//
+// Routing rules:
+//   - stored version.JobID == nil → invariant skipped (legacy/non-processing
+//     versions are allowed to receive DP artifacts unchecked).
+//   - event.JobID == "" → warn-log and skip (theoretical; validateRequired
+//     above already rejects empty job_id, but the check is kept defensive).
+//   - stored != "" && stored != event.JobID → metric + structured error log
+//     + JOB_ID_MISMATCH DomainError. The transaction is rolled back; the
+//     consumer routes the non-retryable error to dm.dlq.ingestion-failed.
+func (s *ArtifactIngestionService) dpJobIDInvariant(
+	event model.DocumentProcessingArtifactsReady,
+) func(*model.DocumentVersion) *port.DomainError {
+	return func(version *model.DocumentVersion) *port.DomainError {
+		if version.JobID == nil {
+			return nil
+		}
+		if event.JobID == "" {
+			s.logger.Warn("DM-TASK-056: incoming DP event carries empty job_id; mismatch check skipped",
+				"document_id", event.DocumentID,
+				"version_id", event.VersionID,
+				"stored_job_id", *version.JobID,
+				"correlation_id", event.CorrelationID,
+			)
+			return nil
+		}
+		if *version.JobID == event.JobID {
+			return nil
+		}
+
+		s.mismatchMetrics.IncJobIDMismatch()
+		s.logger.Error("DM-TASK-056: DP event job_id does not match stored version job_id",
+			"error_code", port.ErrCodeJobIDMismatch,
+			"expected_job_id", *version.JobID,
+			"received_job_id", event.JobID,
+			"document_id", event.DocumentID,
+			"version_id", event.VersionID,
+			"correlation_id", event.CorrelationID,
+		)
+		return port.NewJobIDMismatchError(event.VersionID, *version.JobID, event.JobID)
+	}
 }
 
 // HandleLICArtifacts processes a LIC analysis artifacts-ready event.
@@ -364,16 +422,24 @@ func (s *ArtifactIngestionService) HandleREArtifacts(ctx context.Context, event 
 // enrich outbox events with immutable fields (job_id, origin_type, parent_version_id,
 // created_by_user_id — DM-TASK-055), guaranteeing atomicity between the version
 // state change and the published events.
+//
+// validateVersion is an optional pre-transition invariant check (DM-TASK-056).
+// Invoked inside the transaction with the locked version row, BEFORE
+// TransitionArtifactStatus. A non-nil *DomainError aborts the transaction,
+// triggering the standard rollback + blob compensation path. A nil return
+// allows ingestion to proceed. Currently used by HandleDPArtifacts to enforce
+// event.job_id == version.job_id.
 type ingestionParams struct {
-	orgID         string
-	docID         string
-	versionID     string
-	jobID         string
-	correlationID string
-	producer      model.ProducerDomain
-	targetStatus  model.ArtifactStatus
-	artifacts     []artifactItem
-	buildOutbox   func(version *model.DocumentVersion) []outbox.TopicEvent
+	orgID           string
+	docID           string
+	versionID       string
+	jobID           string
+	correlationID   string
+	producer        model.ProducerDomain
+	targetStatus    model.ArtifactStatus
+	artifacts       []artifactItem
+	buildOutbox     func(version *model.DocumentVersion) []outbox.TopicEvent
+	validateVersion func(version *model.DocumentVersion) *port.DomainError
 }
 
 // artifactItem represents a single artifact to be ingested.
@@ -433,6 +499,16 @@ func (s *ArtifactIngestionService) processIngestion(ctx context.Context, p inges
 		version, findErr := s.versionRepo.FindByIDForUpdate(txCtx, p.orgID, p.docID, p.versionID)
 		if findErr != nil {
 			return findErr
+		}
+
+		// DM-TASK-056: enforce optional pre-transition invariants while the
+		// version row is locked (e.g. event.job_id == version.job_id for DP).
+		// Returning here rolls back the tx; the existing compensation path
+		// removes any uploaded blobs.
+		if p.validateVersion != nil {
+			if invErr := p.validateVersion(version); invErr != nil {
+				return invErr
+			}
 		}
 
 		oldStatus := version.ArtifactStatus

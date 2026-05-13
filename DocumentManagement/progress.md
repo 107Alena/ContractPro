@@ -2755,3 +2755,49 @@ Outbound notification DM → LIC (`VersionProcessingArtifactsReady`, топик 
 **Итог:** LIC получает полный контекст версии (job_id, origin_type, parent_version_id, created_by_user_id) в payload `VersionProcessingArtifactsReady` без догрузки. Outbox-построение перенесено внутрь ingestion-транзакции через callback — атомарность state-change и публикации события гарантирована. Matching-инвариант `event.job_id == version.job_id` оставлен под DM-TASK-056 (defensive code + DLQ).
 
 ---
+
+## DM-TASK-056 — Matching-инвариант event.job_id == version.job_id + DLQ при mismatch
+
+**Дата:** 2026-05-13
+**Статус:** done
+**Зависимости:** DM-TASK-054 (job_id в DocumentVersion) — done.
+
+**Контекст и цель:** ввести defensive integrity check на стыке DP→DM. При получении `DocumentProcessingArtifactsReady` верифицировать, что `event.job_id` совпадает с уже сохранённым `document_versions.job_id` целевой версии (заполненным Orchestrator-ом при `CreateVersion`). Mismatch — data integrity violation (race condition в Orchestrator, cross-job ingestion); транзакция откатывается, событие маршрутизируется в DLQ, метрика инкрементируется, оператор реагирует по runbook.
+
+**Что сделано:**
+- `internal/domain/port/errors.go` — `ErrCodeJobIDMismatch="JOB_ID_MISMATCH"` + `NewJobIDMismatchError(versionID, expected, received)` (non-retryable).
+- `internal/application/ingestion/ingestion.go` — новый `MismatchMetrics interface { IncJobIDMismatch() }`; поле в сервисе; конструктор принимает его аргументом (после `fallbackMetrics`); `ingestionParams` расширен `validateVersion func(*model.DocumentVersion) *port.DomainError` (параллель к существующему `buildOutbox`); в `processIngestion` callback вызывается внутри tx сразу после `FindByIDForUpdate` и до `TransitionArtifactStatus` — на error tx откатывается, существующий код компенсирует blob'ы и регистрирует orphan candidates (BRE-008). `HandleDPArtifacts` через helper `dpJobIDInvariant` собирает callback с 3-мя ветками: `version.JobID==nil` → skip, `event.JobID==""` → WARN log + skip, mismatch → `s.mismatchMetrics.IncJobIDMismatch()` + ERROR log с `error_code/expected_job_id/received_job_id/correlation_id/version_id/document_id` + `NewJobIDMismatchError(...)`. LIC/RE handlers callback не передают.
+- `internal/infra/observability/metrics.go` — counter `dm_ingestion_job_id_mismatch_total` без меток + `IncJobIDMismatch()`; добавлен в registry.
+- `cmd/dm-service/main.go` — проброс `obs.Metrics` как `MismatchMetrics`.
+- `internal/application/ingestion/ingestion_test.go` — `mockMismatchMetrics`, `testDeps.mismatchMetrics`, обновлены 14 call-site'ов `NewArtifactIngestionService`, добавлен `nil mismatchMetrics` case, выровнен default `newTestVersion.JobID="job-001"` с `validDPEvent.JobID` чтобы invariant не триггерился в существующих тестах.
+- `internal/integration/testinfra.go` — `recordingMismatchMetrics` + `jobIDMismatchCount()`; harness wiring; в `recordingLogger` добавлен `findEntry(level, msgSubstr)` + helper `assertLogField` для ассертов structured-log полей.
+- `internal/integration/error_scenarios_test.go` — 3 теста: `TestErrorScenario_JobIDMismatch_StoredAvsIncomingB` (assert: error=JOB_ID_MISMATCH non-retryable, version.ArtifactStatus=PENDING, version.JobID не мутирован, 0 descriptors, 0 outbox entries, 0 blobs в S3 после компенсации, mismatch_count=1, лог-поля); `TestErrorScenario_JobIDNullInVersion_NoMismatchCheck` (stored nil → обработка как обычно, metric=0); `TestErrorScenario_JobIDMatches_HappyPath` (matching → success, metric=0).
+- `internal/integration/full_pipeline_test.go` — 2 DM-TASK-055 теста (Enriched/WithParent) выровнены на одинаковый `job_id` между version и event (invariant требует совпадения).
+- `internal/ingress/consumer/consumer_test.go` — `TestDLQ_JobIDMismatch_SentToIngestionDLQ`: non-retryable JOB_ID_MISMATCH error from ingestion routes to `dm.dlq.ingestion-failed` с `Category=ingestion`, `ErrorCode=JOB_ID_MISMATCH`, `JobID` и `CorrelationID` сохранены в DLQRecord.
+- `architecture/event-catalog.md` §1.1 — добавлена таблица matching-инварианта с тремя ветками поведения.
+- `architecture/high-architecture.md` §5.2 — инвариант job_id расширен; добавлен §11.1 «Алерт `dm_ingestion_job_id_mismatch_total > 0`» — operations runbook (что случилось / реакция DM / 5 шагов оператора: извлечь DLQ-контекст, проверить Orchestrator-логи, DP-логи, решение по DLQ-записи, post-mortem).
+
+**План реализации:**
+1. Изучить ingestion.go, consumer.go, errors.go, metrics.go и DLQ flow.
+2. Сверить дизайн с code-architect (callback внутри tx vs. отдельный pre-check).
+3. Добавить ErrCodeJobIDMismatch + constructor.
+4. Завести `MismatchMetrics` interface + counter + wiring.
+5. Расширить `ingestionParams.validateVersion` + callback в `processIngestion`.
+6. Реализовать `dpJobIDInvariant` helper в `HandleDPArtifacts`.
+7. Обновить ingestion_test (call-sites + nil case + default JobID alignment).
+8. Добавить 3 integration теста (error_scenarios_test) + 1 consumer DLQ тест.
+9. Поправить 2 full_pipeline_test (DM-TASK-055 alignment под invariant).
+10. Обновить документацию: event-catalog §1.1 таблица + high-architecture §5.2 инвариант + §11.1 runbook.
+11. `make build build-migrate test lint` + `go test -race -count=1 ./...`.
+
+**Консультации:**
+- code-architect: одобрил callback-подход внутри tx; рекомендовал сигнатуру `func(*model.DocumentVersion) *port.DomainError` (concrete error type вместо generic); confirmed что метрика+лог внутри tx-callback корректны (tx не retried, double-count невозможен); DLQ topic `dm.dlq.ingestion-failed` корректен ("or equivalent" в acceptance criteria). Compensation overhead на S3 после mismatch допустим в steady state (mismatch ожидается near-zero).
+
+**Тесты:**
+- `go test -count=1 -race ./...` — ALL PASS (30 пакетов).
+- `make build`/`build-migrate`/`test`/`lint` — OK.
+- 3 новых integration + 1 consumer DLQ тест — все PASS.
+
+**Итог:** DP→DM ingestion-boundary защищён data-integrity invariant'ом. JOB_ID_MISMATCH event'ы маршрутизируются в DLQ без побочных эффектов (version unchanged, no descriptors, blobs компенсированы); метрика `dm_ingestion_job_id_mismatch_total` сигнализирует операторам, runbook §11.1 описывает диагностику. Mismatch-сценарий вскрывает баг в Orchestrator/DP — DM делает свою часть defensively, не маскируя проблему.
+
+---

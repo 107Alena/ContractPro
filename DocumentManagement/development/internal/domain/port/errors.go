@@ -31,8 +31,9 @@ const (
 
 	// --- Content validation errors (non-retryable) ---
 
-	ErrCodeInvalidContent        = "INVALID_CONTENT"
-	ErrCodeIntegrityCheckFailed  = "INTEGRITY_CHECK_FAILED"
+	ErrCodeInvalidContent       = "INVALID_CONTENT"
+	ErrCodeIntegrityCheckFailed = "INTEGRITY_CHECK_FAILED"
+	ErrCodeJobIDMismatch        = "JOB_ID_MISMATCH"
 
 	// --- Authorization errors (non-retryable) ---
 
@@ -196,6 +197,25 @@ func NewIntegrityCheckError(storageKey, expected, actual string) *DomainError {
 	return &DomainError{
 		Code:      ErrCodeIntegrityCheckFailed,
 		Message:   fmt.Sprintf("content hash mismatch for %s: expected %s, got %s", storageKey, expected, actual),
+		Retryable: false,
+	}
+}
+
+// NewJobIDMismatchError creates a non-retryable data integrity error when
+// the job_id carried by an incoming DP event does not match the job_id
+// already stored on the target document version (DM-TASK-056).
+//
+// Mismatch indicates a routing bug in the Orchestrator/DP (e.g. a race with
+// another processing job, or cross-job ingestion). The message is routed to
+// the ingestion DLQ for post-mortem analysis; the version state is left
+// untouched and the corresponding *Persisted confirmation is NOT published.
+func NewJobIDMismatchError(versionID, expectedJobID, receivedJobID string) *DomainError {
+	return &DomainError{
+		Code: ErrCodeJobIDMismatch,
+		Message: fmt.Sprintf(
+			"version %s job_id mismatch: stored %s, received %s",
+			versionID, expectedJobID, receivedJobID,
+		),
 		Retryable: false,
 	}
 }

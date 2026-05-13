@@ -356,6 +356,7 @@ DM — **центральный data hub** между вычислительны
 - `version_number` монотонно возрастает в пределах документа.
 - `parent_version_id` ссылается только на версию того же документа.
 - Одна версия → один `job_id` или `NULL`; `job_id` immutable после `CreateVersion` и не меняется при transitions `artifact_status`.
+- **Matching-инвариант (DM-TASK-056):** при обработке входящего `DocumentProcessingArtifactsReady` сохранённый `document_versions.job_id` (если NOT NULL) обязан совпадать с `event.job_id`. Расхождение — data integrity violation, требующее немедленного post-mortem (Orchestrator или DP создали race condition / cross-job routing). Реакция DM: транзакция откатывается, blob'ы компенсируются, событие направляется в `dm.dlq.ingestion-failed` с `error_code=JOB_ID_MISMATCH`, инкрементируется `dm_ingestion_job_id_mismatch_total`. Полный runbook — см. §11.3 ниже.
 
 **Связи:**
 - `DocumentVersion` N→1 `Document`.
@@ -1094,6 +1095,25 @@ PostgreSQL схема, Object Storage, transaction boundaries, idempotency, tran
 # 11. Статусы, ошибки и отказоустойчивость
 
 Внешние/внутренние статусы, retryable/non-retryable errors, DLQ, timeout policy — см. [error-handling.md](error-handling.md).
+
+## 11.1 Алерт `dm_ingestion_job_id_mismatch_total > 0` (DM-TASK-056)
+
+**Что произошло.** DM получил `DocumentProcessingArtifactsReady`, у которого `event.job_id` не совпал с сохранённым `document_versions.job_id` для целевой версии. Метрика `dm_ingestion_job_id_mismatch_total` — счётчик без cardinality-меток; любое значение больше нуля — сигнал, что хотя бы одно событие было направлено в DLQ с `error_code=JOB_ID_MISMATCH`.
+
+**Что сделал DM.** Ingestion-транзакция откатилась, blob'ы скомпенсированы (BRE-008 регистрирует orphan candidates), `artifact_status` версии не изменился, `VersionProcessingArtifactsReady` не опубликован. Само событие лежит в `dm.dlq.ingestion-failed` (и в таблице `dlq_records`) с полями: `original_topic=dp.artifacts.processing-ready`, `error_code=JOB_ID_MISMATCH`, `error_message="version {id} job_id mismatch: stored {A}, received {B}"`, `correlation_id`, `job_id` (incoming).
+
+**Действия оператора.**
+
+1. **Извлечь контекст DLQ-записи:** найти DLQ-запись по `job_id` (`SELECT … FROM dlq_records WHERE error_code='JOB_ID_MISMATCH' ORDER BY failed_at DESC`). Зафиксировать `expected_job_id` и `received_job_id` (см. соответствующий ERROR-лог DM — поле `error_code=JOB_ID_MISMATCH`).
+2. **Проверить Orchestrator-логи** на `correlation_id` из DLQ: какие версии и какие processing-задачи он стартовал и в каком порядке. Цель — найти, где `expected_job_id` был зафиксирован при `CreateVersion` и почему `received_job_id` пришёл от DP.
+3. **Проверить DP-логи** на `received_job_id`: для какого `document_id`/`version_id` DP выполнил processing. Возможные причины:
+   - **Race condition в Orchestrator:** один и тот же `document_id` был отправлен на processing дважды, и второй job переписал `current_version_id`, пока первый ещё работал.
+   - **Cross-job routing:** DP получил команду от другого job, но опубликовал событие на `version_id`, относящийся к этому job.
+   - **Баг идемпотентности:** Orchestrator повторно создал job со старым `version_id`.
+4. **Решение на DLQ:** DLQ-запись НЕ replayable — повторная обработка приведёт к тому же JOB_ID_MISMATCH (data state не изменится сам). Запись остаётся для post-mortem. Если установлено, что событие должно быть применено к новой версии — Orchestrator должен повторно запустить processing с корректным `job_id`/`version_id`; DM реагирует на свежее событие штатно.
+5. **Post-mortem:** инцидент эскалируется владельцу Orchestrator-а; нулевая толерантность — `dm_ingestion_job_id_mismatch_total` не должна расти в steady state.
+
+**Связанные сигналы.** Часто mismatch сопровождается ростом `dm_orphan_candidates_count` (компенсированные blob'ы зарегистрированы для очистки) и записями в `dm.dlq.ingestion-failed`. Оба сигнала — диагностические, не требуют отдельной реакции при наличии JOB_ID_MISMATCH alert.
 
 ---
 

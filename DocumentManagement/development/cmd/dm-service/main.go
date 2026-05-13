@@ -250,6 +250,7 @@ func run() int {
 	ingestionSvc := ingestion.NewArtifactIngestionService(
 		transactor, versionRepo, artifactRepo, auditRepo, objClient, outboxWriter,
 		fallbackResolver, obs.Metrics,
+		obs.Metrics, // DM-TASK-056: MismatchMetrics
 		docRepo, obs.Metrics,
 		poolOrphanCandidateRepo,
 		obs.Logger.With("component", "ingestion"),

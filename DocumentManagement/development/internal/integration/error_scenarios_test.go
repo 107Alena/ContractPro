@@ -49,6 +49,7 @@ func TestErrorScenario_ObjectStorageFailOnFourthArtifact_CompensationAndRetry(t 
 	ingestionSvc := ingestion.NewArtifactIngestionService(
 		transactor, versionRepo, artifactRepo, auditRepo,
 		failStorage, outboxWriter, fallback, &noopFallbackMetrics{},
+		newRecordingMismatchMetrics(),
 		docRepo, &noopTenantMetrics{}, orphanInserter, logger,
 		10*1024*1024, 100*1024*1024,
 	)
@@ -445,6 +446,152 @@ func TestErrorScenario_TerminalStatus_StatusTransitionError_CompensationRuns(t *
 	}
 	assertEqual(t, "version.ArtifactStatus unchanged",
 		string(model.ArtifactStatusFullyReady), string(verAfter.ArtifactStatus))
+}
+
+// =========================================================================
+// Scenario 6 (DM-TASK-056): event.job_id mismatch with stored version.job_id
+// =========================================================================
+
+// TestErrorScenario_JobIDMismatch_StoredAvsIncomingB verifies the integrity
+// invariant: when DP publishes DocumentProcessingArtifactsReady carrying a
+// job_id that differs from the job_id stored on the target version, ingestion
+// must abort. The version state, artifact descriptors, outbox, and S3 blobs
+// must all remain at their pre-ingest state; the mismatch metric must be
+// incremented; and the handler must return a non-retryable JOB_ID_MISMATCH
+// error so the consumer routes the message to dm.dlq.ingestion-failed.
+func TestErrorScenario_JobIDMismatch_StoredAvsIncomingB(t *testing.T) {
+	const (
+		orgID         = "org-err-006"
+		docID         = "doc-err-006"
+		versionID     = "ver-err-006"
+		storedJobID   = "job-stored-A"
+		incomingJobID = "job-incoming-B"
+		correlationID = "corr-err-006"
+	)
+
+	h := newTestHarness(t)
+	h.seedDocument(defaultDocument(orgID, docID))
+
+	ver := defaultVersion(orgID, docID, versionID)
+	stored := storedJobID
+	ver.JobID = &stored
+	h.seedVersion(ver)
+
+	event := defaultDPEvent(orgID, docID, versionID, incomingJobID, correlationID)
+
+	err := h.ingestion.HandleDPArtifacts(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected JOB_ID_MISMATCH error, got nil")
+	}
+	if code := port.ErrorCode(err); code != port.ErrCodeJobIDMismatch {
+		t.Errorf("error code = %q, want %q", code, port.ErrCodeJobIDMismatch)
+	}
+	if port.IsRetryable(err) {
+		t.Error("JOB_ID_MISMATCH must be non-retryable")
+	}
+
+	if got := h.mismatchMetrics.jobIDMismatchCount(); got != 1 {
+		t.Errorf("dm_ingestion_job_id_mismatch_total = %d, want 1", got)
+	}
+
+	// Version status unchanged (still PENDING) and stored job_id untouched.
+	verAfter, findErr := h.versionRepo.FindByID(context.Background(), orgID, docID, versionID)
+	if findErr != nil {
+		t.Fatalf("FindByID: %v", findErr)
+	}
+	assertEqual(t, "version.ArtifactStatus unchanged",
+		string(model.ArtifactStatusPending), string(verAfter.ArtifactStatus))
+	if verAfter.JobID == nil || *verAfter.JobID != storedJobID {
+		t.Errorf("version.JobID mutated: got %v, want %q", verAfter.JobID, storedJobID)
+	}
+
+	// No descriptors persisted, no outbox entries published, blobs compensated.
+	if got := len(h.artifactRepo.allArtifacts()); got != 0 {
+		t.Errorf("artifact descriptors = %d, want 0", got)
+	}
+	if got := len(h.outboxRepo.allEntries()); got != 0 {
+		t.Errorf("outbox entries = %d, want 0 (no VersionProcessingArtifactsReady)", got)
+	}
+	if got := h.objectStorage.blobCount(); got != 0 {
+		t.Errorf("S3 blobs after compensation = %d, want 0", got)
+	}
+
+	// Structured log carries error_code, expected/received job_ids, correlation_id.
+	mismatchLog := h.logger.findEntry("ERROR", "DM-TASK-056: DP event job_id does not match")
+	if mismatchLog == nil {
+		t.Fatal("expected structured ERROR log for job_id mismatch")
+	}
+	assertLogField(t, mismatchLog, "error_code", port.ErrCodeJobIDMismatch)
+	assertLogField(t, mismatchLog, "expected_job_id", storedJobID)
+	assertLogField(t, mismatchLog, "received_job_id", incomingJobID)
+	assertLogField(t, mismatchLog, "correlation_id", correlationID)
+}
+
+// TestErrorScenario_JobIDNullInVersion_NoMismatchCheck verifies that the
+// invariant is skipped when stored version.JobID is nil. Per DM-TASK-056
+// acceptance criteria, a version created outside the processing-flow (legacy
+// import, future scenarios) may receive DP artifacts without job_id matching.
+func TestErrorScenario_JobIDNullInVersion_NoMismatchCheck(t *testing.T) {
+	const (
+		orgID         = "org-err-006n"
+		docID         = "doc-err-006n"
+		versionID     = "ver-err-006n"
+		incomingJobID = "job-incoming-X"
+		correlationID = "corr-err-006n"
+	)
+
+	h := newTestHarness(t)
+	h.seedDocument(defaultDocument(orgID, docID))
+
+	ver := defaultVersion(orgID, docID, versionID)
+	ver.JobID = nil
+	h.seedVersion(ver)
+
+	event := defaultDPEvent(orgID, docID, versionID, incomingJobID, correlationID)
+
+	if err := h.ingestion.HandleDPArtifacts(context.Background(), event); err != nil {
+		t.Fatalf("HandleDPArtifacts: %v", err)
+	}
+	if got := h.mismatchMetrics.jobIDMismatchCount(); got != 0 {
+		t.Errorf("dm_ingestion_job_id_mismatch_total = %d, want 0 (stored JobID was nil)", got)
+	}
+
+	verAfter, findErr := h.versionRepo.FindByID(context.Background(), orgID, docID, versionID)
+	if findErr != nil {
+		t.Fatalf("FindByID: %v", findErr)
+	}
+	assertEqual(t, "version.ArtifactStatus advanced",
+		string(model.ArtifactStatusProcessingArtifactsReceived), string(verAfter.ArtifactStatus))
+}
+
+// TestErrorScenario_JobIDMatches_HappyPath asserts that when stored and
+// incoming job_ids match, ingestion proceeds normally and the mismatch metric
+// stays at zero — the invariant must not produce false positives.
+func TestErrorScenario_JobIDMatches_HappyPath(t *testing.T) {
+	const (
+		orgID         = "org-err-006m"
+		docID         = "doc-err-006m"
+		versionID     = "ver-err-006m"
+		jobID         = "job-shared-A"
+		correlationID = "corr-err-006m"
+	)
+
+	h := newTestHarness(t)
+	h.seedDocument(defaultDocument(orgID, docID))
+
+	ver := defaultVersion(orgID, docID, versionID)
+	stored := jobID
+	ver.JobID = &stored
+	h.seedVersion(ver)
+
+	event := defaultDPEvent(orgID, docID, versionID, jobID, correlationID)
+
+	if err := h.ingestion.HandleDPArtifacts(context.Background(), event); err != nil {
+		t.Fatalf("HandleDPArtifacts: %v", err)
+	}
+	if got := h.mismatchMetrics.jobIDMismatchCount(); got != 0 {
+		t.Errorf("dm_ingestion_job_id_mismatch_total = %d, want 0 (matching job_ids)", got)
+	}
 }
 
 // =========================================================================

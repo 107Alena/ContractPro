@@ -250,6 +250,15 @@ func (m *mockFallbackMetrics) IncMissingVersionID() {
 	m.missingVersionIDCount++
 }
 
+// mockMismatchMetrics records IncJobIDMismatch calls for DM-TASK-056 assertions.
+type mockMismatchMetrics struct {
+	jobIDMismatchCount int
+}
+
+func (m *mockMismatchMetrics) IncJobIDMismatch() {
+	m.jobIDMismatchCount++
+}
+
 type mockDocExistence struct {
 	exists bool
 	err    error
@@ -306,6 +315,7 @@ type testDeps struct {
 	outboxWriter     *outbox.OutboxWriter
 	fallbackResolver *mockFallbackResolver
 	fallbackMetrics  *mockFallbackMetrics
+	mismatchMetrics  *mockMismatchMetrics
 	docExistence     *mockDocExistence
 	tenantMetrics    *noopTenantMetrics
 	orphanInserter   *mockOrphanInserter
@@ -324,6 +334,7 @@ func newTestDeps() *testDeps {
 		outboxWriter:     outbox.NewOutboxWriter(outboxRepo),
 		fallbackResolver: &mockFallbackResolver{orgID: "org-001", versionID: "ver-001"},
 		fallbackMetrics:  &mockFallbackMetrics{},
+		mismatchMetrics:  &mockMismatchMetrics{},
 		docExistence:     &mockDocExistence{exists: true},
 		tenantMetrics:    &noopTenantMetrics{},
 		orphanInserter:   &mockOrphanInserter{},
@@ -335,7 +346,7 @@ func (d *testDeps) newService() *ArtifactIngestionService {
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
-		d.fallbackResolver, d.fallbackMetrics,
+		d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics,
 		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		10*1024*1024, // maxJSONBytes: 10 MB
 		100*1024*1024, // maxBlobBytes: 100 MB
@@ -352,7 +363,11 @@ func newTestVersion(orgID, docID, versionID string, status model.ArtifactStatus)
 	// DM-TASK-055: defaults for the 4 immutable fields used to enrich
 	// VersionProcessingArtifactsReady. Tests overriding any of these fields
 	// should mutate the returned value directly.
-	jobID := "job-stored-001"
+	//
+	// DM-TASK-056: the stored job_id matches validDPEvent().JobID by default
+	// so DP ingestion tests do not trip the job_id mismatch invariant. Tests
+	// exercising the mismatch case mutate version.JobID explicitly.
+	jobID := "job-001"
 	return &model.DocumentVersion{
 		VersionID:       versionID,
 		DocumentID:      docID,
@@ -451,46 +466,49 @@ func TestNewArtifactIngestionService_PanicsOnNilDeps(t *testing.T) {
 		fn   func()
 	}{
 		{"nil transactor", func() {
-			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(nil, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil versionRepo", func() {
-			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, nil, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil artifactRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, nil, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil auditRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, nil, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil objectStorage", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, nil, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil outboxWriter", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, nil, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil fallbackResolver", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, nil, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil fallbackMetrics", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, nil, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, nil, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+		}},
+		{"nil mismatchMetrics", func() {
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, nil, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil docRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, nil, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, nil, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil tenantMetrics", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, nil, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, nil, d.orphanInserter, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil orphanRepo", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, nil, d.logger, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, nil, d.logger, 10*1024*1024, 100*1024*1024)
 		}},
 		{"nil logger", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, nil, 10*1024*1024, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, nil, 10*1024*1024, 100*1024*1024)
 		}},
 		{"zero maxJSONBytes", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 0, 100*1024*1024)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 0, 100*1024*1024)
 		}},
 		{"negative maxBlobBytes", func() {
-			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, -1)
+			NewArtifactIngestionService(d.transactor, d.versionRepo, d.artifactRepo, d.auditRepo, d.objectStorage, d.outboxWriter, d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics, d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger, 10*1024*1024, -1)
 		}},
 	}
 
@@ -519,7 +537,7 @@ func TestValidateArtifacts_OversizedJSONArtifact(t *testing.T) {
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
-		d.fallbackResolver, d.fallbackMetrics,
+		d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics,
 		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		100, 100*1024*1024,
 	)
@@ -676,7 +694,7 @@ func TestValidateArtifacts_BlobRefOversized(t *testing.T) {
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
-		d.fallbackResolver, d.fallbackMetrics,
+		d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics,
 		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		10*1024*1024, 500, // maxBlobBytes = 500
 	)
@@ -708,7 +726,7 @@ func TestValidateArtifacts_OversizedLICArtifact(t *testing.T) {
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
-		d.fallbackResolver, d.fallbackMetrics,
+		d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics,
 		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		50, 100*1024*1024,
 	)
@@ -751,7 +769,7 @@ func TestValidateArtifacts_SizeCheckBeforeJSONParsing(t *testing.T) {
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
 		d.auditRepo, d.objectStorage, d.outboxWriter,
-		d.fallbackResolver, d.fallbackMetrics,
+		d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics,
 		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		10, 100*1024*1024,
 	)
@@ -896,8 +914,11 @@ func TestHandleDPArtifacts_HappyPath(t *testing.T) {
 
 	// DM-TASK-055: notification carries 4 enriched fields read from the
 	// locked version row (job_id, origin_type, parent_version_id, created_by_user_id).
-	if notification.JobID != "job-stored-001" {
-		t.Errorf("notification.job_id = %q, want job-stored-001 (from version row)", notification.JobID)
+	// DM-TASK-056: stored version.JobID and event.JobID must match by invariant;
+	// the dedicated TestHandleDPArtifacts_NilVersionJobID_BecomesEmptyString test
+	// covers the version.JobID = nil branch that still exercises enrichment.
+	if notification.JobID != "job-001" {
+		t.Errorf("notification.job_id = %q, want job-001 (from version row)", notification.JobID)
 	}
 	if notification.OriginType != model.OriginTypeUpload {
 		t.Errorf("notification.origin_type = %q, want UPLOAD", notification.OriginType)
@@ -1219,7 +1240,7 @@ func TestHandleDPArtifacts_AuditRepoFailure(t *testing.T) {
 	svc := NewArtifactIngestionService(
 		d.transactor, d.versionRepo, d.artifactRepo,
 		auditRepo, d.objectStorage, d.outboxWriter,
-		d.fallbackResolver, d.fallbackMetrics,
+		d.fallbackResolver, d.fallbackMetrics, d.mismatchMetrics,
 		d.docExistence, d.tenantMetrics, d.orphanInserter, d.logger,
 		10*1024*1024, 100*1024*1024,
 	)

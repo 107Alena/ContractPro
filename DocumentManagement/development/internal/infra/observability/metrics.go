@@ -95,6 +95,14 @@ type Metrics struct {
 	// did not match the document's actual owner (BRE-015 violation).
 	TenantMismatchTotal prometheus.Counter
 
+	// --- DP→DM ingestion integrity (DM-TASK-056) ---
+
+	// JobIDMismatchTotal counts DocumentProcessingArtifactsReady events
+	// where the event's job_id did not match the job_id stored on the
+	// target document version. Such events are routed to the ingestion
+	// DLQ; the version state is left unchanged.
+	JobIDMismatchTotal prometheus.Counter
+
 	// --- Rate limiting (BRE-009) ---
 
 	// RateLimitedTotal counts requests rejected by per-organization rate limiting,
@@ -243,6 +251,11 @@ func NewMetrics() *Metrics {
 			Help: "Total number of events with organization_id mismatch (BRE-015).",
 		}),
 
+		JobIDMismatchTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "dm_ingestion_job_id_mismatch_total",
+			Help: "Total number of DP artifact events whose job_id did not match the stored document version's job_id (DM-TASK-056).",
+		}),
+
 		RateLimitedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "dm_api_rate_limited_total",
 			Help: "Total number of requests rejected by per-organization rate limiting (BRE-009).",
@@ -316,6 +329,7 @@ func NewMetrics() *Metrics {
 		m.StuckVersionsTotal,
 		m.IntegrityCheckFailures,
 		m.TenantMismatchTotal,
+		m.JobIDMismatchTotal,
 		m.RateLimitedTotal,
 		m.OrphanCandidatesCount,
 		m.OrphansDeletedTotal,
@@ -465,6 +479,17 @@ func (m *Metrics) IncIntegrityCheckFailures() {
 // document's actual owner.
 func (m *Metrics) IncTenantMismatch() {
 	m.TenantMismatchTotal.Inc()
+}
+
+// ---------------------------------------------------------------------------
+// ingestion.MismatchMetrics interface (DM-TASK-056)
+// ---------------------------------------------------------------------------
+
+// IncJobIDMismatch increments dm_ingestion_job_id_mismatch_total.
+// Called when a DocumentProcessingArtifactsReady event carries a job_id that
+// does not match the job_id stored on the target document version.
+func (m *Metrics) IncJobIDMismatch() {
+	m.JobIDMismatchTotal.Inc()
 }
 
 // ---------------------------------------------------------------------------

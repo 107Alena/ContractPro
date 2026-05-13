@@ -63,6 +63,14 @@
 **Обязательные поля:** `correlation_id`, `timestamp`, `job_id`, `document_id`, `version_id`, `ocr_raw`, `text`, `structure`, `semantic_tree`.
 **Optional:** `organization_id`, `warnings` (omitempty).
 
+**Matching-инвариант `job_id` (DM-TASK-056):** входящий `event.job_id` сверяется с сохранённым `document_versions.job_id`, который был зафиксирован Orchestrator-ом при `CreateVersion`. Проверка выполняется внутри ingestion-транзакции после `SELECT ... FOR UPDATE` и до перехода `artifact_status`.
+
+| Сценарий | Результат |
+|----------|----------|
+| `version.job_id` == NULL | Проверка пропускается; обработка идёт обычным маршрутом (legacy/non-processing-flow версии допускаются). |
+| `event.job_id` пустая строка | Структурированный WARN-лог; обработка идёт обычным маршрутом (на практике отсекается `validateRequired`). |
+| `version.job_id` != NULL и `event.job_id` != `version.job_id` | Mismatch: артефакты НЕ сохраняются, `artifact_status` НЕ меняется, `VersionProcessingArtifactsReady` НЕ публикуется, blob'ы компенсируются (BRE-008 регистрирует orphan candidates). Событие отправляется в DLQ `dm.dlq.ingestion-failed` с `error_code=JOB_ID_MISMATCH`; инкрементируется метрика `dm_ingestion_job_id_mismatch_total`; структурированный ERROR-лог содержит `expected_job_id`, `received_job_id`, `correlation_id`. Mismatch сигнализирует о баге в Orchestrator/DP (race condition, cross-job ingestion) — см. observability runbook в `high-architecture.md §11.3`. |
+
 ---
 
 ### 1.2 GetSemanticTreeRequest

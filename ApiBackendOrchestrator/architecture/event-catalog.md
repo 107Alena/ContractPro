@@ -130,9 +130,28 @@
 | `version_id` | UUID | Идентификатор версии. |
 | `organization_id` | UUID | Идентификатор организации (tenant), извлечённый из JWT. |
 | `confirmed_by_user_id` | UUID | Идентификатор пользователя, выполнившего подтверждение (для audit trail). |
-| `contract_type` | string | Тип договора, выбранный/подтверждённый пользователем. Должен принадлежать whitelist LIC, иначе оркестратор отклоняет запрос на стадии 400 VALIDATION_ERROR. |
+| `contract_type` | string | Тип договора, **всегда английский enum LIC** (один из 12 значений ASSUMPTION-LIC-16, см. таблицу ниже). Сервер нормализует русские UI-лейблы в английский enum до публикации (ASSUMPTION-ORCH-16); невалидный ввод отклоняется на стадии HTTP 400 `INVALID_CONTRACT_TYPE`. |
 
-> **Порядок действий оркестратора:** (1) валидация версии в Redis статус-трекере (`status == AWAITING_USER_INPUT`) --> (2) валидация `contract_type` против whitelist --> (3) публикация `UserConfirmedType` в LIC --> (4) перевод версии в `ANALYZING` (Redis + SSE push) --> (5) HTTP 202 клиенту.
+#### Таблица RU↔EN-маппинга `contract_type` (ASSUMPTION-LIC-16)
+
+| RU UI-лейбл (case-insensitive) | EN LIC enum (canonical) |
+|---------|-------------------------|
+| услуги | `SERVICES` |
+| поставка | `SUPPLY` |
+| подряд | `WORK_CONTRACT` |
+| аренда | `LEASE` |
+| NDA | `NDA` |
+| купля-продажа | `SALE` |
+| лицензия | `LICENSE` |
+| агентский | `AGENCY` |
+| займ | `LOAN` |
+| страхование | `INSURANCE` |
+| трудовой | `EMPLOYMENT_CIVIL` |
+| иное | `OTHER` |
+
+API принимает либо RU-лейбл (case-insensitive: `Услуги` / `УСЛУГИ` / `услуги` → `SERVICES`), либо EN-enum (case-sensitive, pass-through: `SERVICES` → `SERVICES`, `services` → 400). Точка нормализации — **Type Confirmation Handler** в Orchestrator (`internal/application/confirmtype/normalize.go`); LIC всегда получает значение из правой колонки.
+
+> **Порядок действий оркестратора:** (1) валидация версии в Redis статус-трекере (`status == AWAITING_USER_INPUT`) --> (2) **нормализация `contract_type` RU→EN** через `NormalizeContractType()` (ASSUMPTION-ORCH-16); невалидный ввод → 400 `INVALID_CONTRACT_TYPE` --> (3) публикация `UserConfirmedType` в LIC с **английским enum** --> (4) перевод версии в `ANALYZING` (Redis + SSE push) --> (5) HTTP 202 клиенту.
 
 ---
 

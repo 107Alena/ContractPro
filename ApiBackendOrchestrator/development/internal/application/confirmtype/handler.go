@@ -57,29 +57,27 @@ type Handler struct {
 	publisher      CommandPublisher
 	kv             KVStore
 	log            *logger.Logger
-	whitelist      map[string]struct{}
 	idempotencyTTL time.Duration
 }
 
 // NewHandler creates a Handler for the confirm-type endpoint.
+//
+// The contract_type whitelist is intrinsic to the package: NormalizeContractType
+// pins the 12-pair RU→EN mapping per ASSUMPTION-LIC-16 / ASSUMPTION-ORCH-16,
+// removing the need for configurable whitelists that could drift from LIC's
+// contract.
 func NewHandler(
 	tracker StatusTracker,
 	publisher CommandPublisher,
 	kv KVStore,
 	log *logger.Logger,
-	whitelistSlice []string,
 	idempotencyTTL time.Duration,
 ) *Handler {
-	wl := make(map[string]struct{}, len(whitelistSlice))
-	for _, t := range whitelistSlice {
-		wl[strings.TrimSpace(t)] = struct{}{}
-	}
 	return &Handler{
 		tracker:        tracker,
 		publisher:      publisher,
 		kv:             kv,
 		log:            log.With("component", "confirm-type-handler"),
-		whitelist:      wl,
 		idempotencyTTL: idempotencyTTL,
 	}
 }
@@ -167,19 +165,25 @@ func (h *Handler) Handle() http.HandlerFunc {
 		if !req.ConfirmedByUser {
 			vb.Add(validation.NewInvalidFormat("confirmed_by_user", "true"))
 		}
-		if req.ContractType != "" {
-			if _, ok := h.whitelist[req.ContractType]; !ok {
-				vb.Add(validation.NewNotInWhitelist("contract_type", len(h.whitelist)))
-			}
-		}
 		if verr := vb.Build(); verr != nil {
 			model.WriteValidationError(w, r, verr, h.log)
 			return
 		}
 
+		// Normalize Russian UI label → English LIC enum (ASSUMPTION-LIC-16,
+		// ASSUMPTION-ORCH-16). The published UserConfirmedType.contract_type
+		// is always one of the 12 English enum values; English inputs already
+		// in the whitelist pass through as-is.
+		normalized, err := NormalizeContractType(req.ContractType)
+		if err != nil {
+			model.WriteError(w, r, model.ErrInvalidContractType, nil)
+			return
+		}
+		req.ContractType = normalized
+
 		// 4. Idempotency check.
 		iKey := idempotencyKey(versionID)
-		_, err := h.kv.Get(ctx, iKey)
+		_, err = h.kv.Get(ctx, iKey)
 		if err == nil {
 			h.log.Debug(ctx, "confirm-type already processed (idempotency hit)",
 				"version_id", versionID)
@@ -280,15 +284,5 @@ func (h *Handler) writeResponse(w http.ResponseWriter, r *http.Request, contract
 func isValidUUID(s string) bool {
 	_, err := uuid.Parse(s)
 	return err == nil
-}
-
-// WhitelistValues returns the configured contract type whitelist as a slice.
-// Exported for testing and introspection.
-func (h *Handler) WhitelistValues() []string {
-	out := make([]string, 0, len(h.whitelist))
-	for k := range h.whitelist {
-		out = append(out, k)
-	}
-	return out
 }
 

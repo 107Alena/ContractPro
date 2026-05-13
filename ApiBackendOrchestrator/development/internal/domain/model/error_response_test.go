@@ -20,7 +20,7 @@ var allErrorCodes = []ErrorCode{
 	ErrRateLimitExceeded,
 	ErrStorageUnavailable, ErrDMUnavailable, ErrOPMUnavailable, ErrBrokerUnavailable, ErrAuthServiceUnavailable,
 	ErrInvalidCredentials, ErrTokenRevoked, ErrRefreshTokenExpired,
-	ErrValidationError,
+	ErrValidationError, ErrInvalidContractType,
 	ErrInternalError,
 }
 
@@ -72,6 +72,7 @@ func TestErrorCatalog_HTTPStatusCategories(t *testing.T) {
 		{ErrVersionStillProcessing, 409},
 		{ErrResultsNotReady, 409},
 		{ErrVersionNotAwaitingInput, 409},
+		{ErrInvalidContractType, 400},
 		{ErrRateLimitExceeded, 429},
 		{ErrStorageUnavailable, 502},
 		{ErrDMUnavailable, 502},

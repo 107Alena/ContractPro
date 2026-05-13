@@ -283,7 +283,6 @@ func NewApp(cfg *config.Config) (*App, error) {
 		confirmTypeCmdPub,
 		kvClient,
 		log,
-		cfg.TypeConfirmation.ContractTypeWhitelist,
 		cfg.TypeConfirmation.IdempotencyTTL,
 	)
 

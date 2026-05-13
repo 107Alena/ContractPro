@@ -680,11 +680,11 @@ sequenceDiagram
     ORCH->>Redis: GET status:{vid}
     Redis-->>ORCH: AWAITING_USER_INPUT (OK)
 
-    ORCH->>ORCH: Validate contract_type<br/>против whitelist LIC
+    ORCH->>ORCH: NormalizeContractType(input)<br/>RU UI label → EN LIC enum<br/>(ASSUMPTION-LIC-16, ASSUMPTION-ORCH-16)<br/>На ошибке → 400 INVALID_CONTRACT_TYPE
 
     ORCH->>Redis: SETEX orch-user-confirmed-type:{vid} 60s<br/>(idempotency)
 
-    ORCH->>RMQ: publish UserConfirmedType<br/>→ orch.commands.user-confirmed-type<br/>{correlation_id, job_id, contract_type,<br/>confirmed_by_user_id, ...}
+    ORCH->>RMQ: publish UserConfirmedType<br/>→ orch.commands.user-confirmed-type<br/>{correlation_id, job_id, contract_type=EN_enum,<br/>confirmed_by_user_id, ...}
 
     ORCH->>Redis: SET status:{vid} = ANALYZING
     ORCH->>Redis: DEL confirmation:wait:{vid}

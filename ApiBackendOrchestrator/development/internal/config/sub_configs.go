@@ -276,26 +276,22 @@ func loadCORSConfig() CORSConfig {
 // (FR-2.1.3). When LIC classification confidence is low, the user is asked
 // to confirm the contract type. If no confirmation arrives within the timeout,
 // the version is moved to FAILED with error_code USER_CONFIRMATION_TIMEOUT.
+//
+// The contract_type whitelist is no longer configurable: the 12-pair RU→EN
+// mapping (ASSUMPTION-LIC-16, ASSUMPTION-ORCH-16) is intrinsic to
+// internal/application/confirmtype/normalize.go to prevent drift from LIC's
+// contract.
 type TypeConfirmationConfig struct {
-	ConfirmationTimeout   time.Duration // ORCH_USER_CONFIRMATION_TIMEOUT (default: 24h)
-	IdempotencyTTL        time.Duration // ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL (default: 60s)
-	WatchdogScanInterval  time.Duration // ORCH_WATCHDOG_SCAN_INTERVAL (default: 1m)
-	ContractTypeWhitelist []string      // ORCH_CONTRACT_TYPE_WHITELIST (default: static v1 list)
+	ConfirmationTimeout  time.Duration // ORCH_USER_CONFIRMATION_TIMEOUT (default: 24h)
+	IdempotencyTTL       time.Duration // ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL (default: 60s)
+	WatchdogScanInterval time.Duration // ORCH_WATCHDOG_SCAN_INTERVAL (default: 1m)
 }
 
-// defaultContractTypeWhitelist is the v1 static whitelist of contract types.
-var defaultContractTypeWhitelist = []string{"услуги", "поставка", "подряд", "аренда", "NDA"}
-
 func loadTypeConfirmationConfig() TypeConfirmationConfig {
-	whitelist := envStringSlice("ORCH_CONTRACT_TYPE_WHITELIST")
-	if len(whitelist) == 0 {
-		whitelist = defaultContractTypeWhitelist
-	}
 	return TypeConfirmationConfig{
-		ConfirmationTimeout:   envDuration("ORCH_USER_CONFIRMATION_TIMEOUT", 24*time.Hour),
-		IdempotencyTTL:        envDuration("ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL", 60*time.Second),
-		WatchdogScanInterval:  envDuration("ORCH_WATCHDOG_SCAN_INTERVAL", 1*time.Minute),
-		ContractTypeWhitelist: whitelist,
+		ConfirmationTimeout:  envDuration("ORCH_USER_CONFIRMATION_TIMEOUT", 24*time.Hour),
+		IdempotencyTTL:       envDuration("ORCH_USER_CONFIRMATION_IDEMPOTENCY_TTL", 60*time.Second),
+		WatchdogScanInterval: envDuration("ORCH_WATCHDOG_SCAN_INTERVAL", 1*time.Minute),
 	}
 }
 

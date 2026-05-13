@@ -2127,3 +2127,65 @@ Wire-up инфраструктуры из ORCH-TASK-052 (jobid.NewJobID) в uplo
 ### Следующие задачи
 - **ORCH-TASK-055** — Серверная нормализация `contract_type` RU→EN для POST /contracts/{id}/confirm-type (независимая, no dependencies).
 - Если/когда появятся endpoints для `RECOMMENDATION_APPLIED` / `MANUAL_EDIT` — паттерн `jobid.NewJobID()` ДО `DM.CreateVersion` применяется автоматически (см. ASSUMPTION-ORCH-15).
+
+---
+
+## ORCH-TASK-055 — Серверная нормализация `contract_type` RU→EN для POST /confirm-type (2026-05-14)
+
+### Контекст
+Frontend отправляет русские UI-лейблы (например, `«услуги»`), а LIC ждёт английский enum (`SERVICES`). Закрывает разрыв на стыке Orchestrator↔LIC: до этой задачи handler принимал любой ввод из конфигурируемого whitelist (5 RU значений по умолчанию) и публиковал его as-is — что (а) не соответствовало контракту LIC, (б) не покрывало все 12 категорий ASSUMPTION-LIC-16, (в) допускало drift между orchestrator-config и LIC enum. Задача независима, dependencies пусты.
+
+### План
+1. Создать `internal/application/confirmtype/normalize.go` с `NormalizeContractType(string) (string, error)` и sentinel `ErrInvalidContractType`. Вшить мапу 12 пар (RU lowercased) — single source of truth, EN whitelist derived at init.
+2. Добавить `model.ErrInvalidContractType` ErrorCode (HTTP 400, русский message+suggestion).
+3. Заменить whitelist-валидацию в handler на `NormalizeContractType` + `model.WriteError(ErrInvalidContractType)` на error; переписать `req.ContractType` нормализованным значением перед публикацией.
+4. Полностью убрать `whitelistSlice` из `NewHandler` signature; убрать `ContractTypeWhitelist`/`defaultContractTypeWhitelist`/env var из config; обновить callers (app/app.go, integration/testenv.go).
+5. Тесты: unit (normalize 12+12+11+9+ edge cases), handler (12 RU + 12 EN + 4 invalid), integration (12 RU end-to-end + capitalized + EN pass-through + reject).
+6. Документация: api-spec ConfirmTypeRequest, event-catalog §1.3 RU↔EN таблица, sequence-diagrams §8.15, integration-contracts §2.1.1 (новый), high-architecture ASSUMPTION-ORCH-16.
+
+### Дизайн (code-architect)
+- **Q1**: `normalize.go` помещён в существующий `confirmtype/` (когезия с handler.go — единственным consumer'ом; sibling-пакет `typeconfirmation/` с одной функцией создавал бы навигационный шум).
+- **Q2**: `(string, error)` + sentinel; lowercase input + lookup в pre-lowercased RU map (вместо `strings.EqualFold` per-key); EN whitelist derived из `ruToEN.values` at init для предотвращения drift; RU case-insensitive, EN case-sensitive.
+- **Q3**: typed `model.ErrInvalidContractType` (а не `WriteValidationError` с новым reason) — консистентно с `ErrVersionNotAwaitingInput`; `whitelistSlice` полностью удалён из `NewHandler` (intrinsic mapping per ASSUMPTION-LIC-16, конфигурируемость вредна — risk drift).
+- **Q4**: table-driven unit tests (12+12); handler-level tests на 12 RU + 12 EN + 4 invalid; 3 integration tests + 1 capitalized RU.
+- **Q5**: 5 файлов архитектурной документации; ASSUMPTION-ORCH-16 в high-architecture.md.
+
+### Реализация
+- `internal/application/confirmtype/normalize.go` (NEW): `NormalizeContractType`, `ErrInvalidContractType`, `ruToEN` map (12 пар: услуги→SERVICES, поставка→SUPPLY, подряд→WORK_CONTRACT, аренда→LEASE, NDA→NDA, купля-продажа→SALE, лицензия→LICENSE, агентский→AGENCY, займ→LOAN, страхование→INSURANCE, трудовой→EMPLOYMENT_CIVIL, иное→OTHER), `enWhitelist` derived через IIFE at package init. `strings.TrimSpace` внутри функции (defense in depth, добавлено после code review nit).
+- `internal/application/confirmtype/handler.go`: убран `whitelistSlice` из `NewHandler` + `whitelist map` field; в `Handle()` после base validation — вызов `NormalizeContractType(req.ContractType)`, на ошибке → `model.WriteError(w, r, model.ErrInvalidContractType, nil)`; `req.ContractType = normalized` перед публикацией; удалён `WhitelistValues()`; docstring `NewHandler` ссылается на ASSUMPTION-LIC-16 + ASSUMPTION-ORCH-16.
+- `internal/domain/model/error_response.go`: новый `ErrInvalidContractType` ErrorCode + entry в `errorCatalog` (HTTP 400, message «Недопустимый тип договора.», suggestion перечисляет все 12 RU-лейблов).
+- `internal/app/app.go`: `cfg.TypeConfirmation.ContractTypeWhitelist` arg удалён из вызова `confirmtype.NewHandler`.
+- `internal/integration/testenv.go`: whitelist arg удалён из тестового вызова `NewHandler`.
+- `internal/config/sub_configs.go`: поле `ContractTypeWhitelist`, var `defaultContractTypeWhitelist`, чтение `ORCH_CONTRACT_TYPE_WHITELIST` — удалены; `TypeConfirmationConfig` теперь содержит только timeouts; docstring обновлён, что whitelist intrinsic к коду.
+
+### Документация
+- `architecture/api-specification.yaml::ConfirmTypeRequest.contract_type`: drop strict enum (`type: string` без `enum`), description расширен — принимаются и RU UI-лейбл (case-insensitive), и EN LIC enum (case-sensitive pass-through), сервер нормализует RU→EN, ссылка на event-catalog §1.3. 400 response description обновлён `INVALID_CONTRACT_TYPE`.
+- `architecture/event-catalog.md` §1.3 UserConfirmedType: новая таблица из 12 строк RU↔EN, контракт «contract_type **всегда** EN enum LIC», порядок действий с шагом «нормализация `contract_type` RU→EN» перед публикацией.
+- `architecture/sequence-diagrams.md` §8.15 (Type Confirmation): шаг `Validate contract_type против whitelist LIC` заменён на `NormalizeContractType(input) RU UI label → EN LIC enum (ASSUMPTION-LIC-16, ASSUMPTION-ORCH-16) На ошибке → 400 INVALID_CONTRACT_TYPE`; payload в RMQ помечен `contract_type=EN_enum`.
+- `architecture/integration-contracts.md`: новый §2.1.1 «Нормализация полей перед публикацией» с таблицей (одна строка для UserConfirmedType.contract_type) + инвариант immutability.
+- `architecture/high-architecture.md`: новая ASSUMPTION-ORCH-16 (полная формулировка с 12 EN-значениями, обоснование, ссылка на ORCH-TASK-055); §6.15a Type Confirmation Handler (Ответственность п.2 переписан); §8.15 (шаг 6.b и Альтернативная ветка «Невалидный contract_type» переписаны с error_code INVALID_CONTRACT_TYPE).
+
+### Тесты
+- `go test -count=1 ./internal/application/confirmtype/...` → PASS (7 normalize-тестов + все handler-тесты).
+- `go test -count=1 ./internal/integration/...` → PASS (4 новых contract-type-теста + lowconfidence-тесты).
+- `go test -count=1 -race ./...` → 38 пакетов PASS.
+- `go vet ./...` → clean.
+- `make build` + `make test` + `make lint` → все targets PASS.
+- Verbose normalize: 12 RU PASS, 12 EN PASS, 11 case-insensitive RU PASS, 9 invalid PASS, NDA edge-case PASS, derivation invariant PASS, 6 whitespace PASS.
+- Verbose integration: TestConfirmType_NormalizesAllRussianLabels (12 sub-tests) PASS, _NormalizesCapitalizedRussian PASS, _PassesThroughEnglishEnum PASS, _RejectsInvalid PASS.
+
+### Code review
+- **code-reviewer**: verdict **approve-with-nits**.
+- 4 nit-level замечания устранены:
+  1. `ErrInvalidContractType` добавлен в `TestErrorCatalog_HTTPStatusCategories` для assertion HTTP 400 (помимо presence-check в `allErrorCodes`).
+  2. Добавлен integration test `TestConfirmType_NormalizesCapitalizedRussian` — capitalized RU `"Услуги"` end-to-end через HTTP-слой.
+  3. `NormalizeContractType` теперь вызывает `strings.TrimSpace(input)` внутри (defense in depth) с обновлённым docstring + новый `TestNormalizeContractType_TrimsSurroundingWhitespace` (6 кейсов с leading/trailing space, tab, newline для RU/EN).
+  4. Docstring `NewHandler` в `handler.go` теперь ссылается на ASSUMPTION-LIC-16 / ASSUMPTION-ORCH-16 (а не только LIC-16).
+- Не устранены сознательно: #5 IIFE→`init()` (стилистический выбор, текущий `var = func(){...}()` идиоматичен для package-level computed value), #7 cosmetic markdown alignment (рендерится корректно), #9 historical references в `tasks.json`/`progress.md` (append-only логи).
+
+### Субагенты
+- **code-architect** — design-ревью (Q1–Q5): когезия пакета, signature/case-handling, typed error path, test-strategy, doc-update points + ASSUMPTION-ORCH-16.
+- **code-reviewer** — final quality/correctness review.
+
+### Следующие задачи
+- Все 50+ ORCH-TASK выполнены. Проверить состояние `tasks.json` — задача 055 закрывает функциональную область type confirmation.

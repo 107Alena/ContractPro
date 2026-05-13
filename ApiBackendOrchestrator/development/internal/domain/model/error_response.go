@@ -73,7 +73,8 @@ const (
 
 // Validation (400).
 const (
-	ErrValidationError ErrorCode = "VALIDATION_ERROR"
+	ErrValidationError      ErrorCode = "VALIDATION_ERROR"
+	ErrInvalidContractType  ErrorCode = "INVALID_CONTRACT_TYPE"
 )
 
 // Internal (500).
@@ -231,6 +232,11 @@ var errorCatalog = map[ErrorCode]ErrorEntry{
 		HTTPStatus: http.StatusBadRequest,
 		Message:    "Данные запроса содержат ошибки.",
 		Suggestion: "Исправьте указанные ошибки и повторите запрос.",
+	},
+	ErrInvalidContractType: {
+		HTTPStatus: http.StatusBadRequest,
+		Message:    "Недопустимый тип договора.",
+		Suggestion: "Выберите тип из списка: услуги, поставка, подряд, аренда, NDA, купля-продажа, лицензия, агентский, займ, страхование, трудовой, иное.",
 	},
 	ErrInternalError: {
 		HTTPStatus: http.StatusInternalServerError,

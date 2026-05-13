@@ -192,8 +192,8 @@ func TestLowConfidenceTypeConfirmation(t *testing.T) {
 			if cmd["version_id"] != verID {
 				t.Errorf("published version_id = %v, want %s", cmd["version_id"], verID)
 			}
-			if cmd["contract_type"] != "услуги" {
-				t.Errorf("published contract_type = %v, want услуги", cmd["contract_type"])
+			if cmd["contract_type"] != "SERVICES" {
+				t.Errorf("published contract_type = %v, want SERVICES (normalized from RU 'услуги' per ASSUMPTION-LIC-16)", cmd["contract_type"])
 			}
 			if cmd["confirmed_by_user_id"] != testUserID {
 				t.Errorf("published confirmed_by_user_id = %v, want %s", cmd["confirmed_by_user_id"], testUserID)

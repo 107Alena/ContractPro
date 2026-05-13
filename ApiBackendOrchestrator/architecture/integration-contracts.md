@@ -663,6 +663,19 @@ UOM — **критическая зависимость** для login/refresh/l
 | Retry backoff | Exponential (100ms, 200ms, 400ms) |
 | Поведение при исчерпании retry | Версия уже создана в DM (статус `PENDING`). Логирование CRITICAL. HTTP 202 возвращается пользователю. Оператор может переотправить команду вручную |
 
+### 2.1.1 Нормализация полей перед публикацией
+
+Некоторые поля исходящих команд проходят серверную нормализацию в Orchestrator
+**перед** публикацией в RabbitMQ — чтобы потребитель (LIC/DP) всегда получал
+канонический формат, независимо от того, что прислал клиент.
+
+| Команда | Поле | Точка нормализации | Правило |
+|---------|------|-------------------|---------|
+| `UserConfirmedType` | `contract_type` | `internal/application/confirmtype/normalize.go::NormalizeContractType` | RU UI-лейбл (case-insensitive) → EN LIC enum (12 пар, ASSUMPTION-LIC-16). EN enum (case-sensitive) → pass-through. Невалидный ввод → HTTP 400 `INVALID_CONTRACT_TYPE` (команда не публикуется). См. ASSUMPTION-ORCH-16 и таблицу маппинга в [event-catalog.md §1.3](event-catalog.md). |
+
+**Инвариант:** payload `UserConfirmedType.contract_type` в RabbitMQ — **всегда**
+один из 12 английских enum-значений; русский лейбл попасть в брокер не может.
+
 ## 2.2 Входящие события (DP/LIC/RE/DM → Orchestrator)
 
 | # | Топик | Событие | Источник | Назначение в оркестраторе |

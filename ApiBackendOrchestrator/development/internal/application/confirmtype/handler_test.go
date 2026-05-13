@@ -84,8 +84,7 @@ func (m *mockKV) Set(_ context.Context, key string, value string, ttl time.Durat
 // ---------------------------------------------------------------------------
 
 func testHandler(tracker StatusTracker, publisher CommandPublisher, kv KVStore) *Handler {
-	return NewHandler(tracker, publisher, kv, logger.NewLogger("error"),
-		[]string{"услуги", "поставка", "подряд", "аренда", "NDA"}, 60*time.Second)
+	return NewHandler(tracker, publisher, kv, logger.NewLogger("error"), 60*time.Second)
 }
 
 func withAuth(r *http.Request, role auth.Role) *http.Request {
@@ -171,8 +170,8 @@ func TestHandle_HappyPath(t *testing.T) {
 	if resp.VersionID != testVersionID {
 		t.Errorf("version_id = %q, want %q", resp.VersionID, testVersionID)
 	}
-	if pub.cmd.ContractType != "услуги" {
-		t.Errorf("published contract_type = %q, want услуги", pub.cmd.ContractType)
+	if pub.cmd.ContractType != "SERVICES" {
+		t.Errorf("published contract_type = %q, want SERVICES (normalized from RU 'услуги')", pub.cmd.ContractType)
 	}
 	if pub.cmd.ConfirmedByUserID != "user-123" {
 		t.Errorf("published confirmed_by = %q, want user-123", pub.cmd.ConfirmedByUserID)
@@ -259,6 +258,17 @@ func TestHandle_ContractTypeNotInWhitelist(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+	var errResp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp["error_code"] != "INVALID_CONTRACT_TYPE" {
+		t.Errorf("error_code = %v, want INVALID_CONTRACT_TYPE", errResp["error_code"])
+	}
+	msg, _ := errResp["message"].(string)
+	if msg == "" || strings.HasPrefix(msg, "ascii-only") {
+		t.Errorf("message must be a non-empty Russian string, got %q", msg)
 	}
 }
 
@@ -394,23 +404,95 @@ func TestHandle_ContractTypeTrimmed(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
 	}
-	if pub.cmd.ContractType != "услуги" {
-		t.Errorf("published contract_type = %q, want %q", pub.cmd.ContractType, "услуги")
+	if pub.cmd.ContractType != "SERVICES" {
+		t.Errorf("published contract_type = %q, want %q (RU 'услуги' normalized after trim)", pub.cmd.ContractType, "SERVICES")
 	}
 }
 
-func TestHandle_AllWhitelistValues(t *testing.T) {
-	for _, ct := range []string{"услуги", "поставка", "подряд", "аренда", "NDA"} {
-		t.Run(ct, func(t *testing.T) {
+func TestHandle_AllRussianWhitelistMapsToEnglish(t *testing.T) {
+	cases := map[string]string{
+		"услуги":         "SERVICES",
+		"поставка":       "SUPPLY",
+		"подряд":         "WORK_CONTRACT",
+		"аренда":         "LEASE",
+		"NDA":            "NDA",
+		"купля-продажа":  "SALE",
+		"лицензия":       "LICENSE",
+		"агентский":      "AGENCY",
+		"займ":           "LOAN",
+		"страхование":    "INSURANCE",
+		"трудовой":       "EMPLOYMENT_CIVIL",
+		"иное":           "OTHER",
+	}
+	for ru, en := range cases {
+		t.Run(ru, func(t *testing.T) {
 			kv := newMockKV()
 			seedMeta(kv, testVersionID)
-			h := testHandler(&mockTracker{}, &mockPublisher{}, kv)
+			pub := &mockPublisher{}
+			h := testHandler(&mockTracker{}, pub, kv)
+
+			body, _ := json.Marshal(map[string]any{"contract_type": ru, "confirmed_by_user": true})
+			w := doRequest(h, testContractID, testVersionID, bytes.NewBuffer(body), auth.RoleLawyer)
+
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want %d for type %q", w.Code, http.StatusAccepted, ru)
+			}
+			if pub.cmd.ContractType != en {
+				t.Errorf("published contract_type for input %q = %q, want %q", ru, pub.cmd.ContractType, en)
+			}
+		})
+	}
+}
+
+func TestHandle_EnglishEnumPassesThrough(t *testing.T) {
+	englishEnums := []string{
+		"SERVICES", "SUPPLY", "WORK_CONTRACT", "LEASE", "NDA",
+		"SALE", "LICENSE", "AGENCY", "LOAN", "INSURANCE",
+		"EMPLOYMENT_CIVIL", "OTHER",
+	}
+	for _, en := range englishEnums {
+		t.Run(en, func(t *testing.T) {
+			kv := newMockKV()
+			seedMeta(kv, testVersionID)
+			pub := &mockPublisher{}
+			h := testHandler(&mockTracker{}, pub, kv)
+
+			body, _ := json.Marshal(map[string]any{"contract_type": en, "confirmed_by_user": true})
+			w := doRequest(h, testContractID, testVersionID, bytes.NewBuffer(body), auth.RoleLawyer)
+
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want %d for English enum %q", w.Code, http.StatusAccepted, en)
+			}
+			if pub.cmd.ContractType != en {
+				t.Errorf("published contract_type = %q, want %q (pass-through)", pub.cmd.ContractType, en)
+			}
+		})
+	}
+}
+
+func TestHandle_RejectsInvalidContractType(t *testing.T) {
+	cases := []string{
+		"абракадабра",
+		"services",   // wrong-case English
+		"услуг",      // partial RU match
+		"unknown_enum",
+	}
+	for _, ct := range cases {
+		t.Run(ct, func(t *testing.T) {
+			h := testHandler(&mockTracker{}, &mockPublisher{}, newMockKV())
 
 			body, _ := json.Marshal(map[string]any{"contract_type": ct, "confirmed_by_user": true})
 			w := doRequest(h, testContractID, testVersionID, bytes.NewBuffer(body), auth.RoleLawyer)
 
-			if w.Code != http.StatusAccepted {
-				t.Errorf("status = %d, want %d for type %q", w.Code, http.StatusAccepted, ct)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d for invalid type %q", w.Code, http.StatusBadRequest, ct)
+			}
+			var errResp map[string]any
+			if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if errResp["error_code"] != "INVALID_CONTRACT_TYPE" {
+				t.Errorf("error_code for input %q = %v, want INVALID_CONTRACT_TYPE", ct, errResp["error_code"])
 			}
 		})
 	}
@@ -495,14 +577,6 @@ func TestHandle_ContentType(t *testing.T) {
 	ct := w.Header().Get("Content-Type")
 	if !strings.Contains(ct, "application/json") {
 		t.Errorf("Content-Type = %q, want application/json", ct)
-	}
-}
-
-func TestHandle_WhitelistValues(t *testing.T) {
-	h := testHandler(&mockTracker{}, &mockPublisher{}, newMockKV())
-	vals := h.WhitelistValues()
-	if len(vals) != 5 {
-		t.Errorf("whitelist length = %d, want 5", len(vals))
 	}
 }
 

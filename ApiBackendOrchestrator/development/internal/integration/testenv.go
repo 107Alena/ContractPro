@@ -151,7 +151,6 @@ func newTestEnv(t *testing.T) *testEnv {
 		confirmTypeCmdPub,
 		kvFake,
 		log,
-		[]string{"услуги", "поставка", "подряд", "аренда", "NDA"},
 		60*time.Second,
 	)
 

@@ -223,6 +223,65 @@ func TestArtifactRepository_AllQueriesHaveOrgFilter(t *testing.T) {
 	}
 }
 
+// DM-TASK-057: RISK_DELTA artifact is accepted by Insert and round-trips
+// through FindByVersionAndType. The artifact_type column is TEXT without a
+// CHECK constraint, so no migration is required; this test ensures the new
+// enum value is wired through both the insert and select code paths.
+func TestArtifactRepository_RiskDelta_RoundTrip(t *testing.T) {
+	now := time.Now().UTC()
+
+	insertMock := &mockTx{
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			assert.Contains(t, sql, "INSERT INTO artifact_descriptors")
+			assert.Len(t, args, 13)
+			// args[4] is artifact_type column.
+			assert.Equal(t, "RISK_DELTA", args[4])
+			return pgconn.NewCommandTag("INSERT 0 1"), nil
+		},
+	}
+	ctx := ctxWithMockTx(insertMock)
+	a := model.NewArtifactDescriptor(
+		"art-rd", "v-rd", "doc-1", "org-1",
+		model.ArtifactTypeRiskDelta, model.ProducerDomainLIC,
+		"org-1/doc-1/v-rd/RISK_DELTA",
+		1024, "sha256:rd", "1.1", "job-rd", "corr-rd",
+	)
+	require.NoError(t, NewArtifactRepository().Insert(ctx, a))
+
+	selectMock := &mockTx{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			assert.Contains(t, sql, "artifact_type = $2")
+			assert.Equal(t, "RISK_DELTA", args[1])
+			return &mockRow{
+				scanFn: func(dest ...any) error {
+					*dest[0].(*string) = "art-rd"
+					*dest[1].(*string) = "v-rd"
+					*dest[2].(*string) = "doc-1"
+					*dest[3].(*string) = "org-1"
+					*dest[4].(*string) = "RISK_DELTA"
+					*dest[5].(*string) = "LIC"
+					*dest[6].(*string) = "org-1/doc-1/v-rd/RISK_DELTA"
+					*dest[7].(*int64) = 1024
+					*dest[8].(*string) = "sha256:rd"
+					*dest[9].(*string) = "1.1"
+					*dest[10].(*string) = "job-rd"
+					*dest[11].(*string) = "corr-rd"
+					*dest[12].(*time.Time) = now
+					return nil
+				},
+			}
+		},
+	}
+	ctx2 := ctxWithMockTx(selectMock)
+	got, err := NewArtifactRepository().FindByVersionAndType(
+		ctx2, "org-1", "doc-1", "v-rd", model.ArtifactTypeRiskDelta,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, model.ArtifactTypeRiskDelta, got.ArtifactType)
+	assert.Equal(t, model.ProducerDomainLIC, got.ProducerDomain)
+	assert.Equal(t, "1.1", got.SchemaVersion)
+}
+
 func TestArtifactRepository_DatabaseError(t *testing.T) {
 	mock := &mockTx{
 		execFn: func(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {

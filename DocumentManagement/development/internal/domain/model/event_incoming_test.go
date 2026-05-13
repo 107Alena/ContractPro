@@ -376,6 +376,78 @@ func TestLegalAnalysisArtifactsReadyAllFieldsPresent(t *testing.T) {
 	}
 }
 
+func TestLegalAnalysisArtifactsReady_RiskDeltaOmitempty(t *testing.T) {
+	event := LegalAnalysisArtifactsReady{
+		EventMeta:            EventMeta{CorrelationID: "corr-rd-1", Timestamp: time.Now().UTC()},
+		JobID:                "job-rd-1",
+		DocumentID:           "doc-1",
+		VersionID:            "ver-1",
+		ClassificationResult: json.RawMessage(`{}`),
+		KeyParameters:        json.RawMessage(`{}`),
+		RiskAnalysis:         json.RawMessage(`{}`),
+		RiskProfile:          json.RawMessage(`{}`),
+		Recommendations:      json.RawMessage(`{}`),
+		Summary:              json.RawMessage(`{}`),
+		DetailedReport:       json.RawMessage(`{}`),
+		AggregateScore:       json.RawMessage(`{}`),
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if _, ok := raw["risk_delta"]; ok {
+		t.Error("expected risk_delta to be omitted when empty")
+	}
+}
+
+func TestLegalAnalysisArtifactsReady_RiskDeltaPresent(t *testing.T) {
+	ts := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	delta := json.RawMessage(`{"baseline_version_id":"ver-1","changes":[{"risk_id":"r1","delta":"resolved"}]}`)
+	event := LegalAnalysisArtifactsReady{
+		EventMeta:            EventMeta{CorrelationID: "corr-rd-2", Timestamp: ts},
+		JobID:                "job-rd-2",
+		DocumentID:           "doc-1",
+		VersionID:            "ver-2",
+		ClassificationResult: json.RawMessage(`{}`),
+		KeyParameters:        json.RawMessage(`{}`),
+		RiskAnalysis:         json.RawMessage(`{}`),
+		RiskProfile:          json.RawMessage(`{}`),
+		Recommendations:      json.RawMessage(`{}`),
+		Summary:              json.RawMessage(`{}`),
+		DetailedReport:       json.RawMessage(`{}`),
+		AggregateScore:       json.RawMessage(`{}`),
+		RiskDelta:            delta,
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var restored LegalAnalysisArtifactsReady
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if string(restored.RiskDelta) != string(delta) {
+		t.Errorf("risk_delta content mismatch: got %s, want %s",
+			string(restored.RiskDelta), string(delta))
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("raw unmarshal error: %v", err)
+	}
+	if _, ok := raw["risk_delta"]; !ok {
+		t.Error("expected risk_delta to be present in JSON")
+	}
+}
+
 func TestReportsArtifactsReadyJSONRoundTrip(t *testing.T) {
 	ts := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	event := ReportsArtifactsReady{

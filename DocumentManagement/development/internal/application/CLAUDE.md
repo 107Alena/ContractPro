@@ -6,7 +6,7 @@ Application services implementing inbound port handlers. Coordinates domain logi
 
 **ingestion/** — ArtifactIngestionService (implements ArtifactIngestionHandler)
 - HandleDPArtifacts: 5 DP artifacts → PROCESSING_ARTIFACTS_RECEIVED
-- HandleLICArtifacts: 8 LIC artifacts → ANALYSIS_ARTIFACTS_RECEIVED
+- HandleLICArtifacts: 8 baseline LIC artifacts (+ optional RISK_DELTA from LIC v1.1 for versions with non-empty parent_version_id) → ANALYSIS_ARTIFACTS_RECEIVED
 - HandleREArtifacts: claim-check pattern → FULLY_READY
 - Flow: validate → tenant check → content validation (BRE-029) → save blobs → DB tx (descriptors + status transition + audit + outbox) → compensation on failure
 - Orphan candidate registration before compensation (BRE-008)

@@ -2801,3 +2801,64 @@ Outbound notification DM → LIC (`VersionProcessingArtifactsReady`, топик 
 **Итог:** DP→DM ingestion-boundary защищён data-integrity invariant'ом. JOB_ID_MISMATCH event'ы маршрутизируются в DLQ без побочных эффектов (version unchanged, no descriptors, blobs компенсированы); метрика `dm_ingestion_job_id_mismatch_total` сигнализирует операторам, runbook §11.1 описывает диагностику. Mismatch-сценарий вскрывает баг в Orchestrator/DP — DM делает свою часть defensively, не маскируя проблему.
 
 ---
+
+## DM-TASK-057 — Регистрация RISK_DELTA в ArtifactType enum (поддержка LIC v1.1)
+
+**Статус:** done
+**Дата:** 2026-05-13
+
+### Контекст
+
+LIC при анализе версий с непустым `parent_version_id` (re-check) публикует артефакт `risk_delta` в составе события `LegalAnalysisArtifactsReady` v1.1 (см. LIC ADR-LIC-05). DM должен принять этот тип артефакта и сохранить его в `ArtifactDescriptor`. Задача полностью независимая — не пересекается с job_id-цепочкой DM-TASK-054..056.
+
+### План
+
+1. Domain model: расширить `ArtifactType` enum значением `RISK_DELTA`. Добавить в `AllArtifactTypes` и `ArtifactTypesByProducer[LIC]`. НЕ добавлять в `IsBlobArtifact()` (RISK_DELTA — JSON).
+2. Event struct: добавить опциональное поле `RiskDelta json.RawMessage` в `LegalAnalysisArtifactsReady` с тегом `omitempty`.
+3. Application service: в `extractLICArtifacts` добавить вызов `appendIfNonEmpty` для `event.RiskDelta`, капасити 8→9.
+4. Тесты: unit (artifact, event_incoming, ingestion), integration repository (mock-based), smoke (full_pipeline LIC v1.1).
+5. Документация: high-architecture.md (таблица ArtifactType + §8.5), event-catalog.md (§1.5 + GetArtifactsRequest + VersionAnalysisReady).
+
+### Реализация
+
+**Production:**
+- `internal/domain/model/artifact.go`: добавлена константа `ArtifactTypeRiskDelta = "RISK_DELTA"`, добавлена в `AllArtifactTypes` (15→16) и `ArtifactTypesByProducer[LIC]` (8→9).
+- `internal/domain/model/event_incoming.go`: в `LegalAnalysisArtifactsReady` добавлено поле `RiskDelta json.RawMessage` с тегом `json:"risk_delta,omitempty"`.
+- `internal/application/ingestion/ingestion.go`: `extractLICArtifacts` капасити 8→9, добавлен вызов `appendIfNonEmpty(items, model.ArtifactTypeRiskDelta, event.RiskDelta)`. Doc-комментарий `HandleLICArtifacts` обновлён.
+
+**Тесты (все проходят, включая `-race`):**
+- `artifact_test.go`: счётчики обновлены, 3 новых теста для RISK_DELTA (enum, JSON round-trip, ArtifactDescriptor).
+- `event_incoming_test.go`: 2 новых теста (omitempty + present).
+- `ingestion_test.go`: `validLICEvent` расширен, `TestExtractLICArtifacts_AllPresent` обновлён (8→9), новый `TestExtractLICArtifacts_WithoutRiskDelta_BackwardCompat`, `TestHandleLICArtifacts_HappyPath` обновлён (счётчики 8→9 + проверка RISK_DELTA).
+- `artifact_repository_test.go`: новый `TestArtifactRepository_RiskDelta_RoundTrip` (INSERT+SELECT с RISK_DELTA, schema_version=1.1).
+- `full_pipeline_test.go`: новый smoke `TestFullPipeline_LICv1_1_RiskDeltaIngested`.
+
+**Документация:**
+- `architecture/high-architecture.md`: строка `RISK_DELTA | LIC | Дельта изменений риск-профиля...` в таблицу ArtifactType; §8.5 расширен описанием risk_delta как опционального артефакта LIC v1.1.
+- `architecture/event-catalog.md`: §1.5 (LegalAnalysisArtifactsReady) — добавлено поле risk_delta + пояснение об опциональности; GetArtifactsRequest и VersionAnalysisReady — упоминания RISK_DELTA.
+- `development/internal/{domain,application,integration}/CLAUDE.md`: счётчики обновлены (16 типов; 8 baseline + optional RISK_DELTA; 12 тестов full_pipeline).
+
+### Принятые решения и обоснования
+
+- **Backward compatibility:** Поле `RiskDelta` помечено `omitempty` — event'ы LIC v1.0 без `risk_delta` продолжают работать. `defaultLICEvent` в `testinfra.go` оставлен LIC v1.0-совместимым.
+- **Никакой миграции БД:** `artifact_type TEXT NOT NULL` без CHECK constraint — RISK_DELTA сохраняется как любая другая строка.
+- **Никаких whitelist-обновлений:** `validateArtifacts` (BRE-029) применяет лимит универсально; `VersionAnalysisReady.artifact_types` строится из `savedTypes` (динамически); `isValidArtifactType` итерирует `AllArtifactTypes`; idempotency fallback использует `ArtifactTypesByProducer`. Все автоматически подхватили новый тип.
+- **NOT blob:** RISK_DELTA не добавлен в `IsBlobArtifact()` — это структурированный JSON, обрабатывается через стандартный JSON-pipeline (не claim-check).
+- **schema_version=1.1:** ArtifactDescriptor для RISK_DELTA сохраняется с тем `schema_version`, который пришёл в событии (LIC v1.1 будет посылать "1.1"). Тесты явно проверяют "1.1".
+
+### Подагенты
+
+- **code-architect** — план одобрен, 8 подводных камней выявлены и закрыты до реализации.
+- **code-reviewer** — 0 blocking; 5 doc-drift замечаний (HandleLICArtifacts comment, 3 CLAUDE.md, defaultLICEvent comment) — все применены.
+
+### Тесты
+
+- `go test -count=1 -race ./internal/...` — ALL PASS (30 пакетов).
+- `make build` / `make build-migrate` / `make lint` / `make test` — все OK.
+- 8 новых RISK_DELTA-специфичных тестов прошли индивидуально (`-run "RiskDelta|LICv1_1"`).
+
+### Итог
+
+LIC v1.1 RE_CHECK события с `risk_delta` теперь корректно обрабатываются DM: артефакт сохраняется как `ArtifactDescriptor{artifact_type=RISK_DELTA, producer=LIC}`, попадает в `VersionAnalysisReady.artifact_types`, доступен через GetArtifacts. Изменение полностью обратно совместимо — LIC v1.0 события без `risk_delta` продолжают работать без изменений.
+
+---

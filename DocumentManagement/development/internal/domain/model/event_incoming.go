@@ -77,6 +77,10 @@ type LegalAnalysisArtifactsReady struct {
 	Summary              json.RawMessage `json:"summary"`
 	DetailedReport       json.RawMessage `json:"detailed_report"`
 	AggregateScore       json.RawMessage `json:"aggregate_score"`
+	// RiskDelta is present in LIC v1.1 events for versions with a non-empty
+	// parent_version_id (re-check). Optional: omitted for first-time analysis
+	// where no parent version exists. See LIC ADR-LIC-05.
+	RiskDelta json.RawMessage `json:"risk_delta,omitempty"`
 }
 
 // ReportsArtifactsReady is received when RE finishes generating export

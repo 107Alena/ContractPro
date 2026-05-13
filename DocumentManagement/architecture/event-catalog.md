@@ -152,7 +152,7 @@
   "version_id": "string (UUID)",
   "organization_id": "string (UUID, optional)",
   "artifact_types": [
-    "string (SEMANTIC_TREE | EXTRACTED_TEXT | DOCUMENT_STRUCTURE | RISK_ANALYSIS | RISK_PROFILE | SUMMARY | DETAILED_REPORT | KEY_PARAMETERS | AGGREGATE_SCORE | ...)"
+    "string (SEMANTIC_TREE | EXTRACTED_TEXT | DOCUMENT_STRUCTURE | RISK_ANALYSIS | RISK_PROFILE | SUMMARY | DETAILED_REPORT | KEY_PARAMETERS | AGGREGATE_SCORE | RISK_DELTA | ...)"
   ]
 }
 ```
@@ -222,11 +222,22 @@
   "aggregate_score": {
     "score": "float",
     "label": "string"
+  },
+  "risk_delta": {
+    "baseline_version_id": "string (UUID, родительская версия)",
+    "changes": [
+      {
+        "risk_id": "string",
+        "delta": "string (added | removed | resolved | level_changed)"
+      }
+    ]
   }
 }
 ```
 
 **Обязательные поля:** `correlation_id`, `timestamp`, `job_id`, `document_id`, `version_id`, `classification_result`, `key_parameters`, `risk_analysis`, `risk_profile`, `recommendations`, `summary`, `detailed_report`, `aggregate_score`.
+
+**Опциональные поля:** `risk_delta` — присутствует только в схеме LIC v1.1 для версий с непустым `parent_version_id` (re-check). Сохраняется как `ArtifactDescriptor` с `artifact_type=RISK_DELTA` и попадает в `dm.events.version-analysis-ready.artifact_types` наравне с остальными LIC-артефактами. См. LIC `ADR-LIC-05`.
 
 ---
 
@@ -491,6 +502,8 @@
   "artifact_types": ["CLASSIFICATION_RESULT", "KEY_PARAMETERS", "RISK_ANALYSIS", "RISK_PROFILE", "RECOMMENDATIONS", "SUMMARY", "DETAILED_REPORT", "AGGREGATE_SCORE"]
 }
 ```
+
+**Примечание:** `artifact_types` формируется из фактически сохранённых `ArtifactDescriptor`-ов. Для версий с непустым `parent_version_id` LIC v1.1 дополнительно публикует `RISK_DELTA`, и тогда этот тип также присутствует в списке.
 
 #### VersionReportsReady
 

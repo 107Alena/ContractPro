@@ -287,8 +287,9 @@ func (s *ArtifactIngestionService) dpJobIDInvariant(
 }
 
 // HandleLICArtifacts processes a LIC analysis artifacts-ready event.
-// Stores 8 analysis artifact blobs and transitions artifact_status to
-// ANALYSIS_ARTIFACTS_RECEIVED.
+// Stores 8 baseline analysis artifact blobs (plus the optional RISK_DELTA
+// artifact emitted by LIC v1.1 for versions with a non-empty parent_version_id)
+// and transitions artifact_status to ANALYSIS_ARTIFACTS_RECEIVED.
 func (s *ArtifactIngestionService) HandleLICArtifacts(ctx context.Context, event model.LegalAnalysisArtifactsReady) error {
 	// REV-002: resolve organization_id if missing.
 	if event.OrgID == "" {
@@ -778,7 +779,7 @@ func extractDPArtifacts(event model.DocumentProcessingArtifactsReady) []artifact
 }
 
 func extractLICArtifacts(event model.LegalAnalysisArtifactsReady) []artifactItem {
-	items := make([]artifactItem, 0, 8)
+	items := make([]artifactItem, 0, 9)
 	items = appendIfNonEmpty(items, model.ArtifactTypeClassificationResult, event.ClassificationResult)
 	items = appendIfNonEmpty(items, model.ArtifactTypeKeyParameters, event.KeyParameters)
 	items = appendIfNonEmpty(items, model.ArtifactTypeRiskAnalysis, event.RiskAnalysis)
@@ -787,6 +788,7 @@ func extractLICArtifacts(event model.LegalAnalysisArtifactsReady) []artifactItem
 	items = appendIfNonEmpty(items, model.ArtifactTypeSummary, event.Summary)
 	items = appendIfNonEmpty(items, model.ArtifactTypeDetailedReport, event.DetailedReport)
 	items = appendIfNonEmpty(items, model.ArtifactTypeAggregateScore, event.AggregateScore)
+	items = appendIfNonEmpty(items, model.ArtifactTypeRiskDelta, event.RiskDelta)
 	return items
 }
 

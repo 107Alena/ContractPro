@@ -22,6 +22,10 @@ const (
 	ArtifactTypeSummary              ArtifactType = "SUMMARY"
 	ArtifactTypeDetailedReport       ArtifactType = "DETAILED_REPORT"
 	ArtifactTypeAggregateScore       ArtifactType = "AGGREGATE_SCORE"
+	// RiskDelta is produced by LIC v1.1 for versions with a non-empty parent_version_id
+	// (re-check). It carries the delta of the risk profile compared to the parent version.
+	// See LIC ADR-LIC-05.
+	ArtifactTypeRiskDelta ArtifactType = "RISK_DELTA"
 
 	// RE (Reporting Engine) artifacts.
 	ArtifactTypeExportPDF  ArtifactType = "EXPORT_PDF"
@@ -43,6 +47,7 @@ var AllArtifactTypes = []ArtifactType{
 	ArtifactTypeSummary,
 	ArtifactTypeDetailedReport,
 	ArtifactTypeAggregateScore,
+	ArtifactTypeRiskDelta,
 	ArtifactTypeExportPDF,
 	ArtifactTypeExportDOCX,
 }
@@ -81,6 +86,7 @@ var ArtifactTypesByProducer = map[ProducerDomain][]ArtifactType{
 		ArtifactTypeSummary,
 		ArtifactTypeDetailedReport,
 		ArtifactTypeAggregateScore,
+		ArtifactTypeRiskDelta,
 	},
 	ProducerDomainRE: {
 		ArtifactTypeExportPDF,

@@ -1386,6 +1386,10 @@ func defaultDPEvent(orgID, docID, versionID, jobID, correlationID string) model.
 	}
 }
 
+// defaultLICEvent emits a LIC v1.0 baseline event with the 8 mandatory analysis
+// artifacts and no risk_delta — i.e. the first-time analysis case (parent_version_id
+// is empty). Tests covering the LIC v1.1 RE_CHECK path with risk_delta set
+// `event.RiskDelta` explicitly (see TestFullPipeline_LICv1_1_RiskDeltaIngested).
 func defaultLICEvent(orgID, docID, versionID, jobID, correlationID string) model.LegalAnalysisArtifactsReady {
 	return model.LegalAnalysisArtifactsReady{
 		EventMeta: model.EventMeta{

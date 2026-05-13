@@ -402,6 +402,7 @@ DM — **центральный data hub** между вычислительны
 | `SUMMARY` | LIC | Краткое резюме |
 | `DETAILED_REPORT` | LIC | Детальный отчёт |
 | `AGGREGATE_SCORE` | LIC | Сводная оценка |
+| `RISK_DELTA` | LIC | Дельта изменений риск-профиля по сравнению с родительской версией; публикуется LIC в составе `LegalAnalysisArtifactsReady` v1.1 для версий с непустым `parent_version_id` (см. LIC ADR-LIC-05) |
 | `EXPORT_PDF` | RE | Экспорт PDF |
 | `EXPORT_DOCX` | RE | Экспорт DOCX |
 
@@ -990,7 +991,7 @@ Sequence diagrams для каждого сценария — см. [sequence-dia
 
 Аналогично сценарию 8.1, но:
 - Idempotency key: `lic-artifacts:{job_id}`.
-- Артефакты: `CLASSIFICATION_RESULT`, `KEY_PARAMETERS`, `RISK_ANALYSIS`, `RISK_PROFILE`, `RECOMMENDATIONS`, `SUMMARY`, `DETAILED_REPORT`, `AGGREGATE_SCORE`.
+- Артефакты: `CLASSIFICATION_RESULT`, `KEY_PARAMETERS`, `RISK_ANALYSIS`, `RISK_PROFILE`, `RECOMMENDATIONS`, `SUMMARY`, `DETAILED_REPORT`, `AGGREGATE_SCORE`. Дополнительно для версий с непустым `parent_version_id` LIC v1.1 публикует опциональный артефакт `RISK_DELTA` (см. LIC ADR-LIC-05). DM сохраняет его в общем потоке `extractLICArtifacts` — отдельной обработки не требуется.
 - artifact_status: `PROCESSING_ARTIFACTS_RECEIVED` → `ANALYSIS_ARTIFACTS_RECEIVED`.
 - Notification: `dm.events.version-analysis-ready` для RE.
 - Confirmation: `dm.responses.lic-artifacts-persisted` / `dm.responses.lic-artifacts-persist-failed` для LIC.

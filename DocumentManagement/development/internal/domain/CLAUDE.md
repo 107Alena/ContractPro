@@ -9,7 +9,7 @@ Core business domain (11 source files):
 **Entities & State Machines:**
 - **document.go** — Document entity (ID, org, title, status, timestamps). DocumentStatus enum: ACTIVE → ARCHIVED → DELETED. ValidateDocumentTransition(), TransitionTo()
 - **version.go** — DocumentVersion entity (immutable version snapshot). ArtifactStatus state machine: PENDING → PROCESSING_ARTIFACTS_RECEIVED → ANALYSIS_ARTIFACTS_RECEIVED → REPORTS_READY → FULLY_READY (not strictly linear: ANALYSIS_ARTIFACTS_RECEIVED can also transition directly to FULLY_READY). PARTIALLY_AVAILABLE for stale versions (set by watchdog). OriginType enum (5 values). ValidateArtifactTransition()
-- **artifact.go** — ArtifactDescriptor (metadata for stored artifact). ArtifactType enum (15 types across DP/LIC/RE). ProducerDomain enum. IsBlobArtifact() for EXPORT_PDF/EXPORT_DOCX. ArtifactTypesByProducer map
+- **artifact.go** — ArtifactDescriptor (metadata for stored artifact). ArtifactType enum (16 types across DP/LIC/RE; RISK_DELTA added in LIC v1.1 — DM-TASK-057). ProducerDomain enum. IsBlobArtifact() for EXPORT_PDF/EXPORT_DOCX. ArtifactTypesByProducer map
 - **diff.go** — VersionDiffReference (metadata for version comparison result)
 - **audit.go** — AuditRecord (append-only). AuditAction enum (9 actions). ActorType enum (USER/SYSTEM/DOMAIN). Builder chain: WithDocument/WithVersion/WithJob/WithDetails
 - **idempotency.go** — IdempotencyRecord (PROCESSING/COMPLETED). IsStuck(threshold) for detecting stuck keys

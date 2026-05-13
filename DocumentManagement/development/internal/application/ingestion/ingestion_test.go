@@ -417,6 +417,7 @@ func validLICEvent() model.LegalAnalysisArtifactsReady {
 		Summary:              json.RawMessage(`{"text":"ok"}`),
 		DetailedReport:       json.RawMessage(`{"sections":[]}`),
 		AggregateScore:       json.RawMessage(`{"value":85}`),
+		RiskDelta:            json.RawMessage(`{"baseline_version_id":"ver-0","changes":[]}`),
 	}
 }
 
@@ -1292,19 +1293,26 @@ func TestHandleLICArtifacts_HappyPath(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify 8 blobs uploaded.
-	if got := len(d.objectStorage.putCalls); got != 8 {
-		t.Fatalf("expected 8 put calls, got %d", got)
+	// Verify 9 blobs uploaded (8 baseline LIC artifacts + risk_delta from LIC v1.1).
+	if got := len(d.objectStorage.putCalls); got != 9 {
+		t.Fatalf("expected 9 put calls, got %d", got)
 	}
 
-	// Verify 8 descriptors.
-	if got := len(d.artifactRepo.inserted); got != 8 {
-		t.Fatalf("expected 8 descriptors, got %d", got)
+	// Verify 9 descriptors.
+	if got := len(d.artifactRepo.inserted); got != 9 {
+		t.Fatalf("expected 9 descriptors, got %d", got)
 	}
+	var sawRiskDelta bool
 	for _, desc := range d.artifactRepo.inserted {
 		if desc.ProducerDomain != model.ProducerDomainLIC {
 			t.Errorf("producer = %q, want LIC", desc.ProducerDomain)
 		}
+		if desc.ArtifactType == model.ArtifactTypeRiskDelta {
+			sawRiskDelta = true
+		}
+	}
+	if !sawRiskDelta {
+		t.Error("expected RISK_DELTA descriptor to be inserted from LIC v1.1 event")
 	}
 
 	// Verify status → ANALYSIS_ARTIFACTS_RECEIVED.
@@ -1644,8 +1652,32 @@ func TestExtractDPArtifacts_AllPresent(t *testing.T) {
 func TestExtractLICArtifacts_AllPresent(t *testing.T) {
 	event := validLICEvent()
 	items := extractLICArtifacts(event)
+	if len(items) != 9 {
+		t.Fatalf("expected 9, got %d", len(items))
+	}
+
+	var sawRiskDelta bool
+	for _, item := range items {
+		if item.artifactType == model.ArtifactTypeRiskDelta {
+			sawRiskDelta = true
+		}
+	}
+	if !sawRiskDelta {
+		t.Error("expected RISK_DELTA to be extracted when risk_delta is present")
+	}
+}
+
+func TestExtractLICArtifacts_WithoutRiskDelta_BackwardCompat(t *testing.T) {
+	event := validLICEvent()
+	event.RiskDelta = nil
+	items := extractLICArtifacts(event)
 	if len(items) != 8 {
-		t.Fatalf("expected 8, got %d", len(items))
+		t.Fatalf("expected 8 artifacts when risk_delta is absent, got %d", len(items))
+	}
+	for _, item := range items {
+		if item.artifactType == model.ArtifactTypeRiskDelta {
+			t.Error("did not expect RISK_DELTA to be extracted when risk_delta is empty")
+		}
 	}
 }
 

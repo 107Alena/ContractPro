@@ -110,8 +110,8 @@ func TestArtifactTypesByProducerCompleteness(t *testing.T) {
 	if len(ArtifactTypesByProducer[ProducerDomainDP]) != 5 {
 		t.Errorf("expected 5 DP artifact types, got %d", len(ArtifactTypesByProducer[ProducerDomainDP]))
 	}
-	if len(ArtifactTypesByProducer[ProducerDomainLIC]) != 8 {
-		t.Errorf("expected 8 LIC artifact types, got %d", len(ArtifactTypesByProducer[ProducerDomainLIC]))
+	if len(ArtifactTypesByProducer[ProducerDomainLIC]) != 9 {
+		t.Errorf("expected 9 LIC artifact types, got %d", len(ArtifactTypesByProducer[ProducerDomainLIC]))
 	}
 	if len(ArtifactTypesByProducer[ProducerDomainRE]) != 2 {
 		t.Errorf("expected 2 RE artifact types, got %d", len(ArtifactTypesByProducer[ProducerDomainRE]))
@@ -119,9 +119,87 @@ func TestArtifactTypesByProducerCompleteness(t *testing.T) {
 }
 
 func TestAllArtifactTypesCount(t *testing.T) {
-	expected := 15
+	expected := 16
 	if len(AllArtifactTypes) != expected {
 		t.Errorf("expected %d artifact types, got %d", expected, len(AllArtifactTypes))
+	}
+}
+
+func TestArtifactTypeRiskDeltaIsLICJSONArtifact(t *testing.T) {
+	if ArtifactTypeRiskDelta != "RISK_DELTA" {
+		t.Errorf("expected RISK_DELTA literal, got %s", ArtifactTypeRiskDelta)
+	}
+	if ArtifactTypeRiskDelta.IsBlobArtifact() {
+		t.Error("RISK_DELTA must not be classified as blob artifact")
+	}
+
+	found := false
+	for _, t := range ArtifactTypesByProducer[ProducerDomainLIC] {
+		if t == ArtifactTypeRiskDelta {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("RISK_DELTA must be registered under ProducerDomainLIC")
+	}
+}
+
+func TestArtifactTypeRiskDeltaJSONRoundTrip(t *testing.T) {
+	original := ArtifactTypeRiskDelta
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if string(data) != `"RISK_DELTA"` {
+		t.Errorf("expected \"RISK_DELTA\", got %s", string(data))
+	}
+
+	var restored ArtifactType
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if restored != ArtifactTypeRiskDelta {
+		t.Errorf("expected RISK_DELTA, got %s", restored)
+	}
+}
+
+func TestArtifactDescriptorWithRiskDeltaJSONRoundTrip(t *testing.T) {
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	ad := &ArtifactDescriptor{
+		ArtifactID:     "art-rd-1",
+		VersionID:      "ver-2",
+		DocumentID:     "doc-1",
+		OrganizationID: "org-1",
+		ArtifactType:   ArtifactTypeRiskDelta,
+		ProducerDomain: ProducerDomainLIC,
+		StorageKey:     "org-1/doc-1/ver-2/RISK_DELTA",
+		SizeBytes:      512,
+		ContentHash:    "sha256:rd",
+		SchemaVersion:  "1.1",
+		JobID:          "job-rd",
+		CorrelationID:  "corr-rd",
+		CreatedAt:      now,
+	}
+
+	data, err := json.Marshal(ad)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var restored ArtifactDescriptor
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if restored.ArtifactType != ArtifactTypeRiskDelta {
+		t.Errorf("artifact_type mismatch: %s != %s", restored.ArtifactType, ArtifactTypeRiskDelta)
+	}
+	if restored.ProducerDomain != ProducerDomainLIC {
+		t.Errorf("producer_domain mismatch: %s != LIC", restored.ProducerDomain)
+	}
+	if restored.SchemaVersion != "1.1" {
+		t.Errorf("schema_version mismatch: %s != 1.1", restored.SchemaVersion)
 	}
 }
 

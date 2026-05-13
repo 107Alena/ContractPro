@@ -112,6 +112,84 @@ func TestFullPipeline_DPtoLICtoRE_FullyReady(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: DM-TASK-057 — LIC v1.1 RE_CHECK delivers risk_delta artifact.
+// LegalAnalysisArtifactsReady with non-empty risk_delta must result in a
+// RISK_DELTA descriptor stored under producer LIC, included in
+// VersionAnalysisReady artifact_types, and counted in ListArtifacts.
+// ---------------------------------------------------------------------------
+
+func TestFullPipeline_LICv1_1_RiskDeltaIngested(t *testing.T) {
+	const (
+		orgID         = "org-fp-rd"
+		docID         = "doc-fp-rd"
+		versionID     = "ver-fp-rd"
+		dpJobID       = "job-dp-rd"
+		licJobID      = "job-lic-rd"
+		correlationID = "corr-rd"
+	)
+
+	h := newTestHarness(t)
+	h.seedDocument(defaultDocument(orgID, docID))
+	h.seedVersion(defaultVersion(orgID, docID, versionID))
+
+	dpEvent := defaultDPEvent(orgID, docID, versionID, dpJobID, correlationID)
+	if err := h.ingestion.HandleDPArtifacts(context.Background(), dpEvent); err != nil {
+		t.Fatalf("HandleDPArtifacts failed: %v", err)
+	}
+
+	licEvent := defaultLICEvent(orgID, docID, versionID, licJobID, correlationID)
+	licEvent.RiskDelta = json.RawMessage(
+		`{"baseline_version_id":"ver-parent","changes":[{"risk_id":"r1","delta":"resolved"}]}`,
+	)
+	if err := h.ingestion.HandleLICArtifacts(context.Background(), licEvent); err != nil {
+		t.Fatalf("HandleLICArtifacts (v1.1) failed: %v", err)
+	}
+
+	all := h.artifactRepo.allArtifacts()
+	assertIntEqual(t, "artifacts after LIC v1.1", 4+9, len(all))
+
+	var rd *model.ArtifactDescriptor
+	for _, a := range all {
+		if a.ArtifactType == model.ArtifactTypeRiskDelta {
+			rd = a
+			break
+		}
+	}
+	if rd == nil {
+		t.Fatal("expected RISK_DELTA descriptor to be persisted")
+	}
+	assertEqual(t, "RISK_DELTA producer", string(model.ProducerDomainLIC), string(rd.ProducerDomain))
+	assertEqual(t, "RISK_DELTA org", orgID, rd.OrganizationID)
+	assertEqual(t, "RISK_DELTA version", versionID, rd.VersionID)
+	assertEqual(t, "RISK_DELTA job", licJobID, rd.JobID)
+
+	outbox := h.outboxRepo.allEntries()
+	var notif *model.VersionAnalysisArtifactsReady
+	for _, e := range outbox {
+		if e.Topic == model.TopicDMEventsVersionAnalysisReady {
+			var n model.VersionAnalysisArtifactsReady
+			if err := json.Unmarshal(e.Payload, &n); err == nil {
+				notif = &n
+			}
+		}
+	}
+	if notif == nil {
+		t.Fatal("expected VersionAnalysisReady notification in outbox")
+	}
+	var sawRiskDelta bool
+	for _, at := range notif.ArtifactTypes {
+		if at == model.ArtifactTypeRiskDelta {
+			sawRiskDelta = true
+			break
+		}
+	}
+	if !sawRiskDelta {
+		t.Errorf("expected RISK_DELTA in VersionAnalysisReady.artifact_types, got %v",
+			notif.ArtifactTypes)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Test: ListArtifacts returns progressively more artifacts at each stage
 // ---------------------------------------------------------------------------
 

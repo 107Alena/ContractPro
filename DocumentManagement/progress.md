@@ -2710,3 +2710,48 @@ MAIN.GO: poolDocumentRepository + poolDiffRepository + poolAuditPartitionManager
 **Итог:** Базовый слой `job_id` в document_versions готов. Колонка immutable после CreateVersion, NULL допустим для версий вне processing-flow, partial index подготовлен под future lookup-by-job. Backward compatibility VersionCreated сохранена через `omitempty`. Координация с ORCH-TASK-052: Orchestrator теперь может передавать `job_id` в `CreateVersionRequest`. Разблокированы DM-TASK-055 (enrichment VersionProcessingArtifactsReady) и DM-TASK-056 (matching-инвариант event.job_id == version.job_id).
 
 ---
+
+
+## 2026-05-13: DM-TASK-055 — Обогащение VersionProcessingArtifactsReady 4 полями из document_versions
+
+**Статус:** done
+
+**Что сделано:**
+Outbound notification DM → LIC (`VersionProcessingArtifactsReady`, топик `dm.events.version-artifacts-ready`) теперь несёт 4 immutable поля версии: `job_id`, `origin_type`, `parent_version_id` (omitempty), `created_by_user_id`. Поля читаются прямо из загруженной строки `document_versions` (под `SELECT ... FOR UPDATE`) и пакуются в payload в той же ingestion-транзакции, что и переход `artifact_status` — атомарность гарантирована. LIC получает полный контекст без догрузки.
+
+**Архитектурный выбор (рекомендация code-architect):**
+Подход B — построение outbox-событий вынесено внутрь транзакции. Поле `ingestionParams.outboxEvents []TopicEvent` заменено на `buildOutbox func(version *DocumentVersion) []TopicEvent`. `processIngestion` после успешного `version.TransitionArtifactStatus` вызывает callback, передавая уже залоченную версию. Альтернативный подход A (дополнительный `FindByID` до транзакции) отклонён: +1 SELECT на каждое DP-событие, дублирование загрузки, нарушение принципа «outbox в той же TX, что и доменное изменение».
+
+**Изменённые файлы:**
+- `DocumentManagement/development/internal/domain/model/event_outgoing.go` — `VersionProcessingArtifactsReady` расширено: `JobID string \`json:"job_id"\``, `OriginType OriginType \`json:"origin_type"\``, `ParentVersionID string \`json:"parent_version_id,omitempty"\``, `CreatedByUserID string \`json:"created_by_user_id"\``. Go-doc фиксирует, что значения immutable и загружаются из document_versions при формировании события (DM-TASK-055).
+- `DocumentManagement/development/internal/application/ingestion/ingestion.go` — `ingestionParams.outboxEvents` → `buildOutbox func(*DocumentVersion) []outbox.TopicEvent`. `processIngestion` вызывает `outboxEvents := p.buildOutbox(version)` сразу перед `s.outboxWriter.WriteMultiple` — внутри транзакции, после `FindByIDForUpdate` и `TransitionArtifactStatus`. `HandleDPArtifacts` формирует `VersionProcessingArtifactsReady` с 4 enrichment-полями (JobID — пустая строка при `version.JobID == nil`, matching-инвариант не проверяется — это DM-TASK-056). `HandleLICArtifacts` и `HandleREArtifacts` — callback'и игнорируют version (через `_`); их события не нуждаются в enrichment.
+- `DocumentManagement/development/internal/domain/model/event_outgoing_test.go` — `TestVersionProcessingArtifactsReadyJSONRoundTrip` расширен ассертами на 4 поля; новый тест `TestVersionProcessingArtifactsReadyOmitemptyParentVersionID` — проверяет omitempty `parent_version_id` и required-присутствие `job_id`/`origin_type`/`created_by_user_id` в raw JSON.
+- `DocumentManagement/development/internal/application/ingestion/ingestion_test.go` — `newTestVersion` теперь заполняет `OriginType=UPLOAD`, `CreatedByUserID="user-stored-001"`, `JobID=&"job-stored-001"` по умолчанию. `TestHandleDPArtifacts_HappyPath` расширен 4 ассертами + проверкой отсутствия `parent_version_id` в raw JSON. Новые тесты: `TestHandleDPArtifacts_EnrichesParentVersionID` (OriginType=RECOMMENDATION_APPLIED, ParentVersionID="ver-parent-001"); `TestHandleDPArtifacts_NilVersionJobID_BecomesEmptyString`.
+- `DocumentManagement/development/internal/integration/full_pipeline_test.go` — два новых интеграционных теста: `TestFullPipeline_VersionProcessingArtifactsReady_EnrichedFields` (UPLOAD, без parent, JobID/CreatedByUserID — проверка payload outbox notification + omitempty `parent_version_id`); `TestFullPipeline_VersionProcessingArtifactsReady_WithParent` (вторая версия RECOMMENDATION_APPLIED с parent_version_id=<UUID v1>, проверка непустого parent_version_id + origin_type).
+- `DocumentManagement/architecture/event-catalog.md` §2.2 — payload `VersionProcessingArtifactsReady` обновлён 4 полями; новая поле-таблица (job_id required, origin_type required, parent_version_id optional, created_by_user_id required); раздел «Источник значений» поясняет, что поля immutable, читаются под SELECT FOR UPDATE и пакуются атомарно с переходом artifact_status.
+- `DocumentManagement/architecture/integration-contracts.md` — добавлен §6.1 «Обогащение outbound уведомлений данными версии» с пояснением переиспользования FindByIDForUpdate и атомарности с переходом artifact_status.
+
+**План реализации:**
+1. Изучить ingestion.go, event_outgoing.go, version.go и тесты — найти, где собирается outbox.
+2. Сверить подход с code-architect (Подход A vs B).
+3. Расширить domain model `VersionProcessingArtifactsReady`.
+4. Рефакторинг `processIngestion`: `outboxEvents` → `buildOutbox` callback.
+5. Обогатить `HandleDPArtifacts`; LIC/RE handlers — оставить семантику без enrichment.
+6. Обновить unit-тесты ingestion + event_outgoing (round-trip + omitempty).
+7. Добавить два интеграционных теста full_pipeline.
+8. Обновить event-catalog.md §2.2 + integration-contracts.md §6.1.
+9. `go test -race -count=1 ./...`, `make build build-migrate test lint`.
+
+**Консультации:**
+- code-architect: рекомендован Подход B (build outbox внутри TX). Причины: атомарность outbox+state change, отсутствие +1 SELECT, отсутствие риска поломать тест VersionNotFound (где раньше 5 блобов компенсировались — поведение сохранено). Acceptance criteria «GetByID или эквивалент» допускает `FindByIDForUpdate` внутри транзакции.
+
+**Тесты:**
+- `go test -count=1 -race ./...` — ALL PASS (30 пакетов)
+- `make build` — OK
+- `make build-migrate` — OK
+- `make test` — OK
+- `make lint` (`go vet ./...`) — OK
+
+**Итог:** LIC получает полный контекст версии (job_id, origin_type, parent_version_id, created_by_user_id) в payload `VersionProcessingArtifactsReady` без догрузки. Outbox-построение перенесено внутрь ingestion-транзакции через callback — атомарность state-change и публикации события гарантирована. Matching-инвариант `event.job_id == version.job_id` оставлен под DM-TASK-056 (defensive code + DLQ).
+
+---

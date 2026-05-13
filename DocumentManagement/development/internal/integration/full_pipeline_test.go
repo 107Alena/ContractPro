@@ -177,6 +177,119 @@ func TestFullPipeline_ListArtifactsAtEachStage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: DM-TASK-055 — VersionProcessingArtifactsReady is enriched with 4
+// immutable fields read from the locked version row inside the ingestion TX:
+// job_id, origin_type, parent_version_id (omitempty), created_by_user_id.
+// ---------------------------------------------------------------------------
+
+func TestFullPipeline_VersionProcessingArtifactsReady_EnrichedFields(t *testing.T) {
+	const (
+		orgID         = "org-fp-055"
+		docID         = "doc-fp-055"
+		versionID     = "ver-fp-055"
+		versionJobID  = "job-stored-on-version-055"
+		userID        = "user-uploader-055"
+		dpJobID       = "job-dp-055"
+		correlationID = "corr-055"
+	)
+
+	h := newTestHarness(t)
+	h.seedDocument(defaultDocument(orgID, docID))
+
+	// First version: UPLOAD, no parent, persisted job_id.
+	ver := defaultVersion(orgID, docID, versionID)
+	ver.CreatedByUserID = userID
+	storedJobID := versionJobID
+	ver.JobID = &storedJobID
+	h.seedVersion(ver)
+
+	dpEvent := defaultDPEvent(orgID, docID, versionID, dpJobID, correlationID)
+	if err := h.ingestion.HandleDPArtifacts(context.Background(), dpEvent); err != nil {
+		t.Fatalf("HandleDPArtifacts: %v", err)
+	}
+
+	entries := h.outboxRepo.allEntries()
+	assertIntEqual(t, "outbox entries", 2, len(entries))
+	notifEntry := entries[1]
+	assertEqual(t, "outbox notification topic",
+		model.TopicDMEventsVersionArtifactsReady, notifEntry.Topic)
+
+	var notif model.VersionProcessingArtifactsReady
+	if err := json.Unmarshal(notifEntry.Payload, &notif); err != nil {
+		t.Fatalf("unmarshal notification: %v", err)
+	}
+
+	assertEqual(t, "notif.JobID", versionJobID, notif.JobID)
+	assertEqual(t, "notif.OriginType", string(model.OriginTypeUpload), string(notif.OriginType))
+	assertEqual(t, "notif.ParentVersionID", "", notif.ParentVersionID)
+	assertEqual(t, "notif.CreatedByUserID", userID, notif.CreatedByUserID)
+
+	// parent_version_id must be omitted in raw JSON for a version with no parent.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(notifEntry.Payload, &raw); err != nil {
+		t.Fatalf("unmarshal raw payload: %v", err)
+	}
+	if _, ok := raw["parent_version_id"]; ok {
+		t.Error("expected parent_version_id to be omitted (first version has no parent)")
+	}
+	for _, key := range []string{"job_id", "origin_type", "created_by_user_id"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("expected %q in payload (required field)", key)
+		}
+	}
+}
+
+func TestFullPipeline_VersionProcessingArtifactsReady_WithParent(t *testing.T) {
+	const (
+		orgID            = "org-fp-055b"
+		docID            = "doc-fp-055b"
+		v1ID             = "ver-fp-055b-v1"
+		v2ID             = "ver-fp-055b-v2"
+		v2JobID          = "job-stored-v2-055"
+		v2User           = "user-rec-055"
+		dpJobID          = "job-dp-055b"
+		correlationID    = "corr-055b"
+	)
+
+	h := newTestHarness(t)
+	h.seedDocument(defaultDocument(orgID, docID))
+	h.seedVersion(defaultVersion(orgID, docID, v1ID))
+
+	// Second version derived from v1 via RECOMMENDATION_APPLIED.
+	v2 := model.NewDocumentVersion(
+		v2ID, docID, orgID, 2,
+		model.OriginTypeRecommendationApplied,
+		"source/rec.pdf", "rec.pdf", 22345, "rec-sha", v2User,
+	)
+	v2.ParentVersionID = v1ID
+	storedJobID := v2JobID
+	v2.JobID = &storedJobID
+	h.seedVersion(v2)
+
+	dpEvent := defaultDPEvent(orgID, docID, v2ID, dpJobID, correlationID)
+	if err := h.ingestion.HandleDPArtifacts(context.Background(), dpEvent); err != nil {
+		t.Fatalf("HandleDPArtifacts: %v", err)
+	}
+
+	entries := h.outboxRepo.allEntries()
+	assertIntEqual(t, "outbox entries", 2, len(entries))
+	notifEntry := entries[1]
+	assertEqual(t, "outbox notification topic",
+		model.TopicDMEventsVersionArtifactsReady, notifEntry.Topic)
+
+	var notif model.VersionProcessingArtifactsReady
+	if err := json.Unmarshal(notifEntry.Payload, &notif); err != nil {
+		t.Fatalf("unmarshal notification: %v", err)
+	}
+
+	assertEqual(t, "notif.JobID", v2JobID, notif.JobID)
+	assertEqual(t, "notif.OriginType",
+		string(model.OriginTypeRecommendationApplied), string(notif.OriginType))
+	assertEqual(t, "notif.ParentVersionID", v1ID, notif.ParentVersionID)
+	assertEqual(t, "notif.CreatedByUserID", v2User, notif.CreatedByUserID)
+}
+
+// ---------------------------------------------------------------------------
 // Test: Audit trail integrity across full pipeline
 // ---------------------------------------------------------------------------
 

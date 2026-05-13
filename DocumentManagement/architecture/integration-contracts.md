@@ -94,6 +94,12 @@
 
 Все поля **пробрасываются** из входящего события в исходящие подтверждения/уведомления.
 
+## 6.1. Обогащение outbound уведомлений данными версии (DM-TASK-055)
+
+Уведомления `dm.events.*`, описывающие готовность артефактов конкретной версии, обогащаются immutable-полями версии, читаемыми из `document_versions` при формировании события. На текущий момент это касается `VersionProcessingArtifactsReady`, который несёт в payload `job_id`, `origin_type`, `parent_version_id` (omitempty) и `created_by_user_id` (см. event-catalog.md §2.2).
+
+`Artifact Ingestion Service` читает строку версии через `VersionRepository.FindByIDForUpdate` в рамках транзакции ingestion-pipeline, переиспользует загруженный `*DocumentVersion` для построения outbox-событий — публикация выполняется атомарно с переходом `artifact_status`, без дополнительных round-trip к БД и без рассинхронизации между состоянием версии и тем, что увидит downstream.
+
 ## 7. Versioning сообщений и backward compatibility
 
 - Каждый тип артефакта в `ArtifactDescriptor` несёт `schema_version`.

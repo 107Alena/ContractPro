@@ -191,25 +191,39 @@ func (s *ArtifactIngestionService) HandleDPArtifacts(ctx context.Context, event 
 		producer:      model.ProducerDomainDP,
 		targetStatus:  model.ArtifactStatusProcessingArtifactsReceived,
 		artifacts:     artifacts,
-		outboxEvents: []outbox.TopicEvent{
-			{
-				Topic: model.TopicDMResponsesArtifactsPersisted,
-				Event: model.DocumentProcessingArtifactsPersisted{
-					EventMeta:  meta,
-					JobID:      event.JobID,
-					DocumentID: event.DocumentID,
+		buildOutbox: func(version *model.DocumentVersion) []outbox.TopicEvent {
+			// DM-TASK-055: enrich VersionProcessingArtifactsReady with immutable
+			// fields read from the locked version row. JobID is empty string when
+			// the version was created outside a processing-flow (matching invariant
+			// is enforced separately — see DM-TASK-056).
+			versionJobID := ""
+			if version.JobID != nil {
+				versionJobID = *version.JobID
+			}
+			return []outbox.TopicEvent{
+				{
+					Topic: model.TopicDMResponsesArtifactsPersisted,
+					Event: model.DocumentProcessingArtifactsPersisted{
+						EventMeta:  meta,
+						JobID:      event.JobID,
+						DocumentID: event.DocumentID,
+					},
 				},
-			},
-			{
-				Topic: model.TopicDMEventsVersionArtifactsReady,
-				Event: model.VersionProcessingArtifactsReady{
-					EventMeta:     meta,
-					DocumentID:    event.DocumentID,
-					VersionID:     event.VersionID,
-					OrgID:         event.OrgID,
-					ArtifactTypes: savedTypes,
+				{
+					Topic: model.TopicDMEventsVersionArtifactsReady,
+					Event: model.VersionProcessingArtifactsReady{
+						EventMeta:       meta,
+						DocumentID:      event.DocumentID,
+						VersionID:       event.VersionID,
+						OrgID:           event.OrgID,
+						ArtifactTypes:   savedTypes,
+						JobID:           versionJobID,
+						OriginType:      version.OriginType,
+						ParentVersionID: version.ParentVersionID,
+						CreatedByUserID: version.CreatedByUserID,
+					},
 				},
-			},
+			}
 		},
 	})
 }
@@ -251,25 +265,27 @@ func (s *ArtifactIngestionService) HandleLICArtifacts(ctx context.Context, event
 		producer:      model.ProducerDomainLIC,
 		targetStatus:  model.ArtifactStatusAnalysisArtifactsReceived,
 		artifacts:     artifacts,
-		outboxEvents: []outbox.TopicEvent{
-			{
-				Topic: model.TopicDMResponsesLICArtifactsPersisted,
-				Event: model.LegalAnalysisArtifactsPersisted{
-					EventMeta:  meta,
-					JobID:      event.JobID,
-					DocumentID: event.DocumentID,
+		buildOutbox: func(_ *model.DocumentVersion) []outbox.TopicEvent {
+			return []outbox.TopicEvent{
+				{
+					Topic: model.TopicDMResponsesLICArtifactsPersisted,
+					Event: model.LegalAnalysisArtifactsPersisted{
+						EventMeta:  meta,
+						JobID:      event.JobID,
+						DocumentID: event.DocumentID,
+					},
 				},
-			},
-			{
-				Topic: model.TopicDMEventsVersionAnalysisReady,
-				Event: model.VersionAnalysisArtifactsReady{
-					EventMeta:     meta,
-					DocumentID:    event.DocumentID,
-					VersionID:     event.VersionID,
-					OrgID:         event.OrgID,
-					ArtifactTypes: savedTypes,
+				{
+					Topic: model.TopicDMEventsVersionAnalysisReady,
+					Event: model.VersionAnalysisArtifactsReady{
+						EventMeta:     meta,
+						DocumentID:    event.DocumentID,
+						VersionID:     event.VersionID,
+						OrgID:         event.OrgID,
+						ArtifactTypes: savedTypes,
+					},
 				},
-			},
+			}
 		},
 	})
 }
@@ -312,25 +328,27 @@ func (s *ArtifactIngestionService) HandleREArtifacts(ctx context.Context, event 
 		producer:      model.ProducerDomainRE,
 		targetStatus:  model.ArtifactStatusFullyReady,
 		artifacts:     artifacts,
-		outboxEvents: []outbox.TopicEvent{
-			{
-				Topic: model.TopicDMResponsesREReportsPersisted,
-				Event: model.ReportsArtifactsPersisted{
-					EventMeta:  meta,
-					JobID:      event.JobID,
-					DocumentID: event.DocumentID,
+		buildOutbox: func(_ *model.DocumentVersion) []outbox.TopicEvent {
+			return []outbox.TopicEvent{
+				{
+					Topic: model.TopicDMResponsesREReportsPersisted,
+					Event: model.ReportsArtifactsPersisted{
+						EventMeta:  meta,
+						JobID:      event.JobID,
+						DocumentID: event.DocumentID,
+					},
 				},
-			},
-			{
-				Topic: model.TopicDMEventsVersionReportsReady,
-				Event: model.VersionReportsReady{
-					EventMeta:     meta,
-					DocumentID:    event.DocumentID,
-					VersionID:     event.VersionID,
-					OrgID:         event.OrgID,
-					ArtifactTypes: savedTypes,
+				{
+					Topic: model.TopicDMEventsVersionReportsReady,
+					Event: model.VersionReportsReady{
+						EventMeta:     meta,
+						DocumentID:    event.DocumentID,
+						VersionID:     event.VersionID,
+						OrgID:         event.OrgID,
+						ArtifactTypes: savedTypes,
+					},
 				},
-			},
+			}
 		},
 	})
 }
@@ -340,6 +358,12 @@ func (s *ArtifactIngestionService) HandleREArtifacts(ctx context.Context, event 
 // ---------------------------------------------------------------------------
 
 // ingestionParams holds all parameters for the shared ingestion logic.
+//
+// buildOutbox is invoked inside the ingestion transaction with the version row
+// already loaded under SELECT ... FOR UPDATE. Callers use the loaded version to
+// enrich outbox events with immutable fields (job_id, origin_type, parent_version_id,
+// created_by_user_id — DM-TASK-055), guaranteeing atomicity between the version
+// state change and the published events.
 type ingestionParams struct {
 	orgID         string
 	docID         string
@@ -349,7 +373,7 @@ type ingestionParams struct {
 	producer      model.ProducerDomain
 	targetStatus  model.ArtifactStatus
 	artifacts     []artifactItem
-	outboxEvents  []outbox.TopicEvent
+	buildOutbox   func(version *model.DocumentVersion) []outbox.TopicEvent
 }
 
 // artifactItem represents a single artifact to be ingested.
@@ -487,7 +511,11 @@ func (s *ArtifactIngestionService) processIngestion(ctx context.Context, p inges
 		}
 
 		// 2e. Write outbox events (confirmation + notification).
-		return s.outboxWriter.WriteMultiple(txCtx, p.versionID, p.outboxEvents)
+		// Build events from the locked version row so notifications carry the
+		// up-to-date immutable fields (job_id, origin_type, parent_version_id,
+		// created_by_user_id) in the same transaction as the status change.
+		outboxEvents := p.buildOutbox(version)
+		return s.outboxWriter.WriteMultiple(txCtx, p.versionID, outboxEvents)
 	}); err != nil {
 		s.logger.Error("ingestion transaction failed",
 			"producer", p.producer, "document_id", p.docID,

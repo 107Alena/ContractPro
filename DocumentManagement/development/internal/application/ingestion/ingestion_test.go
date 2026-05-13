@@ -349,13 +349,20 @@ func (d *testDeps) newService() *ArtifactIngestionService {
 }
 
 func newTestVersion(orgID, docID, versionID string, status model.ArtifactStatus) *model.DocumentVersion {
+	// DM-TASK-055: defaults for the 4 immutable fields used to enrich
+	// VersionProcessingArtifactsReady. Tests overriding any of these fields
+	// should mutate the returned value directly.
+	jobID := "job-stored-001"
 	return &model.DocumentVersion{
-		VersionID:      versionID,
-		DocumentID:     docID,
-		OrganizationID: orgID,
-		VersionNumber:  1,
-		ArtifactStatus: status,
-		CreatedAt:      time.Now().UTC(),
+		VersionID:       versionID,
+		DocumentID:      docID,
+		OrganizationID:  orgID,
+		VersionNumber:   1,
+		ArtifactStatus:  status,
+		OriginType:      model.OriginTypeUpload,
+		CreatedByUserID: "user-stored-001",
+		JobID:           &jobID,
+		CreatedAt:       time.Now().UTC(),
 	}
 }
 
@@ -885,6 +892,87 @@ func TestHandleDPArtifacts_HappyPath(t *testing.T) {
 	}
 	if len(notification.ArtifactTypes) != 5 {
 		t.Errorf("notification.artifact_types length = %d, want 5", len(notification.ArtifactTypes))
+	}
+
+	// DM-TASK-055: notification carries 4 enriched fields read from the
+	// locked version row (job_id, origin_type, parent_version_id, created_by_user_id).
+	if notification.JobID != "job-stored-001" {
+		t.Errorf("notification.job_id = %q, want job-stored-001 (from version row)", notification.JobID)
+	}
+	if notification.OriginType != model.OriginTypeUpload {
+		t.Errorf("notification.origin_type = %q, want UPLOAD", notification.OriginType)
+	}
+	if notification.ParentVersionID != "" {
+		t.Errorf("notification.parent_version_id = %q, want empty for first version", notification.ParentVersionID)
+	}
+	if notification.CreatedByUserID != "user-stored-001" {
+		t.Errorf("notification.created_by_user_id = %q, want user-stored-001", notification.CreatedByUserID)
+	}
+
+	// Verify parent_version_id omitted in raw JSON when version has no parent.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(d.outboxRepo.entries[1].Payload, &raw); err != nil {
+		t.Fatalf("unmarshal raw notification: %v", err)
+	}
+	if _, present := raw["parent_version_id"]; present {
+		t.Error("notification: parent_version_id must be omitted when empty (omitempty)")
+	}
+}
+
+// DM-TASK-055: VersionProcessingArtifactsReady carries parent_version_id when
+// the version was derived from a parent (RE_UPLOAD / RECOMMENDATION_APPLIED / etc.).
+func TestHandleDPArtifacts_EnrichesParentVersionID(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-002", model.ArtifactStatusPending)
+	version.OriginType = model.OriginTypeRecommendationApplied
+	version.ParentVersionID = "ver-parent-001"
+	version.CreatedByUserID = "user-rec-001"
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	event := validDPEvent()
+	event.VersionID = "ver-002"
+
+	if err := svc.HandleDPArtifacts(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var notification model.VersionProcessingArtifactsReady
+	if err := json.Unmarshal(d.outboxRepo.entries[1].Payload, &notification); err != nil {
+		t.Fatalf("unmarshal notification: %v", err)
+	}
+	if notification.ParentVersionID != "ver-parent-001" {
+		t.Errorf("notification.parent_version_id = %q, want ver-parent-001", notification.ParentVersionID)
+	}
+	if notification.OriginType != model.OriginTypeRecommendationApplied {
+		t.Errorf("notification.origin_type = %q, want RECOMMENDATION_APPLIED", notification.OriginType)
+	}
+	if notification.CreatedByUserID != "user-rec-001" {
+		t.Errorf("notification.created_by_user_id = %q, want user-rec-001", notification.CreatedByUserID)
+	}
+}
+
+// DM-TASK-055: when DocumentVersion.JobID is nil (version created outside a
+// processing-flow), VersionProcessingArtifactsReady.JobID falls back to empty string.
+// The matching invariant (event.job_id == version.job_id) is enforced separately
+// by DM-TASK-056.
+func TestHandleDPArtifacts_NilVersionJobID_BecomesEmptyString(t *testing.T) {
+	d := newTestDeps()
+	version := newTestVersion("org-001", "doc-001", "ver-001", model.ArtifactStatusPending)
+	version.JobID = nil
+	setupVersionFind(d, version)
+
+	svc := d.newService()
+	if err := svc.HandleDPArtifacts(context.Background(), validDPEvent()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var notification model.VersionProcessingArtifactsReady
+	if err := json.Unmarshal(d.outboxRepo.entries[1].Payload, &notification); err != nil {
+		t.Fatalf("unmarshal notification: %v", err)
+	}
+	if notification.JobID != "" {
+		t.Errorf("notification.job_id = %q, want empty when version.JobID is nil", notification.JobID)
 	}
 }
 

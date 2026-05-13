@@ -450,11 +450,23 @@
   "document_id": "string (UUID)",
   "version_id": "string (UUID)",
   "organization_id": "string (UUID)",
-  "artifact_types": ["OCR_RAW", "EXTRACTED_TEXT", "DOCUMENT_STRUCTURE", "SEMANTIC_TREE", "PROCESSING_WARNINGS"]
+  "artifact_types": ["OCR_RAW", "EXTRACTED_TEXT", "DOCUMENT_STRUCTURE", "SEMANTIC_TREE", "PROCESSING_WARNINGS"],
+  "job_id": "string (UUID)",
+  "origin_type": "string (UPLOAD | RE_UPLOAD | RECOMMENDATION_APPLIED | MANUAL_EDIT | RE_CHECK)",
+  "parent_version_id": "string (UUID, optional)",
+  "created_by_user_id": "string (UUID)"
 }
 ```
 
-> `artifact_types` — список типов артефактов, которые были сохранены. Позволяет потребителю знать, что доступно, до запроса `GetArtifactsRequest`.
+| Поле | Тип | Обязательное | Описание |
+|------|-----|--------------|----------|
+| `artifact_types` | array | да | Список типов артефактов, сохранённых на стадии DP. Позволяет потребителю знать, что доступно, до `GetArtifactsRequest`. |
+| `job_id` | UUID | да | `job_id` версии (хранится в `document_versions.job_id`). Пустая строка, если версия была создана вне processing-flow. Matching-инвариант `event.job_id == version.job_id` гарантируется отдельно (см. DM-TASK-056). |
+| `origin_type` | string | да | Источник создания версии. См. enum в `VersionCreated`. |
+| `parent_version_id` | UUID | нет (`omitempty`) | Идентификатор родительской версии. Пуст для первой версии документа. |
+| `created_by_user_id` | UUID | да | Пользователь, создавший версию. |
+
+**Источник значений `job_id`, `origin_type`, `parent_version_id`, `created_by_user_id`.** Эти поля immutable и читаются DM из таблицы `document_versions` при формировании события. Чтение выполняется внутри той же транзакции, что и переход `artifact_status`, через `SELECT ... FOR UPDATE`, поэтому события публикуются атомарно с доменным изменением и не нуждаются в догрузке потребителем (см. DM-TASK-055).
 
 #### VersionAnalysisArtifactsReady
 

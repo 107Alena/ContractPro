@@ -434,6 +434,11 @@ func TestVersionProcessingArtifactsReadyJSONRoundTrip(t *testing.T) {
 			ArtifactTypeSemanticTree,
 			ArtifactTypeProcessingWarnings,
 		},
+		// DM-TASK-055: 4 enriched immutable fields.
+		JobID:           "job-11",
+		OriginType:      OriginTypeRecommendationApplied,
+		ParentVersionID: "ver-parent-11",
+		CreatedByUserID: "user-11",
 	}
 
 	data, err := json.Marshal(event)
@@ -451,6 +456,52 @@ func TestVersionProcessingArtifactsReadyJSONRoundTrip(t *testing.T) {
 	}
 	if restored.OrgID != event.OrgID {
 		t.Errorf("organization_id mismatch")
+	}
+	if restored.JobID != "job-11" {
+		t.Errorf("job_id mismatch: got %q, want job-11", restored.JobID)
+	}
+	if restored.OriginType != OriginTypeRecommendationApplied {
+		t.Errorf("origin_type mismatch: got %q, want RECOMMENDATION_APPLIED", restored.OriginType)
+	}
+	if restored.ParentVersionID != "ver-parent-11" {
+		t.Errorf("parent_version_id mismatch: got %q, want ver-parent-11", restored.ParentVersionID)
+	}
+	if restored.CreatedByUserID != "user-11" {
+		t.Errorf("created_by_user_id mismatch: got %q, want user-11", restored.CreatedByUserID)
+	}
+}
+
+// DM-TASK-055: parent_version_id is optional (omitempty); job_id stays present
+// (empty string when version was created outside a processing-flow).
+func TestVersionProcessingArtifactsReadyOmitemptyParentVersionID(t *testing.T) {
+	event := VersionProcessingArtifactsReady{
+		EventMeta:       EventMeta{CorrelationID: "corr-1", Timestamp: time.Now().UTC()},
+		DocumentID:      "doc-1",
+		VersionID:       "ver-1",
+		OrgID:           "org-1",
+		ArtifactTypes:   []ArtifactType{ArtifactTypeSemanticTree},
+		JobID:           "",
+		OriginType:      OriginTypeUpload,
+		CreatedByUserID: "user-1",
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw error: %v", err)
+	}
+
+	if _, ok := raw["parent_version_id"]; ok {
+		t.Error("expected parent_version_id to be omitted when empty")
+	}
+	for _, key := range []string{"job_id", "origin_type", "created_by_user_id"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("expected %q to be present (required field)", key)
+		}
 	}
 }
 

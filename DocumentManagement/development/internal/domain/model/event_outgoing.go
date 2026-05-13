@@ -113,12 +113,21 @@ type ReportsArtifactsPersistFailed struct {
 
 // VersionProcessingArtifactsReady notifies LIC that DP processing
 // artifacts are persisted and available for legal analysis.
+//
+// Поля JobID, OriginType, ParentVersionID, CreatedByUserID загружаются
+// из document_versions при формировании события (см. DM-TASK-055).
+// JobID пуст для версий, созданных вне processing-flow (см. DocumentVersion.JobID).
+// ParentVersionID пуст для первой версии документа (omitempty в JSON).
 type VersionProcessingArtifactsReady struct {
 	EventMeta
-	DocumentID    string         `json:"document_id"`
-	VersionID     string         `json:"version_id"`
-	OrgID         string         `json:"organization_id"`
-	ArtifactTypes []ArtifactType `json:"artifact_types"`
+	DocumentID      string         `json:"document_id"`
+	VersionID       string         `json:"version_id"`
+	OrgID           string         `json:"organization_id"`
+	ArtifactTypes   []ArtifactType `json:"artifact_types"`
+	JobID           string         `json:"job_id"`
+	OriginType      OriginType     `json:"origin_type"`
+	ParentVersionID string         `json:"parent_version_id,omitempty"`
+	CreatedByUserID string         `json:"created_by_user_id"`
 }
 
 // VersionAnalysisArtifactsReady notifies RE that LIC analysis

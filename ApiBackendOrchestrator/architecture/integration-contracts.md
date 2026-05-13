@@ -701,15 +701,44 @@ UOM — **критическая зависимость** для login/refresh/l
 ```
 Frontend HTTP-запрос
     │
-    ▼ Оркестратор генерирует: correlation_id, job_id
+    ▼ Оркестратор генерирует: correlation_id, job_id (jobid.NewJobID, UUID v4)
     │ Извлекает из JWT: organization_id, requested_by_user_id
     │
     ├── Sync (DM): X-Correlation-Id, X-Organization-ID, X-User-ID (заголовки)
+    │              + CreateVersionRequest.job_id в body (persist в DM)
     ├── Sync (OPM): X-Correlation-Id, X-Organization-ID, X-User-ID (заголовки)
     ├── Sync (UOM): X-Correlation-Id (заголовок)
     └── Async (DP): correlation_id, job_id, document_id, version_id,
                      organization_id, requested_by_user_id (поля сообщения)
 ```
+
+### Сквозной `job_id` для upload-flow (ORCH-TASK-053)
+
+Один и тот же UUID v4 `job_id` участвует во всех точках upload-сценария
+(POST /api/v1/contracts/upload):
+
+1. **Orchestrator (Upload Coordinator):** `job_id = jobid.NewJobID()` —
+   единая точка генерации, см. `internal/application/jobid/` и
+   ASSUMPTION-ORCH-15.
+2. **Object Storage:** `storage_key = uploads/{org_id}/{job_id}/{file_uuid}` —
+   `job_id` присутствует как namespace в S3 path для cleanup-by-prefix и
+   per-job трассировки.
+3. **DM REST:** `POST /documents/{id}/versions` body содержит `job_id`.
+   DM persists его в `document_versions.job_id` (DM-TASK-054). Если DM
+   получит CreateVersionRequest без `job_id` — поле сохраняется как `NULL`
+   (backward-compat), но Orchestrator в upload-flow всегда заполняет.
+4. **DP RabbitMQ:** `ProcessDocumentRequested.job_id` равен тому же значению.
+   DM-TASK-056 на стороне DM enforces `event.job_id == stored version.job_id`
+   при обработке последующих DP-событий; race между шагами `3` и `4`
+   невозможен — publish идёт ТОЛЬКО после успешного DM CreateVersion ack.
+5. **HTTP 202 response body:** `job_id` возвращается клиенту для последующей
+   корреляции в SSE / status-poll.
+6. **Redis upload tracking:** ключ `upload:{org_id}:{job_id}` хранит
+   `{correlation_id, document_id, version_id, job_id, status}` (TTL 1ч).
+
+Инвариант: для одной версии — один `job_id`, immutable в течение
+processing-flow. Расширение паттерна на остальные processing-flows
+(re-check, recommendation-applied, manual-edit) — ORCH-TASK-054.
 
 **Входящие события от DP/DM:** Содержат `correlation_id`, `job_id`, `document_id`. Оркестратор использует эти поля для:
 1. Маршрутизации SSE-события к нужной организации (`organization_id`).

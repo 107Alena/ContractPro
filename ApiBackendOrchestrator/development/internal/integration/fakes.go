@@ -291,6 +291,7 @@ type fakeDMServer struct {
 	mu         sync.Mutex
 	documents  map[string]*dmclient.Document
 	versions   map[string]map[string]*dmclient.DocumentVersionWithArtifacts // docID -> verID -> version
+	versionJob map[string]string                                            // verID -> job_id received in CreateVersionRequest
 	artifacts  map[string]json.RawMessage                                   // "docID:verID:type" -> content
 	diffs      map[string]*dmclient.VersionDiff                             // "docID:baseVer:targetVer" -> diff
 	nextVerNum int
@@ -300,6 +301,7 @@ func newFakeDMServer() *fakeDMServer {
 	dm := &fakeDMServer{
 		documents:  make(map[string]*dmclient.Document),
 		versions:   make(map[string]map[string]*dmclient.DocumentVersionWithArtifacts),
+		versionJob: make(map[string]string),
 		artifacts:  make(map[string]json.RawMessage),
 		diffs:      make(map[string]*dmclient.VersionDiff),
 		nextVerNum: 1,
@@ -522,11 +524,34 @@ func (dm *fakeDMServer) handleCreateVersion(w http.ResponseWriter, r *http.Reque
 		dm.versions[docID] = make(map[string]*dmclient.DocumentVersionWithArtifacts)
 	}
 	dm.versions[docID][ver.VersionID] = ver
+	// Capture job_id only when explicitly supplied. This keeps
+	// GetCreatedVersionJobID's (string, bool) contract honest: present-but-
+	// empty (req.JobID == "") is indistinguishable from absent, so we do not
+	// pretend we observed it.
+	if req.JobID != "" {
+		dm.versionJob[ver.VersionID] = req.JobID
+	}
 	dm.mu.Unlock()
 
+	// NOTE: response intentionally encodes only ver.DocumentVersion, which
+	// does NOT round-trip job_id back to the caller. Orchestrator does not
+	// rely on the response body for the job_id (it is generated locally),
+	// so this matches what a real DM that exposes job_id only on later
+	// GET /versions/{id} would behave like for the response of POST.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(ver.DocumentVersion)
+}
+
+// GetCreatedVersionJobID returns the job_id captured from the
+// CreateVersionRequest body for the given version. The second return value
+// reports whether the request actually carried a non-empty job_id — a
+// version created without job_id (or never created) returns ("", false).
+func (dm *fakeDMServer) GetCreatedVersionJobID(verID string) (string, bool) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	jid, ok := dm.versionJob[verID]
+	return jid, ok
 }
 
 func (dm *fakeDMServer) handleListVersions(w http.ResponseWriter, r *http.Request) {

@@ -18,9 +18,9 @@ sequenceDiagram
     FE->>ORCH: POST /api/v1/contracts/upload<br/>(multipart: file + title)
     ORCH->>ORCH: JWT Auth → RBAC → Rate Limit
     ORCH->>ORCH: Validate file (size ≤ 20MB, MIME=pdf)
-    ORCH->>ORCH: Generate correlation_id
+    ORCH->>ORCH: Generate correlation_id, job_id<br/>(jobid.NewJobID, ASSUMPTION-ORCH-15)
 
-    ORCH->>S3: PutObject (streaming upload)<br/>uploads/{org_id}/{uuid}/{filename}
+    ORCH->>S3: PutObject (streaming upload)<br/>uploads/{org_id}/{job_id}/{file_uuid}
     S3-->>ORCH: storage_key
 
     ORCH->>ORCH: SHA-256 checksum
@@ -28,11 +28,10 @@ sequenceDiagram
     ORCH->>DM: POST /api/v1/documents<br/>{title}
     DM-->>ORCH: 201 {document_id}
 
-    ORCH->>DM: POST /api/v1/documents/{id}/versions<br/>{source_file_key, origin_type=UPLOAD, ...}
+    ORCH->>DM: POST /api/v1/documents/{id}/versions<br/>{job_id, source_file_key, origin_type=UPLOAD, ...}
     DM-->>ORCH: 201 {version_id, version_number}
 
-    ORCH->>ORCH: Generate job_id
-    ORCH->>RMQ: publish ProcessDocumentRequested<br/>→ dp.commands.process-document
+    ORCH->>RMQ: publish ProcessDocumentRequested<br/>→ dp.commands.process-document<br/>(with job_id=same)
 
     ORCH->>ORCH: Redis: save upload tracking
 

@@ -61,6 +61,7 @@ func (a *uploadDMAdapter) CreateDocument(ctx context.Context, req upload.CreateD
 
 func (a *uploadDMAdapter) CreateVersion(ctx context.Context, documentID string, req upload.CreateVersionRequest) (*upload.DocumentVersion, error) {
 	ver, err := a.client.CreateVersion(ctx, documentID, dmclient.CreateVersionRequest{
+		JobID:              req.JobID,
 		SourceFileKey:      req.SourceFileKey,
 		SourceFileName:     req.SourceFileName,
 		SourceFileSize:     req.SourceFileSize,

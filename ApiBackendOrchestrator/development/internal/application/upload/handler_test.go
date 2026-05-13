@@ -10,7 +10,9 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -18,6 +20,9 @@ import (
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
 	"contractpro/api-orchestrator/internal/ingress/middleware/auth"
 )
+
+// uuidV4Regexp matches a canonical lowercase UUID v4 string.
+var uuidV4Regexp = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // ---------------------------------------------------------------------------
 // Test mocks
@@ -252,9 +257,12 @@ func TestHandle_Success(t *testing.T) {
 	if resp.VersionNumber != 1 {
 		t.Errorf("expected version_number=1, got %d", resp.VersionNumber)
 	}
-	// uuid-001=correlation_id, uuid-002=job_id
-	if resp.JobID != "uuid-002" {
-		t.Errorf("expected job_id=uuid-002, got %s", resp.JobID)
+	// job_id is generated via jobid.NewJobID() (real UUID v4), independent
+	// of the uuidGen seam. Capture the response value and reuse it for all
+	// downstream equality checks.
+	jobID := resp.JobID
+	if !uuidV4Regexp.MatchString(jobID) {
+		t.Errorf("expected job_id to match UUID v4 shape, got %q", jobID)
 	}
 	if resp.Status != "UPLOADED" {
 		t.Errorf("expected status=UPLOADED, got %s", resp.Status)
@@ -263,7 +271,7 @@ func TestHandle_Success(t *testing.T) {
 		t.Error("expected non-empty message")
 	}
 
-	// Verify X-Correlation-Id header.
+	// Verify X-Correlation-Id header (correlation_id is uuid-001 from seam).
 	if got := rr.Header().Get("X-Correlation-Id"); got != "uuid-001" {
 		t.Errorf("expected X-Correlation-Id=uuid-001, got %s", got)
 	}
@@ -272,8 +280,10 @@ func TestHandle_Success(t *testing.T) {
 	if len(storage.putCalls) != 1 {
 		t.Fatalf("expected 1 S3 put call, got %d", len(storage.putCalls))
 	}
-	// S3 key: uploads/{org_id}/{job_id}/{uuid}
-	expectedKey := "uploads/org-456/uuid-002/uuid-003"
+	// S3 key: uploads/{org_id}/{job_id}/{file_uuid}. file_uuid is uuid-002
+	// because correlation_id consumed uuid-001 from the seam and job_id is
+	// no longer routed through the seam.
+	expectedKey := "uploads/org-456/" + jobID + "/uuid-002"
 	if storage.putCalls[0].Key != expectedKey {
 		t.Errorf("expected S3 key=%s, got %s", expectedKey, storage.putCalls[0].Key)
 	}
@@ -306,14 +316,19 @@ func TestHandle_Success(t *testing.T) {
 	if vc.Req.OriginType != "UPLOAD" {
 		t.Errorf("expected origin_type=UPLOAD, got %s", vc.Req.OriginType)
 	}
+	// The same job_id must flow into DM CreateVersionRequest.
+	if vc.Req.JobID != jobID {
+		t.Errorf("expected DM CreateVersionRequest.JobID=%s, got %s", jobID, vc.Req.JobID)
+	}
 
 	// Verify command was published.
 	if len(pub.calls) != 1 {
 		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
 	}
 	cmd := pub.calls[0]
-	if cmd.JobID != "uuid-002" {
-		t.Errorf("expected job_id=uuid-002, got %s", cmd.JobID)
+	// The same job_id must flow into ProcessDocumentRequested.
+	if cmd.JobID != jobID {
+		t.Errorf("expected ProcessDocument job_id=%s, got %s", jobID, cmd.JobID)
 	}
 	if cmd.DocumentID != "doc-001" {
 		t.Errorf("expected document_id=doc-001, got %s", cmd.DocumentID)
@@ -329,8 +344,9 @@ func TestHandle_Success(t *testing.T) {
 	if len(kv.calls) != 1 {
 		t.Fatalf("expected 1 KV set call, got %d", len(kv.calls))
 	}
-	if kv.calls[0].Key != "upload:org-456:uuid-002" {
-		t.Errorf("expected redis key=upload:org-456:uuid-002, got %s", kv.calls[0].Key)
+	expectedRedisKey := "upload:org-456:" + jobID
+	if kv.calls[0].Key != expectedRedisKey {
+		t.Errorf("expected redis key=%s, got %s", expectedRedisKey, kv.calls[0].Key)
 	}
 	if kv.calls[0].TTL != uploadTrackingTTL {
 		t.Errorf("expected TTL=%v, got %v", uploadTrackingTTL, kv.calls[0].TTL)
@@ -805,9 +821,10 @@ func TestHandle_S3KeyFormat(t *testing.T) {
 		t.Fatalf("expected 202, got %d", rr.Code)
 	}
 
-	// uuid-001=correlation, uuid-002=job, uuid-003=file uuid.
-	// S3 key: uploads/{org_id}/{job_id}/{uuid}
-	expected := "uploads/org-456/uuid-002/uuid-003"
+	// uuid-001=correlation, uuid-002=file uuid; job_id is generated separately
+	// via jobid.NewJobID() and read back from the response.
+	resp := parseUploadResponse(t, rr)
+	expected := "uploads/org-456/" + resp.JobID + "/uuid-002"
 	if len(storage.putCalls) != 1 || storage.putCalls[0].Key != expected {
 		t.Errorf("expected S3 key=%s, got %s", expected, storage.putCalls[0].Key)
 	}
@@ -831,9 +848,12 @@ func TestHandle_RedisTrackingKeyAndPayload(t *testing.T) {
 		t.Fatalf("expected 1 KV call, got %d", len(kv.calls))
 	}
 
+	resp := parseUploadResponse(t, rr)
+
 	call := kv.calls[0]
-	if call.Key != "upload:org-456:uuid-002" {
-		t.Errorf("expected key=upload:org-456:uuid-002, got %s", call.Key)
+	expectedKey := "upload:org-456:" + resp.JobID
+	if call.Key != expectedKey {
+		t.Errorf("expected key=%s, got %s", expectedKey, call.Key)
 	}
 	if call.TTL != uploadTrackingTTL {
 		t.Errorf("expected TTL=%v, got %v", uploadTrackingTTL, call.TTL)
@@ -844,8 +864,8 @@ func TestHandle_RedisTrackingKeyAndPayload(t *testing.T) {
 	if err := json.Unmarshal([]byte(call.Value), &tracking); err != nil {
 		t.Fatalf("failed to unmarshal tracking: %v", err)
 	}
-	if tracking.JobID != "uuid-002" {
-		t.Errorf("expected job_id=uuid-002, got %s", tracking.JobID)
+	if tracking.JobID != resp.JobID {
+		t.Errorf("expected tracking.JobID=%s, got %s", resp.JobID, tracking.JobID)
 	}
 	if tracking.DocumentID != "doc-001" {
 		t.Errorf("expected document_id=doc-001, got %s", tracking.DocumentID)
@@ -882,9 +902,14 @@ func TestHandle_PublishedCommandFields(t *testing.T) {
 		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
 	}
 
+	resp := parseUploadResponse(t, rr)
+
 	cmd := pub.calls[0]
-	if cmd.JobID != "uuid-002" {
-		t.Errorf("expected job_id=uuid-002, got %s", cmd.JobID)
+	if cmd.JobID != resp.JobID {
+		t.Errorf("expected job_id=%s, got %s", resp.JobID, cmd.JobID)
+	}
+	if !uuidV4Regexp.MatchString(cmd.JobID) {
+		t.Errorf("expected published job_id to be UUID v4, got %q", cmd.JobID)
 	}
 	if cmd.DocumentID != "doc-001" {
 		t.Errorf("expected document_id=doc-001, got %s", cmd.DocumentID)
@@ -901,8 +926,9 @@ func TestHandle_PublishedCommandFields(t *testing.T) {
 	if cmd.SourceFileMIMEType != "application/pdf" {
 		t.Errorf("expected mime=application/pdf, got %s", cmd.SourceFileMIMEType)
 	}
-	if cmd.SourceFileKey != "uploads/org-456/uuid-002/uuid-003" {
-		t.Errorf("expected s3 key, got %s", cmd.SourceFileKey)
+	expectedKey := "uploads/org-456/" + resp.JobID + "/uuid-002"
+	if cmd.SourceFileKey != expectedKey {
+		t.Errorf("expected s3 key=%s, got %s", expectedKey, cmd.SourceFileKey)
 	}
 	if cmd.SourceFileName != "contract.pdf" {
 		t.Errorf("expected file name=contract.pdf, got %s", cmd.SourceFileName)
@@ -1180,6 +1206,150 @@ func TestHandle_OversizedRequestBody(t *testing.T) {
 	// Should fail with 400 (parse error from MaxBytesReader) or 413.
 	if rr.Code == http.StatusAccepted {
 		t.Fatalf("expected error for oversized body, got 202")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Job ID integration tests (ORCH-TASK-053)
+// ---------------------------------------------------------------------------
+
+// TestHandle_JobIDFlowsThroughDMAndPublisher asserts that the job_id generated
+// by jobid.NewJobID() reaches DM CreateVersionRequest, ProcessDocumentRequested,
+// the Redis tracking record, the S3 object key and the 202 response body — all
+// as the same value, on a single happy-path upload.
+func TestHandle_JobIDFlowsThroughDMAndPublisher(t *testing.T) {
+	storage := &mockStorage{}
+	dm := &mockDMClient{}
+	pub := &mockPublisher{}
+	kv := &mockKVStore{}
+	h := newTestHandler(storage, dm, pub, kv)
+
+	req := createMultipartRequest(t, "Test", "contract.pdf", validPDFContent())
+	req = withAuthContext(req)
+
+	rr := httptest.NewRecorder()
+	h.Handle().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	resp := parseUploadResponse(t, rr)
+	jobID := resp.JobID
+
+	if !uuidV4Regexp.MatchString(jobID) {
+		t.Fatalf("response job_id is not a UUID v4: %q", jobID)
+	}
+
+	if len(dm.createVerCalls) != 1 {
+		t.Fatalf("expected 1 DM CreateVersion call, got %d", len(dm.createVerCalls))
+	}
+	if got := dm.createVerCalls[0].Req.JobID; got != jobID {
+		t.Errorf("DM CreateVersionRequest.JobID=%q, want %q", got, jobID)
+	}
+
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if got := pub.calls[0].JobID; got != jobID {
+		t.Errorf("ProcessDocumentRequested.JobID=%q, want %q", got, jobID)
+	}
+
+	if len(kv.calls) != 1 {
+		t.Fatalf("expected 1 KV call, got %d", len(kv.calls))
+	}
+	expectedRedisKey := "upload:org-456:" + jobID
+	if kv.calls[0].Key != expectedRedisKey {
+		t.Errorf("redis key=%q, want %q", kv.calls[0].Key, expectedRedisKey)
+	}
+
+	if len(storage.putCalls) != 1 {
+		t.Fatalf("expected 1 S3 put call, got %d", len(storage.putCalls))
+	}
+	if !strings.Contains(storage.putCalls[0].Key, "/"+jobID+"/") {
+		t.Errorf("S3 key %q does not embed job_id %q", storage.putCalls[0].Key, jobID)
+	}
+}
+
+// TestHandle_JobIDPopulatedOnDMRequest is a defence test against regression:
+// even though CreateVersionRequest.JobID is `omitempty`, the upload handler
+// must populate it on every call — so the dmclient payload (after adapter
+// mapping) always carries the key for upload-flow versions. Asserted via the
+// captured mock call.
+func TestHandle_JobIDPopulatedOnDMRequest(t *testing.T) {
+	dm := &mockDMClient{}
+	h := newTestHandler(&mockStorage{}, dm, &mockPublisher{}, &mockKVStore{})
+
+	req := createMultipartRequest(t, "Test", "contract.pdf", validPDFContent())
+	req = withAuthContext(req)
+
+	rr := httptest.NewRecorder()
+	h.Handle().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+	if len(dm.createVerCalls) != 1 {
+		t.Fatalf("expected 1 DM CreateVersion call, got %d", len(dm.createVerCalls))
+	}
+	if dm.createVerCalls[0].Req.JobID == "" {
+		t.Fatal("upload handler must populate CreateVersionRequest.JobID")
+	}
+	if !uuidV4Regexp.MatchString(dm.createVerCalls[0].Req.JobID) {
+		t.Errorf("DM CreateVersionRequest.JobID is not a UUID v4: %q", dm.createVerCalls[0].Req.JobID)
+	}
+}
+
+// TestHandle_Concurrent_UniqueJobIDs runs 5 concurrent uploads through a single
+// handler instance with isolated mocks per goroutine and asserts that every
+// upload produced a distinct job_id (no collisions, no races). Each handler
+// instance uses an independent UUID seam, so file_uuid collisions across
+// goroutines are impossible — the test focuses on job_id uniqueness.
+func TestHandle_Concurrent_UniqueJobIDs(t *testing.T) {
+	const N = 5
+	jobIDs := make([]string, N)
+	errs := make([]error, N)
+
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			h := newTestHandler(&mockStorage{}, &mockDMClient{}, &mockPublisher{}, &mockKVStore{})
+			req := createMultipartRequest(t, "Test", "contract.pdf", validPDFContent())
+			req = withAuthContext(req)
+
+			rr := httptest.NewRecorder()
+			h.Handle().ServeHTTP(rr, req)
+			if rr.Code != http.StatusAccepted {
+				errs[idx] = fmt.Errorf("upload %d: expected 202, got %d", idx, rr.Code)
+				return
+			}
+			var resp UploadResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+				errs[idx] = fmt.Errorf("upload %d: decode: %w", idx, err)
+				return
+			}
+			jobIDs[idx] = resp.JobID
+		}(i)
+	}
+	wg.Wait()
+
+	seen := make(map[string]struct{}, N)
+	for i, jobID := range jobIDs {
+		if errs[i] != nil {
+			t.Fatalf("upload %d failed: %v", i, errs[i])
+		}
+		if !uuidV4Regexp.MatchString(jobID) {
+			t.Fatalf("upload %d: job_id %q is not UUID v4", i, jobID)
+		}
+		if _, dup := seen[jobID]; dup {
+			t.Fatalf("upload %d: duplicate job_id %q across concurrent uploads", i, jobID)
+		}
+		seen[jobID] = struct{}{}
+	}
+	if len(seen) != N {
+		t.Fatalf("expected %d unique job_ids, got %d", N, len(seen))
 	}
 }
 

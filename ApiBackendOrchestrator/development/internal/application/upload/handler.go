@@ -29,6 +29,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"contractpro/api-orchestrator/internal/application/jobid"
 	"contractpro/api-orchestrator/internal/domain/model"
 	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/infra/observability/logger"
@@ -77,7 +78,13 @@ type Document struct {
 }
 
 // CreateVersionRequest is the payload for creating a version in DM.
+//
+// JobID is the Orchestrator-generated UUID v4 correlation key for the
+// processing flow. DM persists it (DM-TASK-054) and the same value is
+// published in the subsequent ProcessDocumentRequested command. Immutable
+// for the lifetime of the version.
 type CreateVersionRequest struct {
+	JobID              string `json:"job_id,omitempty"`
 	SourceFileKey      string `json:"source_file_key"`
 	SourceFileName     string `json:"source_file_name"`
 	SourceFileSize     int64  `json:"source_file_size"`
@@ -167,8 +174,13 @@ type uploadTracking struct {
 // UUIDGenerator (seam for testing)
 // ---------------------------------------------------------------------------
 
-// UUIDGenerator generates UUID v4 strings. The default implementation uses
-// google/uuid. Tests can replace this with a deterministic generator.
+// UUIDGenerator generates UUID v4 strings for local technical identifiers
+// (correlation_id and the file-scoped S3 path UUID). Tests can replace this
+// with a deterministic generator.
+//
+// The job_id is intentionally NOT routed through this seam — it is generated
+// via jobid.NewJobID() because it is a cross-domain correlation key whose
+// invariant (single source of generation) is owned by the jobid package.
 type UUIDGenerator func() string
 
 // defaultUUIDGenerator is the production UUID generator.
@@ -235,8 +247,13 @@ func (h *Handler) Handle() http.HandlerFunc {
 		// ---------------------------------------------------------------
 		// Step 1: Generate correlation_id and job_id
 		// ---------------------------------------------------------------
+		// correlation_id is a local request-scoped identifier — uses the
+		// uuidGen seam so tests can assert deterministic values.
+		// job_id is a cross-domain correlation key (DM, DP, LIC) — generated
+		// via jobid.NewJobID() to preserve a single source of truth (see
+		// internal/application/jobid/CLAUDE.md).
 		correlationID := h.uuidGen()
-		jobID := h.uuidGen()
+		jobID := jobid.NewJobID()
 
 		// Enrich context for structured logging.
 		ctx = logger.WithRequestContext(ctx, logger.RequestContext{
@@ -355,6 +372,11 @@ func (h *Handler) Handle() http.HandlerFunc {
 		// ---------------------------------------------------------------
 		// Step 9: Compute SHA-256 while streaming to S3
 		// ---------------------------------------------------------------
+		// h.uuidGen() is called exactly TWICE per request: once in Step 1 for
+		// correlation_id, and here for the file-scoped S3 path component.
+		// Adding another h.uuidGen() call would shift deterministic counters
+		// asserted by handler_test.go (uuid-001, uuid-002). Use a new seam or
+		// jobid.NewJobID() instead when adding a third identifier.
 		s3Key := fmt.Sprintf("uploads/%s/%s/%s", ac.OrganizationID, jobID, h.uuidGen())
 		checksum, err := h.uploadWithChecksum(ctx, s3Key, file, header.Size)
 		if err != nil {
@@ -390,6 +412,7 @@ func (h *Handler) Handle() http.HandlerFunc {
 		// Step 11: Create version in DM
 		// ---------------------------------------------------------------
 		ver, err := h.dm.CreateVersion(ctx, documentID, CreateVersionRequest{
+			JobID:              jobID,
 			SourceFileKey:      s3Key,
 			SourceFileName:     sanitizedName,
 			SourceFileSize:     header.Size,

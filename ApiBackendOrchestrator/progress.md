@@ -1975,4 +1975,83 @@ happy path, no auth (401), invalid contract_id/version_id (400), invalid JSON (4
 ### Следующие задачи
 - ORCH-TASK-053 (Job ID integration в upload flow) — зависит от ORCH-TASK-052 + DM-TASK-054 (обе done).
 - ORCH-TASK-054 (Job ID integration в re-check / recommendation / manual-edit flows).
+
+---
+
+## ORCH-TASK-053 — Job ID integration в upload flow
+
+**Дата:** 2026-05-14. **Статус:** done. **Категория:** functional. **Приоритет:** critical.
+
+### Цель
+Wire-up инфраструктуры из ORCH-TASK-052 (jobid.NewJobID) в upload-flow (POST /api/v1/contracts/upload). Гарантировать, что один и тот же job_id попадает в DM CreateVersionRequest, ProcessDocumentRequested, response body, Redis tracking key и S3 path namespace. Зафиксировать инвариант immutability как ASSUMPTION-ORCH-15.
+
+### План
+1. Спроектировать дизайн с code-architect (раздельные seams; не менять S3 key; capture-and-reuse в тестах).
+2. handler.go: добавить JobID в local upload.CreateVersionRequest, заменить `h.uuidGen()` для jobID на `jobid.NewJobID()`, передать jobID в DM CreateVersion-вызов.
+3. adapters.go (prod) + testenv.go (test): пробросить JobID в dmclient.CreateVersionRequest.
+4. fakes.go: ввести версию-→-jobID capture в fakeDMServer для integration assertions.
+5. Обновить существующие тесты handler на capture-and-reuse; добавить новые (flow, populated, concurrency).
+6. Новый integration-файл `jobid_upload_test.go` с E2E + concurrency проверками через httptest.Server и fakeBroker.
+7. Обновить sequence-diagrams.md §8.1, high-architecture.md §8.1 + ASSUMPTION-ORCH-15, integration-contracts.md §3.2.
+8. Прогнать go test -race / go vet / make build/test/lint.
+9. Code review.
+
+### Дизайн-решения (после code-architect)
+- **Q1 раздельные seams (Вариант A).** `UUIDGenerator` остаётся для correlation_id и file_uuid (deterministic для unit-тестов); jobID — всегда через `jobid.NewJobID()`. Инвариант пакета jobid сохраняется (jobid.NewJobID не инжектируется ради тестов).
+- **Q2 не менять S3 key.** Текущий `uploads/{org}/{job_id}/{file_uuid}` сохранён: job_id как namespace полезен для cleanup-by-prefix и трассировки. Acceptance criteria трактуется как логический инвариант (jobID существует к моменту DM CreateVersion), а не физический порядок.
+- **Q3 capture-and-reuse + один shape-тест.** В большинстве тестов jobID читается из response/mock recorder, затем equality-сверка по downstream-местам. В одном тесте `TestHandle_JobIDFlowsThroughDMAndPublisher` явная shape-проверка через `uuidV4Regexp`.
+- **Дополнительный риск (event ordering vs DM persistence).** Сохранён строгий порядок: publish ProcessDocumentRequested ТОЛЬКО после успешного DM CreateVersion ack — нет race с DM-TASK-056 (DM enforces event.job_id == stored version.job_id).
+
+### Реализация
+- **internal/application/upload/handler.go:**
+  - `CreateVersionRequest` получил `JobID string json:"job_id,omitempty"` (первым полем) с docstring про immutable correlation key + ссылку на DM-TASK-054.
+  - `import "...application/jobid"`.
+  - В `Handle()` step 1: `correlationID := h.uuidGen(); jobID := jobid.NewJobID()` с комментариями о раздельных ролях.
+  - В step 11 `h.dm.CreateVersion(...{JobID: jobID, ...})` — поле передаётся.
+  - В step 9 (S3 key) — anchor-comment: «h.uuidGen() called exactly TWICE per request — adding a third call would shift counters in tests; use a new seam or jobid.NewJobID() instead».
+  - `UUIDGenerator` docstring расширен: «job_id is intentionally NOT routed through this seam — generated via jobid.NewJobID() because it is a cross-domain correlation key».
+- **internal/app/adapters.go:** `uploadDMAdapter.CreateVersion` пробрасывает `req.JobID` в `dmclient.CreateVersionRequest.JobID` (первым полем).
+- **internal/integration/testenv.go:** `testUploadDMAdapter.CreateVersion` — симметрично (mirror of prod adapter).
+- **internal/integration/fakes.go:**
+  - `fakeDMServer.versionJob map[string]string` (verID → jobID), capture только если req.JobID != "" (избегаем двусмысленности present-but-empty vs absent).
+  - `GetCreatedVersionJobID(verID) (string, bool)` — accessor для integration-тестов; `ok=false` если версия не создавалась или job_id не пришёл.
+  - NOTE-комментарий в `handleCreateVersion`: response intentionally не возвращает job_id (Orchestrator не читает его из response — генерирует локально).
+- **internal/application/upload/handler_test.go:**
+  - Импорты: добавлены `regexp`, `sync`.
+  - Global `uuidV4Regexp = regexp.MustCompile("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")`.
+  - `TestHandle_Success`, `TestHandle_S3KeyFormat`, `TestHandle_RedisTrackingKeyAndPayload`, `TestHandle_PublishedCommandFields` — переписаны на capture-and-reuse jobID из response.
+  - Новые тесты:
+    - `TestHandle_JobIDFlowsThroughDMAndPublisher` — equality jobID между response/DM/publisher/Redis-key/S3-path + UUID v4 shape check.
+    - `TestHandle_JobIDPopulatedOnDMRequest` — handler ВСЕГДА заполняет JobID для upload-flow (omitempty не приводит к опущенному полю).
+    - `TestHandle_Concurrent_UniqueJobIDs` — 5 goroutines × отдельный handler × отдельные mocks, ошибки агрегируются в `errs[idx]`, итог через map дубликатов.
+- **internal/integration/jobid_upload_test.go (NEW):**
+  - `TestUploadFlow_JobIDEndToEnd` — POST upload через httptest.Server → response.JobID соответствует UUID v4 + равен значению, захваченному fakeDMServer.GetCreatedVersionJobID(verID) + равен job_id в ProcessDocumentRequested из brokerFake.PublishedMessages().
+  - `TestUploadFlow_JobIDUnique_Concurrent` — 5 параллельных uploads через единый testEnv (distinct user IDs на goroutine, shared orgID), все 5 job_id уникальны UUID v4 + каждый присутствует в published-set брокера.
+
+### Документация
+- **sequence-diagrams.md §8.1:** Объединён шаг «Generate correlation_id, job_id (jobid.NewJobID, ASSUMPTION-ORCH-15)» перед S3+DM; S3 путь → `uploads/{org_id}/{job_id}/{file_uuid}`; DM body → `{job_id, source_file_key, origin_type=UPLOAD, ...}`; DP-стрелка → `with job_id=same`.
+- **high-architecture.md §8.1 (Happy path 3.a–3.i):** Reorganized — `b. Генерация correlation_id`, `c. Генерация job_id (jobid.NewJobID(), UUID v4) — ДО следующих шагов`, `d. S3 PutObject в uploads/{org_id}/{job_id}/{file_uuid}`, `g. DM CreateVersion с {job_id, source_file_key, ...} → DM persists в document_versions.job_id (DM-TASK-054)`, `h. publish ProcessDocumentRequested — то же значение job_id`.
+- **high-architecture.md §2 (Архитектурные допущения):** Добавлен **ASSUMPTION-ORCH-15** — формулировка инварианта (Orchestrator генерирует job_id ДО DM CreateVersion; immutable; одна версия — один job_id); ссылка на ORCH-TASK-053 (реализовано для upload-flow), DM-TASK-054 (persist), DM-TASK-056 (enforce match), ORCH-TASK-054 (расширение на остальные flows).
+- **integration-contracts.md §3.2:** Схема пробрасывания обновлена (`Sync (DM): + CreateVersionRequest.job_id в body`); новый подраздел «Сквозной job_id для upload-flow (ORCH-TASK-053)» — 6-шаговое описание (Orchestrator → S3 namespace → DM REST → DP RabbitMQ → 202 response → Redis tracking) + инвариант immutability + race-prevention notice.
+
+### Тесты
+- **internal/application/upload/handler_test.go:** 3 новых теста (flow/populated/concurrent), 4 обновлённых (capture-and-reuse). go test -count=1 ./internal/application/upload/... → PASS.
+- **internal/integration/jobid_upload_test.go:** 2 новых E2E теста (flow/concurrent). go test -count=1 ./internal/integration/... → PASS.
+- Full suite: `go test -count=1 -race ./...` → 37 пакетов PASS. `go vet ./...` → clean. `make build` / `make test` / `make lint` → PASS.
+
+### Code review (code-reviewer)
+- Verdict: **APPROVE**. 7 nit-level замечаний (5 cosmetic, 2 устранено + 2 дополнительные правки):
+  - Fixed #1 — обновлён docstring `TestHandle_JobIDPopulatedOnDMRequest` (был stale ссылающийся на старое имя теста).
+  - Fixed #4 — `GetCreatedVersionJobID` теперь возвращает `(string, bool)` + capture только при `req.JobID != ""`.
+  - Fixed #5 — добавлен anchor-comment в handler.go о точном количестве `h.uuidGen()` вызовов (2: correlation_id + file_uuid).
+  - Fixed #7 — добавлен NOTE-комментарий в fakes.go про намеренное отсутствие job_id в DM response.
+  - Остались (cosmetic, не блокирующие): #3 (дубликат uuidV4Regexp в двух пакетах — можно вынести в test helper позже), #6 (расхождение тонов high-architecture vs integration-contracts про omitempty в JSON — можно добавить one-liner), #2 (createMultipartRequest использует t.Fatalf — теоретически нежелательно в goroutine, но в практике никогда не вызывается).
+
+### Субагенты
+- **code-architect** — design-ревью (Q1/Q2/Q3 + 4 риска: cleanup, idempotency, event ordering, adapter symmetry).
+- **code-reviewer** — финальный quality/correctness review.
+
+### Следующие задачи
+- **ORCH-TASK-054** — Job ID integration в re-check / recommendation / manual-edit flows (расширение паттерна 053 на остальные processing-endpoints). Зависит от ORCH-TASK-052 + DM-TASK-054 (обе done) + теперь ORCH-TASK-053 (done — есть baseline для документации).
+- **ORCH-TASK-055** — Серверная нормализация contract_type RU→EN для POST /contracts/{id}/confirm-type (независимая).
 - ORCH-TASK-055 (Серверная нормализация contract_type RU→EN для POST /contracts/{id}/confirm-type).

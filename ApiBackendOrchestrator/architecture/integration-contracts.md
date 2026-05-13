@@ -712,21 +712,32 @@ Frontend HTTP-запрос
                      organization_id, requested_by_user_id (поля сообщения)
 ```
 
-### Сквозной `job_id` для upload-flow (ORCH-TASK-053)
+### Сквозной `job_id` для processing-flows (ORCH-TASK-053, ORCH-TASK-054)
 
-Один и тот же UUID v4 `job_id` участвует во всех точках upload-сценария
-(POST /api/v1/contracts/upload):
+Один и тот же UUID v4 `job_id` участвует во всех точках любого
+processing-сценария, который создаёт новую `version` и публикует
+`ProcessDocumentRequested`. Применимо к:
 
-1. **Orchestrator (Upload Coordinator):** `job_id = jobid.NewJobID()` —
-   единая точка генерации, см. `internal/application/jobid/` и
-   ASSUMPTION-ORCH-15.
-2. **Object Storage:** `storage_key = uploads/{org_id}/{job_id}/{file_uuid}` —
-   `job_id` присутствует как namespace в S3 path для cleanup-by-prefix и
-   per-job трассировки.
+| Endpoint | Origin Type | Flow | Реализовано |
+|----------|-------------|------|-------------|
+| `POST /api/v1/contracts/upload` | `UPLOAD` | initial upload — новый contract + первая версия | ORCH-TASK-053 |
+| `POST /api/v1/contracts/{id}/versions/upload` | `RE_UPLOAD` | новая версия с новым PDF для существующего contract | ORCH-TASK-054 |
+| `POST /api/v1/contracts/{id}/versions/{vid}/recheck` | `RE_CHECK` | повторная проверка той же версии (тот же `source_file`) | ORCH-TASK-054 |
+| (планируется) | `RECOMMENDATION_APPLIED`, `MANUAL_EDIT` | новая версия из правок LIC-рекомендаций или ручного редактирования | Endpoints ещё не реализованы; инвариант применится автоматически по тому же паттерну |
+
+Точки прохождения `job_id` (на примере любого из flow выше):
+
+1. **Orchestrator (handler):** `job_id = jobid.NewJobID()` — единая точка
+   генерации, см. `internal/application/jobid/` и ASSUMPTION-ORCH-15.
+   Генерация выполняется ДО REST-вызова `DM.CreateVersion`.
+2. **Object Storage** *(только UPLOAD и RE_UPLOAD)*: `storage_key =
+   uploads/{org_id}/{job_id}/{file_uuid}` — `job_id` присутствует как
+   namespace в S3 path для cleanup-by-prefix и per-job трассировки. RE_CHECK
+   не создаёт нового S3-объекта (переиспользует parent `source_file_key`).
 3. **DM REST:** `POST /documents/{id}/versions` body содержит `job_id`.
    DM persists его в `document_versions.job_id` (DM-TASK-054). Если DM
    получит CreateVersionRequest без `job_id` — поле сохраняется как `NULL`
-   (backward-compat), но Orchestrator в upload-flow всегда заполняет.
+   (backward-compat), но Orchestrator в перечисленных flows всегда заполняет.
 4. **DP RabbitMQ:** `ProcessDocumentRequested.job_id` равен тому же значению.
    DM-TASK-056 на стороне DM enforces `event.job_id == stored version.job_id`
    при обработке последующих DP-событий; race между шагами `3` и `4`
@@ -735,10 +746,14 @@ Frontend HTTP-запрос
    корреляции в SSE / status-poll.
 6. **Redis upload tracking:** ключ `upload:{org_id}:{job_id}` хранит
    `{correlation_id, document_id, version_id, job_id, status}` (TTL 1ч).
+   Имя ключа namespace `upload:` сохранено для всех flows из соображений
+   обратной совместимости и переиспользования инфраструктуры.
 
-Инвариант: для одной версии — один `job_id`, immutable в течение
-processing-flow. Расширение паттерна на остальные processing-flows
-(re-check, recommendation-applied, manual-edit) — ORCH-TASK-054.
+Инвариант: для одной `version_id` — один `job_id`, immutable в течение
+processing-flow. На уровне теста инвариант проверяется через capture-and-reuse:
+тесты handler-уровня и integration-тесты считают `job_id` из HTTP-ответа /
+captured CreateVersionRequest и затем проверяют равенство с
+`ProcessDocumentRequested.job_id` и ключом Redis-tracking.
 
 **Входящие события от DP/DM:** Содержат `correlation_id`, `job_id`, `document_id`. Оркестратор использует эти поля для:
 1. Маршрутизации SSE-события к нужной организации (`organization_id`).

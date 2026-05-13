@@ -235,15 +235,15 @@ sequenceDiagram
 
     FE->>ORCH: POST /api/v1/contracts/{id}/versions/{vid}/recheck
     ORCH->>ORCH: JWT Auth → RBAC (LAWYER / ORG_ADMIN)
+    ORCH->>ORCH: Generate correlation_id, job_id<br/>(jobid.NewJobID, ASSUMPTION-ORCH-15;<br/>ORCH-TASK-054 расширил инвариант на RE_CHECK)
 
     ORCH->>DM: GET /documents/{id}/versions/{vid}
     DM-->>ORCH: {source_file_key, source_file_name, source_file_size,<br/>source_file_checksum, artifact_status: "FULLY_READY"}
 
-    ORCH->>DM: POST /documents/{id}/versions<br/>{source_file_key, origin_type=RE_CHECK,<br/>parent_version_id=vid}
+    ORCH->>DM: POST /documents/{id}/versions<br/>{job_id, source_file_key, origin_type=RE_CHECK,<br/>parent_version_id=vid}
     DM-->>ORCH: 201 {version_id: new_vid, version_number: N+1}
 
-    ORCH->>ORCH: Generate job_id, correlation_id
-    ORCH->>RMQ: publish ProcessDocumentRequested<br/>→ dp.commands.process-document
+    ORCH->>RMQ: publish ProcessDocumentRequested<br/>→ dp.commands.process-document<br/>(with job_id=same)
 
     ORCH-->>FE: 202 Accepted<br/>{contract_id, version_id: new_vid, job_id, status: "QUEUED"}
 ```
@@ -264,6 +264,14 @@ sequenceDiagram
 
     ORCH-->>FE: 409 Conflict<br/>{error_code: "VERSION_STILL_PROCESSING",<br/>message: "Дождитесь завершения текущей обработки"}
 ```
+
+### Замечание: загрузка новой версии (RE_UPLOAD) — тот же job_id-инвариант
+
+`POST /api/v1/contracts/{contract_id}/versions/upload` (origin_type=RE_UPLOAD,
+загрузка нового PDF под существующий контракт) следует тому же паттерну, что и
+8.1 и 8.4: Orchestrator генерирует `job_id` через `jobid.NewJobID()` ДО
+REST-вызова DM `POST /documents/{id}/versions` и пробрасывает то же значение в
+последующий `ProcessDocumentRequested` (см. ASSUMPTION-ORCH-15, ORCH-TASK-054).
 
 ---
 

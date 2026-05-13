@@ -32,6 +32,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"contractpro/api-orchestrator/internal/application/jobid"
 	"contractpro/api-orchestrator/internal/domain/model"
 	"contractpro/api-orchestrator/internal/domain/model/validation"
 	"contractpro/api-orchestrator/internal/egress/commandpub"
@@ -92,7 +93,14 @@ const (
 	uploadTrackingTTL = 1 * time.Hour
 )
 
-// UUIDGenerator generates UUID v4 strings. Tests can replace with deterministic.
+// UUIDGenerator generates UUID v4 strings for local technical identifiers
+// (correlation_id and the per-file S3 path UUID). Tests can replace it with a
+// deterministic generator.
+//
+// The job_id is intentionally NOT routed through this seam — it is generated
+// via jobid.NewJobID() because it is a cross-domain correlation key whose
+// invariant (single source of generation) is owned by the jobid package
+// (ORCH-TASK-052/053/054).
 type UUIDGenerator func() string
 
 func defaultUUIDGenerator() string {
@@ -309,8 +317,13 @@ func (h *Handler) HandleUpload() http.HandlerFunc {
 			return
 		}
 
+		// jobID is the cross-domain correlation key (Orchestrator → DM → DP).
+		// It MUST be generated via jobid.NewJobID() — never through the
+		// h.uuidGen() seam — so the single-source-of-truth invariant set by
+		// ORCH-TASK-052/053 is preserved. correlationID is a local technical
+		// identifier and remains seam-injectable for tests.
 		correlationID := h.uuidGen()
-		jobID := h.uuidGen()
+		jobID := jobid.NewJobID()
 
 		ctx = logger.WithRequestContext(ctx, logger.RequestContext{
 			CorrelationID:  correlationID,
@@ -416,6 +429,11 @@ func (h *Handler) HandleUpload() http.HandlerFunc {
 
 		// Step 5: Sanitize filename and upload to S3.
 		sanitizedName := sanitizeFilename(header.Filename)
+		// h.uuidGen() is called exactly TWICE per HandleUpload request: once in
+		// Step 1 for correlationID and once here for the per-file S3 path UUID.
+		// Adding another h.uuidGen() call would shift deterministic test
+		// counters and surprise readers — prefer jobid.NewJobID() when adding
+		// a third identifier.
 		s3Key := fmt.Sprintf("uploads/%s/%s/%s", ac.OrganizationID, jobID, h.uuidGen())
 
 		checksum, err := h.uploadWithChecksum(ctx, s3Key, file)
@@ -430,8 +448,12 @@ func (h *Handler) HandleUpload() http.HandlerFunc {
 			"file_size", header.Size,
 		)
 
-		// Step 6: Create version in DM.
+		// Step 6: Create version in DM. JobID is the cross-domain correlation
+		// key (ASSUMPTION-ORCH-15); DM persists it (DM-TASK-054) and enforces
+		// equality with the subsequent ProcessDocumentRequested.job_id
+		// (DM-TASK-056).
 		createReq := dmclient.CreateVersionRequest{
+			JobID:              jobID,
 			SourceFileKey:      s3Key,
 			SourceFileName:     sanitizedName,
 			SourceFileSize:     header.Size,
@@ -541,8 +563,16 @@ func (h *Handler) HandleRecheck() http.HandlerFunc {
 			return
 		}
 
+		// jobID is the cross-domain correlation key (Orchestrator → DM → DP).
+		// Generated via jobid.NewJobID() (never via h.uuidGen()) per the
+		// ORCH-TASK-052/053/054 invariant. correlationID is a local technical
+		// identifier and stays seam-injectable for tests.
+		//
+		// h.uuidGen() is called exactly ONCE per HandleRecheck request — for
+		// correlation_id. The recheck flow reuses the parent version's
+		// source_file_key, so no per-file S3 UUID is generated here.
 		correlationID := h.uuidGen()
-		jobID := h.uuidGen()
+		jobID := jobid.NewJobID()
 
 		ctx = logger.WithRequestContext(ctx, logger.RequestContext{
 			CorrelationID:  correlationID,
@@ -580,8 +610,12 @@ func (h *Handler) HandleRecheck() http.HandlerFunc {
 		}
 
 		// Step 4: Create a new version in DM with origin_type=RE_CHECK,
-		// reusing the same source file from the parent version.
+		// reusing the same source file from the parent version. JobID is
+		// the cross-domain correlation key (ASSUMPTION-ORCH-15); DM persists
+		// it (DM-TASK-054) and enforces equality with the subsequent
+		// ProcessDocumentRequested.job_id (DM-TASK-056).
 		createReq := dmclient.CreateVersionRequest{
+			JobID:              jobID,
 			SourceFileKey:      ver.SourceFileKey,
 			SourceFileName:     ver.SourceFileName,
 			SourceFileSize:     ver.SourceFileSize,

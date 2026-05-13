@@ -2055,3 +2055,75 @@ Wire-up инфраструктуры из ORCH-TASK-052 (jobid.NewJobID) в uplo
 - **ORCH-TASK-054** — Job ID integration в re-check / recommendation / manual-edit flows (расширение паттерна 053 на остальные processing-endpoints). Зависит от ORCH-TASK-052 + DM-TASK-054 (обе done) + теперь ORCH-TASK-053 (done — есть baseline для документации).
 - **ORCH-TASK-055** — Серверная нормализация contract_type RU→EN для POST /contracts/{id}/confirm-type (независимая).
 - ORCH-TASK-055 (Серверная нормализация contract_type RU→EN для POST /contracts/{id}/confirm-type).
+
+## ORCH-TASK-054 — Job ID integration в RE_UPLOAD и RE_CHECK flows
+
+### Контекст
+- Расширение сквозного `job_id`-инварианта (ASSUMPTION-ORCH-15), реализованного для initial-upload в ORCH-TASK-053, на остальные processing-endpoints, которые создают новую версию в DM и публикуют `ProcessDocumentRequested` в DP.
+- Аудит `grep -rn "ProcessDocumentRequested" internal/application`: единственные не-`upload`-flows — `internal/application/versions/handler.go::HandleUpload` (RE_UPLOAD, POST /api/v1/contracts/{id}/versions/upload) и `::HandleRecheck` (RE_CHECK, POST /api/v1/contracts/{id}/versions/{vid}/recheck).
+- `RECOMMENDATION_APPLIED` и `MANUAL_EDIT` присутствуют в OriginType enum (`api-specification.yaml`), но endpoints для них в коде ещё нет → out of scope per task description («конкретный список определяется текущим состоянием internal/application/»).
+
+### План
+1. Аудит non-upload flows, аналогичных upload (ORCH-TASK-053 baseline).
+2. Design-review через code-architect: counter shift в тестах, capture-and-reuse pattern, JobID explicit на CreateVersionRequest, минимальный набор новых тестов.
+3. Изменения в `versions/handler.go`: `jobid.NewJobID()` вместо `h.uuidGen()`; `JobID` populated на `dmclient.CreateVersionRequest`; anchor-comments про точное число `uuidGen` вызовов в обоих методах.
+4. Перевод 3 существующих handler-тестов на capture-and-reuse + 4 новых юнит-теста (по 2 per flow: JobIDPopulatedOnDMRequest + JobIDFlowsThroughDMAndPublisher).
+5. Новый integration-тест `internal/integration/jobid_versions_test.go` с 2 end-to-end сценариями (RE_UPLOAD, RE_CHECK).
+6. Обновление 3 architecture-документов: ASSUMPTION-ORCH-15, sequence-diagrams §8.4, integration-contracts §3.2.
+7. Прогон `go test -race`, `go vet`, `make build/test/lint` → 37 пакетов PASS, vet clean, make targets OK.
+8. Финальный code-review через code-reviewer; устранение nit-замечаний (4 из 5).
+
+### Design-решения (code-architect)
+- **Q1 — counter shift в тестах**: re-number assertions + anchor-comment в `handler.go` (по паттерну 053). Новый счётчик: HandleUpload — 2 вызова `uuidGen` (correlation=uuid-001, file_uuid=uuid-002); HandleRecheck — 1 вызов (correlation=uuid-001). Tracking key и S3 prefix используют capture-and-reuse jobID.
+- **Q2 — test conversion strategy**: full capture-and-reuse. Альтернативы (jobidGenerator seam, hybrid) отвергнуты — нарушают invariant «jobid is NOT injectable».
+- **Q3 — `CreateVersionRequest.JobID`**: всегда set explicitly (mirror 053). `omitempty` — wire-encoding concern; empty JobID в call site — bug (DM-TASK-056 enforces).
+- **Q4 — минимальный набор тестов per flow**: JobIDPopulatedOnDMRequest + JobIDFlowsThroughDMAndPublisher + 1 integration end-to-end. Concurrency-вариант сознательно пропущен: uniqueness — свойство `uuid.NewString()`, покрыто в `jobid` package, дублирование per handler избыточно.
+
+### Реализация
+- `internal/application/versions/handler.go`:
+  - Импорт `contractpro/api-orchestrator/internal/application/jobid`.
+  - `UUIDGenerator` docstring расширен — те же два предложения, что в `upload/handler.go`, отделяющие seam от cross-domain `job_id`; ссылка ORCH-TASK-052/053/054.
+  - `HandleUpload`: `correlationID := h.uuidGen()` + `jobID := jobid.NewJobID()`; `JobID: jobID` добавлено первым полем в `dmclient.CreateVersionRequest`; anchor-comment в Step 5 о ровно 2 вызовах `uuidGen()`.
+  - `HandleRecheck`: то же + anchor-comment о ровно 1 вызове `uuidGen()` (recheck не трогает S3 — reuse parent `source_file_key`).
+  - Существующий `ProcessDocumentCommand.JobID = jobID` сохранён без изменений в обоих методах.
+- `internal/application/versions/handler_test.go`:
+  - Импорт `regexp`; package-level `uuidV4Regexp` (та же запись, что в `upload/handler_test.go` и `integration/jobid_upload_test.go`).
+  - `TestHandleUpload_Success` переведён на capture-and-reuse: jobID считывается из response, проверяется regex и сравнивается со всеми downstream-местами (DM CreateVersionRequest, publisher cmd, Redis key, X-Correlation-Id).
+  - `TestHandleUpload_PublishedCommandFields` — capture jobID из `pub.calls[0]`, проверка regex + equality с response.
+  - `TestHandleUpload_S3KeyFormat` — S3 path теперь `uploads/org-001/<captured-jobID>/uuid-002`.
+  - 4 новых теста: `TestHandleUpload_JobIDPopulatedOnDMRequest`, `TestHandleUpload_JobIDFlowsThroughDMAndPublisher`, `TestHandleRecheck_JobIDPopulatedOnDMRequest`, `TestHandleRecheck_JobIDFlowsThroughDMAndPublisher`.
+- `internal/integration/jobid_versions_test.go` (NEW):
+  - `TestVersionUploadFlow_JobIDEndToEnd`: seed Document+parent Version → POST /versions/upload через httptest.Server → проверка `response.JobID` ↔ `dmFake.GetCreatedVersionJobID(new_version_id)` ↔ `brokerFake.PublishedMessages()` по topic `dp.commands.process-document`.
+  - `TestRecheckFlow_JobIDEndToEnd`: seed + POST /recheck → те же три проверки + ассерт NEW `version_id` != parent.
+  - Helper `uploadNewVersion` (multipart POST на /versions/upload с auth token), `brokerPublishedJobID` (scan published commands).
+  - `uuidV4Regexp` переиспользован из `jobid_upload_test.go` (тот же `integration` package — package-scope var).
+
+### Документация
+- `architecture/high-architecture.md` ASSUMPTION-ORCH-15: формулировка переформулирована — «любой processing-flow с OriginType из {UPLOAD, RE_UPLOAD, RECOMMENDATION_APPLIED, MANUAL_EDIT, RE_CHECK}», явное упоминание ORCH-TASK-053 (initial upload) и ORCH-TASK-054 (RE_UPLOAD + RE_CHECK); явно сказано, что endpoints для RECOMMENDATION_APPLIED / MANUAL_EDIT в коде пока отсутствуют, инвариант применится автоматически при реализации.
+- `architecture/sequence-diagrams.md` §8.4 (recheck): шаг «Generate correlation_id, job_id» добавлен ДО `GET /documents/{id}/versions/{vid}` (соответствует порядку в `handler.go`); тело POST `/versions` теперь содержит `{job_id, ...}`; стрелка в RMQ помечена «with job_id=same»; новая подсекция «Замечание: загрузка новой версии (RE_UPLOAD)» — короткое описание, что endpoint `POST /api/v1/contracts/{id}/versions/upload` следует тому же паттерну.
+- `architecture/integration-contracts.md` §3.2: подсекция переименована «Сквозной job_id для processing-flows (ORCH-TASK-053, ORCH-TASK-054)»; добавлена таблица 4 строк (UPLOAD / RE_UPLOAD / RE_CHECK / планируется); per-flow note про RE_CHECK reuse `source_file_key` (no S3 write); явный test-strategy paragraph про capture-and-reuse invariant verification.
+
+### Тесты
+- `go test -count=1 ./internal/application/versions/...` → PASS (3 переведённых + 4 новых, остальные ~40 без изменений).
+- `go test -count=1 ./internal/integration/...` → PASS (2 новых + все существующие).
+- `go test -count=1 -race ./...` → 37 пакетов PASS.
+- `go vet ./...` → clean.
+- `make build` + `make test` + `make lint` → все targets PASS.
+- В логах integration-тестов видна сквозная цепочка `job_id`: например, для RE_UPLOAD `50fa6ec5-...-014d` присутствует в `version upload started`, `file uploaded to S3` (как S3 path segment), `version created in DM` и `ProcessDocumentRequested command published`.
+
+### Code review
+- **code-reviewer**: verdict **approve**.
+- 5 nit-level замечаний, 4 устранено:
+  1. HandleRecheck doc-comment цитирует «ORCH-TASK-052/053/054» (симметрия с HandleUpload).
+  2. Anchor-comment в HandleRecheck о ровно 1 вызове `h.uuidGen()`.
+  3. sequence-diagrams §8.4 — шаг «Generate job_id» перенесён ДО `GetVersion` (соответствует коду).
+  4. Docstring `TestVersionUploadFlow_JobIDEndToEnd` — упомянуто, что reference (initial-upload) test was established by ORCH-TASK-053.
+- #5 (concurrency-вариант для recheck) сознательно пропущен — code-architect в дизайне явно зафиксировал, что uniqueness — свойство `uuid.NewString()` и duplication per handler избыточна.
+
+### Субагенты
+- **code-architect** — design-ревью (Q1–Q4): counter shift strategy, full capture-and-reuse, JobID explicit, минимальный набор тестов per flow.
+- **code-reviewer** — финальный quality/correctness review.
+
+### Следующие задачи
+- **ORCH-TASK-055** — Серверная нормализация `contract_type` RU→EN для POST /contracts/{id}/confirm-type (независимая, no dependencies).
+- Если/когда появятся endpoints для `RECOMMENDATION_APPLIED` / `MANUAL_EDIT` — паттерн `jobid.NewJobID()` ДО `DM.CreateVersion` применяется автоматически (см. ASSUMPTION-ORCH-15).

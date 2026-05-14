@@ -149,7 +149,30 @@
         "Шаг 3: sanitize редактирует API-ключ в error message"
       ],
       "dependencies": ["LIC-TASK-002"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-14",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/infra/observability/logger на основе stdlib log/slog (hermetic, нулевые внешние зависимости в этом пакете). 6 production-файлов: logger.go (Logger struct + Debug/Info/Warn/Error/Fatal/With + New/NewWithWriter), handler.go (licHandler — кастомный slog.Handler с auto-injection RequestContext, sanitize, FATAL label, timestamp rename), context.go (RequestContext POD + WithRequestContext + RequestContextFrom), level.go (parseLevel, LevelFatal, levelLabel), sanitizer.go (Sanitize + secretPattern + queryKeyPattern + autoSanitizeKeys), keys.go (exported attribute key constants по allowlist security.md §6.2). 5 test-файлов: 46 тестов, все PASS (включая -race). Соответствует observability.md §2.1–2.5 + security.md §3.4 + §6.1–6.2.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран",
+          "make_test": "ok — 75 тестов PASS, 0 FAIL (29 config + 46 logger), включая -race",
+          "make_lint": "ok — go vet 0 errors"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/logger.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/handler.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/context.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/level.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/sanitizer.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/keys.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/logger_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/handler_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/context_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/level_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/sanitizer_test.go"
+        ],
+        "notes": "Архитектура согласована с code-architect (Option: log/slog stdlib + one-concern-per-file + handler-level injection). golang-pro и security-engineer review выявили 5 must-fix, все применены: (1) WithGroup → документированный no-op (раньше нестил service/IDs внутрь группы и ломал инвариант observability.md §2.1); (2) дублирующий component-attr убран (Logger.With — единственный source для component, ctx-based WithComponent удалён из публичного API); (3) sanitize теперь покрывает KindAny+error interface (не только KindString), идиоматичный slog.Any(KeyError, err) больше не leak channel; (4) Bearer regex алфавит расширен до [A-Za-z0-9._\\-+/=~] — opaque base64 токены больше не truncate-ятся, оставляя secret tail; (5) добавлены sk-(proj|svcacct|admin|or)-... и ?KEY= case-insensitive. Дополнительно: msg тоже sanitize-ится на WARN/ERROR/FATAL (защита от fmt.Sprintf-leak); набор auto-sanitize keys расширен (error, error_message, request_body, response_body). FATAL уровень — slog.Level(12), отдельная константа LevelFatal; вызывает os.Exit(1) через подменяемую exitFn (тестируемо). Спецификационная цена no-op WithGroup: callers не должны использовать Slog().WithGroup() — должны использовать Logger.With(component) для логического scope-а; задокументировано в handler.go."
+      }
     },
     {
       "id": "LIC-TASK-005",

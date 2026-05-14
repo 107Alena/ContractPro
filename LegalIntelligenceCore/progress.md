@@ -293,3 +293,58 @@ LIC-TASK-006: OpenTelemetry tracer с W3C Trace Context propagation, OTLP gRPC e
 - LIC-TASK-021 (Token Estimator) — зависит от 011 (done).
 
 Также по-прежнему свободны без новых блокеров: LIC-TASK-003 (Dockerfile distroless), LIC-TASK-007 (Redis), LIC-TASK-008 (RabbitMQ), LIC-TASK-010 (concurrency limiter).
+
+---
+
+## LIC-TASK-012 — Domain models (PipelineState, AgentInput, типизированные artifacts, PendingTypeConfirmation)
+- **Status:** done
+- **Completed at:** 2026-05-14
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, golang-pro, architect-reviewer)
+
+### План реализации
+1. Прочитать high-arch §2.1 (entities), §6.10 (Pending state — gzip+base64, 25h TTL, поля), §6.11 (RiskProfile/AggregateScore + 22-value расширенный RiskCategory + R-NNN/R-PNNN/R-MNNN namespaces), ai-agents-pipeline.md §1-9 (9 JSON schemas артефактов) + §8 (warnings object-map), integration-contracts.md §4 (envelope: correlation_id + job_id + document_id + version_id + organization_id + created_by_user_id + opaque origin_type), event-catalog.md §2.1 (LIC-side ужесточения regex).
+2. Согласовать структуру через code-architect — рекомендации: (Q1) разбить artifacts.go (~600 LOC) на 8 концептуальных файлов под one-concern-per-file; (Q2) DM-outbound counterpart types отложить до LIC-TASK-035 (scope разделения); (Q3) prompt_injection_detected — простой bool на каждом артефакте; (Q4) TraceContext — именованной struct {TraceParent, TraceState} с json lowercase per W3C; (Q5) InputArtifactsCompact — typed map[ArtifactType]json.RawMessage с deferred decoding (byte-faithful copy DM payload); (Q6) Warnings — named-field struct с 5 *Warning указателями + omitempty (named fields IDE-friendly, JSON shape соответствует spec); (Q7) PipelineState — плоская struct (13 указателей agent outputs).
+3. Реализовать 14 production-файлов: trace.go, derived.go, classification.go, key_parameters.go, party_consistency.go, mandatory_conditions.go, risk_analysis.go, recommendations.go, report.go, warnings.go, delta.go, agent_input.go, pipeline_state.go, pending.go.
+4. Реализовать 11 test-файлов с golden round-trip JSON + edge-cases (nil receiver, invalid base64/gzip/json для pending, nullable vs omittable wire-семантика).
+5. Прогнать `make build/test/lint -race`.
+6. Code review через golang-pro + architect-reviewer (параллельно) — применить MUST/SHOULD-FIX.
+
+### Прогресс
+- ✅ Pkg `internal/domain/model`: 14 production-файлов + 11 test-файлов (расширил LIC-TASK-011's 5+5).
+- ✅ Hermetic: только stdlib (bytes, compress/gzip, encoding/base64, encoding/json, fmt, io, regexp, time).
+- ✅ **PipelineState** — плоская struct с 13 указателями agent-результатов, идентифицирующими полями (correlation_id/job_id/document_id/version_id/organization_id/created_by_user_id), Mode (PipelineMode INITIAL/RE_CHECK), OriginType (opaque DM-enum), ParentVersionID (*string), CurrentStage (Stage), StartedAt (time.Time UTC), TraceContext (W3C), InputArtifacts (deferred-decoded), RiskProfile + AggregateScore. Helper `NewPipelineState(correlationID, jobID, documentID, versionID, organizationID)` со Stage=STAGE_RECEIVED, Mode=INITIAL, StartedAt=now UTC.
+- ✅ **AgentInput** — POD-контейнер: correlation IDs + Artifacts (InputArtifactsCompact) + 8 agent-result указателей + Recommendations slice + ParentRiskAnalysis (для Agent 9 в RE_CHECK).
+- ✅ **TraceContext** — W3C 2-field struct (TraceParent + TraceState с omitempty), `IsZero()` helper.
+- ✅ **InputArtifactsCompact** = `map[ArtifactType]json.RawMessage` + Has(t) helper; ArtifactType enum с 5 константами (SEMANTIC_TREE/EXTRACTED_TEXT/DOCUMENT_STRUCTURE/PROCESSING_WARNINGS/RISK_ANALYSIS).
+- ✅ **RiskLevel** (high/medium/low) + **RiskProfile** (OverallLevel + 3 counts) + **AggregateScore** (Score + Label) + **AggregateScoreLabel** (low/medium/high).
+- ✅ **9 артефакт-типов** с FROZEN-DM-conformant JSON tags по ai-agents-pipeline.md §1-9: ClassificationResult, KeyParameters (+InternalExtras +PartyRole +KeyDate), PartyConsistencyFindings (7 PARTY_* findings), MandatoryConditionsReport (^MC_[A-Z0-9_]+$ regex), RiskAnalysis (22-value RiskCategory + ^R-(P|M)?[0-9]{3,}$ regex), Recommendations, Summary, DetailedReport (7 секций), RiskDelta.
+- ✅ **RiskCategory 22-value enum** (13 от агента 5 + 7 PARTY_* + 2 MANDATORY_*) с exhaustive IsValid через init-built map + AllRiskCategories() возвращает fresh slice.
+- ✅ **Warnings wrapper** с 5 типизированными *Warning указателями (PROMPT_INJECTION_DETECTED/RE_CHECK_PARENT_ANALYSIS_MISSING/INPUT_TRUNCATED/CLASSIFICATION_PARAMS_MISMATCH/RECOMMENDATION_ORPHAN_REF), omitempty → object-map wire shape, IsEmpty() helper.
+- ✅ **PendingTypeConfirmation** — 12 полей (10 spec из §6.10 + 2 LIC-internal OriginType/ParentVersionID для resume-completeness); Encode() (JSON → gzip → base64) + DecodePendingTypeConfirmation() с гарантированным byte-for-byte round-trip; edge cases (nil receiver, invalid base64/gzip/json) покрыты.
+- ✅ **Nullable wire-fields** — корректно сериализуются как `null` (не omit) для всех `type:[T,null]` schema полей: PartyRole INN/OGRN/Address/Signatory/SignatoryAuthority/ClauseRef, PartyFinding PartyName, MandatoryCondition FoundIn/IssueDescription, ReportItem Severity/ClauseRef/LegalBasis/LinkedRiskID/LinkedRecommendation, RiskChange OldClauseRef/NewClauseRef.
+- ✅ `make build/test/lint` — все три цели зелёные. `go test -race` — 0 races.
+- ✅ Тесты: 100 PASS в domain/model (53 от LIC-TASK-011 + 45 new), 0 FAIL.
+- ✅ Общий пакет LIC: 5 packages PASS, ~230 тестов total.
+
+### Summary
+Готов production-ready domain pipeline-models пакет для LIC. Полное соответствие ai-agents-pipeline.md §1-9 + high-architecture.md §2.1/§6.10/§6.11 + integration-contracts.md §4. Hermetic, zero внешних deps. Готова основа для LIC-TASK-013 (Hexagonal ports — все ports принимают/возвращают эти типы), LIC-TASK-020 (embed prompts/schemas — схемы валидируют LLM outputs против этих типов), LIC-TASK-024 (BaseAgent runner — Run() возвращает AgentResult), LIC-TASK-035 (Result Aggregator — единственная точка stripping internal fields + расчёта RiskProfile/AggregateScore + сборки 22-value risks[]), LIC-TASK-037 (Pause-and-Resume — Encode/Decode PendingTypeConfirmation в/из Redis).
+
+### Notes
+- Структура согласована с code-architect: разбит artifacts.go (~600 LOC) на 8 концептуальных файлов под one-concern-per-file (продолжает paradigm LIC-TASK-011); DM-outbound counterpart types сознательно отложены до LIC-TASK-035 (scope LIC-TASK-035 = единственная точка stripping rationale/internal_extras/prompt_injection_detected перед публикацией в DM); InputArtifactsCompact как map[ArtifactType]json.RawMessage сохраняет byte-faithful копию payload от DM (никаких re-encode на pause/resume); Warnings как named-field struct (IDE autocomplete в Aggregator, no `any`/type-assertion, golden-test diffs читаемы).
+- golang-pro code review: 1 MUST-FIX/верификация + 6 SHOULD-FIX/NIT. Применено:
+  - (MUST-1) Nullable wire-fields per ai-agents-pipeline.md §2/§3/§4/§8/§9 — убран ошибочный `omitempty` с PartyRole INN/OGRN/Address/Signatory/SignatoryAuthority/ClauseRef, PartyFinding PartyName, MandatoryCondition FoundIn/IssueDescription, ReportItem Severity/ClauseRef/LegalBasis/LinkedRiskID/LinkedRecommendation, RiskChange OldClauseRef/NewClauseRef — все эти поля schema объявляет `type:[T,null]` (nullable), значит должны serialize as null when unset, не быть omitted. Добавлены явные регрессионные тесты `TestPartyRole_NullableFieldsSerialiseAsNull` и `TestMandatoryCondition_NullableFieldsSerialiseAsNull`.
+  - (S-3) Risk.Rationale comment уточнён с ссылкой на LIC-TASK-035 как single stripping site.
+  - (S-5) Pending.go: добавлен комментарий про base64.StdEncoding.EncodedLen exactness (защищает от well-meaning future "fix" на slicing).
+  - (M-2) Pending.go: документирована TraceContext value-vs-pointer семантика (TraceContext.IsZero() — канонический "no trace" тест).
+  - LOW-findings (init() ordering, JSON tags на PipelineState dead annotations, AgentInput-vs-PipelineState near-duplicate) — оставлены как acceptable для v1; перепроектирование AgentInput через projection-метод от PipelineState — задача LIC-TASK-013+.
+- architect-reviewer PASS APPROVED без HIGH/MEDIUM: подтверждены все 11 верификационных пунктов — 18 STAGE_* (из LIC-TASK-011), 3 ExternalStatus (из 011), PipelineMode INITIAL/RE_CHECK с default INITIAL, 22 RiskCategory values (13+7+2 names матчат §6.11.2 verbatim), ^R-(P|M)?[0-9]{3,}$ regex в IsValidRiskID, ^MC_[A-Z0-9_]+$ в IsValidMandatoryConditionCode, PendingTypeConfirmation с 10 spec-полями + 2 LIC-internal для resume-completeness, 9 agent артефактов с FROZEN-DM-conformant tags, KeyParameters Price/Duration/Penalties/Jurisdiction *string без omitempty (serialize null), 7 PARTY_* finding types, 7 ReportSection codes в фиксированном порядке, Warnings object-map с точными field names per spec (detected/detected_by_agents/detection_count/user_message; truncated_bytes/total_bytes; orphan_risk_ids), TraceContext W3C 2-field lowercase, InputArtifactsCompact с 5 ArtifactType ключами. LOW findings задокументированы.
+- Тесты НЕ `t.Parallel` — все быстрые (milliseconds total), reflect.DeepEqual + regex MustCompile вычислены однажды на init.
+- Зависимостей в go.mod не добавлено — пакет полностью hermetic.
+
+### Следующая задача
+Разблокированы все critical-задачи следующего слоя (ports + Aggregator + agents):
+- LIC-TASK-013 (Hexagonal ports — все internal interfaces, использующие model.* типы) — зависит от 012 (done). Logical next.
+- LIC-TASK-020 (embed prompts/schemas) — зависит только от 011 (done). Параллельно.
+- LIC-TASK-021 (Token Estimator) — зависит только от 011 (done). Параллельно.
+
+Также по-прежнему свободны без новых блокеров: LIC-TASK-003 (Dockerfile distroless), LIC-TASK-007 (Redis), LIC-TASK-008 (RabbitMQ), LIC-TASK-010 (concurrency limiter).

@@ -417,7 +417,47 @@
         "Шаг 3: PendingTypeConfirmation сжимается-разжимается без потерь"
       ],
       "dependencies": ["LIC-TASK-011"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-14",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/domain/model с 14 production-файлами для pipeline-state-плоскости (расширил готовые 5 файлов из LIC-TASK-011). Структура: pipeline_state.go (PipelineState с 13 указателями agent-результатов + PipelineMode INITIAL/RE_CHECK + NewPipelineState), agent_input.go (AgentInput POD + ArtifactType enum + InputArtifactsCompact map[ArtifactType]json.RawMessage с deferred decoding), trace.go (TraceContext W3C 2-field struct), derived.go (RiskLevel + RiskProfile + AggregateScore + AggregateScoreLabel), 8 артефакт-файлов по концепциям: classification.go, key_parameters.go (KeyParameters + InternalExtras + PartyRole + KeyDate), party_consistency.go (7 PARTY_* findings), mandatory_conditions.go (^MC_[A-Z0-9_]+$ regex), risk_analysis.go (22-value RiskCategory enum + ^R-(P|M)?[0-9]{3,}$ regex), recommendations.go, report.go (DetailedReport с 7 секциями + Warnings pointer), warnings.go (5 типизированных warning sub-types: PROMPT_INJECTION_DETECTED/RE_CHECK_PARENT_ANALYSIS_MISSING/INPUT_TRUNCATED/CLASSIFICATION_PARAMS_MISMATCH/RECOMMENDATION_ORPHAN_REF), delta.go (RiskDelta + RiskRef + RiskChange + RiskProfileChange), pending.go (PendingTypeConfirmation + Encode() JSON→gzip→base64 + DecodePendingTypeConfirmation). 11 test-файлов с golden round-trip JSON и edge-cases (nil receiver, invalid base64/gzip/json для pending, nullable-vs-omittable wire-семантика). Hermetic: только stdlib (bytes, compress/gzip, encoding/base64, encoding/json, fmt, io, regexp, time).",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран",
+          "make_test": "ok — 100 тестов PASS в domain/model (53 от LIC-TASK-011 + 45 new) + остальные пакеты зелёные, 0 FAIL, -race чистый",
+          "make_lint": "ok — go vet 0 errors"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/domain/model/trace.go",
+          "LegalIntelligenceCore/development/internal/domain/model/derived.go",
+          "LegalIntelligenceCore/development/internal/domain/model/classification.go",
+          "LegalIntelligenceCore/development/internal/domain/model/key_parameters.go",
+          "LegalIntelligenceCore/development/internal/domain/model/party_consistency.go",
+          "LegalIntelligenceCore/development/internal/domain/model/mandatory_conditions.go",
+          "LegalIntelligenceCore/development/internal/domain/model/risk_analysis.go",
+          "LegalIntelligenceCore/development/internal/domain/model/recommendations.go",
+          "LegalIntelligenceCore/development/internal/domain/model/report.go",
+          "LegalIntelligenceCore/development/internal/domain/model/warnings.go",
+          "LegalIntelligenceCore/development/internal/domain/model/delta.go",
+          "LegalIntelligenceCore/development/internal/domain/model/agent_input.go",
+          "LegalIntelligenceCore/development/internal/domain/model/pipeline_state.go",
+          "LegalIntelligenceCore/development/internal/domain/model/pending.go",
+          "LegalIntelligenceCore/development/internal/domain/model/trace_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/derived_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/classification_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/key_parameters_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/party_consistency_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/mandatory_conditions_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/risk_analysis_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/recommendations_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/report_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/warnings_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/delta_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/agent_input_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/pipeline_state_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/pending_test.go"
+        ],
+        "notes": "Структура согласована с code-architect: рекомендован разбив artifacts.go (~600 LOC) на 8 концептуальных файлов под one-concern-per-file (как в LIC-TASK-011). DM-outbound counterpart types сознательно отложены до LIC-TASK-035 (Result Aggregator — единственная точка stripping rationale/internal_extras/prompt_injection_detected перед публикацией LegalAnalysisArtifactsReady). PromptInjectionDetected — простой bool на каждом артефакте (нет interface, нет polymorphism — Aggregator знает concrete types). TraceContext — именованная struct (не map) для compile-time safety на resume; W3C 2-field shape (traceparent + tracestate с omitempty). InputArtifactsCompact = map[ArtifactType]json.RawMessage для deferred decoding (byte-faithful copy DM payload, без re-encode на pause/resume). Warnings — typed wrapper с 5 *Warning указателями + omitempty → object-map wire shape согласно ai-agents-pipeline.md §8 (новое поле = breaking schema change anyway). PipelineState — плоская struct с 13 указателями agent outputs + helper NewPipelineState (Mode=INITIAL, Stage=STAGE_RECEIVED, StartedAt=now UTC). Pending Encode/Decode: JSON.Marshal → gzip.Writer (DefaultCompression) → base64.StdEncoding; полный round-trip + edge cases (nil receiver, invalid base64/gzip/json) покрыты тестами. golang-pro review нашёл 1 MUST-FIX/верификация + 6 SHOULD-FIX/NIT; применены: (1) nullable wire-fields per schema §2/§3/§4/§8/§9 — PartyRole(INN/OGRN/Address/Signatory/SignatoryAuthority/ClauseRef), PartyFinding(PartyName), MandatoryCondition(FoundIn/IssueDescription), ReportItem(Severity/ClauseRef/LegalBasis/LinkedRiskID/LinkedRecommendation), RiskChange(OldClauseRef/NewClauseRef) — убран ошибочный omitempty (schema требует serialize as null); добавлены явные регрессионные тесты `*_NullableFieldsSerialiseAsNull` для PartyRole+MandatoryCondition. (2) Risk.Rationale comment уточнён с ссылкой на LIC-TASK-035. (3) Pending.go: дополнительная документация про TraceContext value semantics + EncodedLen exactness. architect-reviewer PASS APPROVED без HIGH/MEDIUM: подтверждены 18 STAGE_*, 3 ExternalStatus, PipelineMode INITIAL/RE_CHECK, 22 RiskCategory (13+7+2), ^R-(P|M)?[0-9]{3,}$ и ^MC_[A-Z0-9_]+$ regex'ы, 10 pending-state полей + 2 LIC-internal (origin_type/parent_version_id для resume-completeness), 9 agent артефактов с FROZEN-DM-conformant JSON tags, Warnings object-map с точными field names per spec, TraceContext W3C 2-field. LOW findings задокументированы как не-блокеры: created_by_user_id omitempty (LIC-TASK-038 validates), AgentInput/PipelineState near-duplicate (LIC-TASK-013+ может проекцию ввести). Layer hygiene: hermetic — только stdlib (никаких infra/agents/llm импортов)."
+      }
     },
     {
       "id": "LIC-TASK-013",

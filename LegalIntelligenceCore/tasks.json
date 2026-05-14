@@ -78,7 +78,34 @@
         "Шаг 4: тест с LIC_ENV=production + amqp:// → FATAL"
       ],
       "dependencies": ["LIC-TASK-001"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-14",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/config (14 .go-файлов + 1 test). Структура: config.go (root + Load() + Validate() + env helpers), app.go, broker.go, redis.go, idempotency.go, pipeline.go, llm.go, agents.go, scoring.go, observability.go, pricing.go, cache.go, security.go, tls.go. Все ~80 env-переменных из configuration.md §2 покрыты с дефолтами; все 11 правил валидации §3 реализованы. Дополнительные защитные проверки: дубликаты в LIC_PROVIDER_FALLBACK_ORDER, label-threshold ordering, MaxAgentInputTokens ≤ MaxInputTokens, heartbeat < processing TTL, OTEL_INSECURE forbidden in prod, unknown agent IDs in maps. LIC_BROKER_TLS=true работает как альтернатива amqps:// (configuration.md §3 rule 10). Все ошибки агрегируются через errors.Join — оператор видит все misconfigurations за один прогон.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран без ошибок",
+          "make_test": "ok — 29 тестов PASS, 0 FAIL",
+          "make_lint": "ok — go vet 0 errors"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/config/config.go",
+          "LegalIntelligenceCore/development/internal/config/app.go",
+          "LegalIntelligenceCore/development/internal/config/broker.go",
+          "LegalIntelligenceCore/development/internal/config/redis.go",
+          "LegalIntelligenceCore/development/internal/config/idempotency.go",
+          "LegalIntelligenceCore/development/internal/config/pipeline.go",
+          "LegalIntelligenceCore/development/internal/config/llm.go",
+          "LegalIntelligenceCore/development/internal/config/agents.go",
+          "LegalIntelligenceCore/development/internal/config/scoring.go",
+          "LegalIntelligenceCore/development/internal/config/observability.go",
+          "LegalIntelligenceCore/development/internal/config/pricing.go",
+          "LegalIntelligenceCore/development/internal/config/cache.go",
+          "LegalIntelligenceCore/development/internal/config/security.go",
+          "LegalIntelligenceCore/development/internal/config/tls.go",
+          "LegalIntelligenceCore/development/internal/config/config_test.go"
+        ],
+        "notes": "go.mod подтянул github.com/joho/godotenv v1.5.1. Структура согласована с code-architect (Option C — one-concern-per-file). Per-agent provider/timeout map использует string ID (миграция на typed domain.AgentID — после LIC-TASK-011). Конфиг hermetic — только stdlib + godotenv, без зависимостей на domain/infra. golang-pro код-ревью прошёл (применены: errors.Join во всех sub-validate, убран дубль envVarSuffix map, убрано лишнее поле minIngestedBytes, добавлен godotenv-comment, поправлен мутный ассерт). architect-reviewer подтвердил соответствие configuration.md §2.1–2.16 и §3 rules 1–11; единственный WARNING про LIC_BROKER_TLS закрыт (поддержано как альтернатива amqps://)."
+      }
     },
     {
       "id": "LIC-TASK-003",

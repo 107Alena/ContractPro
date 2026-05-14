@@ -538,7 +538,30 @@
         "Шаг 4: CachedInputTokens учитывается при parse usage"
       ],
       "dependencies": ["LIC-TASK-013"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-15",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/llm/claude — адаптер Anthropic Messages API. 5 production-файлов: provider.go (Provider struct + NewClaudeProvider + Complete + HealthCheck + ID + do helper + HTTPClient interface + constants anthropicVersionHeader=2023-06-01 + messagesEndpointPath + maxResponseBytes=8MiB + maxDrainBytes=64KiB), config.go (ClaudeConfig + Validate включая userinfo rejection + defaultHTTPClient TLS 1.2 без Timeout), payload.go (anthropicRequest DTO + buildRequestPayload + buildSystemBlocks always-array + tool_use envelope с virtualToolName=\"return_analysis_result\"), response.go (anthropicResponse + parseResponse + extractContent + mapStopReason с \"refusal\"→StopReasonContentFilter), errors.go (mapTransportError + mapHTTPError + classify400 + isContentPolicy + isContextLength + isQuotaExceeded + parseRetryAfter с maxRetryAfter=1h cap + UTF-8 rune-boundary truncation). 5 test-файлов: 61 тест PASS включая httptest happy path, JSONSchema tool_use, prompt cache, 401/429/529/5xx/400-context/400-content-policy/400-quota, ctx-cancel/timeout, network, adapter invariant for all errors, no-key-leak canary, concurrent calls, HealthCheck dual-return для 401/503/network, BaseURL trailing-slash trim, BaseURL userinfo rejection, per-request Model override, Retry-After int/HTTP-date/cap. Race-clean.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран",
+          "make_test": "ok — 303 теста PASS в модуле (248 предыдущих + 55 новых... обновлено: 61 после code review fixes; 0 FAIL)",
+          "make_lint": "ok — go vet 0 errors",
+          "race": "ok — go test -race чистый"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/llm/claude/provider.go",
+          "LegalIntelligenceCore/development/internal/llm/claude/config.go",
+          "LegalIntelligenceCore/development/internal/llm/claude/payload.go",
+          "LegalIntelligenceCore/development/internal/llm/claude/response.go",
+          "LegalIntelligenceCore/development/internal/llm/claude/errors.go",
+          "LegalIntelligenceCore/development/internal/llm/claude/provider_test.go",
+          "LegalIntelligenceCore/development/internal/llm/claude/config_test.go",
+          "LegalIntelligenceCore/development/internal/llm/claude/payload_test.go",
+          "LegalIntelligenceCore/development/internal/llm/claude/response_test.go",
+          "LegalIntelligenceCore/development/internal/llm/claude/errors_test.go"
+        ],
+        "notes": "Структура согласована с code-architect: 6 файлов (хотя CLAUDE.md в этой задаче не создан per LIC convention из 011-013); HTTPClient interface для test injection (нет SDK, ручной HTTP); per-request Model override; tool_use с фиксированным virtualToolName=\"return_analysis_result\"; всегда-array system block для упрощения cache toggle; Retry-After integer/HTTP-date parser. NewClaudeProvider возвращает *Provider (renamed с claudeProvider после golang-pro M1). golang-pro review нашёл 5 MUST-FIX + 13 SHOULD-FIX + 12 NIT, применены все MUST + ключевые SHOULD: (M1) Provider → exported тип (раньше unexported *claudeProvider блокировал Phase-4 wiring); (M2) HealthCheck fall-through после errors.As — теперь wraps в port.NewLLMProviderError(LLMErrorNetwork) для invariant preservation; (M3) HealthCheck json.Marshal failure теперь возвращает (typedErr, nil) с LLMErrorMalformedRequest вместо bare error; (M4) json.Unmarshal failure на 2xx body → LLMErrorServerError (не MALFORMED) — provider misbehaviour, не наш bug; missing tool_use block + empty input + no text blocks → SERVER_ERROR (retryable+fallback); (M5) defer io.Copy capped at 64 KiB через LimitReader — bounds tail latency под adversarial peers; (S1 golang) HTTPClient interface перенесён в provider.go (с типом который его использует); (S4) strings.Builder в extractContent; (S6 MUST-light) mapStopReason \"refusal\" → StopReasonContentFilter; (S9) unknown HTTP status default → LLMErrorServerError вместо MALFORMED (preserves Router fallback). security-engineer review PASS без MUST-FIX: 0 secret leaks confirmed по полному pass через все error sites; применены 2 SHOULD-FIX: (S1 sec) Validate() rejects userinfo в BaseURL — defense in depth против url.Error echo credentials; (S2 sec) TestComplete_ErrorsDoNotLeakAPIKey canary тест с unwrap-chain walk. NITs применены: N1 UTF-8 rune-boundary truncation в httpStatusError; N2 maxRetryAfter=1h cap (защита от \"Retry-After: 9999999\"); N4 isQuotaExceeded 400 routing для billing/credit balance. architect-reviewer PASS-WITH-NITS, 0 HIGH 0 MEDIUM: все 12 верификационных пунктов confirmed (port contract + adapter invariant; §1.2 error matrix через canonical llmCodeCatalog NewLLMProviderError; §1.5 JSON Schema→tool_use; §1.4 always-array system block; PriorTurns ordering; §5.1 prompt caching с CachedInputTokens отдельно от InputTokens; TLS 1.2 + no InsecureSkipVerify + no CA pinning; secret hygiene confirmed canary test; timeout hierarchy через caller's ctx; hermetic stdlib+port-only; 5-field ClaudeConfig без RPS/Burst — те для LIC-TASK-017; HealthCheck (typedErr, nil) для 401/5xx vs (nil, transport) для TIMEOUT/NETWORK). Зависимости в go.mod: НЕТ новых — пакет полностью hermetic (только stdlib + internal/domain/{model,port})."
+      }
     },
     {
       "id": "LIC-TASK-015",

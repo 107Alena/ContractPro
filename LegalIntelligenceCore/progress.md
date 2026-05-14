@@ -191,3 +191,55 @@ LIC-TASK-005: Prometheus metrics registry с `lic_*` prefix, factories для co
 ### Следующая задача
 LIC-TASK-006: OpenTelemetry tracer с W3C Trace Context propagation, OTLP gRPC exporter, ParentBased(TraceIDRatio) sampler, helpers для StartSpan/SpanFromContext/InjectIntoHeaders. Зависит от LIC-TASK-002 (done). Параллельно может идти LIC-TASK-011 (domain types) или LIC-TASK-007 (Redis client — зависит от 002, 004).
 
+---
+
+## LIC-TASK-006 — OpenTelemetry tracer (W3C TraceContext + OTLP gRPC + ParentBased(TraceIDRatio))
+- **Status:** done
+- **Completed at:** 2026-05-14
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, golang-pro, architect-reviewer)
+
+### План реализации
+1. Прочитать observability.md §4 (Provider, hierarchy, attributes, propagation, sampling, retention) + configuration.md (LIC_OTEL_* env vars). DP-аналог `internal/infra/observability/tracer.go` — реф для конструктора и no-op fallback.
+2. Согласовать структуру через code-architect — рекомендация: гибрид из 3-4 файлов (typed attribute keys обязательно отдельно для 40+ call sites; propagator выделен из-за разной транспортной концепции; tracer.go и span.go разделены по lifecycle vs runtime).
+3. Согласовать идиоматику через golang-pro: OTel v1.32+ (фактически вышла v1.43.0 — взяли её), semconv v1.26.0 (консистентно с DP), `ParentBased(TraceIDRatioBased)` явно (без implicit OTEL_TRACES_SAMPLER env-magic), `sync.Once` для install of globals, `crypto/rand` 16 байт hex для service.instance.id (без uuid-deps), MapCarrier для Inject/Extract.
+4. Реализовать 4 production-файла: attrs.go (28 typed `attribute.Key` + `SpanFields` POD), tracer.go (Config, Tracer, New, Shutdown, buildSampler, newOTLPExporter, buildResource, instanceID, installGlobals), span.go (StartSpan/StartSpanWithFields/SpanFromContext/RecordError/SetOK), propagator.go (InjectIntoHeaders/ExtractFromHeaders).
+5. Написать 4 test-файла: tracer_test (sampler-матрица, resource attrs, instanceID uniqueness, Shutdown timeout, SDK-backed flush ordering, ApplyTo), span_test (StartSpan/StartSpanWithFields, RecordError success/nil-guards, SetOK), propagator_test (round-trip preservation, baggage, nil-guards), attrs_test (omit-empty + all-fields-covered + namespace stability lock).
+6. golang-pro + architect-reviewer code review → применить must/should-fix.
+7. Прогнать `make build`, `make test`, `make lint` (+ `-race`).
+
+### Прогресс
+- ✅ Pkg `internal/infra/observability/tracer`: 4 production + 4 test файла (8 файлов total).
+- ✅ OTLP gRPC exporter (otlptracegrpc.New), не HTTP — соответствует §4.1 + acceptance criteria.
+- ✅ Composite W3C propagator (`TraceContext{}, Baggage{}`) применён даже для no-op tracer — upstream `traceparent` не теряется, когда LIC export disabled.
+- ✅ Sampler-матрица (7 вариантов): default empty fallback на `parentbased_traceidratio`, плюс `always_on/off`, `traceidratio`, 3× `parentbased_*`. Unknown name отклоняется явно (без silent fallback). Range [0,1] для arg-based.
+- ✅ Resource: service.name, service.instance.id (16-байт hex от crypto/rand), service.version (opt), deployment.environment (opt), process.runtime.name=go, process.runtime.version. resource.Default() добавляет host.*, остальные process.*. Custom resource без SchemaURL — иначе конфликт с SDK Default's v1.40.0 в Merge.
+- ✅ Shutdown: ForceFlush (3s бюджет) и Shutdown (5s бюджет) идут с независимыми timeouts через `errors.Join` — медленный flush не съест бюджет gRPC close. No-op tracer Shutdown — early return nil.
+- ✅ installGlobals через `sync.Once`: первый `New(InstallGlobals=true)` фиксирует глобалы; последующие `New()` возвращают usable-через-DI Tracer, но не перезаписывают globals (документировано). Тесты используют `InstallGlobals=false` — глобальное состояние процесса не загрязняется.
+- ✅ 28 typed `attribute.Key` констант — single source of truth по observability.md §4.3 (mandatory IDs + lic.pipeline.* + lic.agent.* + lic.llm.*). `TestAttrConstants_StableNamespacing` локирует wire-format strings — drift сломает компиляцию теста до того, как сломает дашборды.
+- ✅ `SpanFields.AsKeyValues` (omit-empty) + `ApplyTo(span)` (single SetAttributes batch для hot-path call sites).
+- ✅ `InjectIntoHeaders(nil headers)` — паника с явным сообщением: silent drop traceparent ломает W3C propagation invariant §4.4.
+- ✅ `make build/test/lint` — все три цели зелёные. `go test -race` — 0 races. 124 теста PASS (29 config + 46 logger + 25 metrics + 24 tracer).
+- ✅ Зависимости: `go.opentelemetry.io/otel v1.43.0`, `go.opentelemetry.io/otel/sdk v1.43.0`, `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.43.0`, semconv v1.26.0 (как в DP).
+
+### Summary
+Готов production-ready OpenTelemetry tracer для LIC. Полное соответствие observability.md §4.1–4.5 + acceptance criteria LIC-TASK-006. Hermetic (только `otel/*` + stdlib), транспорт-агностичный (конверсия amqp.Table → map[string]string остаётся в infra/broker boundary). Готова основа для LIC-TASK-008 (broker — Inject в outgoing headers, Extract из incoming), LIC-TASK-009 (health — promhttp + tracer.Enabled() metric), LIC-TASK-024 (BaseAgent — span-per-agent с lic.agent.* attributes), LIC-TASK-019 (LLM router — span-per-llm-call с lic.llm.* attributes), LIC-TASK-036 (pipeline orchestrator — root span + span-per-stage hierarchy §4.2).
+
+### Notes
+- Структура согласована с code-architect: гибрид Option B-lite (4 файла), не полный 5-файловый split (`noop.go` отдельным был бы искусственным разделением одной концепции lifecycle).
+- `propagator.go` оставлен отдельным (не сложен в tracer.go) — разные транспортные boundaries; будущая HTTP middleware (Orchestrator) переиспользует его без изменений.
+- Method-style `Tracer.InjectIntoHeaders` (vs package-level) — выбрано для DI-friendliness в hexagonal arch; package-level alias не добавлен (surface bloat); auto-instrumented libs (otelgrpc/otelhttp) подхватят через `otel.GetTextMapPropagator()` после `installGlobals`.
+- `crypto/rand` panic при сбое (вместо silent "unknown") — поломанный entropy source = сломанная ОС, fail-loud правильнее. 128 бит уникальности эквивалентно UUIDv4, без uuid-зависимости.
+- `tracetest.InMemoryExporter` wipes spans на `Shutdown()` — это сломало бы post-Shutdown assertion в `TestShutdown_FlushesPendingSpans`. Заменён на собственный `capturingExporter` (10 LOC), который сохраняет spans across Shutdown.
+- Exporter cleanup при ошибке `buildResource` использует fresh `context.Background()` с timeout — caller's ctx может быть уже cancelled, gRPC close нужно довести до конца.
+- golang-pro нашёл 9 проблем (3 must-fix + 5 should-fix + 1 nit), все применены кроме package-level Inject/Extract alias (намеренно) и sync.Pool для AsKeyValues (заменено `ApplyTo` — нулевые промежуточные allocs). architect-reviewer PASS без CRITICAL/HIGH; единственный MEDIUM — отсутствие SDK-backed flush coverage — закрыт `TestShutdown_FlushesPendingSpans`.
+- AttributeKey `confirmed_by_user_id` переименован из `AttrConfirmedByUser` → `AttrConfirmedByUserID` для консистентности с остальными `*UserID` именами (wire-format string не изменился).
+- Тесты НЕ `t.Parallel` для большинства — быстрые (milliseconds), `TestShutdown_FlushesPendingSpans` использует BatchSpanProcessor с реальным timing-зависимым flush через `tr.Shutdown`.
+
+### Следующая задача
+Свободно несколько критических задач без блокеров:
+- LIC-TASK-003 (distroless multi-stage Dockerfile) — зависит только от LIC-TASK-001 (done).
+- LIC-TASK-007 (Redis client с Lua + TLS) — зависит от LIC-TASK-002 (done) + LIC-TASK-004 (done).
+- LIC-TASK-008 (RabbitMQ broker с publisher confirms + DLX-loop topology) — зависит от LIC-TASK-002 + LIC-TASK-004 (оба done). Подходит для интеграции с tracer (Inject/Extract в outgoing/incoming headers).
+- LIC-TASK-011 (domain types: статусы, стадии, agent IDs, error codes, DomainError) — зависит только от LIC-TASK-001.
+- LIC-TASK-010 (concurrency limiter) — зависит от LIC-TASK-005 (done).
+

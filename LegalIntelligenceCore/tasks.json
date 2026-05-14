@@ -243,7 +243,27 @@
         "Шаг 3: traceparent в headers корректно extract'ится"
       ],
       "dependencies": ["LIC-TASK-002"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-14",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/infra/observability/tracer на стеке OpenTelemetry SDK v1.43.0 (gRPC OTLP exporter v1.43.0, semconv v1.26.0 — консистентно с DocumentProcessing). 4 production-файла: attrs.go (28 typed attribute.Key констант + SpanFields POD struct с AsKeyValues + ApplyTo), tracer.go (Config, Tracer, New, Shutdown, buildSampler с 7 валидируемыми именами + range-check, newOTLPExporter, buildResource, instanceID, installGlobals via sync.Once), span.go (StartSpan, StartSpanWithFields, SpanFromContext, RecordError, SetOK), propagator.go (InjectIntoHeaders/ExtractFromHeaders через propagation.MapCarrier, panic при nil headers — egress invariant). 4 test файла: 24 теста PASS (включая SDK-backed flush ordering, sampler матрица, resource attributes contract, propagator round-trip с baggage, panic-on-nil headers), -race чистый. Соответствует observability.md §4.1–4.5 + acceptance criteria LIC-TASK-006.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service ~1.6 МБ",
+          "make_test": "ok — 124 теста PASS (29 config + 46 logger + 25 metrics + 24 tracer), 0 FAIL, включая -race",
+          "make_lint": "ok — go vet 0 errors"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/infra/observability/tracer/attrs.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/tracer/tracer.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/tracer/span.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/tracer/propagator.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/tracer/tracer_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/tracer/span_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/tracer/propagator_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/tracer/attrs_test.go"
+        ],
+        "notes": "Структура согласована с code-architect (гибрид 4 файла — typed attribute keys как single source of truth обязательно отдельным файлом для 40+ call sites; propagator выделен из-за отдельной транспортной концепции). golang-pro консультация: sync.Once для installGlobals (иначе otelgrpc/otelhttp auto-instrumentation не подхватит provider), instanceID из crypto/rand 16-байт hex (без uuid-зависимости — 128 бит достаточно), ParentBased(TraceIDRatioBased) сборка sampler-а явно (без implicit OTEL_TRACES_SAMPLER env-magic). Code review нашёл 4 must-fix + 4 should-fix + 1 medium-coverage gap, все применены: (1) exporter cleanup при ошибке buildResource — fresh background ctx (был cancellation race); (2) Shutdown теперь даёт ForceFlush и Shutdown отдельные timeouts (3s + 5s), иначе медленный flush съедал бюджет gRPC close; (3) instanceID при сбое crypto/rand — panic вместо silent 'unknown' (две реплики с одинаковым instance.id ломают Tempo/Jaeger aggregation); (4) InjectIntoHeaders при nil headers — panic с явным сообщением (silent drop traceparent ломает W3C invariant observability.md §4.4); (5) переименован AttrConfirmedByUser → AttrConfirmedByUserID; (6) добавлен SpanFields.ApplyTo(span) — single SetAttributes call для hot path; (7) добавлен SDK-backed flush ordering test через capturingExporter (стандартный tracetest.InMemoryExporter wipes на Shutdown, ломая assertion); (8) объединён branch с пустыми attrs в StartSpanWithFields. architect-reviewer PASS без CRITICAL/HIGH: подтвердил соответствие observability.md §4.1 (OTLP gRPC), §4.3 (полный attribute namespace — 4 группы, 28 ключей), §4.4 (W3C composite TraceContext+Baggage), §4.5 (parentbased_traceidratio default + полный OTel SDK env-spec sampler set). Layer hygiene: пакет hermetic — только otel/* + stdlib, никаких amqp/redis/prometheus импортов (конверсия amqp.Table → map делается в infra/broker, ингресс/егресс boundary). Зависимости (go.mod): go.opentelemetry.io/otel v1.43.0, go.opentelemetry.io/otel/sdk v1.43.0, go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.43.0 + транзитивные."
+      }
     },
     {
       "id": "LIC-TASK-007",

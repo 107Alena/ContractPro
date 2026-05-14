@@ -374,7 +374,29 @@
         "Шаг 3: DomainError.Unwrap() возвращает Cause"
       ],
       "dependencies": ["LIC-TASK-001"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-14",
+      "completion_notes": {
+        "summary": "Реализован базовый пакет internal/domain/model — 5 production-файлов + 5 test-файлов. status.go: типы ExternalStatus (3 значения IN_PROGRESS/COMPLETED/FAILED) и Stage (18 STAGE_* из high-architecture.md §2.1.3) с IsValid/AllStages/AllExternalStatuses helpers; init() строит lookup-set. agent.go: AgentID (typed string) с 9 константами + AllAgentIDs + IsValid. contract_type.go: ContractType с 12 whitelist значениями + regex ^[A-Z_]{1,32}$ + ValidateContractTypeFormat + IsValidContractType (комбинированный gate format+whitelist). errors.go: DomainError{Code, UserMessage (RU), DevMessage (EN), Retryable, Stage, Cause, Attributes map} с Error()/Unwrap()/errors.As support; fluent builder API NewDomainError(code, stage) + WithCause/WithDevMessage/WithUserMessage/WithRetryable/WithAttributes/WithAttribute (mutate-in-place; nil-receiver safe); helpers IsDomainError/IsRetryable/GetErrorCode/AsDomainError. error_codes.go: ErrorCode typed string с 20 константами (3.1–3.7 из error-handling.md), статический errorCatalog с RU/EN + retryable; init() panics на mismatch (single source of truth invariant); exported ErrorSpec struct + LookupErrorSpec; ErrorCode.IsPublishableToOrchestrator() guard против leakage пустого UserMessage в lic.events.status-changed.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран без ошибок",
+          "make_test": "ok — 188 тестов PASS (29 config + 53 domain/model + 46 logger + 25 metrics + 24 tracer + smoke), 0 FAIL, включая -race",
+          "make_lint": "ok — go vet 0 errors"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/domain/model/status.go",
+          "LegalIntelligenceCore/development/internal/domain/model/agent.go",
+          "LegalIntelligenceCore/development/internal/domain/model/contract_type.go",
+          "LegalIntelligenceCore/development/internal/domain/model/errors.go",
+          "LegalIntelligenceCore/development/internal/domain/model/error_codes.go",
+          "LegalIntelligenceCore/development/internal/domain/model/status_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/agent_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/contract_type_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/errors_test.go",
+          "LegalIntelligenceCore/development/internal/domain/model/error_codes_test.go"
+        ],
+        "notes": "Структура согласована с code-architect: типизированные string-aliases для всех 4 enum (ErrorCode/Stage/AgentID/ContractType); статический catalog вместо per-code конструкторов (20 кодов × per-code factory = 120 LOC дублирования); init() panic-on-mismatch как single-source-of-truth invariant. golang-pro code review нашёл 2 HIGH + 4 MEDIUM + 5 LOW; применены все HIGH/MEDIUM: (H1) WithAttribute контракт уточнён — все builders мутируют receiver, документировано что *DomainError owned-by-single-goroutine; (H2) добавлен ErrorCode.IsPublishableToOrchestrator() — структурный guard против leak пустого UserMessage в status-changed; (M1+M2) переход на fluent builder API — NewDomainError(code, stage) + WithCause/WithDevMessage/WithUserMessage/WithRetryable/WithAttributes/WithAttribute вместо 5-арг конструктора, заодно решён MEDIUM от architect-reviewer (DM_PERSIST_FAILED non-retryable RU variant override via WithRetryable+WithUserMessage); (M3) Cyrillic regex заменён на unicode.Is(unicode.Cyrillic, r) — корректно покрывает Cyrillic Supplement и Extended-A блоки; (M4) ErrorSpec экспортирован, LookupErrorSpec возвращает (ErrorSpec, bool) вместо 4-tuple. architect-reviewer PASS (no HIGH): проверены все 18 STAGE_* (точные wire-strings), 3 ExternalStatus (нет QUEUED/COMPLETED_WITH_WARNINGS/TIMED_OUT/REJECTED), 9 AgentID, 12 ContractType, 20 ErrorCode (все 7 секций §3.1–§3.7), Retryable flags соответствуют spec table, regex ^[A-Z_]{1,32}$ корректный. Layer hygiene: только stdlib (errors, fmt, regexp, unicode) — никаких infra/agents/llm импортов (inner-ring hexagonal arch). Зависимостей в go.mod не добавлено — пакет полностью hermetic."
+      }
     },
     {
       "id": "LIC-TASK-012",

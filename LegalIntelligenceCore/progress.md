@@ -243,3 +243,53 @@ LIC-TASK-006: OpenTelemetry tracer с W3C Trace Context propagation, OTLP gRPC e
 - LIC-TASK-011 (domain types: статусы, стадии, agent IDs, error codes, DomainError) — зависит только от LIC-TASK-001.
 - LIC-TASK-010 (concurrency limiter) — зависит от LIC-TASK-005 (done).
 
+---
+
+## LIC-TASK-011 — Domain types (статусы, стадии, agent IDs, error codes, DomainError)
+- **Status:** done
+- **Completed at:** 2026-05-14
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, golang-pro, architect-reviewer)
+
+### План реализации
+1. Прочитать high-architecture.md §2.1.3 (3 external status + 18 STAGE_*), error-handling.md §2.1 + §3 (DomainError + каталог 20 кодов RU/EN), ai-agents-pipeline.md §1 (12-value contract-type whitelist + 9 agents).
+2. Согласовать структуру через code-architect — рекомендации: типизированные `type X string` для всех enum (ErrorCode/Stage/AgentID/ContractType), статический errorCatalog вместо 20 per-code конструкторов, init() panic-on-mismatch как single-source-of-truth invariant, AllX() helpers возвращают свежий slice, экспортированный ErrorSpec.
+3. Реализовать 5 production-файлов: status.go (ExternalStatus + Stage), agent.go (AgentID), contract_type.go (ContractType + regex), errors.go (DomainError + fluent builders), error_codes.go (20-кодовый каталог + IsPublishableToOrchestrator + LookupErrorSpec).
+4. Написать 5 test-файлов: status_test, agent_test, contract_type_test, errors_test, error_codes_test — 53 теста, включая wire-format locks, retryable flag locks vs error-handling.md §3, exhaustive catalog completeness via init().
+5. Прогнать `make build`, `make test`, `make lint` (+ `-race`).
+6. golang-pro + architect-reviewer code review → применить must/should-fix.
+
+### Прогресс
+- ✅ Pkg `internal/domain/model`: 5 production + 5 test файлов (10 файлов total).
+- ✅ Hermetic: только stdlib (errors, fmt, regexp, unicode) — никаких infra/agents/llm импортов, чистый inner ring hexagonal arch.
+- ✅ status.go: ExternalStatus (3 значения: IN_PROGRESS/COMPLETED/FAILED — без QUEUED/COMPLETED_WITH_WARNINGS/TIMED_OUT/REJECTED) + Stage (18 STAGE_*) + AllStages/AllExternalStatuses (fresh slices) + IsValid (init-backed lookup).
+- ✅ agent.go: AgentID (typed string) с 9 константами в pipeline-order + AllAgentIDs + IsValid.
+- ✅ contract_type.go: ContractType с 12 whitelist константами + `contractTypeFormatRE = regexp.MustCompile("^[A-Z_]{1,32}$")` + ValidateContractTypeFormat + IsValidContractType (комбинированный gate).
+- ✅ errors.go: DomainError{Code, UserMessage, DevMessage, Retryable, Stage, Cause, Attributes}; Error()/Unwrap()/errors.As support; fluent builder API NewDomainError(code, stage) → WithCause → WithDevMessage → WithUserMessage → WithRetryable → WithAttributes → WithAttribute; все builders mutate-in-place + nil-receiver safe + chainable; helpers IsDomainError/IsRetryable/GetErrorCode/AsDomainError.
+- ✅ error_codes.go: ErrorCode (typed string) с 20 константами в 7 секциях; статический errorCatalog{retryable, userMessage RU, devMessage EN}; init() panics на любой mismatch между AllErrorCodes() и errorCatalog (single-source-of-truth invariant); экспортированный ErrorSpec + LookupErrorSpec возвращает (ErrorSpec, bool); ErrorCode.IsPublishableToOrchestrator() — структурный guard от leak пустого UserMessage в status-changed (DLQ-only коды защищены).
+- ✅ `make build/test/lint` — все три цели зелёные. `go test -race` — 0 races.
+- ✅ Тесты: 188 всего PASS по модулю (29 config + 53 domain/model + 46 logger + 25 metrics + 24 tracer + 11 пакетных smoke), 0 FAIL.
+
+### Summary
+Готов production-ready domain types-пакет для LIC. Полное соответствие error-handling.md §3 + high-architecture.md §2.1.3 + ai-agents-pipeline.md §1. Hermetic, zero внешних deps. Готова основа для LIC-TASK-012 (PipelineState, AgentInput, артефакты), LIC-TASK-013 (ports — все hexagonal interfaces), LIC-TASK-014–016 (LLM provider adapters), LIC-TASK-020–033 (агенты), LIC-TASK-036/037 (orchestrator + pause-resume), LIC-TASK-038–046 (ingress/egress).
+
+### Notes
+- Структура согласована с code-architect: typed string aliases для всех 4 enum (ErrorCode/Stage/AgentID/ContractType) — compile-time safety на switch/map keys; статический catalog вместо per-code constructors (20 кодов × 5 строк = 100 LOC дубликата vs 60-строчный map); init() panic — startup-time guarantee, не runtime surprise.
+- golang-pro code review нашёл 2 HIGH + 4 MEDIUM + 5 LOW; применены все HIGH/MEDIUM:
+  - (H1) WithAttribute контракт уточнён: все builders мутируют receiver (а не возвращают копию); документировано что *DomainError owned-by-single-goroutine; "safe across goroutines" из исходного docstring удалён.
+  - (H2) добавлен ErrorCode.IsPublishableToOrchestrator() — структурный guard против leak пустого UserMessage в lic.events.status-changed (DLQ-only коды — INVALID_MESSAGE_SCHEMA / INVALID_ORG_ID_MISMATCH / IDEMPOTENCY_STORE_UNAVAILABLE — возвращают false; неизвестные коды тоже false — safe default).
+  - (M1+M2) переход на fluent builder API: NewDomainError(code, stage) + chained WithCause/WithDevMessage/WithUserMessage/WithRetryable/WithAttributes/WithAttribute — заменил неудобный 5-арг конструктор с тремя default-value позиционными аргами; одновременно решён MEDIUM от architect-reviewer (DM_PERSIST_FAILED non-retryable RU variant override через WithRetryable(false) + WithUserMessage("Документ был удалён или недоступен.")).
+  - (M3) Cyrillic regex replaced на unicode.Is(unicode.Cyrillic, r) — корректно покрывает Cyrillic Supplement (U+0480..U+04FF) и Extended-A блоки.
+  - (M4) ErrorSpec экспортирован, LookupErrorSpec(ErrorCode) (ErrorSpec, bool) — struct return вместо 4-tuple, исключает positional-argument bug.
+- architect-reviewer PASS (no HIGH violations): подтвердил соответствие spec для всех 18 STAGE_* (точные wire-format strings), 3 ExternalStatus (только IN_PROGRESS/COMPLETED/FAILED), 9 AgentID, 12 ContractType (точно по ai-agents-pipeline.md §1), 20 ErrorCode (все 7 секций §3.1–§3.7 покрыты), Retryable flags соответствуют spec table; regex ^[A-Z_]{1,32}$ соответствует wire-format constraint из integration-contracts/event-catalog.
+- LOW issues задокументированы, не применены: (L1) nil-receiver Error() возвращает "<nil>" — намеренно defensive (callers могут строить error в deferred path); (L2) init() lookup-table pattern концурентно-безопасен по Go spec — нет блокировки нужно; (L3) панику init() тестировать через build constraint не стали — слишком инфраструктурно; добавлен TestErrorCatalog_WireStringsAreUnique как regression для типов tippa.
+- Спорная точка spec'а: error-handling.md §3 использует строку "STAGE_RECEIVE" для inbound errors, но high-architecture.md §2.1.3 (авторитет) использует "STAGE_RECEIVED". Реализация следует high-arch — конкретный комментарий не добавлен (это spec-internal inconsistency не код-level issue).
+- Tests НЕ `t.Parallel` — все быстрые (milliseconds total), reflect-based catalog validation и regex-compiled MustCompile вычислены однажды на init.
+
+### Следующая задача
+Разблокированы все следующие critical-задачи pipeline:
+- LIC-TASK-012 (PipelineState + AgentInput + типизированные artifacts + PendingTypeConfirmation) — зависит от 011 (done). Logical next: данные, которые движутся через pipeline.
+- LIC-TASK-013 (Hexagonal ports — все internal interfaces) — зависит от 012. Сразу после 012.
+- LIC-TASK-020 (embed prompts/schemas через embed.FS) — зависит от 011 (done). Параллельно с 012.
+- LIC-TASK-021 (Token Estimator) — зависит от 011 (done).
+
+Также по-прежнему свободны без новых блокеров: LIC-TASK-003 (Dockerfile distroless), LIC-TASK-007 (Redis), LIC-TASK-008 (RabbitMQ), LIC-TASK-010 (concurrency limiter).

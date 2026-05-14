@@ -479,7 +479,40 @@
         "Шаг 2: каждый порт имеет тест на compile-time проверку (var _ Port = (*stub)(nil))"
       ],
       "dependencies": ["LIC-TASK-012"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-15",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/domain/port с 10 production-файлами и 10 test-файлами (compile-time checks + smoke tests). Структура: events.go (wire DTOs 6 inbound + 4 outbound + DLQ envelope + DLQTopic enum), inbound.go (5 handler interfaces: VersionArtifactsReadyHandler, VersionCreatedHandler, ArtifactsProvidedHandler, PersistConfirmationHandler — объединяет Persisted+PersistFailed, UserConfirmedTypeHandler), llm.go (LLMProviderPort + Turn + CompletionRequest/Response + StopReason + Role + LLMProviderID + IsKnown/IsValid helpers), llm_errors.go (LLMProviderError + LLMErrorCode 11 кодов с canonical (Retryable, FallbackEligible) пары через llmCodeCatalog + NewLLMProviderError + AsLLMProviderError + IsAuthError/IsRetryable/IsFallbackEligible nil-safe), agents.go (Agent + AgentResult = any), idempotency.go (IdempotencyStorePort + 4 status: absent/PROCESSING/PAUSED/COMPLETED + ErrIdempotencyKeyExists + IsTerminal), pending.go (PendingStatePort + ErrPendingStateNotFound), dm.go (4 порта: ArtifactRequesterPort, AnalysisArtifactsPublisherPort, ArtifactsAwaiterPort, PersistConfirmationAwaiterPort + PersistConfirmation discriminated-union + NewPersistConfirmationSuccess/Failure constructors + IsValid XOR + ErrAwaitTimeout + ErrDuplicateRegistration), publisher.go (3 publishers: StatusPublisher, UncertaintyPublisher, DLQPublisher), router.go (ProviderRouterPort с Complete + CompleteRepair sticky + PrimaryCallResult). Naming note: ArtifactPersistencePort из acceptance criteria переименован в AnalysisArtifactsPublisherPort — семантика 'publish', не 'persist' (DM-side side effect); godoc явно отмечает rename и его обоснование. DMResponseAwaiterPort из acceptance разделён на 2 порта (ArtifactsAwaiter + PersistConfirmationAwaiter) per ISP — разные lookup keys (correlation_id vs job_id), разные TTLs, разные failure modes; согласовано с code-architect.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран без ошибок",
+          "make_test": "ok — 248 тестов PASS (29 config + 100 model + 20 port + 46 logger + 25 metrics + 24 tracer + smoke), 0 FAIL",
+          "make_lint": "ok — go vet 0 errors",
+          "race": "ok — go test -race чистый"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/domain/port/events.go",
+          "LegalIntelligenceCore/development/internal/domain/port/inbound.go",
+          "LegalIntelligenceCore/development/internal/domain/port/llm.go",
+          "LegalIntelligenceCore/development/internal/domain/port/llm_errors.go",
+          "LegalIntelligenceCore/development/internal/domain/port/agents.go",
+          "LegalIntelligenceCore/development/internal/domain/port/idempotency.go",
+          "LegalIntelligenceCore/development/internal/domain/port/pending.go",
+          "LegalIntelligenceCore/development/internal/domain/port/dm.go",
+          "LegalIntelligenceCore/development/internal/domain/port/publisher.go",
+          "LegalIntelligenceCore/development/internal/domain/port/router.go",
+          "LegalIntelligenceCore/development/internal/domain/port/events_test.go",
+          "LegalIntelligenceCore/development/internal/domain/port/inbound_test.go",
+          "LegalIntelligenceCore/development/internal/domain/port/llm_test.go",
+          "LegalIntelligenceCore/development/internal/domain/port/llm_errors_test.go",
+          "LegalIntelligenceCore/development/internal/domain/port/agents_test.go",
+          "LegalIntelligenceCore/development/internal/domain/port/idempotency_test.go",
+          "LegalIntelligenceCore/development/internal/domain/port/pending_test.go",
+          "LegalIntelligenceCore/development/internal/domain/port/dm_test.go",
+          "LegalIntelligenceCore/development/internal/domain/port/publisher_test.go",
+          "LegalIntelligenceCore/development/internal/domain/port/router_test.go"
+        ],
+        "notes": "Структура согласована с code-architect: wire-DTO в port-пакете (а не infra/wire или model — port-пакет принимает их в сигнатурах portов, сохраняет inversion); LLM-types разнесены на llm.go (interface + main types) + llm_errors.go (taxonomy + helpers); ErrorCode→LLMErrorCode для исключения name conflict с model.ErrorCode; DMResponseAwaiter разделён на 2 порта per ISP; per-file compile-time tests; AgentResult = any (вместо marker interface — избегает touch к 9 типам в model/; stage executor dispatches по AgentID на runtime). golang-pro code review PASS без MUST-FIX; SHOULD-FIX применены: добавлен NewPersistConfirmationSuccess/Failure constructors с panic-on-nil + IsValid XOR helper (дефенс против both-set ambiguity); strings.Contains вместо самописного contains; усилен godoc LLMProviderPort с adapter-invariant (errors.As на *LLMProviderError); поправлено выравнивание CompletionResponse. architect-reviewer PASS без HIGH-severity: подтверждены все 10 верификационных пунктов — LLMProviderPort §1.1 (10+8 fields), LLMErrorCode матрица §1.2 (11 кодов с canonical Retryable/FallbackEligible), ExternalStatus 3 значения (переиспользует model), Inbound DTO fidelity с FROZEN DM/Orch (все 6 событий поля + типы), DLQ envelope PII-safe (no original_message, HMAC hash + size + payload_storage_key), 4 DLQ topics, Idempotency 4 статуса, Hexagonal hygiene (только stdlib + model), 6 inbound subs + 4 outbound pubs + DLQ покрыты, Sticky-provider invariant (PrimaryCallResult.UsedProvider + CompleteRepair). LOW finding закрыт: добавлен ErrDuplicateRegistration sentinel для симметрии с ErrAwaitTimeout/ErrPendingStateNotFound. Layer hygiene: пакет hermetic — только stdlib (context, errors, fmt, encoding/json, time) + contractpro/legal-intelligence-core/internal/domain/model. Зависимостей в go.mod не добавлено."
+      }
     },
     {
       "id": "LIC-TASK-014",

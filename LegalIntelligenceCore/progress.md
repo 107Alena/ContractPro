@@ -348,3 +348,61 @@ LIC-TASK-006: OpenTelemetry tracer с W3C Trace Context propagation, OTLP gRPC e
 - LIC-TASK-021 (Token Estimator) — зависит только от 011 (done). Параллельно.
 
 Также по-прежнему свободны без новых блокеров: LIC-TASK-003 (Dockerfile distroless), LIC-TASK-007 (Redis), LIC-TASK-008 (RabbitMQ), LIC-TASK-010 (concurrency limiter).
+
+---
+
+## LIC-TASK-013 — Hexagonal ports (все internal interfaces)
+- **Status:** done
+- **Completed at:** 2026-05-15
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, golang-pro, architect-reviewer)
+
+### План реализации
+1. Прочитать llm-provider-abstraction.md §1-2 (LLMProviderPort + Router + LLMProviderError taxonomy), high-architecture.md §6 (компоненты), event-catalog.md §1-3 (LIC events + DLQ), integration-contracts.md §1-2 (subscriptions/publications), DM event-catalog.md §1.4-1.5, §2.1-2.2 (FROZEN inbound/outbound контракты), error-handling.md §3 (error codes).
+2. Согласовать структуру через code-architect — рекомендации Q1-Q8 одобрены: (Q1) wire-DTO в port-пакете (а не infra/wire или model — они часть контракта portов); (Q2) симметрично для outbound; (Q3) LLM-types разнесены на llm.go + llm_errors.go (concept boundary); (Q4) ErrorCode→LLMErrorCode (исключение name conflict с model.ErrorCode); (Q5) DMResponseAwaiter → 2 порта per ISP (ArtifactsAwaiter + PersistConfirmationAwaiter — разные lookup keys, TTLs, failure modes); (Q6) per-file compile-time tests `var _ Port = (*fake)(nil)`; (Q7) AgentResult = any (без marker interface, чтобы избежать touch к 9 типам в model/; stage executor диспатчит по AgentID); (Q8) переименовать ArtifactPersistencePort → AnalysisArtifactsPublisherPort (семантика publish, не persist).
+3. Реализовать 10 production-файлов: events.go, inbound.go, llm.go, llm_errors.go, agents.go, idempotency.go, pending.go, dm.go, publisher.go, router.go.
+4. Написать 10 test-файлов: per-file compile-time stub-checks + smoke tests + JSON round-trip + omitempty contract + nil-safety + catalog exhaustiveness + IsAuthError + errors.As unwrap + XOR validity для PersistConfirmation.
+5. Прогнать `make build/test/lint -race`.
+6. Code review через golang-pro + architect-reviewer (параллельно) — применить MUST/SHOULD/LOW-FIX.
+
+### Прогресс
+- ✅ Pkg `internal/domain/port`: 10 production-файлов + 10 test-файлов.
+- ✅ Hermetic: только stdlib (context, errors, fmt, encoding/json, strings, time) + `contractpro/legal-intelligence-core/internal/domain/model`. Никаких infra/agents/llm импортов — чистый inner ring hexagonal arch.
+- ✅ **events.go** — wire DTO 6 inbound (VersionProcessingArtifactsReady с ParentVersionID/CreatedByUserID, VersionCreated с version_number int + JobID omitempty, ArtifactsProvided с map[ArtifactType]json.RawMessage + MissingTypes, LegalAnalysisArtifactsPersisted compact, LegalAnalysisArtifactsPersistFailed с IsRetryable, UserConfirmedType с ContractType string) + 4 outbound (GetArtifactsRequest, LegalAnalysisArtifactsReady с optional RiskDelta v1.1, LICStatusChangedEvent с Stage/ErrorCode/ErrorMessage/IsRetryable omitempty, ClassificationUncertain) + LICDLQEnvelope (PII-safe: HMAC original_message_hash + size + payload_storage_key для publish-failed) + DLQTopic enum 4 значения.
+- ✅ **llm.go** — LLMProviderPort (ID/Complete/HealthCheck) + Turn (Role user/assistant) + CompletionRequest (10 полей: AgentID, Model, System, User, PriorTurns, MaxTokens, Temperature, StopSequences, JSONMode, JSONSchema) + CompletionResponse (8 полей с CachedInputTokens отдельно) + StopReason (end_turn/max_tokens/stop_sequence/content_filter) + Role.IsValid/StopReason.IsValid/LLMProviderID.IsKnown helpers.
+- ✅ **llm_errors.go** — LLMProviderError (Code + Retryable + FallbackEligible + RetryAfter + Wrapped) с errors.Is/As (Unwrap()) + LLMErrorCode 11 значений (TIMEOUT/RATE_LIMIT/SERVER_ERROR/NETWORK/OVERLOADED/INVALID_API_KEY/QUOTA_EXCEEDED/CONTENT_POLICY/CONTEXT_TOO_LONG/MALFORMED_REQUEST/ALL_PROVIDERS_FAILED) + llmCodeCatalog с canonical (Retryable, FallbackEligible) пары + NewLLMProviderError + AsLLMProviderError + IsAuthError/IsRetryable/IsFallbackEligible nil-safe.
+- ✅ **inbound.go** — 5 handler interfaces (VersionArtifactsReadyHandler, VersionCreatedHandler, ArtifactsProvidedHandler, PersistConfirmationHandler — объединяет HandlePersisted + HandlePersistFailed, UserConfirmedTypeHandler).
+- ✅ **agents.go** — Agent interface (ID + Run) + AgentResult = any (тип-erased return для heterogeneous registry; stage executor dispatches type-assertion по AgentID).
+- ✅ **idempotency.go** — IdempotencyStorePort (SetNX + Get + ExtendTTL + SetCompleted + SetPaused) + IdempotencyStatus enum 4 значения (absent ""/PROCESSING/PAUSED/COMPLETED) с IsTerminal helper + ErrIdempotencyKeyExists sentinel.
+- ✅ **pending.go** — PendingStatePort (Save + Load + Delete; Save принимает *model.PendingTypeConfirmation + TTL) + ErrPendingStateNotFound sentinel (errors.Is matchable).
+- ✅ **dm.go** — 4 порта: ArtifactRequesterPort (RequestArtifacts с correlation_id + 5 IDs + []model.ArtifactType), AnalysisArtifactsPublisherPort (Publish с LegalAnalysisArtifactsReady), ArtifactsAwaiterPort (Register/Await/Cancel + ErrAwaitTimeout + ErrDuplicateRegistration), PersistConfirmationAwaiterPort (зеркальный API на job_id). PersistConfirmation discriminated-union с NewPersistConfirmationSuccess/Failure constructors (panic-on-nil) + IsSuccess/IsFailure/IsValid XOR helpers.
+- ✅ **publisher.go** — 3 publishers: StatusPublisherPort (PublishStatus), UncertaintyPublisherPort (PublishClassificationUncertain), DLQPublisherPort (PublishDLQ с topic + envelope).
+- ✅ **router.go** — ProviderRouterPort (Complete + CompleteRepair sticky) + PrimaryCallResult (Response + UsedProvider — OQ-10 invariant).
+- ✅ Compile-time checks `var _ Port = (*fake)(nil)` для всех 21 интерфейсов (5 handlers + LLMProviderPort + Agent + IdempotencyStorePort + PendingStatePort + 4 DM ports + 3 publishers + ProviderRouterPort).
+- ✅ `make build/test/lint` — все три цели зелёные. `go test -race` — 0 races.
+- ✅ Тесты: 248 PASS по всему модулю (29 config + 100 model + 20 port + 46 logger + 25 metrics + 24 tracer + smoke), 0 FAIL.
+
+### Summary
+Готов production-ready port-пакет для LIC. Полное соответствие llm-provider-abstraction.md §1-2 + event-catalog.md §1-3 + integration-contracts.md §1-2 + FROZEN DM event-catalog §1.4-1.5/§2.1-2.2. Hermetic, zero внешних deps. Готова основа для всех инфраструктурных и функциональных задач следующего слоя: LIC-TASK-014/015/016 (Claude/OpenAI/Gemini adapters — реализуют LLMProviderPort), LIC-TASK-017 (rate limiter), LIC-TASK-018 (cost tracker), LIC-TASK-019 (Provider Router — реализует ProviderRouterPort), LIC-TASK-024 (BaseAgent — использует ProviderRouterPort), LIC-TASK-025-033 (9 агентов — реализуют Agent), LIC-TASK-036 (Pipeline Orchestrator — coordinator всех портов), LIC-TASK-037 (PendingTypeConfirmationManager — использует PendingStatePort), LIC-TASK-038 (Idempotency Guard — реализует IdempotencyStorePort), LIC-TASK-039 (Consumer — десериализует в wire-DTO + вызывает handlers), LIC-TASK-040 (Event Router — диспатчит между handlers), LIC-TASK-041 (DM awaiters — реализуют ArtifactsAwaiterPort + PersistConfirmationAwaiterPort), LIC-TASK-042-046 (publishers).
+
+### Notes
+- **Naming deviations from acceptance criteria документированы:**
+  - `ArtifactPersistencePort` (tasks.json) → `AnalysisArtifactsPublisherPort` (код). Семантика: метод publish-event (fire-and-forget); persistence — DM-side side effect, подтверждается через `PersistConfirmationAwaiterPort`. Согласовано с code-architect; вариант с сохранением имени из task'а отклонён как менее точный.
+  - `DMResponseAwaiterPort` (tasks.json, единственное число) → `ArtifactsAwaiterPort` + `PersistConfirmationAwaiterPort` (2 порта). Разные lookup keys (correlation_id vs job_id), разные TTLs (~5s vs ~30s), разные failure modes (timeout vs explicit PersistFailed). ISP-compliant. Архитектура LIC-TASK-041 явно их разделяет.
+- **`PersistConfirmation` discriminated-union:** в первой итерации был простой struct с двумя `*X` указателями; после golang-pro review добавлены `NewPersistConfirmationSuccess`/`NewPersistConfirmationFailure` constructors с panic-on-nil (защита от half-construction) + `IsValid()` XOR helper (защита от both-set ambiguity при literal-construction). IsSuccess/IsFailure возвращают false на ambiguous/empty состояние — caller должен проверить IsValid сначала или использовать constructors.
+- **LLMProviderPort adapter-invariant:** signature остался `(CompletionResponse, error)` (не `*LLMProviderError`) — позволяет адаптерам возвращать typed-nil без gotchas; godoc усилен явным требованием "errors.As на *LLMProviderError должно срабатывать на любой не-nil error" + ссылка на `AsLLMProviderError` helper. Router-side тест enforce'ит этот контракт (LIC-TASK-019).
+- **AgentResult = any** — обоснование в godoc agents.go: heterogeneous registry для stage executor требует erasure; marker interface добавил бы 9 single-line методов в model/ (touch outside LIC-TASK-013 scope); type-safe assertion в executor — per-AgentID dispatch table (LIC-TASK-034). При желании marker interface можно ввести в LIC-TASK-035 без breaking change.
+- **`LLMErrorCode` rename** оправдан: `model.ErrorCode` — pipeline-state taxonomy (20 кодов: DM_PERSIST_FAILED, AGENT_TIMEOUT, ANALYSIS_TIMEOUT...); `port.LLMErrorCode` — wire-level taxonomy (11 кодов: TIMEOUT, RATE_LIMIT, INVALID_API_KEY...). Router-слой выполняет mapping; qualified imports (port.* vs model.*) делают translation самодокументируемой.
+- **PrimaryCallResult.UsedProvider** — sticky-provider invariant OQ-10 enforced на type-level: CompleteRepair требует usedProvider parameter, нельзя её "забыть" передать.
+- golang-pro code review: 0 MUST-FIX + 4 SHOULD-FIX (все применены: gofmt alignment в CompletionResponse, NewPersistConfirmation constructors + IsValid XOR, усиление godoc LLMProviderPort с adapter-invariant, `strings.Contains` вместо самописного `contains`) + 8 NIT (selectively applied). architect-reviewer PASS без HIGH-severity: 10/10 верификационных пунктов confirmed (LLMProviderPort §1.1 поля, LLMErrorCode §1.2 матрица, ExternalStatus 3 значения, Inbound DTO fidelity с FROZEN DM/Orch, DLQ envelope PII-safe, 4 DLQ топика, Idempotency 4 статуса, Hexagonal hygiene, 6+4 events покрыты, Sticky-provider invariant); MEDIUM PersistConfirmation closed via IsValid XOR; LOW ErrDuplicateRegistration sentinel закрыт.
+- Тесты НЕ `t.Parallel` — большинство тестов hermetic и быстрые (microseconds); явный `t.Parallel()` на 4 helpers тестах не имеет смысла оптимизировать.
+- Зависимостей в go.mod не добавлено — пакет полностью hermetic.
+
+### Следующая задача
+Разблокированы все следующие critical-задачи pipeline:
+- LIC-TASK-014 (Claude provider adapter — реализует LLMProviderPort) — зависит от 013 (done).
+- LIC-TASK-015 (OpenAI provider adapter) — зависит от 013 (done). Параллельно с 014.
+- LIC-TASK-016 (Gemini provider adapter) — зависит от 013 (done). Параллельно с 014/015.
+- LIC-TASK-017 (Rate limiter — token bucket в Redis) — зависит от 007 (pending Redis).
+- LIC-TASK-018 (Cost & Usage Tracker) — зависит от 005 (done) + 013 (done).
+
+Также по-прежнему свободны: LIC-TASK-003 (Dockerfile distroless), LIC-TASK-007 (Redis), LIC-TASK-008 (RabbitMQ), LIC-TASK-010 (concurrency limiter), LIC-TASK-020 (embed prompts/schemas), LIC-TASK-021 (Token Estimator).

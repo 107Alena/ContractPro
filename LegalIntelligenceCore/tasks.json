@@ -193,7 +193,35 @@
         "Шаг 3: histogram buckets валидны"
       ],
       "dependencies": ["LIC-TASK-002"],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-14",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/infra/observability/metrics на prometheus/client_golang v1.23.2 (та же версия, что в DocumentProcessing). 10 production-файлов: registry.go (Metrics aggregator с nested sub-groups + New(BuildInfo) + Registry()), labels.go (typed string constants для всех label values + BoolLabel helper — single source of truth по observability.md §3), buckets.go (histogram bucket sets как функции, чтобы caller mutation не утекала), pipeline.go, agent.go, llm.go, dm.go, idempotency.go, pending.go, dlq.go, crosscut.go, buildinfo.go. 4 test-файла: registry_test.go (cardinality invariants, exhaustive metric inventory, lic_ prefix, hermetic-from-default, concurrent New, exhaustive enums), buckets_test.go (spec values + monotonic + fresh instances), labels_test.go (lock enum strings + circuit gauge encoding), groups_test.go (smoke per group). 38 метрик зарегистрированы — все из §3.2–3.9. Поддержаны все cardinality invariants §3.10: organization_id запрещён в labels (TestNew_NoOrganizationIDLabel walks every gathered family + asserts absence), mode binary INITIAL|RE_CHECK (не 5-value origin_type), severity absent on prompt-injection counter (C-lite OQ-13), cached_tokens_total отдельной метрикой (защита от 10× cost-инфляции на Anthropic prompt-cache).",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран без ошибок",
+          "make_test": "ok — 100 тестов PASS (29 config + 46 logger + 25 metrics), 0 FAIL, включая -race",
+          "make_lint": "ok — go vet 0 errors"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/registry.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/labels.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/buckets.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/pipeline.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/agent.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/llm.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/dm.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/idempotency.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/pending.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/dlq.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/crosscut.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/buildinfo.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/registry_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/buckets_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/labels_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/metrics/groups_test.go"
+        ],
+        "notes": "Структура согласована с code-architect (nested sub-groups вместо flat fields — при 35+ метриках flat namespace ломает навигацию; sub-group handle упрощает DI для call-sites — оркестратору нужен только *PipelineMetrics, не весь *Metrics). golang-pro code review выявил 8 проблем (2 MUST-FIX + 6 SHOULD-FIX), 7 применено: (1) TestRegistry_HermeticFromDefault больше не сравнивает count, а напрямую проверяет отсутствие lic_* в DefaultRegisterer — раньше прежнее загрязнение из других тестов маскировало регрессию; (2) добавлен TestLabels_PipelineOutcomeExhaustive — exhaustive map-size assertion для всех 8 enum-семейств: добавить enum-член без обновления теста = compile-time signal; (3) BuildInfo zero-value теперь нормализуется в 'unknown' вместо пустых строк (silent footgun — пустые labels ломают version-pivot дашборды); (4) TestNew_ConcurrentConstructionIsSafe — 50 параллельных New() возвращают distinct registries без data races; (5) добавлен pipelineStageDurationBuckets в TestBuckets_SpecValues; (6) для PublishOutcome задокументировано, что enum package-defined (§3.9 spec не enum'ил значения для consumer/publisher); (7) seedOneObservationPerLabelledMetric документирован как smoke, не exhaustive (cardinality invariant защищён на уровне schema, не tuple). architect-reviewer подтвердил PASS: все 10 ключевых spec-инвариантов защищены regression-тестами. Зависимость: github.com/prometheus/client_golang v1.23.2 (та же, что DP)."
+      }
     },
     {
       "id": "LIC-TASK-006",

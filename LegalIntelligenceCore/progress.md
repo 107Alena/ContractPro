@@ -145,3 +145,49 @@ LIC-TASK-003: distroless multi-stage Dockerfile (`gcr.io/distroless/static-debia
 ### Следующая задача
 LIC-TASK-005: Prometheus metrics registry с `lic_*` prefix, factories для counter/histogram/gauge, cardinality-safe (no `organization_id` label). Зависит от LIC-TASK-002 (done). Параллельно может идти LIC-TASK-006 (OTel tracer) и LIC-TASK-011 (domain types).
 
+---
+
+## LIC-TASK-005 — Prometheus metrics registry (`lic_*` prefix + cardinality-safe)
+- **Status:** done
+- **Completed at:** 2026-05-14
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, golang-pro, architect-reviewer)
+
+### План реализации
+1. Прочитать observability.md §3.1–3.10 (10 категорий метрик, ~38 штук, cardinality budget 1500 series/instance).
+2. Изучить DP-аналог `internal/infra/observability/metrics.go` как референс — flat struct из 6 метрик, для LIC структура должна быть богаче.
+3. Согласовать структуру через code-architect — рекомендация: nested sub-groups (`m.Pipeline.StartedTotal` вместо flat `m.PipelineStartedTotal`), отдельный sub-package под logger/metrics/tracer, typed string-константы для всех label-значений (single source of truth), BuildInfo в конструкторе, bucket-наборы как функции (Go не имеет const slices). Дополнительно: добавить `labels.go` и cardinality-тест на reflection.
+4. Реализовать 10 production-файлов: registry.go, labels.go, buckets.go, pipeline.go, agent.go, llm.go, dm.go, idempotency.go, pending.go, dlq.go, crosscut.go, buildinfo.go.
+5. Написать 4 test-файла: registry_test (inventory + cardinality + hermetic + concurrent + exhaustive enums), buckets_test (spec values + monotonic + fresh instances), labels_test (lock strings + circuit gauge encoding), groups_test (smoke per group).
+6. golang-pro код-ревью → применить MUST-FIX (hermetic-from-default через прямую проверку lic_* в DefaultRegisterer, exhaustive enum maps) + SHOULD-FIX (BuildInfo normalization, concurrent test, stage bucket coverage).
+7. architect-reviewer верификация соответствия observability.md §3.
+
+### Прогресс
+- ✅ Pkg `internal/infra/observability/metrics`: 10 production + 4 test файлов (16 файлов total).
+- ✅ 38 Prometheus метрик зарегистрированы — все из §3.2–3.9.
+- ✅ Nested sub-groups: `m.Pipeline`, `m.Agent`, `m.LLM`, `m.DM`, `m.Idempotency`, `m.Pending`, `m.DLQ`, `m.CrossCut`, `m.BuildInfo`.
+- ✅ Зависимость `github.com/prometheus/client_golang v1.23.2` (та же, что DP).
+- ✅ Hermetic registry: `New()` возвращает свой `*prometheus.Registry`; `DefaultRegisterer` не затрагивается (test-проверка прямой walk lic_* prefix-семейств).
+- ✅ Cardinality §3.10: `TestNew_NoOrganizationIDLabel` walks every gathered family и asserts отсутствие organization_id; 0 violations.
+- ✅ `lic_build_info{version,commit,go_version}` seeded в New() из `BuildInfo` struct; пустые поля нормализуются в "unknown" (защита от silent dashboard breakage).
+- ✅ Typed label values (single source of truth observability.md §3): PipelineMode, PipelineOutcome, AgentInvocationOutcome, AgentRepairOutcome, LLMCallOutcome, LLMErrorCode, LLMHealthState, DMOperation, DMOutcome, IdempotencyLookupResult, PendingConfirmationOutcome, DLQTopic, PartyValidationType, PublishOutcome — 14 enum-семейств с exhaustive-проверкой через map-size assertion.
+- ✅ Histogram buckets — точные spec-значения (pipeline 1..120s, agent_duration 0.5..20s, agent_input_tokens 1k..64k, agent_output_tokens 100..8k, llm_latency 0.2..30s, dm_request 0.1..30s); монотонность + fresh-instance invariant.
+- ✅ `cached_tokens_total` отдельной метрикой (защита от 10× cost-инфляции на Anthropic prompt-cache).
+- ✅ `prompt_injection_detected_total` БЕЗ severity label (C-lite OQ-13).
+- ✅ `make build/test/lint` — все три цели зелёные. `go test -race` — 0 races.
+- ✅ Тесты: 25 PASS metrics (100 total с config+logger), 0 FAIL.
+
+### Summary
+Готов production-ready Prometheus metrics registry для LIC. Полное соответствие observability.md §3.1–3.10; все 10 ключевых spec-инвариантов защищены regression-тестами. Готова основа для LIC-TASK-009 (health handler — `/metrics` экспонент), LIC-TASK-010 (concurrency limiter — обновляет ConcurrentJobs gauge), LIC-TASK-018 (cost tracker), LIC-TASK-019 (provider router — обновляет fallback/health/skip counters), LIC-TASK-024+ (агенты — обновляют invocations/duration/tokens).
+
+### Notes
+- Структура согласована с code-architect (Option: nested sub-groups вместо flat) — при 38+ метриках flat namespace ломает IDE-навигацию; sub-group handle упрощает DI (оркестратору нужен только `*PipelineMetrics`, не весь `*Metrics`).
+- Bucket-наборы экспортируются как функции (не вар-slices) — caller mutation одной серии не утечёт в следующую конструкцию; протестировано через `TestBuckets_AreFreshInstances` (мутируем slice А, проверяем что slice Б не затронут).
+- golang-pro нашёл 8 проблем: 2 MUST-FIX (false-negative в hermetic-test через count-diff, отсутствие exhaustive enum-теста) + 6 SHOULD-FIX (BuildInfo zero-value silent footgun, PublishOutcome spec-divergence, dead state field, concurrent test, missing stage bucket assertion, seed coverage doc). Применено 7 из 8 (BuildInfoMetric.info оставлен — пригодится для health endpoint и documented).
+- architect-reviewer PASS без несоответствий. Подтверждены invariants: 38-name set + lic_ prefix universality + organization_id absence + severity absence on prompt-injection + exact bucket boundaries + bucket monotonicity/freshness + outcome enum exhaustiveness + cached_tokens independence + build_info value=1 + registry hermeticity.
+- Поле `PublishOutcome` (success|failure|nacked|invalid) — package-defined; §3.9 spec не enum'ил значения для consumer/publisher_messages_total; задокументировано в labels.go.
+- Не реализовано (out of scope): integration с promhttp (LIC-TASK-009), реальные call-sites из агентов/router (LIC-TASK-019, 024+), OTel span attributes (LIC-TASK-006).
+- Tests НЕ `t.Parallel` для большинства (они и так быстрые, milliseconds total); `TestNew_ConcurrentConstructionIsSafe` явно использует 50 goroutines для проверки thread-safety.
+
+### Следующая задача
+LIC-TASK-006: OpenTelemetry tracer с W3C Trace Context propagation, OTLP gRPC exporter, ParentBased(TraceIDRatio) sampler, helpers для StartSpan/SpanFromContext/InjectIntoHeaders. Зависит от LIC-TASK-002 (done). Параллельно может идти LIC-TASK-011 (domain types) или LIC-TASK-007 (Redis client — зависит от 002, 004).
+

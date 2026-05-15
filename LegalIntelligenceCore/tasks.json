@@ -749,7 +749,36 @@
       "dependencies": [
         "LIC-TASK-013"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-15",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/llm/gemini — адаптер Google Gemini generateContent (POST {BaseURL}/v1beta/models/{model}:generateContent). 6 production-файлов (зеркало sibling openai/claude + один Gemini-специфичный): provider.go (Provider + NewGeminiProvider + ID + Complete + HealthCheck + do + endpointFor + chooseModel + HTTPClient interface; per-call endpoint — model в URL path; auth через x-goog-api-key header, НЕ ?key= query; константы healthCheckMaxTokens=10, maxResponseBytes=8MiB, maxDrainBytes=64KiB), config.go (GeminiConfig{APIKey,BaseURL,Model,HTTPClient} + Validate с userinfo rejection + http/https-only + isValidModelID path-safe charset; defaultHTTPClient TLS1.2 без client Timeout; БЕЗ PromptCacheEnabled — Gemini cachedContent не в v1), payload.go (generateContentRequest DTO + buildRequestPayload: System->systemInstruction только при non-empty, PriorTurns role Assistant->\"model\", JSONSchema->responseSchema+responseMimeType=application/json, JSONMode->responseMimeType only; stopSequences форвардится — Gemini поддерживает), schema.go (transformSchema: draft-07 -> Gemini OpenAPI-3.0 Schema subset — UPPERCASE type, X|null->nullable, $ref inline из $defs/definitions с cycle/depth guard, const->enum + type inference, oneOf->anyOf, single allOf inline non-destructive, strip $schema/$id/additionalProperties/etc.), response.go (parseResponse: promptFeedback.blockReason precedence -> StopReasonContentFilter success, candidate finishReason SAFETY/RECITATION/PROHIBITED_CONTENT/BLOCKLIST/SPII/IMAGE_SAFETY -> ContentFilter success, MAX_TOKENS->MaxTokens, STOP/OTHER/unknown->EndTurn lenient, thought-parts skip, decode-fail/empty->SERVER_ERROR, CachedInputTokens hardcoded 0, modelVersion fallback), errors.go (mapTransportError + mapHTTPError 401||403->InvalidAPIKey / 429+RetryAfter / quota->QUOTA_EXCEEDED / 408->TIMEOUT / 5xx->SERVER / 400 classify400 / unknown->SERVER; parseRetryAfter RFC7231 cap 1h reject signed; boundedDetail UTF-8 rune-boundary 512B chokepoint). 6 test-файлов: 102 RUN, 0 FAIL, race-clean.",
+        "key_decision": "Acceptance criteria разрешает auth '?key= query ИЛИ x-goog-api-key header' — выбран HEADER: ключ никогда не попадает в URL (*url.Error, error-chain, access-logs; security.md §3.2, 152-ФЗ); это закрывает регрессию, на которую прямо ссылается canary openai-sibling ('future Gemini-style ?key= pattern'). Model id живёт в URL path (отличие от claude/openai где в body) — per-call endpoint + isValidModelID path-safe charset валидация + НЕ url.PathEscape суффикса ':generateContent' (иначе ':'->'%3A' и 404). JSONSchema трансформируется draft-07->Gemini-Schema (gemini-2.5-pro принимает OpenAPI-3.0 subset, НЕ draft-07 — pass-through сломал бы prod fallback); архитектурный интент (strict structured outputs) сохранён. DOCS FOLLOW-UP: Gemini-3 series использует новый generationConfig.responseFormat object — v1 default gemini-2.5-pro использует responseSchema/responseMimeType (как в acceptance criteria).",
+        "test_results": {
+          "go_test_gemini_race": "ok — 102 RUN / 0 FAIL, race-clean (3.3s)",
+          "go_test_module": "ok — весь модуль PASS (claude+openai+gemini+config+domain+observability+broker+kvstore), 0 FAIL",
+          "make_lint": "ok — go vet ./... 0 errors",
+          "make_build": "ok — bin/lic-service пересобран (gitignored, не в коммите)",
+          "make_test": "ok",
+          "make_docker_build": "не запускался — нет Docker daemon (вне test_steps, как и в прежних LIC-задачах)"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/llm/gemini/config.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/provider.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/payload.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/schema.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/response.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/errors.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/config_test.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/provider_test.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/payload_test.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/schema_test.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/response_test.go",
+          "LegalIntelligenceCore/development/internal/llm/gemini/errors_test.go"
+        ],
+        "reviews": "code-architect (design): APPROVE Q1-Q12 + 6 MUST-FIX — все внедрены (#1 schema-транслятор draft07->Gemini, #2 model-in-path no-PathEscape-colon + path-safe валидация, #3 blockReason precedence, #4 детерминированный mapFinishReason ordering + safetyRatings не authoritative, #5 systemInstruction omit при empty System в HealthCheck, #6 400-only classify + 403 PERMISSION_DENIED->InvalidAPIKey). code-reviewer (final): APPROVE, 0 BLOCKER/0 HIGH; адаптер-инвариант доказуемо тотален, API key header-only, bounded error-strings. Применены M1 (typeless const->enum: inferGeminiType добавляет type, иначе Gemini 400), M2 (single-allOf inline non-destructive — sibling keywords не затираются), L1 (chooseModel trim padded override). L2/L3/N* приняты (sibling-паритет / fail-closed / в SCOPE).",
+        "notes": "Provider — exported тип (конвенция sibling claude/openai; acceptance criteria буквально '(*geminiProvider)(nil)' — отклонение задокументировано в package doc, cross-adapter consistency). var _ port.LLMProviderPort = (*Provider)(nil). Hermetic: нет новых зависимостей в go.mod (только stdlib + internal/domain/{model,port}). Адаптер НЕ делает retry/fallback/repair — это Provider Router (LIC-TASK-019). content_filter -> УСПЕШНЫЙ CompletionResponse{StopReason=ContentFilter} (Router маппит в LLMErrorContentPolicy) — паритет с claude refusal / openai refusal. Без package CLAUDE.md — паритет с siblings claude/openai (исчерпывающий package doc в provider.go). Разблокирует LIC-TASK-019 (Provider Router — нужны 014+015+016+017+018; 016 закрыт)."
+      }
     },
     {
       "id": "LIC-TASK-017",

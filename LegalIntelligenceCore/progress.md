@@ -601,3 +601,39 @@ Production-ready Redis-клиент. Соответствует configuration.md
 
 ### Следующая задача
 Разблокированы (deps done): LIC-TASK-009 (health/readyz — 005+007+008 ✓), LIC-TASK-017 (rate limiter Lua — 007 ✓), LIC-TASK-038 (idempotency guard — 007 ✓), LIC-TASK-037 (pause-resume — 036+007). Свободны также: LIC-TASK-016 (Gemini), LIC-TASK-018 (Cost Tracker), LIC-TASK-020 (embed prompts), LIC-TASK-021 (Token Estimator), LIC-TASK-035 (Aggregator), LIC-TASK-039 (Event Consumer), LIC-TASK-041..046, LIC-TASK-003, LIC-TASK-010, LIC-TASK-052. Рекомендация: LIC-TASK-038 (idempotency guard) или LIC-TASK-009 (health) — следующие critical на пути pipeline.
+
+## LIC-TASK-016 — Gemini provider adapter (generateContent с responseSchema)
+- **Status:** done
+- **Completed at:** 2026-05-15
+- **Agent:** claude-opus-4-7 (консультации: code-architect — design review; code-reviewer — финальное ревью)
+
+### План реализации
+1. Выбор: среди eligible pending (deps done) LIC-TASK-016 — наивысший приоритет/leverage critical. Завершает триаду LLM-адаптеров (claude 014 ✓ + openai 015 ✓ + gemini). dep=013 done. Разблокирует 019 (Provider Router).
+2. Изучить llm-provider-abstraction.md §1.1–§1.6/§2.3, port/llm.go+llm_errors.go (adapter invariant), config/llm.go (GeminiProviderConfig), sibling openai (5+5, proven pattern) + claude. Подтвердить Gemini generateContent wire-формат через context7 (systemInstruction, contents role, generationConfig responseSchema/responseMimeType, finishReason, promptFeedback.blockReason, usageMetadata, error envelope status, x-goog-api-key).
+3. Design review code-architect: APPROVE Q1–Q12 + 6 MUST-FIX.
+4. Реализовать 6 production + 6 test файлов hermetic (stdlib + internal/domain/{model,port} only). Без новых go.mod deps.
+5. make build/test/lint + go test -race; финальное ревью code-reviewer.
+
+### Прогресс
+- ✅ Pkg `internal/llm/gemini`: 6 production + 6 test файлов. Hermetic: zero новых go.mod deps. Ручной HTTP (нет Google GenAI SDK — арх §1.3 «в v1 REST»).
+- ✅ **config.go**: GeminiConfig{APIKey,BaseURL,Model,HTTPClient}; Validate (userinfo reject + http/https-only + **isValidModelID path-safe charset** — MUST-FIX #2); defaultHTTPClient TLS1.2 без client Timeout. БЕЗ PromptCacheEnabled (Gemini cachedContent не в v1).
+- ✅ **provider.go**: exported `Provider` (sibling-конвенция; отклонение от acceptance `(*geminiProvider)` задокументировано); per-call endpointFor (model в URL path — отличие от claude/openai); **auth x-goog-api-key header, НЕ ?key= query** (MUST-FIX #2/Q2, security 152-ФЗ); chooseModel с trim (L1); re-validate override model перед URL (MUST-FIX #2); do() с bounded read+drain; HealthCheck dual-return, без systemInstruction (MUST-FIX #5).
+- ✅ **payload.go**: generateContentRequest DTO; buildRequestPayload — System->systemInstruction только non-empty, PriorTurns role Assistant->"model" (wireRole), JSONSchema->transformSchema+responseMimeType, JSONMode->responseMimeType only; stopSequences форвардится (Gemini поддерживает — Q5).
+- ✅ **schema.go** (Gemini-специфичный, MUST-FIX #1): transformSchema draft-07 -> Gemini OpenAPI-3.0 Schema subset — UPPERCASE type, X|null->nullable, $ref inline из $defs/definitions + cycle/depth guard, const->enum + inferGeminiType (M1), oneOf->anyOf, single-allOf non-destructive inline (M2), strip $schema/$id/additionalProperties/etc.; un-transformable -> error -> MALFORMED до wire I/O.
+- ✅ **response.go**: parseResponse — promptFeedback.blockReason precedence (MUST-FIX #3) -> ContentFilter SUCCESS; candidate finishReason safety-family -> ContentFilter SUCCESS; mapFinishReason детерминированный ordering (MUST-FIX #4), safetyRatings НЕ authoritative; thought-parts skip; decode-fail/empty -> SERVER_ERROR; CachedInputTokens=0; modelVersion fallback.
+- ✅ **errors.go**: mapTransportError + mapHTTPError (401||403->InvalidAPIKey MUST-FIX #6 / 429+RetryAfter / quota->QUOTA / 408->TIMEOUT / 5xx->SERVER / 400-only classify400 / unknown->SERVER); parseRetryAfter RFC7231 cap 1h reject signed; boundedDetail UTF-8 512B chokepoint.
+- ✅ Тесты: 102 RUN / 0 FAIL, race-clean; весь модуль PASS; go vet чистый; make build/test/lint зелёные; bin gitignored.
+- ✅ code-reviewer: APPROVE, 0 BLOCKER/0 HIGH. Применены M1 (typeless const->enum инференс типа), M2 (single-allOf non-destructive merge), L1 (chooseModel trim) + pinning-тесты.
+
+### Summary
+Production-ready Gemini generateContent адаптер. Соответствует llm-provider-abstraction.md §1.1–§1.6/§2.3 и acceptance LIC-TASK-016 (systemInstruction, contents Assistant->model, responseSchema+responseMimeType, x-goog-api-key, error mapping, HealthCheck). Зеркало проверенного openai/claude паттерна + Gemini-специфика (model-in-path, schema-транслятор, blockReason). Разблокирует LIC-TASK-019 (Provider Router): 014+015+016 закрыты, остаются 017+018.
+
+### Notes
+- **Schema-транслятор (MUST-FIX #1):** Gemini-2.5 responseSchema = OpenAPI-3.0 subset, НЕ draft-07. Pass-through (как у claude/openai) сломал бы prod Gemini-fallback (400 на каждый structured-вызов). Реализован transformSchema; интент strict structured outputs сохранён. Gemini-3 series — новый responseFormat object (DOCS FOLLOW-UP; v1 default gemini-2.5-pro -> responseSchema как в acceptance).
+- **content_filter:** blocked prompt / safety finishReason -> УСПЕШНЫЙ CompletionResponse{StopReason=ContentFilter}; Router маппит в LLMErrorContentPolicy. Паритет с claude refusal / openai refusal — все три адаптера идентичны для одного логического события.
+- **Auth header (Q2):** x-goog-api-key, не ?key= query — ключ не утекает в URL/логи (152-ФЗ); закрывает регрессию из openai-canary.
+- **Без package CLAUDE.md** — паритет с siblings claude/openai (нет CLAUDE.md); исчерпывающий package doc в provider.go.
+- **make docker-build не запускался:** нет Docker daemon (вне test_steps, как во всех прежних LIC-задачах).
+
+### Следующая задача
+Разблокированы (deps done): LIC-TASK-017 (rate limiter token-bucket Redis Lua — 007 ✓), LIC-TASK-018 (Cost & Usage Tracker — 005 ✓) — оба нужны для LIC-TASK-019 (Provider Router; 014+015+016 ✓, осталось 017+018). Свободны также: LIC-TASK-009 (health), LIC-TASK-020 (embed prompts), LIC-TASK-035 (Aggregator), LIC-TASK-038 (idempotency guard), LIC-TASK-039 (Event Consumer), LIC-TASK-041..046, LIC-TASK-003, LIC-TASK-010, LIC-TASK-052. Рекомендация: LIC-TASK-017 или LIC-TASK-018 — последние два блокера Provider Router (центральный LLM-шлюз на критическом пути).

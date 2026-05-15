@@ -77,7 +77,9 @@
         "Шаг 3: тест без LIC_BROKER_URL → ошибка со списком недостающих",
         "Шаг 4: тест с LIC_ENV=production + amqp:// → FATAL"
       ],
-      "dependencies": ["LIC-TASK-001"],
+      "dependencies": [
+        "LIC-TASK-001"
+      ],
       "status": "done",
       "completed_at": "2026-05-14",
       "completion_notes": {
@@ -126,7 +128,9 @@
         "Шаг 2: docker images lic:test — размер < 50 МБ",
         "Шаг 3: docker run lic:test — fail-fast на missing config"
       ],
-      "dependencies": ["LIC-TASK-001"],
+      "dependencies": [
+        "LIC-TASK-001"
+      ],
       "status": "pending"
     },
     {
@@ -148,7 +152,9 @@
         "Шаг 2: лог-запись содержит correlation_id из context",
         "Шаг 3: sanitize редактирует API-ключ в error message"
       ],
-      "dependencies": ["LIC-TASK-002"],
+      "dependencies": [
+        "LIC-TASK-002"
+      ],
       "status": "done",
       "completed_at": "2026-05-14",
       "completion_notes": {
@@ -192,7 +198,9 @@
         "Шаг 2: проверка cardinality (no organization_id в labels)",
         "Шаг 3: histogram buckets валидны"
       ],
-      "dependencies": ["LIC-TASK-002"],
+      "dependencies": [
+        "LIC-TASK-002"
+      ],
       "status": "done",
       "completed_at": "2026-05-14",
       "completion_notes": {
@@ -242,7 +250,9 @@
         "Шаг 2: span создаётся с правильными attributes",
         "Шаг 3: traceparent в headers корректно extract'ится"
       ],
-      "dependencies": ["LIC-TASK-002"],
+      "dependencies": [
+        "LIC-TASK-002"
+      ],
       "status": "done",
       "completed_at": "2026-05-14",
       "completion_notes": {
@@ -284,7 +294,10 @@
         "Шаг 2: SetNX с TTL → дублирующий SetNX возвращает false",
         "Шаг 3: Eval Lua-script (тестовый) выполняется"
       ],
-      "dependencies": ["LIC-TASK-002", "LIC-TASK-004"],
+      "dependencies": [
+        "LIC-TASK-002",
+        "LIC-TASK-004"
+      ],
       "status": "pending"
     },
     {
@@ -308,7 +321,10 @@
         "Шаг 3: reconnect после имитированного disconnect",
         "Шаг 4: retry queues создаются с правильным TTL"
       ],
-      "dependencies": ["LIC-TASK-002", "LIC-TASK-004"],
+      "dependencies": [
+        "LIC-TASK-002",
+        "LIC-TASK-004"
+      ],
       "status": "pending"
     },
     {
@@ -331,7 +347,11 @@
         "Шаг 3: GET /readyz при доступных deps → 200",
         "Шаг 4: SetNotReady → /readyz → 503"
       ],
-      "dependencies": ["LIC-TASK-005", "LIC-TASK-007", "LIC-TASK-008"],
+      "dependencies": [
+        "LIC-TASK-005",
+        "LIC-TASK-007",
+        "LIC-TASK-008"
+      ],
       "status": "pending"
     },
     {
@@ -352,7 +372,9 @@
         "Шаг 2: N+1 одновременных Acquire — последний блокируется до Release",
         "Шаг 3: ctx cancellation прерывает Acquire"
       ],
-      "dependencies": ["LIC-TASK-005"],
+      "dependencies": [
+        "LIC-TASK-005"
+      ],
       "status": "pending"
     },
     {
@@ -373,7 +395,9 @@
         "Шаг 2: contract_type whitelist validator принимает SERVICES, отвергает INVALID",
         "Шаг 3: DomainError.Unwrap() возвращает Cause"
       ],
-      "dependencies": ["LIC-TASK-001"],
+      "dependencies": [
+        "LIC-TASK-001"
+      ],
       "status": "done",
       "completed_at": "2026-05-14",
       "completion_notes": {
@@ -416,7 +440,9 @@
         "Шаг 2: marshal/unmarshal каждой структуры round-trip без потерь",
         "Шаг 3: PendingTypeConfirmation сжимается-разжимается без потерь"
       ],
-      "dependencies": ["LIC-TASK-011"],
+      "dependencies": [
+        "LIC-TASK-011"
+      ],
       "status": "done",
       "completed_at": "2026-05-14",
       "completion_notes": {
@@ -478,7 +504,9 @@
         "Шаг 1: go vet ./internal/domain/port/... — без ошибок",
         "Шаг 2: каждый порт имеет тест на compile-time проверку (var _ Port = (*stub)(nil))"
       ],
-      "dependencies": ["LIC-TASK-012"],
+      "dependencies": [
+        "LIC-TASK-012"
+      ],
       "status": "done",
       "completed_at": "2026-05-15",
       "completion_notes": {
@@ -537,7 +565,9 @@
         "Шаг 3: tool_use payload содержит правильную input_schema",
         "Шаг 4: CachedInputTokens учитывается при parse usage"
       ],
-      "dependencies": ["LIC-TASK-013"],
+      "dependencies": [
+        "LIC-TASK-013"
+      ],
       "status": "done",
       "completed_at": "2026-05-15",
       "completion_notes": {
@@ -583,8 +613,36 @@
         "Шаг 2: developer role в input",
         "Шаг 3: strict json_schema передается"
       ],
-      "dependencies": ["LIC-TASK-013"],
-      "status": "pending"
+      "dependencies": [
+        "LIC-TASK-013"
+      ],
+      "status": "done",
+      "completed_at": "2026-05-15",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/llm/openai — адаптер OpenAI Responses API (POST /v1/responses). 5 production-файлов (зеркало sibling internal/llm/claude): provider.go (Provider + NewOpenAIProvider + Complete + HealthCheck + ID + do + HTTPClient interface + константы responsesEndpointPath=/v1/responses, healthCheckMaxTokens=16, maxResponseBytes=8MiB, maxDrainBytes=64KiB), config.go (OpenAIConfig{APIKey,BaseURL,Model,HTTPClient} + Validate с userinfo rejection + http/https-only + defaultHTTPClient TLS1.2 без client Timeout; БЕЗ PromptCacheEnabled — у OpenAI implicit cache), payload.go (responsesRequest DTO + buildRequestPayload: System->первый input role=developer только при non-empty, PriorTurns->user/assistant, JSONSchema->FLATTENED text.format type=json_schema/name=return_analysis_result/strict=true/schema, JSONMode->text.format type=json_object; БЕЗ stop — Responses API не поддерживает), response.go (parseResponse: output[] message/output_text concat, reasoning items ignored, refusal->StopReasonContentFilter success, incomplete->max_output_tokens/content_filter, status failed->SERVER_ERROR с bounded message, CachedInputTokens hardcoded 0, reportedModel fallback), errors.go (mapTransportError + mapHTTPError 401||403 / 429+RetryAfter / insufficient_quota->QUOTA / 5xx / 400+422 classify / unknown->SERVER_ERROR; parseRetryAfter RFC7231 cap 1h + reject signed; boundedDetail UTF-8 rune-boundary 512B единый chokepoint). 5 test-файлов: 75 subtests PASS с -race.",
+        "key_decision": "Acceptance criteria и арх §1.5 буквально требуют response_format с json_schema — это формат Chat Completions API. Endpoint же Responses API (/v1/responses, арх §1.3), который использует text.format с FLATTENED полями json_schema (без ключа response_format). Реализован корректный Responses-формат; архитектурный интент (strict structured outputs, json_schema, strict=true) сохранён. Подтверждено code-architect (Q2 CONFIRM). DOCS FOLLOW-UP: арх §1.5 и acceptance criteria стоит уточнить под Responses API; HealthCheck max_output_tokens=16 (Responses API floor) vs port/llm.go godoc и арх §2.3 'max_tokens=10' — задокументировано в коде, требует синхронизации спеки.",
+        "test_results": {
+          "go_test_openai_race": "ok — 75 subtests PASS, race-clean",
+          "go_test_module": "ok — весь модуль PASS (claude+openai+config+domain+observability), 0 FAIL",
+          "make_lint": "ok — go vet ./... 0 errors",
+          "make_build": "ok — bin/lic-service пересобран (gitignored, не в коммите)",
+          "make_test": "ok"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/llm/openai/config.go",
+          "LegalIntelligenceCore/development/internal/llm/openai/provider.go",
+          "LegalIntelligenceCore/development/internal/llm/openai/payload.go",
+          "LegalIntelligenceCore/development/internal/llm/openai/response.go",
+          "LegalIntelligenceCore/development/internal/llm/openai/errors.go",
+          "LegalIntelligenceCore/development/internal/llm/openai/config_test.go",
+          "LegalIntelligenceCore/development/internal/llm/openai/provider_test.go",
+          "LegalIntelligenceCore/development/internal/llm/openai/payload_test.go",
+          "LegalIntelligenceCore/development/internal/llm/openai/response_test.go",
+          "LegalIntelligenceCore/development/internal/llm/openai/errors_test.go"
+        ],
+        "reviews": "code-architect: подтвердил Q1-Q10 + 8 нюансов sibling. golang-pro: 0 MUST-FIX; применены SHOULD: S1 (документирован invariant strict+omitempty), S2 (mixed output_text+refusal -> refusal text wins, детерминизм), S3.3 (тест invalid JSONSchema -> marshal fail -> MALFORMED, reachable path), S3.4 (тест empty error-object envelope), N1 (удалён неиспользуемый Param), N3 (errors.New вместо fmt.Errorf %s). security-engineer: 0 MUST-FIX; применён S1 (status=failed message через boundedDetail/512B — закрыт unbounded PII/log-bleed по 152-ФЗ), S2 (canary расширен: status=failed inline-message + forced url.Error no-key-leak). Threat-model: API key не утекает ни на одном пути; SSRF adequate; Retry-After hardening сильнее sibling (reject signed).",
+        "notes": "Provider — exported тип (конвенция sibling claude из LIC-TASK-014). var _ port.LLMProviderPort = (*Provider)(nil). Hermetic: нет новых зависимостей в go.mod (только stdlib + internal/domain/{model,port}). Адаптер НЕ делает retry/fallback/repair — это Provider Router (LIC-TASK-019). Разблокирует LIC-TASK-019."
+      }
     },
     {
       "id": "LIC-TASK-016",
@@ -606,7 +664,9 @@
         "Шаг 2: PriorTurn Assistant маппится в \"model\"",
         "Шаг 3: responseSchema передается"
       ],
-      "dependencies": ["LIC-TASK-013"],
+      "dependencies": [
+        "LIC-TASK-013"
+      ],
       "status": "pending"
     },
     {
@@ -629,7 +689,9 @@
         "Шаг 3: burst допускается до limit",
         "Шаг 4: ctx cancelled → return error"
       ],
-      "dependencies": ["LIC-TASK-007"],
+      "dependencies": [
+        "LIC-TASK-007"
+      ],
       "status": "pending"
     },
     {
@@ -651,7 +713,10 @@
         "Шаг 2: cost формула на claude-sonnet-4-6 с input=10000, output=1000 → правильное значение USD",
         "Шаг 3: cached tokens используют CachedInputPerMTokenUSD (0.30 vs 3.00 для Claude)"
       ],
-      "dependencies": ["LIC-TASK-005", "LIC-TASK-013"],
+      "dependencies": [
+        "LIC-TASK-005",
+        "LIC-TASK-013"
+      ],
       "status": "pending"
     },
     {
@@ -676,7 +741,13 @@
         "Шаг 4: INVALID_API_KEY → mark permanent unhealthy",
         "Шаг 5: ALL_PROVIDERS_FAILED после исчерпания chain"
       ],
-      "dependencies": ["LIC-TASK-014", "LIC-TASK-015", "LIC-TASK-016", "LIC-TASK-017", "LIC-TASK-018"],
+      "dependencies": [
+        "LIC-TASK-014",
+        "LIC-TASK-015",
+        "LIC-TASK-016",
+        "LIC-TASK-017",
+        "LIC-TASK-018"
+      ],
       "status": "pending"
     },
     {
@@ -698,7 +769,9 @@
         "Шаг 2: LoadPrompt(AGENT_TYPE_CLASSIFIER) возвращает non-empty",
         "Шаг 3: LoadSchema(AGENT_RISK_DETECTION) — валидный JSON Schema"
       ],
-      "dependencies": ["LIC-TASK-011"],
+      "dependencies": [
+        "LIC-TASK-011"
+      ],
       "status": "pending"
     },
     {
@@ -719,7 +792,9 @@
         "Шаг 2: text 200K tokens → Truncate возвращает 150K (head/tail proportions correct)",
         "Шаг 3: ingest size 11 МБ → DocumentTooLarge error"
       ],
-      "dependencies": ["LIC-TASK-011"],
+      "dependencies": [
+        "LIC-TASK-011"
+      ],
       "status": "pending"
     },
     {
@@ -743,7 +818,9 @@
         "Шаг 3: валидный ИНН 7707083893 → validation_facts inn_valid=true",
         "Шаг 4: невалидный ОГРН → ogrn_valid=false"
       ],
-      "dependencies": ["LIC-TASK-020"],
+      "dependencies": [
+        "LIC-TASK-020"
+      ],
       "status": "pending"
     },
     {
@@ -766,7 +843,10 @@
         "Шаг 3: после repair success → repaired_ok метрика",
         "Шаг 4: 2nd invalid → AGENT_OUTPUT_INVALID error"
       ],
-      "dependencies": ["LIC-TASK-019", "LIC-TASK-020"],
+      "dependencies": [
+        "LIC-TASK-019",
+        "LIC-TASK-020"
+      ],
       "status": "pending"
     },
     {
@@ -787,7 +867,10 @@
         "Шаг 3: timeout → AGENT_TIMEOUT error",
         "Шаг 4: repair_success path → правильная метрика"
       ],
-      "dependencies": ["LIC-TASK-022", "LIC-TASK-023"],
+      "dependencies": [
+        "LIC-TASK-022",
+        "LIC-TASK-023"
+      ],
       "status": "pending"
     },
     {
@@ -808,7 +891,9 @@
         "Шаг 2: integration с mock provider — корректный envelope",
         "Шаг 3: invalid contract_type в response → repair triggered"
       ],
-      "dependencies": ["LIC-TASK-024"],
+      "dependencies": [
+        "LIC-TASK-024"
+      ],
       "status": "pending"
     },
     {
@@ -827,7 +912,9 @@
         "Шаг 1: go test ./internal/agents/keyparams/... — все тесты проходят",
         "Шаг 2: party_roles содержит ИНН/ОГРН (как-есть, без валидации)"
       ],
-      "dependencies": ["LIC-TASK-024"],
+      "dependencies": [
+        "LIC-TASK-024"
+      ],
       "status": "pending"
     },
     {
@@ -847,7 +934,9 @@
         "Шаг 1: go test ./internal/agents/partyconsistency/... — все тесты проходят",
         "Шаг 2: validation_facts блок присутствует в envelope"
       ],
-      "dependencies": ["LIC-TASK-024"],
+      "dependencies": [
+        "LIC-TASK-024"
+      ],
       "status": "pending"
     },
     {
@@ -866,7 +955,9 @@
         "Шаг 1: go test ./internal/agents/mandatoryconditions/... — все тесты проходят",
         "Шаг 2: code соответствует regex ^MC_[A-Z0-9_]+$"
       ],
-      "dependencies": ["LIC-TASK-024"],
+      "dependencies": [
+        "LIC-TASK-024"
+      ],
       "status": "pending"
     },
     {
@@ -886,7 +977,9 @@
         "Шаг 1: go test ./internal/agents/riskdetection/... — все тесты проходят",
         "Шаг 2: ids монотонно растут R-001, R-002, …"
       ],
-      "dependencies": ["LIC-TASK-024"],
+      "dependencies": [
+        "LIC-TASK-024"
+      ],
       "status": "pending"
     },
     {
@@ -905,7 +998,9 @@
         "Шаг 1: go test ./internal/agents/recommendation/... — все тесты проходят",
         "Шаг 2: risk_id формат R-, R-P, или R-M"
       ],
-      "dependencies": ["LIC-TASK-024"],
+      "dependencies": [
+        "LIC-TASK-024"
+      ],
       "status": "pending"
     },
     {
@@ -923,7 +1018,9 @@
         "Шаг 1: go test ./internal/agents/summary/... — все тесты проходят",
         "Шаг 2: text length ∈ [200, 3000]"
       ],
-      "dependencies": ["LIC-TASK-024"],
+      "dependencies": [
+        "LIC-TASK-024"
+      ],
       "status": "pending"
     },
     {
@@ -943,7 +1040,9 @@
         "Шаг 1: go test ./internal/agents/detailedreport/... — все тесты проходят",
         "Шаг 2: все 7 секций присутствуют (даже если items=[])"
       ],
-      "dependencies": ["LIC-TASK-024"],
+      "dependencies": [
+        "LIC-TASK-024"
+      ],
       "status": "pending"
     },
     {
@@ -963,7 +1062,9 @@
         "Шаг 1: go test ./internal/agents/riskdelta/... — все тесты проходят",
         "Шаг 2: profile_change counts соответствуют входным rates"
       ],
-      "dependencies": ["LIC-TASK-024"],
+      "dependencies": [
+        "LIC-TASK-024"
+      ],
       "status": "pending"
     },
     {
@@ -988,7 +1089,17 @@
         "Шаг 2: Stage 1 параллелит 2 агента (assertion timing < sum of timeouts)",
         "Шаг 3: fail в одном агенте Stage 1 → второй отменяется"
       ],
-      "dependencies": ["LIC-TASK-025", "LIC-TASK-026", "LIC-TASK-027", "LIC-TASK-028", "LIC-TASK-029", "LIC-TASK-030", "LIC-TASK-031", "LIC-TASK-032", "LIC-TASK-033"],
+      "dependencies": [
+        "LIC-TASK-025",
+        "LIC-TASK-026",
+        "LIC-TASK-027",
+        "LIC-TASK-028",
+        "LIC-TASK-029",
+        "LIC-TASK-030",
+        "LIC-TASK-031",
+        "LIC-TASK-032",
+        "LIC-TASK-033"
+      ],
       "status": "pending"
     },
     {
@@ -1014,7 +1125,10 @@
         "Шаг 3: aggregate score: 1 high, 1 medium → 100-25-10=65 → score=0.65 label=medium",
         "Шаг 4: 2 агента с prompt_injection_detected=true → warning с detected_by_agents=[sorted]"
       ],
-      "dependencies": ["LIC-TASK-012", "LIC-TASK-005"],
+      "dependencies": [
+        "LIC-TASK-012",
+        "LIC-TASK-005"
+      ],
       "status": "pending"
     },
     {
@@ -1035,7 +1149,12 @@
         "Шаг 3: happy path RE_CHECK — Stage 6 запускается",
         "Шаг 4: timeout job-level → FAILED ANALYSIS_TIMEOUT"
       ],
-      "dependencies": ["LIC-TASK-034", "LIC-TASK-035", "LIC-TASK-010", "LIC-TASK-006"],
+      "dependencies": [
+        "LIC-TASK-034",
+        "LIC-TASK-035",
+        "LIC-TASK-010",
+        "LIC-TASK-006"
+      ],
       "status": "pending"
     },
     {
@@ -1058,7 +1177,10 @@
         "Шаг 4: Resume с invalid contract_type → DLQ + INVALID_CONTRACT_TYPE",
         "Шаг 5: TTL miss → USER_CONFIRMATION_EXPIRED"
       ],
-      "dependencies": ["LIC-TASK-036", "LIC-TASK-007"],
+      "dependencies": [
+        "LIC-TASK-036",
+        "LIC-TASK-007"
+      ],
       "status": "pending"
     },
     {
@@ -1082,7 +1204,9 @@
         "Шаг 3: heartbeat продлевает TTL",
         "Шаг 4: stop heartbeat → TTL естественно expirit"
       ],
-      "dependencies": ["LIC-TASK-007"],
+      "dependencies": [
+        "LIC-TASK-007"
+      ],
       "status": "pending"
     },
     {
@@ -1106,7 +1230,11 @@
         "Шаг 3: missing required field → DLQ",
         "Шаг 4: valid message → dispatched"
       ],
-      "dependencies": ["LIC-TASK-008", "LIC-TASK-011", "LIC-TASK-012"],
+      "dependencies": [
+        "LIC-TASK-008",
+        "LIC-TASK-011",
+        "LIC-TASK-012"
+      ],
       "status": "pending"
     },
     {
@@ -1129,7 +1257,10 @@
         "Шаг 3: idempotency COMPLETED → ACK без обработки",
         "Шаг 4: PAUSED + valid pending state → re-publish events + ACK"
       ],
-      "dependencies": ["LIC-TASK-039", "LIC-TASK-038"],
+      "dependencies": [
+        "LIC-TASK-039",
+        "LIC-TASK-038"
+      ],
       "status": "pending"
     },
     {
@@ -1154,7 +1285,9 @@
         "Шаг 3: timeout 30s → DM_ARTIFACTS_TIMEOUT",
         "Шаг 4: concurrent Await на разные correlation_ids"
       ],
-      "dependencies": ["LIC-TASK-011"],
+      "dependencies": [
+        "LIC-TASK-011"
+      ],
       "status": "pending"
     },
     {
@@ -1176,7 +1309,9 @@
         "Шаг 2: payload содержит правильный artifact_types list",
         "Шаг 3: publisher confirms ожидаются"
       ],
-      "dependencies": ["LIC-TASK-008"],
+      "dependencies": [
+        "LIC-TASK-008"
+      ],
       "status": "pending"
     },
     {
@@ -1198,7 +1333,9 @@
         "Шаг 2: payload без risk_delta — поле отсутствует (omitempty)",
         "Шаг 3: payload с risk_delta — поле присутствует"
       ],
-      "dependencies": ["LIC-TASK-008"],
+      "dependencies": [
+        "LIC-TASK-008"
+      ],
       "status": "pending"
     },
     {
@@ -1220,7 +1357,10 @@
         "Шаг 2: COMPLETED без error fields → валидно",
         "Шаг 3: FAILED с error_code → правильная RU error_message"
       ],
-      "dependencies": ["LIC-TASK-008", "LIC-TASK-011"],
+      "dependencies": [
+        "LIC-TASK-008",
+        "LIC-TASK-011"
+      ],
       "status": "pending"
     },
     {
@@ -1241,7 +1381,9 @@
         "Шаг 2: suggested_type в whitelist; иначе fail",
         "Шаг 3: confidence ∈ [0,1]"
       ],
-      "dependencies": ["LIC-TASK-008"],
+      "dependencies": [
+        "LIC-TASK-008"
+      ],
       "status": "pending"
     },
     {
@@ -1261,7 +1403,9 @@
         "Шаг 2: envelope без оригинального payload (только hash)",
         "Шаг 3: HMAC reproducible с одинаковым key"
       ],
-      "dependencies": ["LIC-TASK-008"],
+      "dependencies": [
+        "LIC-TASK-008"
+      ],
       "status": "pending"
     },
     {
@@ -1284,7 +1428,19 @@
         "Шаг 3: SIGTERM → graceful shutdown < 130s",
         "Шаг 4: SIGHUP → secrets reloaded"
       ],
-      "dependencies": ["LIC-TASK-009", "LIC-TASK-036", "LIC-TASK-037", "LIC-TASK-039", "LIC-TASK-040", "LIC-TASK-041", "LIC-TASK-042", "LIC-TASK-043", "LIC-TASK-044", "LIC-TASK-045", "LIC-TASK-046"],
+      "dependencies": [
+        "LIC-TASK-009",
+        "LIC-TASK-036",
+        "LIC-TASK-037",
+        "LIC-TASK-039",
+        "LIC-TASK-040",
+        "LIC-TASK-041",
+        "LIC-TASK-042",
+        "LIC-TASK-043",
+        "LIC-TASK-044",
+        "LIC-TASK-045",
+        "LIC-TASK-046"
+      ],
       "status": "pending"
     },
     {
@@ -1307,7 +1463,9 @@
         "Шаг 2: FakeLLMProvider inject error → router fallback works",
         "Шаг 3: FakeBroker manual ACK — message redelivered при NACK"
       ],
-      "dependencies": ["LIC-TASK-047"],
+      "dependencies": [
+        "LIC-TASK-047"
+      ],
       "status": "pending"
     },
     {
@@ -1329,7 +1487,9 @@
         "Шаг 2: 3 publishes (IN_PROGRESS, analysis-ready, COMPLETED)",
         "Шаг 3: ACK счётчик = 1"
       ],
-      "dependencies": ["LIC-TASK-048"],
+      "dependencies": [
+        "LIC-TASK-048"
+      ],
       "status": "pending"
     },
     {
@@ -1353,7 +1513,9 @@
         "Шаг 3: UserConfirmedType → resume + COMPLETED",
         "Шаг 4: invalid contract_type → DLQ + FAILED"
       ],
-      "dependencies": ["LIC-TASK-049"],
+      "dependencies": [
+        "LIC-TASK-049"
+      ],
       "status": "pending"
     },
     {
@@ -1376,7 +1538,9 @@
         "Шаг 2: метрики и publish-патены ассертятся",
         "Шаг 3: DLQ envelopes валидны (HMAC hash present)"
       ],
-      "dependencies": ["LIC-TASK-050"],
+      "dependencies": [
+        "LIC-TASK-050"
+      ],
       "status": "pending"
     },
     {
@@ -1396,7 +1560,9 @@
         "Шаг 2: попытка log content of KeyParameters → field NOT present в JSON",
         "Шаг 3: error с API ключ → редакция в logged message"
       ],
-      "dependencies": ["LIC-TASK-004"],
+      "dependencies": [
+        "LIC-TASK-004"
+      ],
       "status": "pending"
     },
     {
@@ -1418,7 +1584,10 @@
         "Шаг 2: response с prompt_injection_detected=true для 2 agents → warning в payload, метрика +2",
         "Шаг 3: audit log содержит HMAC hash, не raw content"
       ],
-      "dependencies": ["LIC-TASK-022", "LIC-TASK-035"],
+      "dependencies": [
+        "LIC-TASK-022",
+        "LIC-TASK-035"
+      ],
       "status": "pending"
     },
     {
@@ -1438,7 +1607,9 @@
         "Шаг 2: spoofed organization_id в ArtifactsProvided → DLQ",
         "Шаг 3: OTel span attribute check"
       ],
-      "dependencies": ["LIC-TASK-049"],
+      "dependencies": [
+        "LIC-TASK-049"
+      ],
       "status": "pending"
     },
     {
@@ -1460,7 +1631,10 @@
         "Шаг 2: curl localhost:8081/healthz → 200",
         "Шаг 3: curl localhost:8081/readyz → 200 (при rabbitmq/redis up)"
       ],
-      "dependencies": ["LIC-TASK-003", "LIC-TASK-047"],
+      "dependencies": [
+        "LIC-TASK-003",
+        "LIC-TASK-047"
+      ],
       "status": "pending"
     }
   ]

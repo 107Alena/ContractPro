@@ -459,3 +459,40 @@ Production-ready Claude provider adapter для LIC. Полное соответ
 - LIC-TASK-018 (Cost & Usage Tracker — Prometheus метрики с CachedInputTokens отдельной строкой, pricing table loader) — зависит от 005 (done) + 013 (done).
 
 Свободны без новых блокеров: LIC-TASK-003 (Dockerfile distroless), LIC-TASK-007 (Redis), LIC-TASK-008 (RabbitMQ), LIC-TASK-010 (concurrency limiter), LIC-TASK-020 (embed prompts/schemas), LIC-TASK-021 (Token Estimator).
+
+## LIC-TASK-015 — OpenAI provider adapter (Responses API)
+- **Status:** done
+- **Completed at:** 2026-05-15
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, golang-pro, security-engineer)
+
+### План реализации
+1. Прочитать llm-provider-abstraction.md §1.1–1.6 (LLMProviderPort + structured outputs), port/llm.go + llm_errors.go (adapter invariant), config/llm.go (OpenAIProviderConfig), sibling internal/llm/claude (5+5 файлов — proven pattern), OpenAI Responses API (context7).
+2. Согласовать дизайн через code-architect (Q1–Q10 + 8 нюансов sibling): зеркало claude-структуры; **ключевое решение Q2** — Responses API использует FLATTENED `text.format` (не Chat-Completions `response_format`); System→`input[0].role=developer` (не `instructions`); нет `stop` параметра; CachedInputTokens=0; HealthCheck floor 16.
+3. Реализовать 5 production-файлов hermetic (stdlib + internal/domain/{model,port} only): config.go, provider.go, payload.go, response.go, errors.go.
+4. Реализовать 5 test-файлов с httptest fakes: 71 → 75 subtests после review fixes.
+5. Прогнать `make build/test/lint` + `go test -race`.
+6. Параллельный code review: golang-pro + security-engineer.
+
+### Прогресс
+- ✅ Pkg `internal/llm/openai`: 5 production + 5 test файлов. Hermetic: zero новых go.mod deps (только stdlib + internal/domain/{model,port}). Никакого openai-go SDK — ручной HTTP.
+- ✅ **provider.go**: exported `Provider` (конвенция sibling claude из LIC-TASK-014, не lowercase `openaiProvider` из иллюстративного текста арх); `var _ port.LLMProviderPort = (*Provider)(nil)`; NewOpenAIProvider + Complete + HealthCheck + ID + do + HTTPClient interface co-located; constants responsesEndpointPath=/v1/responses, healthCheckMaxTokens=16, maxResponseBytes=8MiB, maxDrainBytes=64KiB; bounded body drain через io.LimitReader; Authorization: Bearer header.
+- ✅ **config.go**: OpenAIConfig (APIKey+BaseURL+Model+HTTPClient — БЕЗ PromptCacheEnabled: у OpenAI implicit cache; БЕЗ RPS/Burst — те для LIC-TASK-017); Validate с errors.Join + userinfo rejection + http/https-only; defaultHTTPClient TLS1.2 без client Timeout.
+- ✅ **payload.go**: responsesRequest DTO; buildRequestPayload валидирует PriorTurns.Role, System→`input[0]{role:developer}` ТОЛЬКО при non-empty (HealthCheck без System), PriorTurns→user/assistant, JSONSchema→FLATTENED `text.format{type:json_schema,name:return_analysis_result,strict:true,schema}`, JSONMode→`text.format{type:json_object}`; **нет stop** (Responses API не поддерживает — задокументированное отклонение от sibling).
+- ✅ **response.go**: parseResponse — json.Unmarshal failure на 2xx → LLMErrorServerError (provider misbehaviour, не MALFORMED, как claude M4); status=failed → SERVER_ERROR с bounded message; extractContent итерирует output[] message-items, output_text concat, reasoning items ignored; refusal или incomplete/content_filter → StopReasonContentFilter + **success** (Router маппит в LLMErrorContentPolicy через port godoc — зеркало claude refusal-пути); mixed output_text+refusal → refusal text wins (детерминизм); empty/whitespace (не на content-filter пути) → SERVER_ERROR; CachedInputTokens hardcoded 0; reportedModel fallback.
+- ✅ **errors.go**: mapTransportError (ctx/net.Timeout→TIMEOUT, прочее→NETWORK); mapHTTPError 401||403→InvalidAPIKey, 429 insufficient_quota→QUOTA иначе RateLimit+RetryAfter, 5xx→ServerError, 400+422→classify4xx (context-length→ContextTooLong, quota→QuotaExceeded, content-policy→ContentPolicy, иначе MALFORMED), unknown→ServerError default (нет Anthropic-529 ветки); boundedDetail — единый UTF-8 rune-boundary 512B chokepoint для всех provider-controlled строк; parseRetryAfter RFC7231 + cap 1h + **reject signed delta-seconds** (сильнее sibling).
+- ✅ Adapter invariant: каждая non-nil ошибка из Complete/HealthCheck unwraps к *port.LLMProviderError (включая json.Marshal нашего struct → MALFORMED, http.NewRequestWithContext failure → MALFORMED, invalid JSONSchema → MALFORMED). Покрыт TestComplete_AdapterInvariant (8 случаев) + canary.
+- ✅ Тесты: 75 subtests PASS с -race в openai; весь модуль PASS; go vet чистый; make lint/build/test зелёные. Бинарь bin/lic-service gitignored — не в коммите.
+
+### Summary
+Production-ready OpenAI Responses API adapter. Соответствует llm-provider-abstraction.md §1.1–§1.6 и acceptance criteria LIC-TASK-015 (developer-role input, strict json_schema, error mapping, Bearer, HealthCheck, CachedInputTokens=0). Зеркало проверенного claude-паттерна. Разблокирует LIC-TASK-019 (Provider Router — Complete + CompleteRepair sticky).
+
+### Notes
+- **Ключевое архитектурное решение (code-architect Q2):** acceptance criteria и арх §1.5 буквально пишут `response_format:{type:json_schema,strict,schema}` — это формат **Chat Completions API**. Endpoint же — **Responses API** (`/v1/responses`, арх §1.3), который требует `text:{format:{type:json_schema,name,strict,schema}}` (json-schema поля FLATTENED внутри `format`, БЕЗ ключа `response_format`/`json_schema`). Реализован корректный Responses-формат — `response_format` против `/v1/responses` вернул бы 400. Архитектурный ИНТЕНТ (strict structured outputs) сохранён. **DOCS FOLLOW-UP:** арх §1.5 + acceptance criteria стоит переписать под Responses API.
+- **HealthCheck max_output_tokens=16** — Responses API floor (отвергает <16 с 400). port/llm.go godoc и арх §2.3 говорят `max_tokens=10` (claude использует 10). Это сознательное provider-specific отклонение, громко задокументировано в коде (healthCheckMaxTokens const) — **DOCS FOLLOW-UP** для синхронизации спеки.
+- **Refusal/content_filter → success:** 200 с refusal или incomplete/content_filter возвращает успешный CompletionResponse со StopReason=ContentFilter; Router маппит в LLMErrorContentPolicy (port godoc + арх §1.1). Это зеркалит claude mapStopReason("refusal") — оба адаптера ведут себя идентично для одного логического события.
+- **StopSequences игнорируется:** Responses API не имеет `stop` параметра (в отличие от Chat Completions). port.CompletionRequest.StopSequences осознанно дропается; mapStopReason никогда не эмитит StopReasonStopSequence. LIC v1 агенты полагаются на strict JSON schema, не на stop-sequences (арх помечает поле "optional").
+- **Review-фиксы:** golang-pro 0 MUST + применены S1 (документирован strict+omitempty invariant), S2 (mixed text+refusal детерминизм), S3.3 (тест invalid JSONSchema marshal-fail — reachable Router-driven path, untested и в sibling), S3.4 (empty error-object), N1 (drop unused Param), N3 (errors.New). security-engineer 0 MUST + применены S1 (status=failed message через boundedDetail/512B — закрыт unbounded PII/log-bleed по 152-ФЗ; реальный регресс vs sibling), S2 (canary расширен: status=failed inline + forced *url.Error). Threat-model: API key не утекает; SSRF adequate (operator-controlled endpoint); Retry-After hardening сильнее claude.
+- Зависимостей в go.mod НЕ добавлено.
+
+### Следующая задача
+Разблокирована LIC-TASK-019 (Provider Router — per-agent primary + global fallback chain, sticky repair) при условии 014+015+016+017+018. Ещё открыты для следующей итерации (deps done): LIC-TASK-016 (Gemini adapter — тот же 5-файл pattern, responseSchema + role Assistant→"model"), LIC-TASK-018 (Cost & Usage Tracker), LIC-TASK-007 (Redis), LIC-TASK-008 (RabbitMQ), LIC-TASK-020 (embed prompts/schemas), LIC-TASK-021 (Token Estimator), LIC-TASK-003 (Dockerfile distroless), LIC-TASK-010 (concurrency limiter).

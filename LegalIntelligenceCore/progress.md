@@ -637,3 +637,35 @@ Production-ready Gemini generateContent адаптер. Соответствуе
 
 ### Следующая задача
 Разблокированы (deps done): LIC-TASK-017 (rate limiter token-bucket Redis Lua — 007 ✓), LIC-TASK-018 (Cost & Usage Tracker — 005 ✓) — оба нужны для LIC-TASK-019 (Provider Router; 014+015+016 ✓, осталось 017+018). Свободны также: LIC-TASK-009 (health), LIC-TASK-020 (embed prompts), LIC-TASK-035 (Aggregator), LIC-TASK-038 (idempotency guard), LIC-TASK-039 (Event Consumer), LIC-TASK-041..046, LIC-TASK-003, LIC-TASK-010, LIC-TASK-052. Рекомендация: LIC-TASK-017 или LIC-TASK-018 — последние два блокера Provider Router (центральный LLM-шлюз на критическом пути).
+
+## LIC-TASK-017 — Rate limiter (token bucket в Redis, atomic Lua)
+- **Status:** done
+- **Completed at:** 2026-05-16
+- **Agent:** claude-opus-4-7[1m] (консультации: code-architect — design review; code-reviewer + golang-pro — финальное ревью параллельно)
+
+### План реализации
+1. Выбор: среди eligible pending (deps done) LIC-TASK-017 — critical, наивысший leverage: один из двух последних блокеров LIC-TASK-019 (Provider Router — центральный LLM-шлюз на критич. пути ко всему пайплайну агентов). dep=007 (Redis) done. Прошлая сессия дизайн отревьюила, но код НЕ сохранён (ratelimit/ только .gitkeep, git clean) → перезапуск с опорой на зафиксированный в session.log дизайн + свежая верификация.
+2. Изучены: kvstore (Eval/RedisAPI seam, (nil,nil) на Lua-nil, EVALSHA-кэш), port/llm.go+llm_errors.go (LLMProviderError/NewLLMProviderError/Unwrap, LLMProviderID.IsKnown), port/router.go, config/llm.go (per-provider RPS/Burst SSOT), metrics/llm.go (RateLimitedTotal), arch llm-provider-abstraction §2.1 (rateLimit callsite), §3.1-§3.3, configuration.md §2 SSOT.
+3. Design review → code-architect: APPROVE-WITH-MUST-FIX (MF1 miniredis-офлайн-отклонение; MF2 виртуальные часы в fake; MF3 имя LuaEvaluator не ScriptRunner + assert в 047; MF4 redis.replicate_commands() первой строкой; MF5 maxSleep cap; OQ-A..F).
+4. Реализация 3 prod + CLAUDE.md + 5 test-файлов hermetic (stdlib + internal/domain/port).
+5. make build/test/lint + go test -race; финальное ревью code-reviewer + golang-pro (параллельно); применение фиксов.
+
+### Прогресс
+- ✅ **script.go**: `tokenBucketScript` (Lua) — redis.replicate_commands() первой строкой (нон-детерм. redis.TIME, min Redis 5.0), integer micro-tokens SCALE=1e6 (lossless HSET), cold key=full burst без refill от ts=0 (overflow guard), refill cap burst, persist HSET на allow И deny, EXPIRE max(window,60s), retry_after_ms≥1, return {allowed,retry_after_ms} never nil. `computeBucket` — Go SSOT-зеркало арифметики (math.Floor/Ceil после SF-4), используется fake → Lua/Go не дрейфят. `decodeResult` defensive (int64/int/float64-integral/string; nil/bad→errScriptAnomaly).
+- ✅ **bucket.go**: `TokenBucket{provider,key=lic:rate:{provider},rps,burst,eval}` (без shard — acceptance + 152-ФЗ; §3.1 shard опц.). `outcome` таксономия (Allowed/Denied/InfraError/ScriptAnomaly). `allow` — один не-блокирующий Eval + классификация, никогда не возвращает Go-error.
+- ✅ **ratelimit.go**: seams `LuaEvaluator` (Eval; *kvstore.Client сатисфит, assert в 047) + `Observer` (RateLimited denied-only / FailOpen / ScriptAnomaly) + noopObserver. `Config`/`ProviderLimit`, `NewLimiter` fail-fast (eval req, RPS≥minRPS=1e-6, Burst≥1). `Wait(ctx,providerID)` — token→nil; denied→RateLimited+computeSleep(retry-after+full-jitter, floor max(1ms,1/2rps), cap maxSleep=2s, clamp ctx, ранний выход <1ms)→reusable timer vs ctx.Done()→retry; ctx-expiry→NewLLMProviderError(RATE_LIMIT,ctx.Err()); unknown→MALFORMED; infra-fail→ctx.Err()-guard иначе fail-OPEN+FailOpen; anomaly→fail-OPEN+ScriptAnomaly.
+- ✅ **CLAUDE.md**: зафиксированы все отклонения (no-shard, fail-open rationale, anomaly≠outage + transport-redis.Nil-неотличимость, ctx-expiry race, redis.TIME determinism/min-Redis, cold-key, doc-расхождение LIC_LLM_RPS_*, miniredis test-стратегия).
+- ✅ Тесты: fake_test (fakeEvaluator на computeBucket + инъектируемые виртуальные часы + recordingObserver с firstDenied-каналом), script_test (computeBucket/decode/Lua-pin инварианты), bucket_test (outcome), ratelimit_test (validation/Wait/sleep/race/§2.1-совместимость), script_integration_test (//go:build redis_integration, сверка реал-Lua с computeBucket SSOT). 70 RUN/PASS -race clean; модуль 12 OK/0 FAIL; vet (+tag) чисто; build OK (gitignored).
+- ✅ Найден+исправлен реальный баг при первом прогоне: computeSleep low-rps minSleep>maxSleep (точно MF-5).
+
+### Финальное ревью (применённые фиксы)
+- **code-reviewer:** H1 (ctx истекает между ctx.Err() и Eval → infra-путь fail-open маскировал таймаут вместо RATE_LIMIT) → ctx.Err()-guard на outcomeInfraError. M1 (transport redis.Nil ≈ script-nil) → доки CLAUDE.md. M2 (флака-тест) → канал firstDenied. M3 (integration-тест не сверял с computeBucket) → числовая сверка (0,maxRetry]. L1/L2/L3 → коммент/math.Floor/float64-case.
+- **golang-pro:** MF-1 (tiny-RPS float→Duration overflow) → minRPS=1e-6 bound + base<0 guard + math.* . MF-2 (= M2). SF-1 (busy-spin в хвосте дедлайна) → ранний выход при clamp<1ms. SF-2 (комментарий timer.C/ctx.Done race) → уточнён. SF-3 (randF контракт) → godoc [0,1)+concurrent-safe. SF-4 (math vs ручной floor/ceil — math это stdlib, герметичность не нарушается) → math.Floor/Ceil. N-4/N-5 → godoc/тест.
+
+### Summary
+Production-ready per-provider token-bucket rate limiter. Соответствует llm-provider-abstraction.md §3.1-§3.2, §2.1 router-контракту и acceptance LIC-TASK-017. Hermetic, zero новых go.mod deps. Разблокирует LIC-TASK-019 (Provider Router): 014+015+016+017 закрыты, остаётся только LIC-TASK-018 (Cost & Usage Tracker).
+
+### Notes / следующая задача
+- **DOC FOLLOW-UP (LIC-TASK-047):** §3.2/acceptance пишут `LIC_LLM_RPS_<PROVIDER>`/`LIC_LLM_BURST_<PROVIDER>` — таких env НЕТ. Реальный SSOT (configuration.md §2 / config/llm.go) — `LIC_<PROVIDER>_RPS`/`LIC_<PROVIDER>_BURST`. LIC-TASK-047 ДОЛЖЕН мапить `Config.Providers[id]={cfg.LLM.<Provider>.RPS, cfg.LLM.<Provider>.Burst}`, НЕ §3.2-написание. Также в 047: `var _ ratelimit.LuaEvaluator=(*kvstore.Client)(nil)` + Prometheus/logger Observer-адаптер (RateLimitedTotal{provider} + сэмплированный WARN на FailOpen/ScriptAnomaly).
+- **make docker-build не запускался:** нет Docker daemon (вне test_steps, как во всех прежних LIC-задачах).
+- **Разблокирована LIC-TASK-018** (Cost & Usage Tracker — deps 005+013 done) — последний блокер LIC-TASK-019. Также открыты (deps done): LIC-TASK-009 (health), 020 (embed prompts), 021 (token estimator), 035 (aggregator), 038 (idempotency guard), 039 (event consumer), 041-046, 003, 010, 052. Рекомендация следующей итерации: **LIC-TASK-018** (закрывает Provider Router 019 — центральный LLM-шлюз).

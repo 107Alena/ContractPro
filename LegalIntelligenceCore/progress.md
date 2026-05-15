@@ -460,6 +460,75 @@ Production-ready Claude provider adapter для LIC. Полное соответ
 
 Свободны без новых блокеров: LIC-TASK-003 (Dockerfile distroless), LIC-TASK-007 (Redis), LIC-TASK-008 (RabbitMQ), LIC-TASK-010 (concurrency limiter), LIC-TASK-020 (embed prompts/schemas), LIC-TASK-021 (Token Estimator).
 
+## LIC-TASK-008 — RabbitMQ broker client (publisher confirms, manual ACK, auto-reconnect, DLX-loop topology)
+- **Status:** done
+- **Started at:** 2026-05-15
+- **Completed at:** 2026-05-15
+- **Agent:** claude-opus-4-7 (консультации: code-architect [дизайн], golang-pro + security-engineer + code-reviewer [review])
+
+### Обоснование выбора
+Из eligible-задач (deps done): 003,007,008,010,016,018,020,021,035,041,052 — все critical кроме 010. LIC-TASK-008
+разблокирует **7 задач** (009,039,042,043,044,045,046) — максимум; брокер — backbone event-driven LIC,
+на критическом пути ко всей integration-фазе (до LIC-TASK-047).
+
+### План реализации (валидирован code-architect, Q1–Q8)
+1. Добавить `github.com/rabbitmq/amqp091-go v1.10.0` (версия из DP sibling).
+2. Пакет `internal/infra/broker`, файлы: client.go, topology.go, publish.go, subscribe.go, reconnect.go, errors.go + test-peers + CLAUDE.md.
+3. **errors.go**: broker-локальный типизированный `BrokerError{Op,Retryable,Cause}` + sentinels (НЕ model.ErrorCode — сломал бы SSOT-инвариант errorCatalog.init() + infra-ошибки не публикуются в Orchestrator). context.Canceled/DeadlineExceeded — passthrough raw (конвенция кодбазы). AMQP reply codes 404/403/406 → non-retryable, прочее retryable (зеркало DP).
+4. **client.go**: инъектируемые `AMQPAPI`/`AMQPChannelAPI` (mock-тестирование без брокера, паттерн DP), real-wrappers, NewClient(cfg)+newClientWithAMQP(test seam), Ping (IsClosed-guard → open+close transient channel), graceful idempotent Close с handler-ctx cancel.
+5. **topology.go**: статическая data-driven таблица из BrokerConfig (§6.1 routing-key map + retry TTLs). `DeclareTopology(ctx)`: 4 topic exchange (events/responses/commands/dlx) + 6 main queues + 18 retry queues + bindings. Единый `amqp.Table`-builder (byte-identical args для идемпотентного re-declare на reconnect — иначе 406 PRECONDITION_FAILED).
+   - Main queue `lic.q.X`: durable, x-message-ttl=86400000, x-max-length=100000, x-dead-letter-exchange=contractpro.dlx; **БЕЗ статического x-dead-letter-routing-key** (escalation retry.N — динамическое решение consumer'а 043 по x-death.count, code-architect Q3 correction; задокументированное отклонение от литерального диаграмм-аннотейта §6.4, интент loop сохранён).
+   - Retry queue `lic.q.X.retry.N`: x-message-ttl=ttlN(2s/10s/60s), x-dead-letter-exchange=contractpro.dlx, x-dead-letter-routing-key=RK (возврат в main).
+   - Bindings: main ← source-exchange(RK) И main ← contractpro.dlx(RK, return path); retry.N ← contractpro.dlx(lic.q.X.retry.N). DLX = topic (НЕ fanout — иначе storm).
+6. **publish.go**: выделенный publish channel в Confirm mode; Publish(ctx,exchange,rk,payload) под full Lock (сериализация confirm-wait против reconnect-swap, TOCTOU); NotifyPublish(size=1); select confirm/timeout(PublisherConfirmTimeout=5s)/ctx; retry 3× exp backoff+jitter; mandatory=false.
+7. **subscribe.go**: Option B — broker-local `Delivery` интерфейс (Body/Headers/Ack/Nack/Reject/XDeath() []XDeathEntry — amqp-free decoded для 043, без утечки amqp091 в ingress); QoS prefetch per-channel; consumeLoop с lifecycle (done/closed/reconnect).
+8. **reconnect.go**: reconnectLoop (NotifyClose + exp backoff+jitter 25%, cap), порядок: dial → pub-channel+Confirm() → DeclareTopology → per-sub channel → Qos → Consume.
+9. Тесты против in-memory fake: publish→confirm, reconnect-redeclare, retry-queue TTL assertion, XDeath decode, topology completeness, DLX=topic assertion.
+10. make build/test/lint + go test -race; параллельный review (golang-pro + security-engineer + code-reviewer); architecture-compliance vs integration-contracts §5/§6.
+
+### Прогресс
+- ✅ go.mod/go.sum: +github.com/rabbitmq/amqp091-go v1.10.0 (версия как в DP sibling, из module cache).
+- ✅ 6 production-файлов + 6 test-peers + CLAUDE.md + config/broker_test.go. `go build ./...` OK, `go vet ./...` чисто.
+- ✅ **errors.go**: BrokerError{Op,Retryable,Cause}+Unwrap; sentinels ErrNotConnected/ErrPublishNack/ErrConfirmTimeout; mapError (AMQP 404/403/406→non-retryable, прочее retryable, context passthrough raw); redactURLCredentials (security MF-1 — пароль из dial-ошибки не утекает).
+- ✅ **client.go**: инъектируемые AMQPAPI/AMQPChannelAPI + real-wrappers + compile-time assertions; NewClient (dial с redact + openPublishChannel + DeclareTopology fail-fast + reconnectLoop); newClientWithAMQP test-seam; openPublishChannelOn(conn) (Confirm, не store); Ping (IsClosed-guard + Channel() off-goroutine с ctx-deadline + Close-error surface); idempotent Close с handler-ctx cancel; pubMu отдельно от mu.
+- ✅ **topology.go**: subscriptionSpecs (6 frozen queue→exchange→rk §6.1); mainQueueArgs (durable/ttl 86400000/max-length 100000/DLX, БЕЗ статического dlrk — Q3); retryQueueArgs (ttlMillisInt32 clamp + DLX + dlrk=original RK); declareTopologyOn(conn) — 4 topic exchange + 6 main + 18 retry + bindings (main←source RK, main←dlx RK return, retry←dlx retryKey); DeclareTopology обёртка.
+- ✅ **publish.go**: Publish под pubMu (НЕ mu — decouple от lifecycle, не стопорит Ping/Close/reconnect); per-attempt snapshot pubCh под mu; deferred confirm; waitConfirm select Done/ctx/c.done/timeout; classify: ctx→raw terminal, ErrNotConnected→terminal, ErrConfirmTimeout→retry, nack→retry; 3 attempts с backoff.
+- ✅ **subscribe.go**: Delivery (amqp091-free: Body/Header/Headers shallow-copy/XDeath/Ack/Nack/Reject); XDeath decode с cap (64/64) + toInt64 (int*/uint*/float64, unknown→1<<62 exhausted, nil→0); Subscribe (record sub перед startConsumer, rollback по id); startConsumer (Qos prefetch + Consume + wg.Add под done-guard — golang-pro M2); consumeLoop (handler владеет ack).
+- ✅ **reconnect.go**: reconnectLoop (NotifyClose буфер-1 + IsClosed re-check); reconnectWithBackoff (immediate first dial; no-store-until-validated: pub-channel+topology на newConn ДО adopt; done-atomic swap под mu; non-retryable DeclareTopology→backoff max не tight-loop; newConn не лик); backoffDelay exp+25% jitter cap.
+- ✅ config/broker.go: upper-bound валидация LIC_CONSUMER_RETRY_TTL_* (<=24h) и LIC_PUBLISHER_CONFIRM_TIMEOUT (<=5m) — security MF-2 (overflow→406→outage).
+- ✅ Тесты: 106 RUN/PASS subtests в broker, 0 FAIL, race-clean; config_test+broker_test PASS; весь модуль PASS; go vet чисто; make lint/build/test зелёные (docker-build — scope LIC-TASK-003).
+
+### Summary
+Production-ready RabbitMQ broker client для LIC — backbone event-driven архитектуры. Полное соответствие
+integration-contracts §5/§6.1-§6.4 (topic exchange topology, 6 подписок, queue policies, DLX-loop retry queues
+2s/10s/60s, publisher confirms, manual-ack prefetch). Hermetic кроме amqp091-go. 1 задокументированное
+intent-сохраняющее отклонение (main-queue без статического x-dead-letter-routing-key — escalation = consumer
+LIC-TASK-043). Разблокирует LIC-TASK-009,039,042,043,044,045,046.
+
+### Notes
+- **§6.4 deviation (code-architect Q3):** main-queue только x-dead-letter-exchange; динамический выбор retry.N
+  по x-death[].count — зона consumer'а (043). Broker даёт примитив Delivery.XDeath() (amqp091-free, capped).
+  Литеральная диаграмма §6.4 показывает dlrk=retry.1, но consumer-side текст §6.4 — динамику; интент сохранён.
+- **Error-модель:** broker-локальный BrokerError, НЕ model.ErrorCode (errorCatalog.init() SSOT-panic; infra-ошибки
+  не идут в Orchestrator). context-passthrough raw — конвенция кодбазы (как DP/LLM-адаптеры).
+- **Publisher confirms via deferred confirmations** (не shared NotifyPublish-канал) — каждый publish владеет своим
+  подтверждением, нет stale-confirmation correlation bug на timeout+retry. После review pubMu развязан с mu —
+  медленный/мёртвый брокер НЕ стопорит Ping/Close/reconnect (инвариант swap-safety сохранён через per-attempt
+  snapshot + deferred-confirm + retry, не lock-holding). Refinement code-architect Q4 после 3-reviewer pass.
+- **Reconnect rework (golang-pro M2/M3):** no-store-until-validated + done-atomic swap устраняет wg.Add-after-Wait
+  race и newConn-leak; immediate first dial убирает ~1s penalty (code-reviewer M2).
+- **Security:** redactURLCredentials (пароль брокера не в логах — 152-ФЗ PII); config+adapter TTL upper-bound
+  (overflow→outage); DLX=topic (не fanout); XDeath panic-safe + capped; defer-SF-3 (reconnect alert seam — поздние
+  задачи, нет metrics-dep в infra by design, TODO в коде).
+- amqp091-go v1.10.0 — единственная новая go.mod зависимость; версия совпадает с DP.
+
+### Следующая задача
+Разблокированы (deps теперь done): LIC-TASK-009 (deps 005,007,008 — нужен ещё 007 Redis), LIC-TASK-039
+(deps 008,011,012 — wiring), LIC-TASK-042 (DLQ sender, dep 008), LIC-TASK-043/044/045 (consumers, dep 008),
+LIC-TASK-046 (dep 008). Также свободны: LIC-TASK-003 (Dockerfile), LIC-TASK-007 (Redis), LIC-TASK-010
+(concurrency), LIC-TASK-016 (Gemini), LIC-TASK-018 (Cost Tracker), LIC-TASK-020 (embed prompts), LIC-TASK-021,
+LIC-TASK-035 (Aggregator), LIC-TASK-041 (DM awaiter), LIC-TASK-052.
+
 ## LIC-TASK-015 — OpenAI provider adapter (Responses API)
 - **Status:** done
 - **Completed at:** 2026-05-15

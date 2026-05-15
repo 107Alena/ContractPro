@@ -71,18 +71,35 @@ func (b BrokerConfig) validate() error {
 	if b.ConsumerMaxRedeliveries < 0 {
 		errs = append(errs, fmt.Errorf("config: LIC_CONSUMER_MAX_REDELIVERIES must be >= 0, got %d", b.ConsumerMaxRedeliveries))
 	}
+	// maxRetryTTL bounds each LIC_CONSUMER_RETRY_TTL_*. A retry TTL becomes
+	// the queue's x-message-ttl, which RabbitMQ takes as a 32-bit
+	// millisecond count; the broker adapter casts via int32. 24h
+	// (86_400_000 ms) is well under the int32 ceiling (~24.8 days) and is
+	// far beyond any sane DLX-loop backoff. Capping here makes a fat-finger
+	// (e.g. "30d") fail fast at startup with a clear message instead of
+	// silently overflowing to a negative x-message-ttl that RabbitMQ
+	// rejects with 406 — which would turn every reconnect into a permanent
+	// self-inflicted outage (security-engineer MF-2).
+	const maxRetryTTL = 24 * time.Hour
+	// maxConfirmTimeout bounds LIC_PUBLISHER_CONFIRM_TIMEOUT: a publish
+	// holds the publish lock for the confirm wait, so an absurd value would
+	// stall the publisher indefinitely.
+	const maxConfirmTimeout = 5 * time.Minute
 	// Ordered list keeps error output deterministic across runs.
 	for _, dv := range []struct {
 		name string
 		d    time.Duration
+		max  time.Duration
 	}{
-		{"LIC_CONSUMER_RETRY_TTL_1", b.ConsumerRetryTTL1},
-		{"LIC_CONSUMER_RETRY_TTL_2", b.ConsumerRetryTTL2},
-		{"LIC_CONSUMER_RETRY_TTL_3", b.ConsumerRetryTTL3},
-		{"LIC_PUBLISHER_CONFIRM_TIMEOUT", b.PublisherConfirmTimeout},
+		{"LIC_CONSUMER_RETRY_TTL_1", b.ConsumerRetryTTL1, maxRetryTTL},
+		{"LIC_CONSUMER_RETRY_TTL_2", b.ConsumerRetryTTL2, maxRetryTTL},
+		{"LIC_CONSUMER_RETRY_TTL_3", b.ConsumerRetryTTL3, maxRetryTTL},
+		{"LIC_PUBLISHER_CONFIRM_TIMEOUT", b.PublisherConfirmTimeout, maxConfirmTimeout},
 	} {
 		if dv.d <= 0 {
 			errs = append(errs, fmt.Errorf("config: %s must be > 0, got %s", dv.name, dv.d))
+		} else if dv.d > dv.max {
+			errs = append(errs, fmt.Errorf("config: %s must be <= %s, got %s", dv.name, dv.max, dv.d))
 		}
 	}
 	if b.PublishBufferSize < 0 {

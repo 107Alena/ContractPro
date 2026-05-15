@@ -325,7 +325,44 @@
         "LIC-TASK-002",
         "LIC-TASK-004"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-15",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/infra/broker — RabbitMQ-адаптер LIC на amqp091-go v1.10.0 (добавлен в go.mod/go.sum, версия как в DP sibling). 6 production-файлов: client.go (Client + инъектируемые AMQPAPI/AMQPChannelAPI для mock-тестов без брокера + real-wrappers + NewClient + newClientWithAMQP test-seam + openPublishChannel(On) + Ping + idempotent Close с handler-ctx cancel), topology.go (DeclareTopology/declareTopologyOn: 4 topic-exchange events/responses/commands/dlx + 6 main queues + 18 retry queues + bindings из статической config-driven таблицы; единый amqp.Table-builder для byte-identical re-declare; ttlMillisInt32 overflow-guard), publish.go (Publish: deferred publisher confirms, retry 3x с backoff, сериализация на выделенном pubMu — развязан с connection-lock), subscribe.go (Subscribe + amqp091-free Delivery интерфейс + XDeathEntry decode с cap/hardening + manual-ack consumeLoop, handler владеет ack/nack — Option B), reconnect.go (reconnectLoop по NotifyClose + reconnectWithBackoff: immediate first dial, no-store-until-validated, done-atomic swap, non-retryable topology backoff; backoffDelay exp+25% jitter), errors.go (BrokerError{Op,Retryable,Cause} + sentinels + mapError + redactURLCredentials). 6 test-peers + config/broker_test.go: 106 RUN/PASS, 0 FAIL, race-clean. + internal/infra/broker/CLAUDE.md.",
+        "key_decision": "Документированное intent-сохраняющее отклонение (валидировано code-architect Q3): main-queue объявляется с x-dead-letter-exchange=contractpro.dlx, но БЕЗ статического x-dead-letter-routing-key. Литеральная ASCII-диаграмма integration-contracts §6.4 аннотирует '...retry.1', однако consumer-side текст §6.4 задаёт выбор retry-уровня динамически по x-death[].count. Статический ключ запинил бы все dead-letter в retry.1 и сделал бы multi-level escalation невозможным. Escalation — зона ответственности consumer-адаптера (LIC-TASK-043), который публикует в DLX с вычисленным ключом; broker предоставляет примитивы (Delivery.XDeath()). Интент loop §6.4 сохранён. Error-модель: broker-локальный типизированный BrokerError, НЕ model.ErrorCode (model.errorCatalog имеет init() SSOT-panic; infra-ошибки не публикуются в Orchestrator); context-ошибки passthrough raw — конвенция кодбазы.",
+        "test_results": {
+          "go_test_broker_race": "ok — 106 RUN/PASS subtests, 0 FAIL, race-clean (~13s, медленно из-за backoff в reconnect/publish тестах)",
+          "go_test_module": "ok — весь модуль PASS (broker+config+claude+openai+domain+observability), 0 FAIL",
+          "go_vet": "ok — go vet ./... чисто",
+          "make_lint": "ok — go vet ./...",
+          "make_build": "ok — bin/lic-service пересобран (gitignored /bin/, не в коммите)",
+          "make_test": "ok",
+          "make_docker_build": "не выполнялся — требует Docker daemon; Dockerfile — deliverable отдельного pending LIC-TASK-003"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/infra/broker/client.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/topology.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/publish.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/subscribe.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/reconnect.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/errors.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/client_test.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/topology_test.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/publish_test.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/subscribe_test.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/reconnect_test.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/errors_test.go",
+          "LegalIntelligenceCore/development/internal/infra/broker/CLAUDE.md",
+          "LegalIntelligenceCore/development/internal/config/broker_test.go"
+        ],
+        "files_modified": [
+          "LegalIntelligenceCore/development/go.mod (+github.com/rabbitmq/amqp091-go v1.10.0)",
+          "LegalIntelligenceCore/development/go.sum (+amqp091-go хэши)",
+          "LegalIntelligenceCore/development/internal/config/broker.go (upper-bound валидация retry TTL <=24h и confirm timeout <=5m — security MF-2)"
+        ],
+        "reviews": "code-architect: дизайн валидирован Q1-Q8 (с коррекцией Q3 — без статического x-dead-letter-routing-key). Параллельный review golang-pro + security-engineer + code-reviewer. Применены: [security MUST] MF-1 redactURLCredentials — пароль из amqp.Dial URI-ошибки не утекает в BrokerError/логи (152-ФЗ); MF-2 int32(ttl.Ms()) overflow→негативный x-message-ttl→406→вечный reconnect-outage: config upper-bound (<=24h) + adapter ttlMillisInt32 clamp. [golang-pro MUST] M2 wg.Add-after-Close race + newConn leak: reconnect no-store-until-validated + done-atomic swap + wg.Add под done-guard в startConsumer. M3 newConn leak на early-return — закрыт тем же reworkом. [code-reviewer MUST] M1 auto-delete/exclusive не проверялись в тестах — расширен mock + ассерты §6.2; M2 ~1s penalty на каждый reconnect — immediate first dial, backoff только attempt>=1; M3 lost-wakeup window — IsClosed re-check + уточнён комментарий. [SHOULD] S1/S2 publish-mutex стопорил Ping/Close/reconnect — выделен pubMu (decouple); Ping honour ctx deadline на Channel() (half-open TCP); non-retryable DeclareTopology→backoff max не tight-loop; XDeath cap entries/keys + Headers() shallow copy + toInt64 расширен (float64/uint*) с unknown→exhausted (не 0 — иначе retry.1 forever); удалён dead-code; Ping возвращает Close-error. [DEFERRED] SF-3 reconnect metrics/alert seam + dial-time 403 — observability injection сознательно зона поздних задач (нет logger/metrics-зависимости в этом infra-пакете by design, как в DP); TODO в коде.",
+        "notes": "Pure infra — НЕ реализует доменный port (как DP broker). Конструктор NewClient (stutter-free, расходится с DP infra/CLAUDE.md NewBrokerClient — задокументировано в пакетном CLAUDE.md). Соответствие архитектуре integration-contracts §5/§6.1-§6.4 подтверждено (1 задокументированное intent-сохраняющее отклонение: main-queue без статического dead-letter-routing-key). DLX=topic (НЕ fanout — иначе storm). x-death-count escalation осознанно вне scope (LIC-TASK-043). Разблокирует LIC-TASK-009,039,042,043,044,045,046."
+      }
     },
     {
       "id": "LIC-TASK-009",

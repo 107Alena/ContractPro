@@ -298,7 +298,52 @@
         "LIC-TASK-002",
         "LIC-TASK-004"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-15",
+      "completion_notes": {
+        "summary": "Redis-клиент LIC (go-redis/v9 v9.18.0) — пакет internal/infra/kvstore. Чистая инфраструктура, не реализует доменный порт (зеркалит internal/infra/broker; idempotency/pending порты реализуют LIC-TASK-037/038, token-bucket — LIC-TASK-017 через Eval). Конструктор NewClient(config.RedisConfig) fail-fast: buildOptions(ParseURL+overrides)→dial→Ping, ошибки с credential redaction. Операции: Get, Set(TTL), SetNX(TTL), Delete(variadic), Expire, Eval(Lua, EVALSHA→EVAL fallback c per-source script-кэшем), Ping (honors ctx), idempotent graceful Close. TLS: SSOT в config.RedisConfig.UsesTLS() (экспортирован этой задачей; используется и enforceTLS), harden MinVersion TLS1.2 + ServerName, без InsecureSkipVerify; force-TLS при LIC_REDIS_TLS=true поверх redis://. Error-модель: package-local RedisError{Op,Retryable,Cause} (НЕ model.ErrorCode), ErrKeyNotFound — плоский sentinel, context errors passthrough raw, redis.Nil→ErrKeyNotFound, redis.ErrClosed→non-retryable.",
+        "design_review": "code-architect: APPROVE Q1/Q2/Q5/Q6, CORRECT Q3 (per-source script cache для hot-path token bucket), Q4 (экспорт config.UsesTLS вместо дублирования). Все 7 must-fix внедрены. code-reviewer: APPROVE, без BLOCKER/HIGH; M1 закрыт уточняющим комментарием (без изменения поведения), L1/L2/N1/N2 приняты как унаследованный прецедент/test-only.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service ~1.67 MB",
+          "make_test": "ok — все пакеты PASS (config с экспортом UsesTLS — без регрессий; kvstore PASS)",
+          "make_lint": "ok — go vet ./... 0 issues",
+          "go_test_race_kvstore": "ok — go test -race -count=1 ./internal/infra/kvstore/... PASS (~1.5s)",
+          "make_docker_build": "не запускался — Docker daemon недоступен/не разрешён в окружении; не входит в test_steps LIC-TASK-007. build/test/lint пройдены."
+        },
+        "acceptance_criteria_status": {
+          "package_go_redis_v9": "DONE — internal/infra/kvstore, go-redis/v9 v9.18.0 + транзитивные офлайн в module-cache",
+          "config_LIC_REDIS": "DONE — buildOptions из config.RedisConfig (URL/DB/PASSWORD/TLS/POOL_SIZE/DIAL_TIMEOUT)",
+          "ops_get_set_setnx_delete_expire_eval": "DONE — все 6 + per-source Lua script cache",
+          "health_ping": "DONE — Ping(ctx) c early ctx.Err(), для /readyz (LIC-TASK-009)",
+          "graceful_close": "DONE — idempotent, mu-guarded, concurrent-safe",
+          "error_mapping": "DONE — ErrKeyNotFound плоский sentinel, RedisError typed, context passthrough",
+          "tests_inmemory_miniredis": "DONE с отклонением — miniredis отсутствует офлайн; faithful fakeRedis + mockRedis (intent-preserving, документировано, зеркалит broker). test_steps 1/2/3 покрыты."
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/infra/kvstore/errors.go",
+          "LegalIntelligenceCore/development/internal/infra/kvstore/options.go",
+          "LegalIntelligenceCore/development/internal/infra/kvstore/client.go",
+          "LegalIntelligenceCore/development/internal/infra/kvstore/ops.go",
+          "LegalIntelligenceCore/development/internal/infra/kvstore/CLAUDE.md",
+          "LegalIntelligenceCore/development/internal/infra/kvstore/helpers_test.go",
+          "LegalIntelligenceCore/development/internal/infra/kvstore/errors_test.go",
+          "LegalIntelligenceCore/development/internal/infra/kvstore/options_test.go",
+          "LegalIntelligenceCore/development/internal/infra/kvstore/client_test.go",
+          "LegalIntelligenceCore/development/internal/infra/kvstore/ops_test.go"
+        ],
+        "files_modified": [
+          "LegalIntelligenceCore/development/go.mod (+redis/go-redis/v9 v9.18.0; indirect dgryski/go-rendezvous, go.uber.org/atomic)",
+          "LegalIntelligenceCore/development/go.sum (go mod tidy офлайн из module-cache)",
+          "LegalIntelligenceCore/development/internal/config/redis.go (usesTLS → UsesTLS экспорт — SSOT TLS)",
+          "LegalIntelligenceCore/development/internal/config/tls.go (вызов c.Redis.UsesTLS())"
+        ],
+        "deviations": [
+          "miniredis недоступен офлайн → faithful in-memory fakeRedis + mockRedis (intent-preserving; Lua-VM офлайн невозможен — Eval тесты проверяют реальный redis.Script.Run EVALSHA→NOSCRIPT→EVAL dispatch-контракт; поведение token bucket — в LIC-TASK-017).",
+          "make docker-build не выполнялся (нет Docker daemon; вне test_steps).",
+          "config.RedisConfig.usesTLS() → UsesTLS() экспорт (code-architect Q4) — затрагивает пакет LIC-TASK-002, чистый рефактор-переименование без изменения поведения; SSOT TLS, убирает риск дрейфа (152-ФЗ)."
+        ],
+        "unblocks": "Прямо: LIC-TASK-009 (health/readyz), LIC-TASK-017 (rate limiter Lua), LIC-TASK-037 (pause-resume), LIC-TASK-038 (idempotency guard). Транзитивно — большая часть pipeline."
+      }
     },
     {
       "id": "LIC-TASK-008",

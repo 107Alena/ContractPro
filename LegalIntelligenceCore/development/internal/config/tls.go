@@ -18,7 +18,7 @@ func enforceTLS(c *Config) error {
 
 	var errs []error
 
-	if !c.Redis.usesTLS() {
+	if !c.Redis.UsesTLS() {
 		errs = append(errs, fmt.Errorf("config: LIC_REDIS_TLS must be true (or LIC_REDIS_URL must use rediss://) when LIC_ENV=%s", c.App.Env))
 	}
 	if !c.Broker.usesTLS() {

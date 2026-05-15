@@ -565,3 +565,39 @@ Production-ready OpenAI Responses API adapter. Соответствует llm-pr
 
 ### Следующая задача
 Разблокирована LIC-TASK-019 (Provider Router — per-agent primary + global fallback chain, sticky repair) при условии 014+015+016+017+018. Ещё открыты для следующей итерации (deps done): LIC-TASK-016 (Gemini adapter — тот же 5-файл pattern, responseSchema + role Assistant→"model"), LIC-TASK-018 (Cost & Usage Tracker), LIC-TASK-007 (Redis), LIC-TASK-008 (RabbitMQ), LIC-TASK-020 (embed prompts/schemas), LIC-TASK-021 (Token Estimator), LIC-TASK-003 (Dockerfile distroless), LIC-TASK-010 (concurrency limiter).
+
+## LIC-TASK-007 — Redis-клиент (Lua scripts + TLS)
+- **Status:** done
+- **Completed at:** 2026-05-15
+- **Agent:** claude-opus-4-7 (консультации: code-architect — design review; code-reviewer — финальное ревью)
+
+### План реализации
+1. Выбор задачи: среди eligible pending (deps done) LIC-TASK-007 — наивысший leverage critical: прямо разблокирует 009/017/037/038 + большую транзитивную часть pipeline. Deps 002/004 = done.
+2. Проверка окружения: предыдущий session.log утверждал «все go-команды отклоняются» — ОПРОВЕРГНУТО: `go build/test/vet/mod tidy` + `make build/test/lint` уже в allowlist .claude/settings.json. `go build ./...` прошёл. Блокера нет.
+3. Изучить config/redis.go+tls.go, DP-kvstore precedent, LIC broker precedent (client/errors/CLAUDE.md), port/idempotency+pending, arch §2.3 / §6.3 / §6.5 / §6.10 / §6.13, go-redis v9.18.0 API.
+4. Design review code-architect: APPROVE Q1/Q2/Q5/Q6, CORRECT Q3 (per-source script cache), Q4 (экспорт config.UsesTLS вместо дублирования). 7 must-fix.
+5. Реализовать 4 production + CLAUDE.md + 5 test файлов; экспорт config.UsesTLS; go-redis в go.mod через `go mod tidy` (офлайн из module-cache).
+6. make build/test/lint + go test -race; финальное ревью code-reviewer.
+
+### Прогресс
+- ✅ Кэш проверен: go-redis/v9 v9.18.0 + ВСЕ транзитивные (dgryski/go-rendezvous, go.uber.org/atomic, zeebo/xxh3, klauspost/cpuid/v2, cespare/xxhash/v2) полностью офлайн в module-cache. `go mod tidy` отработал офлайн.
+- ✅ **errors.go**: `ErrKeyNotFound` плоский sentinel (НЕ RedisError — downstream 037/038 делают errors.Is); `RedisError{Op,Retryable,Cause}`+Unwrap+IsRetryable; `mapError` (ctx raw → redis.Nil→ErrKeyNotFound → redis.ErrClosed→non-retryable → default retryable); `errClientClosed`; `redactURLCredentials` (152-ФЗ, сознательно дублировано из broker).
+- ✅ **options.go**: `buildOptions`=ParseURL+overrides (DB всегда из cfg; password только при cfg.Password!=""; Read/WriteTimeout=DialTimeout — нет отдельных env §2.3); TLS harden MinVersion TLS1.2+ServerName, force-TLS поверх redis:// при cfg.UsesTLS(), без InsecureSkipVerify.
+- ✅ **client.go**: `RedisAPI` seam (subset+redis.Scripter+io.Closer); `var _ RedisAPI=(*redis.Client)(nil)` БЕЗ wrapper-структур (в отличие от broker); `NewClient` fail-fast (ParseURL→Ping, redacted); test seam; `Ping` early ctx.Err() (без broker half-open workaround — go-redis честит ctx сам); idempotent concurrent-safe `Close`.
+- ✅ **ops.go**: Get(redis.Nil→ErrKeyNotFound), Set(TTL), SetNX(TTL), Delete(variadic), Expire(false=key gone=heartbeat-stop), Eval (redis.Script.Run EVALSHA→EVAL + per-source sync.Map cache; Lua nil→(nil,nil)); `scriptFor`.
+- ✅ **config**: `RedisConfig.usesTLS()`→экспорт `UsesTLS()` (SSOT TLS; tls.go обновлён). Чистый рефактор, без изменения поведения, config-тесты зелёные.
+- ✅ Тесты: faithful fakeRedis + programmable mockRedis + redisErrStr (реальный NOSCRIPT-fallback). `go test -race` PASS; весь модуль PASS; go vet чистый; make build/test/lint зелёные; bin gitignored.
+- ✅ code-reviewer: APPROVE, 0 BLOCKER/HIGH. M1 закрыт уточняющим комментарием в ops.go; L1/L2/N1/N2 приняты (broker-прецедент / test-only / doc-формулировка).
+
+### Summary
+Production-ready Redis-клиент. Соответствует configuration.md §2.3 (LIC_REDIS_* в точности) и high-architecture.md §6.3/§6.5/§6.10/§6.13 (SETNX/GET/EXPIRE-heartbeat/DEL/SET..EX/Eval token-bucket). Hexagonal: чистая инфра, без доменного порта (зеркалит broker). Разблокирует LIC-TASK-009/017/037/038.
+
+### Notes
+- **Прошлый session.log был ошибочен** про «go-команды отклоняются» — на деле они в allowlist; задача реализована полностью с прохождением тестов/линтера.
+- **Отклонение miniredis:** недоступен офлайн, сеть недоступна. Замена — faithful in-memory fakeRedis + programmable mockRedis (intent-preserving, зеркалит broker no-live-broker). Lua-VM офлайн невозможен — Eval тесты проверяют РЕАЛЬНЫЙ `redis.Script.Run` EVALSHA→NOSCRIPT→EVAL dispatch-контракт (redisErrStr satisfying redis.Error) + per-source cache; поведение token bucket — в LIC-TASK-017. Документировано в kvstore/CLAUDE.md + helpers_test.go.
+- **Экспорт config.UsesTLS (code-architect Q4):** усечён риск дрейфа TLS-решения между enforceTLS (§3 rule 10) и kvstore. SSOT.
+- **make docker-build не запускался:** Docker daemon недоступен/не разрешён; вне test_steps (как и в предыдущих LIC-задачах). build/test/lint пройдены.
+- **Сознательные отклонения от broker (в kvstore/CLAUDE.md):** нет wrapper-структур; нет half-open Ping workaround; NewClient vs DP NewKVStoreClient (stutter-free).
+
+### Следующая задача
+Разблокированы (deps done): LIC-TASK-009 (health/readyz — 005+007+008 ✓), LIC-TASK-017 (rate limiter Lua — 007 ✓), LIC-TASK-038 (idempotency guard — 007 ✓), LIC-TASK-037 (pause-resume — 036+007). Свободны также: LIC-TASK-016 (Gemini), LIC-TASK-018 (Cost Tracker), LIC-TASK-020 (embed prompts), LIC-TASK-021 (Token Estimator), LIC-TASK-035 (Aggregator), LIC-TASK-039 (Event Consumer), LIC-TASK-041..046, LIC-TASK-003, LIC-TASK-010, LIC-TASK-052. Рекомендация: LIC-TASK-038 (idempotency guard) или LIC-TASK-009 (health) — следующие critical на пути pipeline.

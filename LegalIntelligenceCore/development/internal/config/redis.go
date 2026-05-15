@@ -51,8 +51,12 @@ func (r RedisConfig) validate() error {
 	return nil
 }
 
-// usesTLS returns true when either LIC_REDIS_TLS=true or the URL scheme is rediss://.
-func (r RedisConfig) usesTLS() bool {
+// UsesTLS returns true when either LIC_REDIS_TLS=true or the URL scheme is
+// rediss://. It is the single source of truth for the Redis TLS decision: the
+// production TLS-everywhere enforcement (enforceTLS, configuration.md §3 rule
+// 10) and the kvstore adapter (internal/infra/kvstore, LIC-TASK-007) both
+// consult it, so the rule cannot drift between the two.
+func (r RedisConfig) UsesTLS() bool {
 	if r.TLS {
 		return true
 	}

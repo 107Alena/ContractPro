@@ -821,3 +821,51 @@ Production-ready Provider Router. Hermetic (только stdlib + domain/{port,m
 - **Forward (LIC-TASK-047 app-wiring):** Recorder-адаптер над metrics.CrossCutMetrics.PartyValidationTotal (RecordPartyValidation→.WithLabelValues(string(kind), metrics.BoolLabel(valid)).Inc()); per-agent Run (025-033) владеет ПОРЯДКОМ блоков envelope (должен совпадать с системным промптом агента §1-9); агент-3 вставляет ValidationFacts-Part между `<party_roles>` и `<party_details_block>`; system-аргумент из prompts.LoadPrompt(agentID).
 - **make docker-build не запускался:** нет Docker daemon (вне test_steps, как во всех прежних LIC-задачах).
 - **Открыты (deps done) для следующей итерации:** 003,009,010,021,023,035,038,039,041-046,052. Рекомендация: **LIC-TASK-023** (Schema Validator + Repair Loop — dep=[019,020] done, замыкает вместе с 022 разблокировку 024/BaseAgent — критический путь). Прогресс: **18/55 done**.
+
+---
+
+## LIC-TASK-023 — Schema Validator + Repair Loop (1-shot) [critical] — DONE 2026-05-17
+
+- **Status:** done
+- **Completed at:** 2026-05-17
+- **Agent:** claude-opus-4-7[1m] (консультации: code-architect — design review; code-reviewer + golang-pro — финальное ревью параллельно)
+
+### Выбор задачи
+- done на старте: 18/55 (вкл. 022). Eligible pending (deps done, все critical): 003,009,010,021,023,035,038,039,041-046,052. schemavalidator/ содержал только .gitkeep (прошлая итерация спланировала, но НЕ сохранила код; git clean) → перезапуск.
+- Объективная метрика транзитивного разблокирования максимальна у **023**: dep=[019,020] done; замыкает (вместе с 022) разблокировку 024/BaseAgent → каскад 025-033 → 034 → 036/037 → 047. Выбрана **LIC-TASK-023**.
+
+### План реализации
+1. Изучены: port/{router,llm,llm_errors}.go, model/{error_codes,errors,status,agent}.go, router/repair.go+CLAUDE.md, cost.go+CLAUDE.md (house-style seam), schemas.go+CLAUDE.md (LoadSchema verbatim; 023 владеет real JSON-Schema lib), metrics/{agent,labels}.go (RepairAttemptsTotal/RepairOutcomeTotal централизованы), error-handling.md §5, high-architecture §6.6/§6.8, observability §3.3, ai-agents-pipeline §retry/repair, 3 адаптера payload.go.
+2. code-architect design review → **REJECT→resolved**: MF-1 (PriorTurns: 2-element shorthand §6.8/godoc lossy; верная 3-turn форма + проверка переносимости по 3 адаптерам + фикс stale-godoc), MF-2 (err!=nil⟹repair_provider_error строго дизъюнктно 2nd-violation⟹repair_failed), MF-3 (SchemaCompileError⟹INTERNAL_ERROR, не репейрится), MF-4 (passing primary ⟹ 0 repair-метрик). Q3-Q5/items 7,9 confirmed.
+3. Реализация пакета (5 prod-файлов + CLAUDE.md + 4 test-файла), go.mod += gojsonschema v1.2.0, godoc-фиксы port/llm.go+router/repair.go.
+4. make build/test/lint + go test -race; финальное ревью code-reviewer + golang-pro (параллельно); применение hardening.
+
+### Прогресс
+- ✅ **validator.go**: package-doc (single-non-hermetic-exception инвариант). `Validator`/`NewValidator`/`Validate(schema,content)`. gojsonschema.NewSchema (compile-fail→*SchemaCompileError) ПЕРЕД compiled.Validate (doc-parse-fail→*SchemaViolation "not valid JSON" §5.1; !Valid()→*SchemaViolation с result.Errors()). Stateless/concurrency-safe.
+- ✅ **errors.go**: `SchemaViolation` (Errors[] sorted+dedup+trim+sentinel — детерминизм repair-prompt; Pretty()) / `SchemaCompileError` (Unwrap) + `AsSchemaViolation`/`AsSchemaCompileError` (nil-safe errors.As). var _ error checks.
+- ✅ **seams.go**: `Metrics` seam (RepairAttempt/RepairOutcome) + noopMetrics; `RepairOutcome` local mirror (repaired_ok|repair_failed|repair_provider_error) + IsValid; адаптер→047.
+- ✅ **repair.go**: `repairPromptTemplate` (error-handling.md §5.2 BYTE-EXACT, вкл. hard-wrap «без объяснений и\npreamble»). `Repairer` narrow seam (1 метод = port.CompleteRepair sig). `RepairLoop`/`NewRepairLoop` (fail-fast nil-repairer, nil-metrics→noop). `Run`: switch-init — valid→primary без метрик (MF-4); compile→INTERNAL_ERROR без repair (MF-3); violation→RepairAttempt + 1× CompleteRepair sticky (N=1) → rerr!=nil⟹repair_provider_error+AGENT_OUTPUT_INVALID (MF-2) / repaired valid⟹repaired_ok / 2nd violation⟹repair_failed+AGENT_OUTPUT_INVALID. `buildRepairRequest`: slices.Clone(origPriorTurns)+[{User,origUser},{Assistant,invalid}], User=repair_prompt, Temperature=0.0 (delta ровно {PriorTurns,User,Temperature} §5.3). LOW-3-hardening !ok-guard.
+- ✅ **CLAUDE.md**: все решения с атрибуцией; MF-1 SSOT-реконсиляция; single-exception confinement; forward 024/047.
+- ✅ **godoc-фиксы (MF-1)**: port/llm.go Turn + router/repair.go CompleteRepair — стале 2-element shorthand заменён на актуальную 3-turn конструкцию (comment-only, без trailing WS, gofmt-clean).
+- ✅ Тесты: 22 функции + 6 подтестов (validator/repair/seams/errors + acceptance steps 1-4 + MF-1..4 + N=1 + delta + verbatim-prompt pin + wire-string pin vs metrics/labels.go + TestSingleThirdPartyImport import-guard + TestGofmtClean go/format self-check + -race ×16). go test ./... 0 FAIL; -race clean; go vet чисто; make build/test/lint зелёные; bin gitignored.
+
+### Финальное ревью (применённые фиксы)
+- **code-architect:** REJECT→resolved — MF-1..MF-4 реализованы и независимо подтверждены.
+- **code-reviewer:** APPROVE — 0 CRITICAL/0 HIGH. MF-1..4 «genuinely (not nominally) satisfied». LOW-1 (raw json-err text в prompt — bounded, тот же провайдер, §5.2 «не цитируй ошибки»; вне scope), LOW-2 (trailing-garbage после валидного JSON принимается — поведение gojsonschema v1.2.0, вне §5.1-триггеров; awareness для LIC-TASK-024), LOW-3 (default-ветка !ok-guard) — **LOW-3 применён**.
+- **golang-pro:** APPROVE — gojsonschema v1.2.0 API сверен по исходникам (после успешного NewSchema ошибка compiled.Validate ⟹ только document-parse fail — маппинг точен); slices.Clone Go1.26.1 гарантированно без aliasing caller-слайса; format-string безопасен (validationErrors — Sprintf ARG, не format); TestGofmtClean sound. nit-3 = LOW-3 — применён.
+
+### Соответствие архитектуре
+- error-handling.md §5.1 (триггеры: не-JSON / схема) §5.2 (repair-prompt byte-exact) §5.3 (тот же model/tokens, Temperature 0.0, delta) §5.4 (N=1) §5.5 (метрики) — ✅.
+- high-architecture.md §6.6 шаги 4-6 / §6.8 (sticky used_provider, repair через PriorTurns, provider-error→immediate AGENT_OUTPUT_INVALID без fallback, 2nd→AGENT_OUTPUT_INVALID is_retryable=true) — ✅. MF-1 SSOT-реконсиляция §5.2-проза vs §6.8-shorthand (как 019 §6.1 / 022 validation_facts).
+- observability.md §3.3 / error-handling §5.5: lic_agent_repair_attempts_total{agent,provider} + lic_agent_repair_outcome_total{agent,provider,outcome∈repaired_ok|repair_failed|repair_provider_error}; provider=used_provider sticky; typed-label cardinality (9×3×3=81) — ✅ (за seam).
+- house-style (hermetic кроме осознанного gojsonschema-exception confined тестом; NewTypeName; var _ checks; fail-fast; CLAUDE.md; -race; WireStringsPinned; metrics-seam+noop→047) — CONFORMS.
+
+### Summary
+Production-ready Schema Validator + 1-shot Repair Loop. Соответствует §5/§6.6/§6.8 + acceptance LIC-TASK-023. Единственный осознанно non-hermetic internal/* пакет (xeipuuv/gojsonschema v1.2.0), confined import-set guard-тестом; телеметрия инвертирована за Metrics-seam (адаптер→047). **Разблокирует LIC-TASK-024 (BaseAgent runner — шаги 4-6 уже инкапсулированы в RepairLoop.Run) → весь 9-agent pipeline (025-033) → 034 → 036/037 → 047.**
+
+### Notes / следующая задача
+- **Forward (LIC-TASK-024 BaseAgent):** RepairLoop.Run = шаги 4-6 agent loop. Caller владеет stage (STAGE_AGENT_*), schema (schemas.LoadSchema(agentID)), originalReq (Prompt Builder 022), primary (router.Complete). nil err → response для aggregate; *DomainError (AGENT_OUTPUT_INVALID|INTERNAL_ERROR, оба is_retryable=true) → propagate в errgroup. LOW-2: если когда-либо нужна strict trailing-byte rejection — на BaseAgent/контент-pre-trim, НЕ в schemavalidator (вне §5.1).
+- **Forward (LIC-TASK-047 app-wiring):** (1) Metrics-адаптер над *metrics.AgentMetrics: RepairAttempt→RepairAttemptsTotal.WithLabelValues(agent,provider).Inc(); RepairOutcome→RepairOutcomeTotal.WithLabelValues(agent,provider,outcome).Inc() (outcome — только экспортируемые RepairOutcome-константы .String()). (2) var _ Repairer = (port.ProviderRouterPort)(nil) в wiring (НЕ в пакете — иначе router-import ломает seam). (3) schemas.Validate() ОБЯЗАН быть fatal startup-check (SchemaCompileError в Run — defence-in-depth, в prod недостижим).
+- **DOC FOLLOW-UP (для архитектора):** error-handling.md §6.8 / (исходные) port.Turn godoc давали lossy 2-element shorthand PriorTurns; исправлено в port/llm.go+router/repair.go в этой задаче. tasks.json acceptance-парафраз repair-prompt отличается от error-handling.md §5.2 — реализован §5.2 verbatim (SSOT). Рекомендуется привести §6.8 к 3-turn форме при следующей правке доков.
+- **make docker-build не запускался:** нет Docker daemon (вне test_steps, как во всех прежних LIC-задачах; Dockerfile не менялся, новый go.mod-dep подхватывается go build в multi-stage).
+- **Открыты (deps done) для следующей итерации:** 003,009,010,021,024,035,038,039,041-046,052. Рекомендация: **LIC-TASK-024** (BaseAgent runner — теперь разблокирован 022+023; прямой критический путь к 9-agent pipeline) либо параллельно-независимые 021/035/038/039. Прогресс: **19/55 done**.

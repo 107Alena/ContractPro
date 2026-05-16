@@ -9,8 +9,12 @@ import (
 
 // CompleteRepair re-issues the agent call STICKY on usedProvider — the
 // provider that served the original successful Complete (OQ-10 / §2.1).
-// req.PriorTurns already carries [assistant:invalid_response, user:repair_prompt]
-// built by the Schema Validator (LIC-TASK-023); switching providers here
+// req is the repair request fully built by the Schema Validator
+// (LIC-TASK-023, internal/agents/schemavalidator): req.PriorTurns carries
+// [..origPriors, {User, origUser}, {Assistant, invalid_response}] and
+// req.User carries the §5.2 repair prompt (the adapter appends req.User as
+// the final user turn, so the wire conversation ends user→assistant→user;
+// see port.Turn godoc for the full reconciliation). Switching providers here
 // would break conversation continuity, so there is NO fallback and NO
 // same-provider retry — it is a single shot (§2.1 CompleteRepair pseudocode
 // + §5.4 hard repair limit of 1; code-architect confirmed).

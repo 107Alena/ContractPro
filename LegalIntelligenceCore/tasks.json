@@ -1045,7 +1045,31 @@
         "LIC-TASK-019",
         "LIC-TASK-020"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-17",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/agents/schemavalidator — JSON Schema Validator (draft-07 через github.com/xeipuuv/gojsonschema v1.2.0) + 1-shot Repair Loop. Validator.Validate(schema,content) различает три исхода: nil | *SchemaCompileError (битая встроенная схема — LIC build-defect, никогда не репейрится) | *SchemaViolation (не-JSON либо нарушение схемы — единственный триггер repair). RepairLoop.Run выполняет ровно один sticky router.CompleteRepair на UsedProvider (N=1, без fallback): success->repaired_ok; провайдер-ошибка->repair_provider_error+AGENT_OUTPUT_INVALID(retryable); 2-е нарушение->repair_failed+AGENT_OUTPUT_INVALID(retryable). Repair-prompt — error-handling.md 5.2 byte-exact. Метрики инвертированы за Metrics-seam+noop (адаптер->LIC-TASK-047), local mirror RepairOutcome запинен против metrics/labels.go SSOT. Единственный non-hermetic internal/* пакет (gojsonschema), confined import-set guard-тестом.",
+        "test_results": "go test ./... — все пакеты PASS (0 FAIL). go test -race ./internal/agents/schemavalidator/ — race-clean, 22 тест-функции + 6 подтестов PASS (acceptance test_steps 1-4: invalid JSON->repair с корректными PriorTurns; repair success->repaired_ok метрика; 2nd invalid->AGENT_OUTPUT_INVALID; provider-error->repair_provider_error). go vet ./... — чисто. make build/test/lint — зелёные. gofmt: sandbox блокирует gofmt -> TestGofmtClean (go/format self-check) пинует byte-cleanliness всех .go пакета. make docker-build не запускался (нет Docker daemon — как во всех прежних LIC-задачах; Dockerfile не менялся, go.mod-dep подхватится go build).",
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/agents/schemavalidator/validator.go",
+          "LegalIntelligenceCore/development/internal/agents/schemavalidator/errors.go",
+          "LegalIntelligenceCore/development/internal/agents/schemavalidator/seams.go",
+          "LegalIntelligenceCore/development/internal/agents/schemavalidator/repair.go",
+          "LegalIntelligenceCore/development/internal/agents/schemavalidator/CLAUDE.md",
+          "LegalIntelligenceCore/development/internal/agents/schemavalidator/validator_test.go",
+          "LegalIntelligenceCore/development/internal/agents/schemavalidator/repair_test.go",
+          "LegalIntelligenceCore/development/internal/agents/schemavalidator/seams_test.go",
+          "LegalIntelligenceCore/development/internal/agents/schemavalidator/internal_test.go"
+        ],
+        "files_modified": [
+          "LegalIntelligenceCore/development/go.mod (+ github.com/xeipuuv/gojsonschema v1.2.0 direct; +gojsonpointer/+gojsonreference indirect)",
+          "LegalIntelligenceCore/development/go.sum",
+          "LegalIntelligenceCore/development/internal/domain/port/llm.go (godoc-only: Turn — исправлен lossy 2-element shorthand на актуальную 3-turn конструкцию repair, MF-1)",
+          "LegalIntelligenceCore/development/internal/llm/router/repair.go (godoc-only: CompleteRepair — синхронизирован с фактической конструкцией Schema Validator, MF-1)"
+        ],
+        "files_deleted": [],
+        "notes": "code-architect design review: REJECT->resolved, MF-1..MF-4 все применены и независимо подтверждены code-reviewer. MF-1: 3 адаптера (claude/openai/gemini payload.go) строят wire=[System?]+PriorTurns+финальный {user,req.User}; корректная конструкция repair = PriorTurns=origPriorTurns+[{User,origUser},{Assistant,invalid}], User=repair_prompt, Temperature=0.0 (5.3 delta ровно {PriorTurns,User,Temperature}); stale-godoc port.Turn+router/repair.go исправлены в этой задаче, реконсиляция зафиксирована в CLAUDE.md (класс SSOT-resolution как 019 6.1 / 022 validation_facts). MF-2: err!=nil=>repair_provider_error строго дизъюнктно err==nil+2nd violation=>repair_failed. MF-3: SchemaCompileError=>INTERNAL_ERROR(retryable), не репейрится. MF-4: passing primary => 0 repair-метрик (RepairAttempt ровно перед CompleteRepair). Финальное ревью: code-reviewer APPROVE (0 CRITICAL/HIGH; LOW-1 raw json-err text / LOW-2 trailing-garbage — вне 5.1-scope, awareness для LIC-TASK-024), golang-pro APPROVE (gojsonschema v1.2.0 API сверен по исходникам: после успешного NewSchema ошибка compiled.Validate => только document-parse fail; slices.Clone Go1.26.1 — нет aliasing). Применён LOW-3/nit-3 hardening: !ok-guard в default-ветке (защита от будущего дрейфа контракта Validate -> INTERNAL_ERROR вместо nil-deref). Forward LIC-TASK-047: Metrics-адаптер над *metrics.AgentMetrics; var _ Repairer=(port.ProviderRouterPort)(nil) в wiring; schemas.Validate() fatal на старте. Forward LIC-TASK-024: Run = шаги 4-6 agent loop. Разблокирует LIC-TASK-024 (BaseAgent) -> весь 9-agent pipeline (025-033) -> 034 -> 036/037 -> 047."
+      }
     },
     {
       "id": "LIC-TASK-024",

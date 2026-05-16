@@ -95,9 +95,25 @@ func (r Role) IsValid() bool {
 
 // Turn is one exchange in a multi-turn conversation, used solely for the
 // repair-loop (llm-provider-abstraction.md §1.1): when a primary call returns
-// JSON that fails schema validation, the Router builds
-// PriorTurns = [{Assistant, invalid_response}, {User, repair_prompt}] and
-// re-issues a `CompleteRepair` on the same provider.
+// JSON that fails schema validation, the Schema Validator (LIC-TASK-023)
+// builds the repair request and re-issues it via `CompleteRepair` on the
+// same provider.
+//
+// Repair conversation shape (authoritative — see
+// internal/agents/schemavalidator). Adapters build the wire conversation as
+// [System?] + PriorTurns... + a final appended {user, req.User}, and
+// error-handling.md §5.2 requires the previous user message to be preserved.
+// The Schema Validator therefore sets, on the repair request:
+//
+//	PriorTurns = origPriorTurns + [{User, origUser}, {Assistant, invalid_response}]
+//	User       = repair_prompt   (the adapter appends it as the final user turn)
+//
+// yielding wire = [..origPriors, user:origUser, assistant:invalid, user:repair]
+// — a valid alternating sequence that starts with a user turn on all three
+// adapters. (Earlier revisions of this godoc and high-architecture.md §6.8
+// showed a lossy 2-element shorthand [{Assistant,invalid},{User,repair}];
+// that omitted the preserved original user turn and is corrected here —
+// schemavalidator/CLAUDE.md records the reconciliation.)
 //
 // Role=System is NOT permitted; system prompts are non-turn-scoped and travel
 // in CompletionRequest.System.

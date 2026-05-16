@@ -863,7 +863,42 @@
         "LIC-TASK-017",
         "LIC-TASK-018"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-16",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/llm/router — Provider Router (port.ProviderRouterPort): seams.go (RateLimiter/UsageTracker/Metrics consumer-seams + noop defaults + CallOutcome/HealthState локальные mirror-типы + Deps + ctx-aware sleepCtx), config.go (RouterConfig + 30s/10s health-дефолты), registry.go (healthRegistry — ЕДИНАЯ recordSuccess/recordFailure state-transition по §2.3: auth->permanent-навсегда, quota->permanent-24h-autorecover, retryable/transport->consecutive>=3 transient, CONTEXT_TOO_LONG/MALFORMED->health no-op), router.go (ProviderRouter + NewProviderRouter fail-fast валидация + Complete: chain primary+fallback dedup, skip-unhealthy, rate-limit Wait, 1 same-provider retry по §4.3 backoff, fallback по флагу FallbackEligible, fatal по non-fallback, ALL_PROVIDERS_FAILED), repair.go (CompleteRepair sticky single-shot, литерал-эскалация MF-4), health.go (Start/Stop lifecycle race-safe + 30s healthLoop + runHealthChecks). Hermetic: только stdlib + domain/{port,model}; rate-limiter/cost/prometheus инвертированы за seam-ами (адаптеры — LIC-TASK-047), как ratelimit.Observer/cost.Recorder. var _ port.ProviderRouterPort = (*ProviderRouter)(nil). Добавлен CLAUDE.md (конвенции, doc-нестыковка §6.1 vs catalog-SSOT, scope-cuts circuit-breaker/cost->span, forward-reqs для 047).",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран",
+          "make_test": "ok — go test ./... все пакеты ok, 0 FAIL; router: 39 тестов PASS",
+          "make_lint": "ok — go vet ./... 0 errors",
+          "race": "ok — go test -race ./internal/llm/router/ 39 RUN/PASS race-clean (вкл. concurrent Complete x64 и concurrent Start/Stop)",
+          "docker_build": "вне scope — нет docker daemon в среде (как в предыдущих задачах)"
+        },
+        "test_steps_verified": {
+          "step1_primary_5xx_fallback_secondary_success": "TestComplete_FallbackOnServerError — claude 5xx (+1 same-provider retry) -> openai success; fallback_total{claude,openai}",
+          "step2_completerepair_uses_usedprovider": "TestCompleteRepair_StickyOnUsedProvider — primary=claude, UsedProvider=openai -> repair бьёт openai, claude НЕ вызван",
+          "step3_invalid_api_key_permanent": "TestComplete_InvalidAPIKeyMarksPermanentAndFallsBack + TestRegistry_AuthIsPermanentNeverProbed — claude permanent, quotaUntil zero, fallback на openai",
+          "step4_all_providers_failed": "TestComplete_AllProvidersFailed — ALL_PROVIDERS_FAILED + Wrapped != nil; TestComplete_LastProviderSkippedPreservesRootCause — Wrapped = реальная корневая ошибка",
+          "step5_go_test_router": "go test -race ./internal/llm/router/ — 39 PASS"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/llm/router/seams.go",
+          "LegalIntelligenceCore/development/internal/llm/router/config.go",
+          "LegalIntelligenceCore/development/internal/llm/router/registry.go",
+          "LegalIntelligenceCore/development/internal/llm/router/router.go",
+          "LegalIntelligenceCore/development/internal/llm/router/repair.go",
+          "LegalIntelligenceCore/development/internal/llm/router/health.go",
+          "LegalIntelligenceCore/development/internal/llm/router/CLAUDE.md",
+          "LegalIntelligenceCore/development/internal/llm/router/fakes_test.go",
+          "LegalIntelligenceCore/development/internal/llm/router/router_test.go",
+          "LegalIntelligenceCore/development/internal/llm/router/repair_test.go",
+          "LegalIntelligenceCore/development/internal/llm/router/registry_test.go",
+          "LegalIntelligenceCore/development/internal/llm/router/health_test.go",
+          "LegalIntelligenceCore/development/internal/llm/router/seams_test.go"
+        ],
+        "reviews": "code-architect: APPROVE-WITH-MUST-FIX (D1-D9 одобрены; MF-1..5 применены; scope-cuts circuit-breaker/cost->span подтверждены OUT). golang-pro: APPROVE (no MUST-FIX; gofmt подтверждён byte-level чистым; SHOULD S-1 + NIT N-1/N-2 применены). code-reviewer: APPROVE-WITH-FIX (no CRITICAL; MEDIUM-1/MEDIUM-2/LOW-1/LOW-2 применены; tenant-isolation/§3.10 подтверждены — нет organization_id, label из typed-источников, UNKNOWN-sentinel bounded).",
+        "notes": "Hermetic — нулевые внешние зависимости, ровно как ratelimit/cost siblings. Doc-нестыковка error-handling §6.1 (INVALID_API_KEY/QUOTA/CONTENT_POLICY = fatal) vs §1.2-матрица + port.llmCodeCatalog (FallbackEligible=true) — роутер ветвится по флагу .FallbackEligible (catalog = SSOT, acceptance: fail только ContextTooLong/MalformedRequest); зафиксировано в CLAUDE.md и progress.md. Circuit-breaker (gobreaker §3.3, lic_llm_provider_circuit_state) — OUT of scope (нет в acceptance, нет в go.mod; health-registry skip покрывает cascade-protection); forward-concern. Cost-USD->OTel span attribution — OUT (роутер без tracer-зависимости, не владеет lic.llm span); ObserveSuccess вызывается ради метрик, USD отбрасывается; forward-note для span-owner (036/agent). Разблокирует LIC-TASK-023 (Schema Validator + Repair Loop) -> 024 (BaseAgent) -> весь agent pipeline."
+      }
     },
     {
       "id": "LIC-TASK-020",

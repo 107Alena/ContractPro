@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DetailedReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sections"],
+  "properties": {
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["section_code","title","items"],
+        "properties": {
+          "section_code": {"type":"string","enum":[
+            "OVERVIEW","KEY_PARAMETERS","PARTY_DATA","MANDATORY_CONDITIONS",
+            "RISKS","RECOMMENDATIONS_SUMMARY","WARNINGS"
+          ]},
+          "title": {"type":"string"},
+          "items": {
+            "type":"array",
+            "items": {
+              "type":"object",
+              "additionalProperties": false,
+              "required":["title","content"],
+              "properties": {
+                "title": {"type":"string"},
+                "content": {"type":"string","maxLength":4000},
+                "severity": {"type":["string","null"],"enum":["high","medium","low",null]},
+                "clause_ref": {"type":["string","null"]},
+                "legal_basis": {"type":["string","null"]},
+                "linked_risk_id": {"type":["string","null"]},
+                "linked_recommendation": {"type":["string","null"]}
+              }
+            }
+          }
+        }
+      }
+    },
+    "warnings": {
+      "description": "Object-map: ключ — warning code (PROMPT_INJECTION_DETECTED, RE_CHECK_PARENT_ANALYSIS_MISSING, INPUT_TRUNCATED, CLASSIFICATION_PARAMS_MISMATCH, ...). Значение — типизированная структура warning'а. Object-map (а не array) — потому что разные warnings имеют разные поля.",
+      "type":"object",
+      "additionalProperties": false,
+      "properties": {
+        "PROMPT_INJECTION_DETECTED": {
+          "type":"object",
+          "required":["detected","detected_by_agents","detection_count","user_message"],
+          "additionalProperties": false,
+          "properties": {
+            "detected": {"type":"boolean","const":true},
+            "detected_by_agents": {
+              "type":"array",
+              "items": {"type":"string"},
+              "minItems":1,
+              "description":"agent_id'ы с prompt_injection_detected=true, отсортированы лексикографически"
+            },
+            "detection_count": {"type":"integer","minimum":1},
+            "user_message": {"type":"string","maxLength":500}
+          }
+        },
+        "RE_CHECK_PARENT_ANALYSIS_MISSING": {
+          "type":"object",
+          "required":["user_message"],
+          "additionalProperties": false,
+          "properties": {
+            "user_message": {"type":"string","maxLength":500}
+          }
+        },
+        "INPUT_TRUNCATED": {
+          "type":"object",
+          "required":["truncated_bytes","total_bytes","user_message"],
+          "additionalProperties": false,
+          "properties": {
+            "truncated_bytes": {"type":"integer","minimum":1},
+            "total_bytes": {"type":"integer","minimum":1},
+            "user_message": {"type":"string","maxLength":500}
+          }
+        },
+        "CLASSIFICATION_PARAMS_MISMATCH": {
+          "type":"object",
+          "required":["user_message"],
+          "additionalProperties": false,
+          "properties": {
+            "user_message": {"type":"string","maxLength":500}
+          }
+        },
+        "RECOMMENDATION_ORPHAN_REF": {
+          "type":"object",
+          "required":["orphan_risk_ids","user_message"],
+          "additionalProperties": false,
+          "properties": {
+            "orphan_risk_ids": {"type":"array","items":{"type":"string"}},
+            "user_message": {"type":"string","maxLength":500}
+          }
+        }
+      }
+    }
+  }
+}

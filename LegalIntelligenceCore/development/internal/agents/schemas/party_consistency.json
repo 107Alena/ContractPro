@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PartyConsistencyFindings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "severity", "description", "clause_ref"],
+        "properties": {
+          "type": {"type":"string","enum":[
+            "PARTY_DATA_INVALID",
+            "PARTY_NAME_MISMATCH",
+            "PARTY_ADDRESS_INCONSISTENT",
+            "PARTY_AUTHORITY_MISSING",
+            "PARTY_INN_INVALID_CHECKSUM",
+            "PARTY_OGRN_INVALID_CHECKSUM",
+            "PARTY_OGRN_INN_MISMATCH"
+          ]},
+          "severity": {"type":"string","enum":["high","medium","low"]},
+          "description": {"type":"string","maxLength":500},
+          "party_name": {"type":["string","null"]},
+          "clause_ref": {"type":"string"},
+          "legal_basis": {"type":"string"}
+        }
+      }
+    },
+    "summary": {"type":"string","maxLength":300},
+    "prompt_injection_detected": {"type":"boolean"}
+  }
+}

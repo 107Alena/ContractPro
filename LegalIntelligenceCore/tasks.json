@@ -922,7 +922,32 @@
       "dependencies": [
         "LIC-TASK-011"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-16",
+      "completion_notes": {
+        "summary": "Реализованы два sibling-пакета internal/agents/prompts и internal/agents/schemas. Каждый: один production-файл (prompts.go / schemas.go) с unexported embed.FS (//go:embed *.txt / *.json), explicit SSOT-map model.AgentID→basename (9 записей, НЕ derive из wire-строки — house style как domain/model errorCatalog), публичный API LoadPrompt(model.AgentID)(string,error) / LoadSchema(model.AgentID)([]byte,error) (verbatim, never panic, no trim/no re-marshal) и Validate() error. 9 prompts/*.txt и 9 schemas/*.json извлечены ПОБАЙТНО из ai-agents-pipeline.md §1-9 (fenced-блоки `### Системный промпт` / `### JSON-схема выхода`) — code-reviewer подтвердил полное byte-for-byte равенство всех 18 файлов с SSOT (включая bare-null в enum §8 detailed_report и root type:array §6 recommendation; кириллица/типографика « » „ — … § № ≤ целы). Validate() агрегирует через errors.Join в детерминированном порядке (per-agent в pipeline-order model.AllAgentIDs(), затем orphan-файлы sort.Strings) — strict fail-loud как pricing: ровно 9, no orphan, для schemas доп. well-formed JSON + $schema exact-pin draft-07 + non-empty title + валидный draft-07 root type (string|array — НЕ только object). Hermetic: stdlib + только internal/domain/model. CLAUDE.md в обоих пакетах с scope-boundary (полная JSON-Schema meta-валидация — LIC-TASK-023) и forward-requirement (fatal startup в LIC-TASK-024/047).",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран (go:embed assets вшиты)",
+          "make_test": "ok — go test ./... зелёный; 19 тестов в agents/prompts+agents/schemas PASS, включая -race; полный suite без FAIL",
+          "make_lint": "ok — go vet ./... 0 errors",
+          "make_docker_build": "не запускался — Docker daemon недоступен в окружении; LIC-TASK-020 не меняет Dockerfile, go:embed-ассеты — закоммиченные файлы, существующий билд их вшивает без изменений (docker-build — зона LIC-TASK-003, прошлые завершённые задачи также верифицировали только build/test/lint)"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/agents/prompts/prompts.go",
+          "LegalIntelligenceCore/development/internal/agents/prompts/prompts_test.go",
+          "LegalIntelligenceCore/development/internal/agents/prompts/CLAUDE.md",
+          "LegalIntelligenceCore/development/internal/agents/prompts/{type_classifier,key_params,party_consistency,mandatory_conditions,risk_detection,recommendation,summary,detailed_report,risk_delta}.txt (9)",
+          "LegalIntelligenceCore/development/internal/agents/schemas/schemas.go",
+          "LegalIntelligenceCore/development/internal/agents/schemas/schemas_test.go",
+          "LegalIntelligenceCore/development/internal/agents/schemas/CLAUDE.md",
+          "LegalIntelligenceCore/development/internal/agents/schemas/{type_classifier,key_params,party_consistency,mandatory_conditions,risk_detection,recommendation,summary,detailed_report,risk_delta}.json (9)"
+        ],
+        "files_deleted": [
+          "LegalIntelligenceCore/development/internal/agents/prompts/.gitkeep",
+          "LegalIntelligenceCore/development/internal/agents/schemas/.gitkeep"
+        ],
+        "notes": "code-architect design review (APPROVE + 3 must-fix) учтён полностью: (1) root type может быть array — validTopLevelType принимает любой draft-07 primitive (string|array), Recommendations root=array проходит, locked TestSchemaRootTypes; (2) $schema pin по exact string equality http://json-schema.org/draft-07/schema#; (3) Validate()-returns-error, НЕ init()-panic (embedded data ≠ compiled-in constants — pricing precedent vs domain/model). golang-pro + code-reviewer review: verbatim fidelity PASS (18/18 byte-equal к SSOT). Применены: MF-1 (stale .gitkeep — git rm обоих placeholder'ов + правка CLAUDE.md формулировки compile-time-guard); SF-1 (validBasename — guard SSOT-таблицы от path-separator/dotfile/.., fail-loud); SF-2 (e.IsDir() skip в orphan-scan); N-1 (agent id в error-сообщениях). N-2a закрыт: Validate/Load отрефакторены в FS-injectable cores (loadPrompt/loadSchema/validate(fs.FS,map)) — публичный API не изменён, детерминированный порядок ошибок тестируется напрямую через testing/fstest.MapFS (test-only stdlib, hermeticity сохранена). Добавлены тесты: TestValidateDeterministicOrdering, TestValidateRejectsBadBasename, TestValidBasename (оба пакета), TestValidateRejectsMalformedJSON (schemas). Полная JSON-Schema meta-валидация осознанно отложена до LIC-TASK-023 (добавит реальную JSON-Schema библиотеку) — задокументировано в schemas/CLAUDE.md scope-boundary. Разблокирует LIC-TASK-022 (promptbuilder), 023 (schemavalidator), 024 (BaseAgent) и далее всю agent-pipeline."
+      }
     },
     {
       "id": "LIC-TASK-021",

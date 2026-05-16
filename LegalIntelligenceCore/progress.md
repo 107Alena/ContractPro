@@ -755,3 +755,33 @@ Production-ready Provider Router. Hermetic (только stdlib + domain/{port,m
 - **FORWARD (LIC-TASK-047 app-wiring):** (1) три seam-адаптера: RateLimiter→*ratelimit.Limiter.Wait (var _ assertion в wiring); UsageTracker→над *cost.Tracker (ObserveSuccess строит cost.Usage с Latency=time.Duration(resp.LatencyMs)*time.Millisecond — off-by-1000 hazard; ObserveCall→cost.Outcome(routerOutcome)); Metrics→над *metrics.LLMMetrics (HealthState→gauge 1 для state + 0 для других двух). (2) RouterConfig из config (AgentPrimary string→typed, FallbackOrder, interval 30s prod/60s staging). (3) Start(ctx) после wiring, Stop() ПЕРВЫМ в graceful shutdown. (4) circuit-breaker (gobreaker §3.3, lic_llm_provider_circuit_state) — отдельная будущая задача (OUT of 019). (5) cost-USD→OTel lic.llm span attribution — для span-owner (036/agent), роутер USD отбрасывает.
 - **make docker-build не запускался:** нет Docker daemon (вне test_steps, как во всех прежних LIC-задачах).
 - **Открыты (deps done) для следующей итерации:** 003, 009, 010, 020, 021, 023, 035, 038, 039, 041-046, 052. Рекомендация: **LIC-TASK-023** (Schema Validator + Repair Loop — теперь разблокирована 019+020; прямое продолжение критического пути к BaseAgent/024) либо параллельно-независимые 020/021/038/039. Прогресс: 16/55 done.
+
+---
+
+## LIC-TASK-020 — Embed system prompts & JSON schemas (embed.FS) [critical] — DONE 2026-05-16
+
+### Выбор задачи
+- done на момент старта: 001,002,004,005,006,007,008,011,012,013,014,015,016,017,018,019 (16/55).
+- Кандидаты (critical, deps done): 003,009,020,021. Выбрана **020** — высший leverage: разблокирует всю agent-pipeline (022→023→024→025-034→036/037, ~23 задачи транзитивно). dep=[011] done.
+
+### План реализации
+1. Извлечь ПОБАЙТНО 9 промптов + 9 схем из ai-agents-pipeline.md §1-9 (SSOT, fenced-блоки).
+2. Два sibling-пакета internal/agents/{prompts,schemas}: unexported embed.FS + explicit model.AgentID→basename SSOT-map + LoadPrompt/LoadSchema (verbatim, never panic) + Validate() (errors.Join, детерминированный порядок, fail-loud).
+3. schemas доп.: well-formed JSON + $schema exact-pin draft-07 + non-empty title + draft-07 root type (string|array, НЕ только object).
+4. Тесты (acceptance + fail-path) + CLAUDE.md в обоих пакетах.
+
+### Архитектурное соответствие
+- ai-agents-pipeline.md §1-9: 18 ассетов byte-for-byte = SSOT (подтверждено code-reviewer; bare-null enum §8, root array §6, кириллица/типографика целы).
+- pricing-конвенция: hermetic (stdlib + только domain/model), strict fail-loud, детерминированный sorted error-order, Validate-returns-error (НЕ init-panic — embedded data ≠ compiled constants; code-architect Q4).
+- code-architect design review: APPROVE + 3 must-fix (root array; $schema exact-pin; Validate-not-init-panic) — все применены.
+- Scope-boundary: полная JSON-Schema meta-валидация осознанно отложена до LIC-TASK-023 (реальная JSON-Schema lib) — задокументировано.
+
+### Ревью и правки
+- golang-pro + code-reviewer: verbatim fidelity PASS (18/18). Применено: MF-1 (stale .gitkeep → git rm + правка CLAUDE.md), SF-1 (validBasename guard SSOT-таблицы), SF-2 (e.IsDir() skip), N-1 (agent id в errors), N-2a (FS-injectable cores loadPrompt/loadSchema/validate(fs.FS,map) + тесты детерминизма через testing/fstest.MapFS; публичный API не изменён).
+
+### Тесты
+- go test ./... зелёный; 19 тестов agents/prompts+agents/schemas PASS, включая -race. make build/lint/test — ok. make docker-build не запускался (нет Docker daemon; Dockerfile не менялся, go:embed-ассеты закоммичены).
+
+### Notes / следующая задача
+- Forward (LIC-TASK-024/047): prompts.Validate()/schemas.Validate() ДОЛЖНЫ вызываться на старте как fatal (как pricing.Load fail-fast) — задокументировано в обоих CLAUDE.md.
+- Открыты (deps done): 003,009,010,021,022,023,035,038,039,041-046,052. Рекомендация след. итерации: **LIC-TASK-022** (Prompt Builder — dep=[020] done, прямой критический путь) или **023** (Schema Validator — dep=[019,020] done). Прогресс: **17/55 done**.

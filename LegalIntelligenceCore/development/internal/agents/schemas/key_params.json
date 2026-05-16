@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "KeyParameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["parties", "subject", "price", "duration", "penalties", "jurisdiction"],
+  "properties": {
+    "parties": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "subject": {"type": "string"},
+    "price": {"type": ["string", "null"]},
+    "duration": {"type": ["string", "null"]},
+    "penalties": {"type": ["string", "null"]},
+    "jurisdiction": {"type": ["string", "null"]},
+    "internal_extras": {
+      "type": "object",
+      "description": "Дополнительные данные для downstream-агентов; не уходят в DM",
+      "additionalProperties": false,
+      "properties": {
+        "applicable_law": {"type": ["string", "null"]},
+        "termination": {"type": ["string", "null"]},
+        "acceptance_procedure": {"type": ["string", "null"]},
+        "party_roles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "role"],
+            "properties": {
+              "name": {"type": "string"},
+              "role": {"type": "string", "enum": ["customer","contractor","seller","buyer","lessor","lessee","licensor","licensee","party"]},
+              "inn": {"type": ["string","null"]},
+              "ogrn": {"type": ["string","null"]},
+              "address": {"type": ["string","null"]},
+              "signatory": {"type": ["string","null"]},
+              "signatory_authority": {"type": ["string","null"]},
+              "clause_ref": {"type": ["string","null"]}
+            }
+          }
+        },
+        "key_dates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label","value","clause_ref"],
+            "properties": {
+              "label": {"type": "string"},
+              "value": {"type": "string"},
+              "clause_ref": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "prompt_injection_detected": {"type": "boolean"}
+  }
+}

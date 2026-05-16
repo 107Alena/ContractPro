@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RiskDelta",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["base_version_id","target_version_id","added","removed","changed","summary"],
+  "properties": {
+    "base_version_id": {"type":"string","format":"uuid"},
+    "target_version_id": {"type":"string","format":"uuid"},
+    "added": {"type":"array","items":{"$ref":"#/definitions/risk_ref"}},
+    "removed": {"type":"array","items":{"$ref":"#/definitions/risk_ref"}},
+    "changed": {
+      "type":"array",
+      "items":{
+        "type":"object",
+        "required":["target_id","base_id","old_level","new_level","explanation"],
+        "properties": {
+          "target_id": {"type":"string"},
+          "base_id": {"type":"string"},
+          "old_level": {"type":"string","enum":["high","medium","low"]},
+          "new_level": {"type":"string","enum":["high","medium","low"]},
+          "old_clause_ref": {"type":["string","null"]},
+          "new_clause_ref": {"type":["string","null"]},
+          "explanation": {"type":"string","maxLength":500}
+        }
+      }
+    },
+    "profile_change": {
+      "type":"object",
+      "required":["old_overall_level","new_overall_level"],
+      "properties": {
+        "old_overall_level": {"type":"string","enum":["high","medium","low"]},
+        "new_overall_level": {"type":"string","enum":["high","medium","low"]},
+        "old_high_count": {"type":"integer","minimum":0},
+        "new_high_count": {"type":"integer","minimum":0},
+        "old_medium_count": {"type":"integer","minimum":0},
+        "new_medium_count": {"type":"integer","minimum":0},
+        "old_low_count": {"type":"integer","minimum":0},
+        "new_low_count": {"type":"integer","minimum":0}
+      }
+    },
+    "summary": {"type":"string","maxLength":1000}
+  },
+  "definitions": {
+    "risk_ref": {
+      "type":"object",
+      "required":["id","level","description","clause_ref"],
+      "properties": {
+        "id": {"type":"string"},
+        "level": {"type":"string","enum":["high","medium","low"]},
+        "description": {"type":"string","maxLength":600},
+        "clause_ref": {"type":"string"}
+      }
+    }
+  }
+}

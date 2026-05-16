@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Recommendations",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["risk_id","original_text","recommended_text","explanation"],
+    "properties": {
+      "risk_id": {"type":"string"},
+      "original_text": {"type":"string","maxLength":2000},
+      "recommended_text": {"type":"string","maxLength":3000},
+      "explanation": {"type":"string","maxLength":800}
+    }
+  }
+}

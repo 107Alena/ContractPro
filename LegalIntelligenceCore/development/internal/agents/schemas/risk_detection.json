@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RiskAnalysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["risks"],
+  "properties": {
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id","level","description","clause_ref","legal_basis"],
+        "properties": {
+          "id": {"type":"string","pattern":"^R-[0-9]{3,}$"},
+          "level": {"type":"string","enum":["high","medium","low"]},
+          "description": {"type":"string","maxLength":1500},
+          "clause_ref": {"type":"string"},
+          "legal_basis": {"type":"string","maxLength":600},
+          "category": {"type":"string","enum":[
+            "UNILATERAL_CHANGE","UNILATERAL_TERMINATION","AUTO_RENEWAL",
+            "JURISDICTION_UNFAVORABLE","ASYMMETRIC_LIABILITY",
+            "AMBIGUOUS_ACCEPTANCE","HIDDEN_FEES","WAIVER_OF_RIGHTS",
+            "FORCE_MAJEURE_OVERREACH","CONFIDENTIALITY_OVERREACH",
+            "DATA_PROCESSING_CONCERNS","PROMPT_INJECTION_ATTEMPT","OTHER"
+          ]},
+          "rationale": {"type":["string","null"],"maxLength":600}
+        }
+      }
+    },
+    "summary": {"type":"string","maxLength":500},
+    "prompt_injection_detected": {"type":"boolean"}
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MandatoryConditionsReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_type","conditions"],
+  "properties": {
+    "contract_type": {"type":"string"},
+    "conditions": {
+      "type":"array",
+      "items": {
+        "type":"object",
+        "additionalProperties": false,
+        "required":["code","label","status","legal_basis"],
+        "properties": {
+          "code": {"type":"string","pattern":"^MC_[A-Z0-9_]+$"},
+          "label": {"type":"string"},
+          "status": {"type":"string","enum":["FOUND_OK","FOUND_AMBIGUOUS","MISSING"]},
+          "legal_basis": {"type":"string"},
+          "found_in": {"type":["array","null"],"items":{"type":"string"}},
+          "issue_description": {"type":["string","null"],"maxLength":500}
+        }
+      }
+    },
+    "summary": {"type":"string","maxLength":500},
+    "prompt_injection_detected": {"type":"boolean"}
+  }
+}

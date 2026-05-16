@@ -996,7 +996,30 @@
       "dependencies": [
         "LIC-TASK-020"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-16",
+      "completion_notes": {
+        "summary": "Реализован hermetic leaf-пакет internal/agents/promptbuilder — prompt-injection защита уровня 2 (high-architecture.md §6.7.1, ai-agents-pipeline.md §0.3). 3 production-файла: escape.go (ДВА раздельных strings.Replacer: textEscaper &<> для XML text-node; attrEscaper &<>\" + stripControl C0/C1/DEL/newline для атрибутов; & всегда первым — single-pass Replacer гарантирует отсутствие double-escape; > эскейпится т.к. LLM не парсит XML и acceptance-test пинит &gt;), innogrn.go (детерминированные FNS-checksum ИНН 10/12 + ОГРН/ОГРНИП 13/15, чистые без side-effect, pre-shape-gate перед арифметикой, uint64 overflow-free для ≤14 цифр, safeEntityType closed-set guard), builder.go (Builder/NewBuilder nil→noop, Recorder seam + noopRecorder + var _ checks, закрытый тип Part с unexported-полями — минтинг структурного XML только Builder, exported Content() всегда escaped; Build(agentID,system,parts)→port.CompletionRequest ставит ТОЛЬКО AgentID/System/User per §6.7; ValidationFacts() — pre-LLM ИНН/ОГРН → minted <validation_facts> + []PartyValidation, метрика 1×/present-id). validation_facts в форме <inn_check>/<ogrn_check> из SSOT-промпта агента-3 (party_consistency.txt), НЕ flat-<party> из §6.7.2 — модель читает промпт. Метрика lic_party_validation_total{type,valid} инвертирована за Recorder (hermetic, без import metrics; adapter — LIC-TASK-047). PartyKind мирорит metrics.PartyValidationType, TestPartyKind_WireStringsPinned. Per-package CLAUDE.md фиксирует решения + forward-reqs.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран",
+          "make_test": "ok — go test ./... зелёный (18 пакетов + promptbuilder); ~55 подтестов promptbuilder PASS включая -race (TestBuilder_Concurrent 16×64); acceptance steps 2/3/4 запинены",
+          "make_lint": "ok — go vet ./... 0 errors",
+          "make_docker_build": "не запускался — Docker daemon недоступен; задача не меняет Dockerfile (docker-build — зона LIC-TASK-003; прошлые задачи также верифицировали build/test/lint)"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/agents/promptbuilder/escape.go",
+          "LegalIntelligenceCore/development/internal/agents/promptbuilder/innogrn.go",
+          "LegalIntelligenceCore/development/internal/agents/promptbuilder/builder.go",
+          "LegalIntelligenceCore/development/internal/agents/promptbuilder/escape_test.go",
+          "LegalIntelligenceCore/development/internal/agents/promptbuilder/innogrn_test.go",
+          "LegalIntelligenceCore/development/internal/agents/promptbuilder/builder_test.go",
+          "LegalIntelligenceCore/development/internal/agents/promptbuilder/CLAUDE.md"
+        ],
+        "files_deleted": [
+          "LegalIntelligenceCore/development/internal/agents/promptbuilder/.gitkeep"
+        ],
+        "notes": "code-architect APPROVE-WITH-MUST-FIX (5 MF) учтён: MF-1 (& первым, single-pass Replacer, > обязателен); MF-2 (Raw bool → закрытый тип Part с unexported-полями — инъекция unescaped XML невозможна на границе пакета by type); MF-3 (раздельные text/attr эскейперы + strip ctrl/newline в name, TestEscapers_AreDistinct); MF-4 (inn/ogrn тоже attr-escaped — user-controlled из агента-2); MF-5 (Recorder typed PartyKind + noop + метрика только для present-id, absent≠valid=false, *Present-флаги). NTH: Build reject пустого/невалидного/dup tag (validTag ^[a-z_]{1,32}$ вручную, прецедент prompts.validBasename), []PartyValidation с present-флагами, FNS pre-checks, CLAUDE.md фиксирует SSOT-resolution. security-engineer PASS-WITH-FINDINGS: escaping фундаментально достаточен, нет CRITICAL; HIGH#2 (social mis-attribution через name) и HIGH#3 (all-zeros INN checksum-valid) — НЕ delimiter-bypass, semantic-trust validation_facts → routed downstream (агент-3 промпт/reporting/будущий ЕГРЮЛ-lookup, accepted residual risk); применены дешёвые in-scope меры: name rune-cap 256 (полное имя в PartyValidation для in-process корреляции, капается только model-facing атрибут), safeEntityType closed-set write-site guard (LOW#6); LOW#8 size-bound routed на router/agent-layer. golang-pro APPROVE-WITH-NITS (багов нет; strings.Replacer single-pass документирован; uint64 overflow-free; %11%10 left-assoc; byte-loop ASCII-gated): добавлены invalid-UTF-8 регресс-тест и two-minted-parts тест. code-reviewer CONFORMS (7/7 acceptance criteria PASS, арх-пункты §6.7/§6.7.1/§6.7.2/§0.2/§0.3 PASS, house-style vs cost/prompts PASS, gaps нет). Разблокирует LIC-TASK-024 (BaseAgent) → 025-033 (9 движков), транзитивно 21."
+      }
     },
     {
       "id": "LIC-TASK-023",

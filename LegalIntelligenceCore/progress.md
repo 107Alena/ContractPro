@@ -785,3 +785,39 @@ Production-ready Provider Router. Hermetic (только stdlib + domain/{port,m
 ### Notes / следующая задача
 - Forward (LIC-TASK-024/047): prompts.Validate()/schemas.Validate() ДОЛЖНЫ вызываться на старте как fatal (как pricing.Load fail-fast) — задокументировано в обоих CLAUDE.md.
 - Открыты (deps done): 003,009,010,021,022,023,035,038,039,041-046,052. Рекомендация след. итерации: **LIC-TASK-022** (Prompt Builder — dep=[020] done, прямой критический путь) или **023** (Schema Validator — dep=[019,020] done). Прогресс: **17/55 done**.
+
+---
+
+## LIC-TASK-022 — Prompt Builder (XML envelope + mandatory escaping, prompt-injection layer 2) [critical/security] — DONE 2026-05-16
+
+### Выбор задачи
+- done на момент старта: 17/55 (…,020). Доступных (deps satisfied) = 16, все critical.
+- Объективная метрика транзитивного разблокирования: **022 = 21** (макс.), 023 = 20, остальные ≤10. Критический путь 022 → 024 (BaseAgent) → 025-033 (9 движков) → 034 → … → 047. dep=[020] done. Выбрана **LIC-TASK-022**.
+
+### План реализации
+1. Hermetic leaf-пакет `internal/agents/promptbuilder` (паттерн internal/llm/cost): stdlib + domain/{model,port} only; Prometheus инвертирован за Recorder seam + noopRecorder; adapter → LIC-TASK-047.
+2. `escape.go` — ДВА раздельных эскейпера: `escapeText` (&<>, XML text-node) и `escapeAttr` (&<>" + strip C0/C1/DEL/newline, XML attribute). & первым, single-pass `strings.Replacer`.
+3. `innogrn.go` — чистые FNS-checksum: `ValidateINN` (10/12), `ValidateOGRN` (13→LEGAL_ENTITY / 15→INDIVIDUAL_ENTREPRENEUR), pre-shape-gate, uint64 overflow-free, `safeEntityType` closed-set guard.
+4. `builder.go` — закрытый тип `Part` (unexported поля; минтинг структурного XML только Builder; exported `Content()` всегда escaped), `Build()` ставит только AgentID/System/User per §6.7, `ValidationFacts()` → minted `<validation_facts>` + `[]PartyValidation` + метрика 1×/present-id.
+5. Тесты (acceptance 2/3/4 + fail-path + -race) + per-package CLAUDE.md.
+
+### Архитектурное соответствие
+- high-architecture.md §6.7 (только System/User/AgentID), §6.7.1 (mandatory escaping всего user-controlled; не baked-tags/metadata), §6.7.2 (pre-LLM ИНН/ОГРН → validation_facts; lic_party_validation_total{type,valid}).
+- ai-agents-pipeline.md §0.2 (контракт агента), §0.3 (5-layer defence, layer 2 = escaping в Prompt Builder), §3 (envelope агента-3).
+- **SSOT-resolution:** validation_facts эмитится в форме `<inn_check>/<ogrn_check>` из embedded-промпта агента-3 (party_consistency.txt), НЕ в иллюстративной flat-`<party>` из §6.7.2 — модель читает промпт (code-architect-confirmed).
+- code-architect design review: **APPROVE-WITH-MUST-FIX** (5 MF) — учтены полностью (MF-1 эскейпинг-порядок, MF-2 Part-closed-type вместо Raw bool, MF-3 раздельные эскейперы, MF-4 inn/ogrn attr-escape, MF-5 Recorder typed + present-only).
+- House-style vs cost/prompts: hermetic, NewTypeName, var _ checks, fail-fast errors, CLAUDE.md, -race, WireStringsPinned — CONFORMS.
+
+### Ревью и правки
+- **security-engineer PASS-WITH-FINDINGS:** escaping фундаментально достаточен, нет CRITICAL. HIGH#2 (social mis-attribution через name) / HIGH#3 (all-zeros INN checksum-valid) — НЕ delimiter-bypass; semantic-trust validation_facts → routed downstream. Применены дешёвые in-scope меры: name rune-cap 256 (полное имя сохранено в PartyValidation; капается только model-facing атрибут), safeEntityType closed-set write-site guard (LOW#6). LOW#8 (size-bound) → router/agent-layer.
+- **golang-pro APPROVE-WITH-NITS:** багов нет, вся корректность подтверждена (strings.Replacer single-pass — документированный контракт; uint64 overflow-free ≤14 цифр; %11%10 left-assoc; byte-loop безопасен — ASCII-gated). Добавлены invalid-UTF-8 регресс-тест + two-minted-parts тест.
+- **code-reviewer CONFORMS:** 7/7 acceptance criteria PASS, все арх-пункты PASS, gaps нет.
+
+### Тесты
+- go test ./... зелёный (18 пакетов + promptbuilder); ~55 подтестов promptbuilder PASS включая -race (TestBuilder_Concurrent 16×64); acceptance steps 2/3/4 запинены. make build/lint/test — ok. make docker-build не запускался (нет Docker daemon; Dockerfile не менялся).
+
+### Notes / следующая задача
+- **Routed downstream (accepted residual risk, security record):** (1) агент-3 системный промпт / Reporting Engine ДОЛЖНЫ формулировать `valid=true` как «контрольная сумма корректна», НЕ «ИНН подтверждён» (HIGH#3, реальный фикс — будущий ЕГРЮЛ/ЕГРИП-lookup, вне v1); (2) `name` в validation_facts — document-derived, не system-fact (HIGH#2, prompt-side mitigation в LIC-TASK-027 агент-3); (3) total-size guard envelope — на router/agent-layer (LOW#8).
+- **Forward (LIC-TASK-047 app-wiring):** Recorder-адаптер над metrics.CrossCutMetrics.PartyValidationTotal (RecordPartyValidation→.WithLabelValues(string(kind), metrics.BoolLabel(valid)).Inc()); per-agent Run (025-033) владеет ПОРЯДКОМ блоков envelope (должен совпадать с системным промптом агента §1-9); агент-3 вставляет ValidationFacts-Part между `<party_roles>` и `<party_details_block>`; system-аргумент из prompts.LoadPrompt(agentID).
+- **make docker-build не запускался:** нет Docker daemon (вне test_steps, как во всех прежних LIC-задачах).
+- **Открыты (deps done) для следующей итерации:** 003,009,010,021,023,035,038,039,041-046,052. Рекомендация: **LIC-TASK-023** (Schema Validator + Repair Loop — dep=[019,020] done, замыкает вместе с 022 разблокировку 024/BaseAgent — критический путь). Прогресс: **18/55 done**.

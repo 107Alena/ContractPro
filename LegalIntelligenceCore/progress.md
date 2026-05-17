@@ -1200,3 +1200,36 @@ Production-ready Agent 7 — тонкая обёртка над BaseAgent: Summa
 - **Forward (LIC-TASK-047 wiring):** NewSummarizer(resolvedPrimaryModel, Timeouts[config.AgentSummary], deps); регистрация по model.AgentSummary (Stage 5 parallel w/ Agent 8).
 - **make docker-build не запускался:** требует Docker (= pending LIC-TASK-003) + go.mod не менялся (вне scope).
 - **Прогресс: 27/55 done.** Открыты (deps done): 003,009,010,021,032,033,035,038,039,041-046,052. Рекомендация: продолжить каскад **LIC-TASK-032** (Agent 8 Detailed Report) — оставшийся critical блокер 034; template закреплён (025-031); Agent 8 = 6-block + 7-section DetailedReport + warnings object-map (агент оставляет пустым).
+
+
+---
+
+## LIC-TASK-032 — Agent 8: Detailed Report DONE (2026-05-17)
+
+**Выбор:** наивысший приоритет среди eligible (deps done). priority=critical, dep LIC-TASK-024=done. Последний critical-блокер (вместе с LIC-TASK-033 Agent 9, priority=high) для LIC-TASK-034 Stage Executor -> главный крит. путь 034->036->037->040->047. Продолжает проверенную последовательность агентов 1-7 (LIC-TASK-025..031), тот же base/spec шаблон.
+
+**Задача:** Пакет internal/agents/detailedreport. Provider=LIC_AGENT_DETAILED_REPORT_PROVIDER, timeout=12s, temperature=0.0, max_tokens=5000. Вход: все upstream AgentResult + PROCESSING_WARNINGS + re_check_meta + SEMANTIC_TREE. Выход: model.DetailedReport{sections[7-enum], warnings — агент оставляет пустым, Result Aggregator merges}. 7 секций OVERVIEW/KEY_PARAMETERS/PARTY_DATA/MANDATORY_CONDITIONS/RISKS/RECOMMENDATIONS_SUMMARY/WARNINGS. Critical agent.
+
+**План/архитектура (code-architect — все 10 решений ACCEPT, 0 reject):**
+- D1 (LOAD-BEARING): risk_analysis <- in.MergedRiskAnalysis (MERGED, как Agent 6 — делибератная инверсия Agent 7 RAW). Драйвер: §8 prompt PROHIBITION (detailed_report.txt:72-73) явно "встроенные риски агентов 3/4 уже в RiskAnalysis после Result Aggregator" + criterion 5 -> требует пост-merge R-PNNN/R-MNNN; raw Agent-5 делает §8-запрет невыполнимым. §8 "Зависимости" bare RiskAnalysis (как у §7) переопределён явным prompt-body (Agent-7-D1 факторы инвертированы). nil-check на MergedRiskAnalysis, non-nil raw НЕ удовлетворяет.
+- D2: classification_result минимальная contract_type типизированная проекция (Agent-4/5/7 bare-ellipsis прецедент).
+- D3: KeyParameters/MandatoryConditions WHOLE + hard pipeline-ordering. Пустые Conditions[] tolerated.
+- D4 (НОВЫЙ класс): party_consistency_findings TOLERATED-nil. Agent 3 NON-CRITICAL (error-handling.md:304 skip on timeout). nil = in-spec, НЕ pipeline-ordering breach (forward note 4, riskdetection-FN-5 класс). Sentinel = json.Marshal zero-value model.PartyConsistencyFindings с НЕ-nil пустым Findings (НЕ литерал, НЕ null; nil-path == non-nil-empty-path, drift-locked к struct SSOT).
+- D5: recommendations TOLERATED nil/empty -> явный [] (json.Marshal nil-slice = null запрещён CC-3; clean contract zero recs валидно).
+- D6: processing_warnings OPTIONAL []-normalised — riskdetection D3/CC-2 verbatim reuse (absent/empty/whitespace/bare-null -> []; present&valid -> verbatim; present&!valid -> error).
+- D7 (Option A): re_check_meta = фикс all-false sentinel. БЕЗ изменения model.AgentInput (нет carrier; ai-agents-pipeline.md:1390 де-скопит warnings от Agent 8). Точный sourcing -> forward note 6 (LIC-TASK-034/035). Reject Option B (scope creep).
+- D8: maxOutputTokens=5000, temperature=0.0 (§8 SSOT — возврат к детерминированному 0.0, инверсия Agents 6/7 non-zero; reviewer НЕ должен переносить 0.3 от Agent 7).
+- D9: Decode pure typed-unmarshal + drift-guard ОБА закрытых enum (equality-test, НЕ one-guard квота): section_code via ReportSectionCode.IsValid() + non-nil severity via RiskLevel.IsValid() (nil = schema null, не гвардить). Оба enum в detailed_report.json -> schema-invalid value = repair-triggered (Agent-4/5 класс, инверсия Agent-6 terminal). warnings passthrough verbatim — НЕ strip/synthesize (запрещённый transform; Result Aggregator owns — forward note 6).
+- D10: 9-block §8 envelope (detailed_report.txt:33-43) все promptbuilder.Content (escaped layer-2). Strictness GROUPED-BY-CLASS (riskdetection CC-1, 4 класса — НЕ envelope-mirror). Hermetic = 6-entry artifacts-FREE (Agent-6 non-EXTRACTED_TEXT-consumer класс; §8 "Зависимости" только SEMANTIC_TREE; byte-faithful passthrough).
+
+**Реализация:** detailedreport.go (DetailedReporter/NewDetailedReporter, 5000/0.0/timeout-param, forward note 1), spec.go (9-block envelope, MERGED nil-guard явно reject raw, grouped-by-class strictness, типизированный PartyConsistency sentinel + [] sentinels + фикс re_check_meta, Decode 2-enum drift-guard + warnings passthrough), internal_test.go (6-entry artifacts-free allowlist + fails-if-artifacts-appears), detailedreport_test.go (полный suite — load-bearing пины: D1 nil-merged/non-nil-raw, D4 sentinel-by-marshal + never-null + nil==non-nil-empty, D7 input-invariance под non-nil ParentRiskAnalysis, D9 warnings-not-stripped + repair-triggered), CLAUDE.md. .gitkeep удалён.
+
+**Тестирование/проверки:** go test -race ./internal/agents/detailedreport — PASS. go test ./... — все ok, 0 FAIL. go vet ./... — clean. make build/lint/test — зелёные. make docker-build — Docker (LIC-TASK-003, вне scope).
+
+**Ревью:** code-reviewer — ACCEPT, 0 CRIT/HIGH/MEDIUM, 4 LOW (информационные, без действий). Полное соответствие §8 SSOT / detailed_report.txt / detailed_report.json / model SSOT / house-style. Все 10 решений + биндинг-констрейнты реализованы; envelope-order line-by-line совпадает; Decode без transform-утечек.
+
+**Forward notes (owners elsewhere):** (1) base/router Config.Model fallback — LIC-TASK-024/047 (shared с прежними 7); (2) pipeline-ordering — Stage Executor заполнить Classification+KeyParameters+MandatoryConditions+MergedRiskAnalysis (НЕ raw RiskAnalysis) до Agent 8 (Stage 5 параллельно с Agent 7); (3) DM-artifact-bundle gate — missing/empty SEMANTIC_TREE = DM_ARTIFACTS_MISSING до Agent 8; (4) Agent-3 non-critical tolerance — in.PartyConsistency OPTIONAL, nil не promote в INTERNAL_ERROR; (5) OPTIONAL PROCESSING_WARNINGS tolerance; (6) re_check_meta/warnings ownership — LIC-TASK-034/035 (точный sourcing + machine warnings; НЕ добавлять carrier/Decode-rewrite в этой задаче). НЕ схлопывать 2/3/4.
+
+**Forward (LIC-TASK-047 wiring):** NewDetailedReporter(resolvedPrimaryModel, Timeouts[config.AgentDetailedReport], deps); регистрация по model.AgentDetailedReport (Stage 5, параллельно с Agent 7), ПОСЛЕ LIC-TASK-035 merge (in.MergedRiskAnalysis), с Classification/KeyParameters/MandatoryConditions + (опц.) PartyConsistency/Recommendations.
+
+**Прогресс: 28/55 done.** Открыты (deps done): 003,009,010,021,033,035,038,039,041-046,052. LIC-TASK-034 Stage Executor: остался ОДИН блокер — LIC-TASK-033 Agent 9 Risk Delta (priority=high, dep LIC-TASK-024 done). Рекомендация: следующая итерация — LIC-TASK-033 (Agent 9, RE_CHECK risk_delta) закрывает последний блокер 034; template закреплён (025-032).

@@ -1093,7 +1093,27 @@
         "LIC-TASK-022",
         "LIC-TASK-023"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-17",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/agents/base — BaseAgent runner: единый Run()-workflow §6.6 для всех 9 агентов, реализует port.Agent. 9 per-agent пакетов (025-033) встраивают *BaseAgent и поставляют только Spec (Parts→[]promptbuilder.Part + Decode([]byte)→port.AgentResult) и Config (System=prompts.LoadPrompt, Schema=schemas.LoadSchema, Model/MaxTokens/Temperature из ai-agents-pipeline, Timeout из config.AgentsConfig, Stage=canonicalStage[AgentID]). Run: spec.Parts→builder.Build→set Model/MaxTokens/Temperature/JSONSchema/JSONMode→estimator.Fit(req) (БЕЗ мутации req)→context.WithTimeout(cfg.Timeout)→router.Complete→validator.Validate(primary): nil⇒success (без RepairLoop, MF-4); иначе⇒schemavalidator.RepairLoop.Run (переиспользование §5.2 SSOT, sticky тот же router-instance)→spec.Decode→типизированный port.AgentResult. Хермётичность как у всех internal/agents|llm/*: stdlib+internal/domain+sibling-leaf (promptbuilder/schemavalidator); телеметрия инвертирована за Metrics/Tracer(2-span: parent lic.agent.<name> + child lic.llm.call)/TokenEstimator seam+noop, concrete-адаптеры→LIC-TASK-047. 5 outcome (observability §3.3 SSOT) success|repair_success|invalid_output|provider_error|timeout; build-defects (INTERNAL_ERROR/decode/Build/Parts) — именованная lossy-проекция на invalid_output, un-lossy истина сохраняется на span.status=Error. Единственная точка эмиссии метрик (MF-5, defer): lic_agent_invocations_total ровно 1×, duration всегда, input_tokens только если Fit отработал, output_tokens только success|repair_success.",
+        "test_results": "go test ./... — все 21 пакет PASS (0 FAIL). go test -race ./internal/agents/base/ — race-clean, 19 тест-функций + подтесты PASS. Acceptance test_steps: Шаг1 (go test пакета) ✓; Шаг2 success→AgentResult+метрики (TestRun_Success: outcome=success, duration/input/output_tokens, span 2-уровня child-before-parent, full Correlation, без repair-метрик MF-4) ✓; Шаг3 timeout→AGENT_TIMEOUT (TestRun_Timeout + TestRun_Timeout_WrappedProviderError: S4 end-to-end через настоящий context.WithTimeout, deadline решает над обёрнутым ALL_PROVIDERS_FAILED) ✓; Шаг4 repair_success→правильная метрика+span repair_attempts=1 (TestRun_RepairSuccess) ✓. go vet ./... — чисто. make build/test/lint — зелёные. gofmt: sandbox блокирует gofmt -> TestGofmtClean (go/format self-check). make docker-build не запускался (нет Docker daemon — как во всех прежних LIC-задачах; Dockerfile/go.mod не менялись).",
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/agents/base/base.go",
+          "LegalIntelligenceCore/development/internal/agents/base/seams.go",
+          "LegalIntelligenceCore/development/internal/agents/base/CLAUDE.md",
+          "LegalIntelligenceCore/development/internal/agents/base/base_test.go",
+          "LegalIntelligenceCore/development/internal/agents/base/seams_test.go",
+          "LegalIntelligenceCore/development/internal/agents/base/internal_test.go"
+        ],
+        "files_modified": [
+          "LegalIntelligenceCore/development/internal/agents/base/.gitkeep (удалён — пакет наполнен реальным содержимым, как prompts/schemas прецедент)"
+        ],
+        "files_deleted": [
+          "LegalIntelligenceCore/development/internal/agents/base/.gitkeep"
+        ],
+        "notes": "code-architect design review: 6 MUST-FIX + S1/S3/S4/S5/N1/N3 применены; S2 (base.New) ОТКЛОНЁН — feedback_constructors.md явно требует NewTypeName, весь codebase: NewProviderRouter/NewRepairLoop/NewBuilder => NewBaseAgent корректен. MF-1: success/repair_success — load-bearing инвариант (общий *Validator+schema ⇒ детерминированная развилка, RepairLoop happy-arm статически недостижим из base). MF-2: build-defects→invalid_output как именованная lossy-проекция, истина на span.status=Error; 2 sub-case AGENT_OUTPUT_INVALID дискриминируются AsSchemaViolation(→invalid_output) vs AsLLMProviderError(→provider_error). MF-3: TokenEstimator.Fit(req)->(est,overBudget) БЕЗ мутации req (per-artifact head/tail = upstream/LIC-TASK-021); §6.6 порядок Build→Fit корректен (не deviation). MF-4: valid primary ⇒ 0 repair-метрик. MF-5: единственная defer-точка эмиссии, sentinel-init outcome, gated input/output_tokens. MF-6: builder.Build/spec.Parts ошибки не глотаются⇒INTERNAL_ERROR. Финальное ревью: golang-pro APPROVE (сигнатуры/errors.As-traversal/interface-assignability/defer-LIFO/concurrency сверены по исходникам); code-reviewer 1 CRITICAL+3 HIGH+M/L. Все устранены и подтверждены re-review APPROVED: C1 — repair_attempts из ground-truth (classifyRepairError->(Outcome,turnIssued), не pre-guess) ⇒ span-атрибут не может разойтись с lic_agent_repair_attempts_total; H1 — LLMSpanOutput godoc документирует one-logical-span (primary-фигуры при repair_provider_error); H2 — parent-cancel→AGENT_TIMEOUT documented deliberate lossy (retryable верен per ASSUMPTION-LIC-19); H3 — добавлены end-to-end wrapped-timeout тест + span InputTokens/LatencyMs + MF-2 span-truth pin; M1/M2/M3/L1/L2. Forward LIC-TASK-025..033: реализовать Spec (stateless), Config, встроить *BaseAgent. Forward LIC-TASK-047: адаптеры Metrics(*metrics.AgentMetrics)/Tracer(*tracer.Tracer 2-span)/RepairMetrics(schemavalidator.Metrics)/реальный TokenEstimator(LIC-TASK-021). Разблокирует LIC-TASK-025..033 (9 агентов) -> 034 -> 036/037 -> 047."
+      }
     },
     {
       "id": "LIC-TASK-025",

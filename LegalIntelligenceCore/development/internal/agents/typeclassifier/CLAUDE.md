@@ -143,6 +143,14 @@ base.Deps) (*Classifier, error)` — stutter-free `NewTypeName`
    importing the DP module; per-agent local structs are the sanctioned
    v1 pattern) — recorded so agent 2 makes the call deliberately
    (code-reviewer LOW-2).
+   **RESOLVED by LIC-TASK-026 (doc-only annotation, no code change here):**
+   the hermetic `internal/agents/artifacts` package was created (stdlib-only;
+   `ExtractedText`+`FullText` pinned by `TestFullText_DPSemantics`). Agent 2
+   consumes it. Agent 1 was deliberately NOT refactored (re-touching a
+   reviewed DONE task = unrequested scope creep risking its pinned tests);
+   `typeclassifier`'s local `extractedText`/`fullText` is now a recorded
+   duplicate to be retired by a later cleanup task — see
+   `internal/agents/artifacts/CLAUDE.md` "Consumers & forward notes".
 
 ## Forward requirement for LIC-TASK-047 (app-wiring)
 

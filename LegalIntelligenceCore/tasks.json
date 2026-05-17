@@ -1174,7 +1174,8 @@
       "dependencies": [
         "LIC-TASK-024"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "DONE (Agent 2 — Key Parameters Extractor). Created hermetic shared pkg internal/agents/artifacts (ExtractedText+FullText, byte-faithful DP mirror, pinned by TestFullText_DPSemantics — resolves typeclassifier forward-note #3 / code-reviewer LOW-2; Agent 1 deliberately NOT refactored to avoid scope creep). Created internal/agents/keyparams: Extractor embeds *base.BaseAgent (port.Agent), NewExtractor(modelID,timeout,base.Deps); §2 budget consts max_tokens=2000 temp=0.0 (provider=LIC_AGENT_KEY_PARAMS_PROVIDER / timeout=LIC_AGENT_KEY_PARAMS_TIMEOUT=8s are LIC-TASK-047 wiring's job via base.Deps/ctor param — hermetic Agent-1 precedent). Spec.Parts: envelope <semantic_tree>(raw byte-faithful passthrough, json.Valid gate) then <contract_document>(full EXTRACTED_TEXT via artifacts.FullText, NO compaction — >80K head/tail is LIC-TASK-021's upstream job per base/seams.go MF-3). Spec.Decode: *model.KeyParameters + defence-in-depth PartyRoleType.IsValid() drift-guard (sole enum surface; nil-guard internal_extras). INN/OGRN passed AS-IS, never checksum-validated (Agent 3's job — acceptance Шаг 2 pinned). Design reviewed by subagent code-architect (5 cross-cutting Qs). Tests: keyparams + artifacts pass incl. -race; go vet clean; make build/lint/test pass (make docker-build needs Dockerfile = still-pending LIC-TASK-003, out of scope). Full LIC suite green (24 pkgs, no FAIL)."
     },
     {
       "id": "LIC-TASK-027",

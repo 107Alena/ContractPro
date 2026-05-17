@@ -72,4 +72,12 @@ type AgentInput struct {
 
 	// Parent-version RISK_ANALYSIS — populated only in RE_CHECK mode for Agent 9.
 	ParentRiskAnalysis *RiskAnalysis `json:"parent_risk_analysis,omitempty"`
+
+	// ParentVersionID is the parent (base) version UUID — populated only in
+	// RE_CHECK mode for Agent 9 (the symmetric counterpart of
+	// ParentRiskAnalysis; copied by the Stage Executor from
+	// PipelineState.ParentVersionID). Agent 9 rewrites it verbatim into
+	// RiskDelta.base_version_id (ai-agents-pipeline.md §9 criterion 2;
+	// risk_delta.json requires base_version_id). nil = INITIAL / not-RE_CHECK.
+	ParentVersionID *string `json:"parent_version_id,omitempty"`
 }

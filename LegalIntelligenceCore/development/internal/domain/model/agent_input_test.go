@@ -91,7 +91,7 @@ func TestAgentInput_OmitsUnsetFields(t *testing.T) {
 		`"artifacts":`, `"classification_result":`, `"key_parameters":`,
 		`"party_consistency_findings":`, `"mandatory_conditions_report":`,
 		`"risk_analysis":`, `"merged_risk_analysis":`, `"recommendations":`,
-		`"parent_risk_analysis":`, `"created_by_user_id":`,
+		`"parent_risk_analysis":`, `"parent_version_id":`, `"created_by_user_id":`,
 	} {
 		if bytes.Contains(b, []byte(mustNot)) {
 			t.Errorf("unset field %q must be omitted, got %s", mustNot, b)

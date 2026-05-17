@@ -1136,7 +1136,24 @@
       "dependencies": [
         "LIC-TASK-024"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-17",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/agents/typeclassifier — Agent 1, Contract Type Classifier (ai-agents-pipeline.md §1). Тонкая обёртка над BaseAgent (LIC-TASK-024): Classifier встраивает *base.BaseAgent ⇒ удовлетворяет port.Agent (ID==AGENT_TYPE_CLASSIFIER, Run) бесплатно. Единственная per-agent логика — classifierSpec: Parts (сборка §1-конверта <input><document_structure>titles</document_structure><contract_document>compact</contract_document></input>, 2 экранированных promptbuilder.Content-блока в порядке системного промпта) и Decode (json.Unmarshal в *model.ClassificationResult + defense-in-depth re-check ContractType.IsValid() для primary и всех alternatives — drift-guard schema-enum vs model-whitelist). NewClassifier(modelID, timeout, base.Deps): prompts.LoadPrompt/schemas.LoadSchema (fail-fast пробрасывается), base.Config (MaxTokens=400, Temperature=0.0 из §1; Stage=StageAgentTypeClassifier), делегирует base.NewBaseAgent. Компактизация EXTRACTED_TEXT head 4000 + tail 1000 РУН (не байт — Cyrillic-safe), разделитель элизии; <=5000 рун — verbatim без маркера. Хермётичность: stdlib + internal/domain + base/promptbuilder/prompts/schemas; БЕЗ internal/config и БЕЗ contractpro/document-processing (артефакты — локальные minimal-структуры, byte-faithful к json.RawMessage).",
+        "test_results": "go test ./internal/agents/typeclassifier -race -count=1: PASS (14 тест-функций, incl. TestHermeticImports + TestGofmtClean). go test ./...: весь модуль зелёный (21 пакет ok, 0 FAIL). go vet ./...: чисто. make build/test/lint: зелёные. docker-build не запускался (нет Docker daemon — как во всех LIC-задачах).",
+        "files_created": [
+          "internal/agents/typeclassifier/classifier.go",
+          "internal/agents/typeclassifier/spec.go",
+          "internal/agents/typeclassifier/internal_test.go",
+          "internal/agents/typeclassifier/classifier_test.go",
+          "internal/agents/typeclassifier/CLAUDE.md"
+        ],
+        "files_modified": [],
+        "files_deleted": [
+          "internal/agents/typeclassifier/.gitkeep"
+        ],
+        "notes": "code-architect SSOT-ruling Q1-Q5: Q1 Config.Model=injected resolved primary-provider model (НЕ литерал) + forward-note про base/router defect (base.Run пишет req.Model=cfg.Model безусловно; router форвардит req без изменений; provider.chooseModel переопределяет env-pinned default ⇒ на fallback не-primary провайдер получает primary model id, нарушает ADR-LIC-03; настоящий fix — LIC-TASK-024/router/047). Q2 head/tail — Spec.Parts, руны, разделитель, <=5000 verbatim. Q3 2 Content-блока (inner <sections> иллюстративен). Q4 EXTRACTED_TEXT mandatory, DOCUMENT_STRUCTURE mandatory-in-shape но 0 sections OK; forward-note: upstream DM-gate (LIC-TASK-034) обязан отбраковывать missing artifact как DM_ARTIFACTS_MISSING ДО Agent 1. Q5 no internal/config; Decode re-check IsValid(). NICE: §1 MaxTokens=400 (§0.6 говорит 200 — §1 per-agent таблица binding). Review: golang-pro APPROVE, code-reviewer APPROVED (0 CRITICAL/0 HIGH). Применены MEDIUM-1 (full-struct Decode round-trip), MEDIUM-2 (compaction-branch end-to-end envelope), golang-pro F2/F3 (pages null/wrong-type/sections null|[]). LOW-2 (shared artifacts-decoder steward) — forward-note для LIC-TASK-026. Это template для агентов 2-9 (026-033)."
+      }
     },
     {
       "id": "LIC-TASK-026",

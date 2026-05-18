@@ -1433,7 +1433,33 @@
         "LIC-TASK-010",
         "LIC-TASK-006"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion": {
+        "summary": "Реализован пакет internal/application/pipeline (Pipeline Orchestrator, happy path INITIAL+RE_CHECK без pause). Дизайн адъюдицирован subagent code-architect (авторитетный build-spec + 4 DEFECT-коррекции против реальных сигнатур), реализован subagent golang-pro, независимо проверен subagent code-reviewer (точное соответствие spec).",
+        "files": [
+          "internal/application/pipeline/orchestrator.go — package doc; Config+validate; Orchestrator; NewOrchestrator (fail-fast errors.Join по 9 required deps); Run (шаги 0-21); helpers requestAndAwait*/resolveParentAndMode/mergeEarly/buildPayload/classifyOutcome(D11)/publishFailed; единый terminal-publish path; IsPublishableToOrchestrator gate",
+          "internal/application/pipeline/seams.go — 7 seam-интерфейсов (JobLimiter, PipelineMetrics, Tracer/PipelineSpan, Clock, Logger, VersionMetaCache, PauseController) + noop-defaults + var _ assertions",
+          "internal/application/pipeline/deps.go — Deps + withDefaults() (precedent stages.Deps)",
+          "internal/application/pipeline/internal_test.go — TestHermeticImports (allowlist {model,port,pipeline/stages,aggregator} + active-fail config/infra/egress/agents/all-third-party incl. golang.org/x/sync) + TestGofmtClean (go/format)",
+          "internal/application/pipeline/orchestrator_test.go — 26 поведенческих тестов (17 load-bearing pins + 7 coverage-pins + fail-fast/acquire-timeout/race), in-package fakes для всех seams/ports, реальные stages.Executor+aggregator.Aggregator с fake-агентами",
+          "internal/application/pipeline/CLAUDE.md — decision-records D1..(spec), DEFECT-1..4 reconciliations, forward-notes 037/040/047",
+          "internal/application/pipeline/.gitkeep — удалён"
+        ],
+        "key_decisions": [
+          "D1 hermetic-with-seams: импорты только stdlib + model + port + pipeline/stages + aggregator (concrete Executor/Aggregator разрешены), всё остальное — seam или port; enforced TestHermeticImports",
+          "DEFECT-1: trigger.ParentVersionID — primary источник RE_CHECK; VersionMetaCache seam — fallback-only (noop=miss), cache-miss НЕ ошибка → degrade to INITIAL",
+          "DEFECT-2: PipelineMetrics seam БЕЗ ConcurrentJobs — lic_pipeline_concurrent_jobs принадлежит concurrency.Semaphore через WithGauge (047), без double-count",
+          "DEFECT-3: noop PauseController цепляет .WithRetryable(false) (ErrCodeInternal по умолчанию retryable=true) — low-confidence в happy-path-only 036 терминально FAILED non-retryable; реальный pause = LIC-TASK-037",
+          "DEFECT-4: Run сам публикует терминальный FAILED и возвращает *model.DomainError; broker ACK/NACK решает LIC-TASK-040 по IsRetryable; 036 не трогает delivery",
+          "D3 aggregator 2x: merge-early (после RunStage3, assign MergedRiskAnalysis/RiskProfile/AggregateScore ДО RunStage4) + finalize-late (после RunStage6, payload+Warnings); Aggregate чистая идемпотентная",
+          "D7: corr-suffix :current/:parent; RE_CHECK parent-fetch sequential (current критичен, parent degradable); parent await/missing/parse fail → ParentAnalysisMissing=true, НЕ fail; outbound risk_delta=null при parent-missing (036 owns, §8.7 step 4)",
+          "D8: LIC_MAX_INGESTED_BYTES inline (sum len(raw) по ArtifactsProvided.Artifacts), без зависимости от Token Estimator 021; over-cap → DOCUMENT_TOO_LARGE non-retryable",
+          "D11: timeout-discriminator — rootCtx.Err()==DeadlineExceeded ⇒ outcome=timeout/ANALYSIS_TIMEOUT retryable, перекрывает body-error; иначе verbatim *model.DomainError",
+          "Acquire job-semaphore ДО WithTimeout (queue-wait ≠ timeout); defer LIFO: Release регистрируется первым → выполняется последним (слот держится весь job вкл. terminal publish); finalizer перед Release"
+        ],
+        "verification": "go build ./internal/... OK; go vet ./internal/... clean; go test ./... — весь модуль зелёный, 0 регрессий (pipeline 0.935s); go test -v ./internal/application/pipeline = 26/26 PASS; go test -race = ok 1.748s; TestGofmtClean PASS; make build/test/lint — все проходят. Соответствие архитектуре: high-architecture §6.5(1-11), observability §4.2 span-tree, error-handling §3 catalog.",
+        "forward_notes": "LIC-TASK-037: реализовать PauseController.Pause (Redis pending-state + classification-uncertain + строгий порядок §6.5:611-622) + sentinel ErrPipelinePaused, добавить errors.Is-ветку в classifyOutcome (локально, без смены сигнатуры; uncertainPub уже в ctor). LIC-TASK-040: RabbitMQ consumer + lic-trigger idempotency + restart-semantics + broker ACK/NACK по Run-результату (nil→Ack, IsRetryable→NACK/retry-DLX иначе DLQ) + W3C trace-extract + DLQ для non-publishable codes. LIC-TASK-047: 9 agents→stages.NewExecutor; aggregator.NewAggregator(config.ScoringConfig); concrete egress/publisher+dmawaiter+pendingconfirmation; Deps{JobLimiter:concurrency.New(cfg.Pipeline.Concurrency,WithGauge(metrics.Pipeline.ConcurrentJobs)) — в Orchestrator, НЕ Router; var _ JobLimiter=(*concurrency.Semaphore)(nil) в wiring; metrics/tracer/logger/kvVersionMeta адаптеры}."
+      }
     },
     {
       "id": "LIC-TASK-037",

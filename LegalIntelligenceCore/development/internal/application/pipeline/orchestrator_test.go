@@ -1293,3 +1293,256 @@ func TestRun_Payload_KeyParametersStripped(t *testing.T) {
 		t.Fatal("aggregator must not mutate the raw KeyParameters in place")
 	}
 }
+
+// ============================================================================
+// LIC-TASK-037 ADDITIVE pins (build-spec D.B 18..23). The 24 functions above
+// are UNTOUCHED (Pin 16/D.B reviewer gate). These exercise the paused
+// sentinel + ResumeAfterConfirmation + the continueFromStage2 extraction.
+// ============================================================================
+
+// classifiedState builds a post-Stage-1, user-confirmed PipelineState as the
+// pendingconfirmation.Manager hands to ResumeAfterConfirmation: Stage 1 done,
+// Classification non-nil & overridden.
+func classifiedState() *model.PipelineState {
+	st := model.NewPipelineState("corr-1", "job", "doc", "ver", "org")
+	st.OriginType = "UPLOAD"
+	st.Classification = &model.ClassificationResult{ContractType: "SUPPLY", Confidence: 1.0}
+	return st
+}
+
+func reCheckClassifiedState(parent string) *model.PipelineState {
+	st := classifiedState()
+	st.Mode = model.PipelineModeReCheck
+	st.ParentVersionID = &parent
+	return st
+}
+
+// D.B-18 — TestRun_LowConfidence_RealPause_Sentinel: a fake PauseController
+// returning ErrPipelinePaused ⇒ Run returns the sentinel, IsPaused==true, NO
+// FAILED, NO COMPLETED, span finished without error, PipelineOutcome
+// "paused"/"".
+func TestRun_LowConfidence_RealPause_Sentinel(t *testing.T) {
+	lowConf := fakeAgent{id: model.AgentTypeClassifier, run: func(context.Context, model.AgentInput) (port.AgentResult, error) {
+		return &model.ClassificationResult{ContractType: "SERVICE", Confidence: 0.10}, nil
+	}}
+	h := newHarness(t, lowConf)
+	h.pause.ret = ErrPipelinePaused
+	o := h.orch()
+
+	err := o.Run(context.Background(), initialTrigger())
+	if err != ErrPipelinePaused {
+		t.Fatalf("Run must return ErrPipelinePaused, got %v", err)
+	}
+	if !IsPaused(err) {
+		t.Fatal("IsPaused(err) must be true")
+	}
+	if got := len(h.status.byStatus(model.StatusFailed)); got != 0 {
+		t.Fatalf("paused run must NOT publish FAILED, got %d", got)
+	}
+	if got := len(h.status.byStatus(model.StatusCompleted)); got != 0 {
+		t.Fatalf("paused run must NOT publish COMPLETED, got %d", got)
+	}
+	if len(h.metrics.outcomes) != 1 || h.metrics.outcomes[0][1] != outcomePaused || h.metrics.outcomes[0][2] != "" {
+		t.Fatalf("outcome metric want {*,paused,\"\"}, got %v", h.metrics.outcomes)
+	}
+}
+
+// D.B-19 — TestResumeAfterConfirmation_Happy: real Executor+Aggregator,
+// classified INITIAL state ⇒ IN_PROGRESS{STAGE_AGENT_PARTY_CONSISTENCY} →
+// Stage2..6 → analysis-ready → persist → COMPLETED; nil; 1 Acquire/1 Release.
+func TestResumeAfterConfirmation_Happy(t *testing.T) {
+	h := newHarness(t)
+	o := h.orch()
+
+	if err := o.ResumeAfterConfirmation(context.Background(), classifiedState()); err != nil {
+		t.Fatalf("resume happy must return nil, got %v", err)
+	}
+	ip := h.status.byStatus(model.StatusInProgress)
+	if len(ip) != 1 || ip[0].Stage != model.StageAgentPartyConsistency {
+		t.Fatalf("resume IN_PROGRESS must be STAGE_AGENT_PARTY_CONSISTENCY once, got %+v", ip)
+	}
+	if got := len(h.status.byStatus(model.StatusCompleted)); got != 1 {
+		t.Fatalf("resume must COMPLETE once, got %d", got)
+	}
+	if _, ok := h.analysis.last(); !ok {
+		t.Fatal("resume must publish analysis-ready")
+	}
+	if acq, rel := h.limiter.counts(); acq != 1 || rel != 1 {
+		t.Fatalf("resume re-acquires a slot exactly once: Acquire=%d Release=%d", acq, rel)
+	}
+	if h.persist.registers != 1 {
+		t.Fatalf("persist Register once, got %d", h.persist.registers)
+	}
+	// No artifact request for the CURRENT version on resume (Stage 1 already
+	// consumed the restored InputArtifacts).
+	if got := len(h.requester.callsFor(":current")); got != 0 {
+		t.Fatalf("resume must NOT re-request current artifacts, got %d", got)
+	}
+}
+
+// D.B-20 — TestResumeAfterConfirmation_ReCheckParentRefetch.
+func TestResumeAfterConfirmation_ReCheckParentRefetch(t *testing.T) {
+	// Sub-1: parent await success ⇒ ParentRiskAnalysis set, risk_delta in
+	// payload; RequestArtifacts called with :parent:resume + [RISK_ANALYSIS]
+	// + *state.ParentVersionID.
+	t.Run("ParentPresent", func(t *testing.T) {
+		h := newHarness(t)
+		h.artAwait.provided["corr-1:parent:resume"] = goodParent()
+		o := h.orch()
+
+		if err := o.ResumeAfterConfirmation(context.Background(), reCheckClassifiedState("parent-ver")); err != nil {
+			t.Fatalf("resume RE_CHECK must COMPLETE, got %v", err)
+		}
+		par := h.requester.callsFor(":parent:resume")
+		if len(par) != 1 {
+			t.Fatalf("parent re-fetch must use the :parent:resume suffix exactly once, got %d", len(par))
+		}
+		if par[0].versionID != "parent-ver" {
+			t.Fatalf("parent request subject must be *state.ParentVersionID, got %q", par[0].versionID)
+		}
+		if len(par[0].types) != 1 || par[0].types[0] != model.ArtifactRiskAnalysis {
+			t.Fatalf("parent request must ask RISK_ANALYSIS only, got %v", par[0].types)
+		}
+		pay, _ := h.analysis.last()
+		if pay.RiskDelta == nil {
+			t.Fatal("parent present ⇒ payload risk_delta must be non-nil (Agent 9 ran)")
+		}
+	})
+
+	// Sub-2: parent await error ⇒ degrade (parentMissing), Stage 6 self-skips,
+	// payload risk_delta==nil, pipeline still COMPLETED (degrade-never-fail).
+	t.Run("ParentDegrade", func(t *testing.T) {
+		h := newHarness(t)
+		h.artAwait.awaitErr["corr-1:parent:resume"] = port.ErrAwaitTimeout
+		o := h.orch()
+
+		if err := o.ResumeAfterConfirmation(context.Background(), reCheckClassifiedState("parent-ver")); err != nil {
+			t.Fatalf("parent degrade must NOT fail the resumed pipeline, got %v", err)
+		}
+		if h.log.warnCount() == 0 {
+			t.Fatal("parent degradation must WARN-log")
+		}
+		pay, _ := h.analysis.last()
+		if pay.RiskDelta != nil {
+			t.Fatal("degraded parent ⇒ outbound risk_delta must be nil (§8.7 step 4)")
+		}
+		if got := len(h.status.byStatus(model.StatusCompleted)); got != 1 {
+			t.Fatalf("degraded RE_CHECK resume still COMPLETES, got %d", got)
+		}
+	})
+}
+
+// D.B-21 — TestResumeAfterConfirmation_SingleFinalizer + _JobTimeout.
+func TestResumeAfterConfirmation_SingleFinalizer(t *testing.T) {
+	want := model.NewDomainError(model.ErrCodeLLMAllProvidersFailed, model.StageAgentMandatoryConditions)
+	badStage3 := fakeAgent{id: model.AgentMandatoryConditions, run: func(context.Context, model.AgentInput) (port.AgentResult, error) {
+		return nil, want
+	}}
+	h := newHarness(t, badStage3)
+	o := h.orch()
+
+	err := o.ResumeAfterConfirmation(context.Background(), classifiedState())
+	de, ok := model.AsDomainError(err)
+	if !ok || de.Code != model.ErrCodeLLMAllProvidersFailed {
+		t.Fatalf("resume body error must propagate verbatim, got %v", err)
+	}
+	if got := len(h.status.byStatus(model.StatusFailed)); got != 1 {
+		t.Fatalf("exactly one FAILED publish on the resume path, got %d", got)
+	}
+	if got := len(h.status.byStatus(model.StatusCompleted)); got != 0 {
+		t.Fatalf("no COMPLETED on a failed resume, got %d", got)
+	}
+	if acq, rel := h.limiter.counts(); acq != 1 || rel != 1 {
+		t.Fatalf("slot reclaimed exactly once on a failed resume: Acquire=%d Release=%d", acq, rel)
+	}
+}
+
+func TestResumeAfterConfirmation_JobTimeout(t *testing.T) {
+	blockAgent := fakeAgent{id: model.AgentPartyConsistency, run: func(ctx context.Context, _ model.AgentInput) (port.AgentResult, error) {
+		<-ctx.Done()
+		return nil, model.NewDomainError(model.ErrCodeInternal, model.StageAgentPartyConsistency).WithCause(ctx.Err())
+	}}
+	h := newHarness(t, blockAgent)
+	h.cfg.JobTimeout = 30 * time.Millisecond
+	h.cfg.DMRequestTimeout = 25 * time.Millisecond
+	h.cfg.DMPersistConfirmTimeout = 25 * time.Millisecond
+	o := h.orch()
+
+	err := o.ResumeAfterConfirmation(context.Background(), classifiedState())
+	de, ok := model.AsDomainError(err)
+	if !ok {
+		t.Fatalf("want *model.DomainError, got %T", err)
+	}
+	if de.Code != model.ErrCodeAnalysisTimeout || !de.Retryable {
+		t.Fatalf("fresh-budget overrun ⇒ retryable ANALYSIS_TIMEOUT (classifyOutcome reused), got code=%s retry=%v", de.Code, de.Retryable)
+	}
+}
+
+// D.B-22 — TestResumeAfterConfirmation_AcquireBeforeWithTimeout: Acquire on
+// the raw ctx; a queued resume is not mis-timed.
+func TestResumeAfterConfirmation_AcquireBeforeWithTimeout(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.JobTimeout = 200 * time.Millisecond
+	h.cfg.DMRequestTimeout = 150 * time.Millisecond
+	h.cfg.DMPersistConfirmTimeout = 150 * time.Millisecond
+	h.limiter.acquireWait = 400 * time.Millisecond // exceeds JobTimeout alone
+	o := h.orch()
+
+	if err := o.ResumeAfterConfirmation(context.Background(), classifiedState()); err != nil {
+		t.Fatalf("limiter delay alone must not consume the resume budget; got %v", err)
+	}
+	if got := len(h.status.byStatus(model.StatusCompleted)); got != 1 {
+		t.Fatalf("resume should COMPLETE: the budget starts after Acquire, got %d", got)
+	}
+}
+
+// D.B-23 — TestContinueFromStage2_SharedBody: Run (post-gate) and
+// ResumeAfterConfirmation produce byte-identical LegalAnalysisArtifactsReady
+// for the same post-Stage-1 state (proves the extraction is
+// behavior-preserving — the load-bearing refactor pin).
+func TestContinueFromStage2_SharedBody(t *testing.T) {
+	// Path A: Run an INITIAL pipeline to COMPLETED and capture the payload.
+	hRun := newHarness(t)
+	oRun := hRun.orch()
+	if err := oRun.Run(context.Background(), initialTrigger()); err != nil {
+		t.Fatalf("Run path: %v", err)
+	}
+	runPay, ok := hRun.analysis.last()
+	if !ok {
+		t.Fatal("Run path published no analysis-ready")
+	}
+
+	// Path B: ResumeAfterConfirmation over the equivalent post-Stage-1 state
+	// (same identity, same Agent-1 ContractType=SERVICE/Confidence as the
+	// Run-path Stage 1 produced via defaultResult).
+	hRes := newHarness(t)
+	oRes := hRes.orch()
+	st := model.NewPipelineState("corr-1", "job", "doc", "ver", "org")
+	st.OriginType = "UPLOAD"
+	// Post-Stage-1 state as the Manager restores it from the pending blob:
+	// Stage 1 ran Agent 1 (Classification) AND Agent 2 (KeyParams). The Run
+	// path's fake Agent 2 returns &model.KeyParameters{} (defaultResult), so
+	// the equivalent resume state carries the same — proving the SHARED body
+	// is behavior-preserving over identical post-Stage-1 input.
+	st.Classification = &model.ClassificationResult{ContractType: "SERVICE", Confidence: 0.99}
+	st.KeyParameters = &model.KeyParameters{}
+	if err := oRes.ResumeAfterConfirmation(context.Background(), st); err != nil {
+		t.Fatalf("Resume path: %v", err)
+	}
+	resPay, ok := hRes.analysis.last()
+	if !ok {
+		t.Fatal("Resume path published no analysis-ready")
+	}
+
+	a, err := json.Marshal(runPay)
+	if err != nil {
+		t.Fatalf("marshal run payload: %v", err)
+	}
+	b, err := json.Marshal(resPay)
+	if err != nil {
+		t.Fatalf("marshal resume payload: %v", err)
+	}
+	if string(a) != string(b) {
+		t.Fatalf("continueFromStage2 must be behavior-preserving: Run and Resume payloads differ\n run=%s\n res=%s", a, b)
+	}
+}

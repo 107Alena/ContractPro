@@ -17,8 +17,18 @@
 // error→status mapping, and nulling outbound risk_delta on a missing parent.
 // It does NOT own broker ACK/NACK (LIC-TASK-040 — it returns a typed error
 // instead), the lic-trigger idempotency guard / restart-semantics
-// (LIC-TASK-040), or the real pause/resume (LIC-TASK-037 — invoked via the
-// PauseController seam).
+// (LIC-TASK-040), or the real pause body (LIC-TASK-037's
+// pendingconfirmation.Manager — invoked via the PauseController seam).
+//
+// LIC-TASK-037 extension: the Stage-2..21 body is extracted into the shared
+// continueFromStage2 continuation, reused by ResumeAfterConfirmation — the
+// exported resume entrypoint that re-establishes the Run wrapper for an
+// already-classified (user-confirmed) state and runs Stage 2..21 without
+// Stage 1 / artifact-request / the confidence gate. When the real
+// PauseController completes a pause it returns ErrPipelinePaused; Run's
+// classifyOutcome routes it to the non-failure outcomePaused (no FAILED
+// published) and Run returns the sentinel for LIC-TASK-040 to map to "ACK
+// the source, no COMPLETED". IsPaused is the exported predicate for that.
 //
 // Hermetic: stdlib + internal/domain/{model,port} +
 // internal/application/{pipeline/stages,aggregator} only (build-spec §7
@@ -229,9 +239,16 @@ func NewOrchestrator(
 // model.IsRetryable. Run never touches the broker delivery (no broker handle —
 // hermeticity).
 //
+// On a low-confidence classification Run calls the PauseController seam: the
+// real LIC-TASK-037 impl returns ErrPipelinePaused, which classifyOutcome
+// maps to outcomePaused (no FAILED published) so Run returns the sentinel
+// (LIC-TASK-040 ACKs the source, no COMPLETED); the noop returns a terminal
+// non-retryable INTERNAL_ERROR (Pin 9). The post-confirmation resume runs via
+// the separate ResumeAfterConfirmation entrypoint, NOT Run.
+//
 // Run is goroutine-safe for distinct triggers: it builds its own
 // *model.PipelineState and the Orchestrator holds only immutable
-// config/collaborators. It does NOT handle pause/resume, the idempotency
+// config/collaborators. It does NOT handle the resume body, the idempotency
 // guard, or restart-semantics (LIC-TASK-037 / LIC-TASK-040).
 func (o *Orchestrator) Run(ctx context.Context, trigger port.VersionProcessingArtifactsReady) (runErr error) {
 	start := o.clock.Now()
@@ -312,14 +329,24 @@ func (o *Orchestrator) Run(ctx context.Context, trigger port.VersionProcessingAr
 		o.metrics.PipelineFinished(resolvedMode, outcome, o.clock.Since(start).Seconds())
 		o.metrics.PipelineOutcome(resolvedMode, outcome, codeLabelFor(outcome, de))
 
-		if outcome != outcomeSuccess {
+		switch outcome {
+		case outcomeSuccess:
+			span.Finish(nil)
+			runErr = nil
+		case outcomePaused:
+			// The PauseController (LIC-TASK-037) already published
+			// classification-uncertain + IN_PROGRESS{STAGE_AWAITING_USER_
+			// CONFIRMATION} with broker confirms. Do NOT publish FAILED.
+			// Close the span cleanly and surface the sentinel so
+			// LIC-TASK-040 ACKs the source without COMPLETED (build-spec
+			// D3 / RECONCILIATION R1).
+			span.Finish(nil)
+			runErr = ErrPipelinePaused
+		default: // outcomeFailed / outcomeTimeout
 			o.publishFailed(spanCtx, state, de)
 			span.Finish(de)
 			runErr = de
-			return
 		}
-		span.Finish(nil)
-		runErr = nil
 	}()
 
 	// --- Body (steps 6..21) ---------------------------------------------
@@ -402,6 +429,29 @@ func (o *Orchestrator) Run(ctx context.Context, trigger port.VersionProcessingAr
 		return o.pause.Pause(spanCtx, state)
 	}
 
+	// Step 13 — the shared Stage-2..21 continuation (build-spec D2). It is
+	// identical for Run (post confidence-gate) and ResumeAfterConfirmation
+	// (post user-confirmed-type); extracting it keeps the ~80 lines of
+	// pin-covered ordering single-sourced.
+	return o.continueFromStage2(spanCtx, span, trigger, state, parentMissing)
+}
+
+// continueFromStage2 is the shared Stage-2..21 continuation used by BOTH
+// Run (post confidence-gate, INITIAL/RE_CHECK) and ResumeAfterConfirmation
+// (post user-confirmed-type). It assumes Stage 1 is complete and
+// state.Classification is non-nil & validated. spanCtx carries the root
+// span; span is its handle; parentMissing is the RE_CHECK parent-degrade
+// flag resolved by the caller. This body is the VERBATIM old Run steps
+// 13..21 — a pure, behavior-preserving refactor (build-spec D2 point 1/2,
+// Pin 23): Run and ResumeAfterConfirmation produce byte-identical payloads
+// for the same post-Stage-1 state.
+func (o *Orchestrator) continueFromStage2(
+	spanCtx context.Context,
+	span PipelineSpan,
+	trigger port.VersionProcessingArtifactsReady,
+	state *model.PipelineState,
+	parentMissing bool,
+) error {
 	// Step 13 — Stage 2 (Party Consistency, non-critical: a returned err is
 	// a genuine non-timeout fatal — the executor already degraded a
 	// per-agent AGENT_TIMEOUT internally; D6). 036 does NOT re-derive
@@ -484,12 +534,211 @@ func (o *Orchestrator) Run(ctx context.Context, trigger port.VersionProcessingAr
 	return nil
 }
 
+// ResumeAfterConfirmation continues a paused pipeline from Stage 2
+// (LIC-TASK-037, high-arch §6.10 Resume steps 6..9). It re-establishes the
+// Run wrapper (semaphore slot → WithTimeout(JobTimeout) → root span linked
+// to the saved trace context → single-terminal-finalizer) for an ALREADY-
+// classified state (Stage 1 done, Classification overridden by the user),
+// then runs the shared continuation (Stage 2..21). It does NOT request
+// current artifacts, does NOT run Stage 1, does NOT consult the confidence
+// gate. The caller (pendingconfirmation.Manager, via the PipelineResumer
+// seam) has already SETNX'd lic-user-confirmed, validated the contract_type,
+// loaded + restored the pending state, overridden the classification, and
+// (via the TraceRestorer seam) seeded ctx with the saved W3C trace context.
+//
+// Returns nil ⇒ COMPLETED (the caller performs §6.10 step-9 cleanup and
+// ACKs); a non-nil *model.DomainError AFTER publishing the terminal FAILED
+// itself (the SAME single-publish finalizer as Run — there is exactly one
+// terminal-status publish per invocation). It is a method ON the
+// Orchestrator because resume re-acquires a JobLimiter slot (build-spec D9)
+// and the orchestrator owns the limiter; the Manager does not and must not.
+func (o *Orchestrator) ResumeAfterConfirmation(ctx context.Context, state *model.PipelineState) (runErr error) {
+	start := o.clock.Now()
+
+	// Synthesize the trigger the Stage-2..21 helpers consume (statusEvent /
+	// buildPayload / persist Register key / publishFailed) from the restored
+	// state (build-spec D2 point 4). Timestamp/ArtifactTypes intentionally
+	// empty — helpers re-clock Timestamp via o.clock.Now() and never read
+	// ArtifactTypes post-Stage-1.
+	trigger := port.VersionProcessingArtifactsReady{
+		CorrelationID:   state.CorrelationID,
+		JobID:           state.JobID,
+		DocumentID:      state.DocumentID,
+		VersionID:       state.VersionID,
+		OrganizationID:  state.OrganizationID,
+		OriginType:      state.OriginType,
+		ParentVersionID: state.ParentVersionID,
+		CreatedByUserID: state.CreatedByUserID,
+	}
+
+	// Step R1 — metrics. A resumed run counts as a fresh pipeline start
+	// (§6.10:784 "fresh budget"; the metric reflects pipeline executions).
+	modeLabel := string(state.Mode)
+	o.metrics.PipelineStarted(modeLabel)
+
+	// Step R2 — acquire the job semaphore on the RAW inbound ctx (a resume
+	// queued behind the cap is "queued", not "timed out" — the 036 binding
+	// rule). Resume DOES re-acquire a slot: it runs Stage 2..6, full
+	// pipeline cost (build-spec D9; §6.14 backpressure).
+	if err := o.limiter.Acquire(ctx); err != nil {
+		state.CurrentStage = model.StageReceived
+		var de *model.DomainError
+		var outcome string
+		if errors.Is(err, context.DeadlineExceeded) {
+			de = model.NewDomainError(model.ErrCodeAnalysisTimeout, model.StageReceived).WithCause(err)
+			outcome = outcomeTimeout
+		} else {
+			de = model.NewDomainError(model.ErrCodeInternal, model.StageReceived).WithCause(err)
+			outcome = outcomeFailed
+		}
+		o.finalizePrePipeline(ctx, state, de, modeLabel, outcome, start)
+		return de
+	}
+	// Registered FIRST after success ⇒ runs LAST (defer LIFO): the slot is
+	// held through the terminal publish + span close, identical to Run.
+	defer o.limiter.Release()
+
+	// Step R3 — fresh full JobTimeout budget for Stage 2..5 (high-arch:784 —
+	// deliberate, NOT elapsed-aware).
+	rootCtx, cancel := context.WithTimeout(ctx, o.cfg.JobTimeout)
+	defer cancel()
+
+	// Step R4 — root span linked to the saved trace context. The link is
+	// established by the caller seeding ctx via the TraceRestorer seam BEFORE
+	// calling here; StartPipeline opens a span as a child of whatever trace
+	// context ctx carries (the real adapter, LIC-TASK-047, continues the
+	// remote context across the pause boundary; the noopTracer is a no-op).
+	spanCtx, span := o.tracer.StartPipeline(rootCtx, PipelineSpanAttrs{
+		JobID:      trigger.JobID,
+		VersionID:  trigger.VersionID,
+		Mode:       modeLabel,
+		OriginType: trigger.OriginType,
+	})
+
+	// Step R5 — the SAME single-terminal-outcome deferred finalizer as Run
+	// step 5 (replicated structurally). classifyOutcome is reused unchanged,
+	// so a Stage-2..5 overrun of the fresh rootCtx is correctly classified
+	// timeout (build-spec D2 invariant-preservation).
+	defer func() {
+		bodyErr := runErr
+		outcome, de := o.classifyOutcome(rootCtx, state, bodyErr)
+		resolvedMode := string(state.Mode)
+
+		o.metrics.PipelineFinished(resolvedMode, outcome, o.clock.Since(start).Seconds())
+		o.metrics.PipelineOutcome(resolvedMode, outcome, codeLabelFor(outcome, de))
+
+		switch outcome {
+		case outcomeSuccess:
+			span.Finish(nil)
+			runErr = nil
+		case outcomePaused:
+			// Unreachable on the resume path (no confidence gate here), but
+			// the same 3-way switch is kept for structural parity with Run.
+			span.Finish(nil)
+			runErr = ErrPipelinePaused
+		default: // outcomeFailed / outcomeTimeout
+			o.publishFailed(spanCtx, state, de)
+			span.Finish(de)
+			runErr = de
+		}
+	}()
+
+	// Step R6 — Stage stamp + IN_PROGRESS{STAGE_AGENT_PARTY_CONSISTENCY}
+	// publish (§6.10 Resume step 6 / build-spec D19). The orchestrator owns
+	// statusEvent; the Manager only publishes the pause events.
+	state.CurrentStage = model.StageAgentPartyConsistency
+	if err := o.statusPub.PublishStatus(spanCtx, o.statusEvent(trigger, model.StatusInProgress, model.StageAgentPartyConsistency, nil)); err != nil {
+		return model.NewDomainError(model.ErrCodeInternal, model.StageAgentPartyConsistency).WithCause(err)
+	}
+
+	// Step R7 — RE_CHECK parent re-fetch (build-spec D8): re-request +
+	// re-await the parent RISK_ANALYSIS with the SAME degrade-never-fail
+	// pattern as Run; current artifacts are NOT re-fetched (Stage 1 already
+	// consumed state.InputArtifacts, restored from the pending blob).
+	parentMissing, refetchErr := o.reCheckParentRefetchForResume(spanCtx, span, trigger, state)
+	if refetchErr != nil {
+		return refetchErr
+	}
+
+	// Step R8 — the shared Stage-2..21 continuation (build-spec D2).
+	return o.continueFromStage2(spanCtx, span, trigger, state, parentMissing)
+}
+
+// reCheckParentRefetchForResume houses the build-spec D8 step-R7 block: for a
+// RE_CHECK resume it re-requests and re-awaits the parent RISK_ANALYSIS using
+// a DISTINCT ":parent:resume" correlation suffix (so a stray late delivery of
+// the original pre-pause ":parent" request cannot be misrouted to the resumed
+// awaiter slot, and vice-versa) and the SAME degrade-never-fail semantics as
+// Run's awaitParentAnalysis. It returns parentMissing for the continuation
+// (stages.RunStage6 self-gates on a nil ParentRiskAnalysis; the aggregator
+// renders RE_CHECK_PARENT_ANALYSIS_MISSING; buildPayload nulls outbound
+// risk_delta). The only non-degrade error is an awaiter Register failure
+// (a LIC-TASK-040 routing/idempotency defect — INTERNAL_ERROR), kept fatal
+// exactly as Run step 7. INITIAL ⇒ (false, nil) immediately.
+func (o *Orchestrator) reCheckParentRefetchForResume(
+	spanCtx context.Context,
+	span PipelineSpan,
+	trigger port.VersionProcessingArtifactsReady,
+	state *model.PipelineState,
+) (parentMissing bool, fatalErr error) {
+	if state.Mode != model.PipelineModeReCheck {
+		return false, nil
+	}
+	parCorr := state.CorrelationID + ":parent:resume"
+	if _, regErr := o.artAwait.Register(parCorr); regErr != nil {
+		return false, model.NewDomainError(model.ErrCodeInternal, model.StageAgentPartyConsistency).
+			WithCause(regErr).
+			WithDevMessage("resume: parent-artifacts awaiter Register failed (LIC-TASK-040 routing/idempotency defect)")
+	}
+	defer o.artAwait.Cancel(parCorr)
+
+	if rErr := o.artReq.RequestArtifacts(spanCtx, parCorr, trigger.JobID, trigger.DocumentID,
+		*state.ParentVersionID, trigger.OrganizationID,
+		[]model.ArtifactType{model.ArtifactRiskAnalysis}); rErr != nil {
+		// DEGRADE: a failed parent request is non-fatal (036 D7 / D8).
+		o.log.Warn(spanCtx, "resume RE_CHECK parent request failed; degrading",
+			"version_id", state.VersionID, "cause", rErr)
+		return true, nil
+	}
+	return o.awaitParentAnalysis(spanCtx, span, trigger, state, parCorr), nil
+}
+
 // outcome label constants (build-spec §3.1 PipelineMetrics godoc).
 const (
 	outcomeSuccess = "success"
 	outcomeFailed  = "failed"
 	outcomeTimeout = "timeout"
+	// outcomePaused is the LIC-TASK-037 non-terminal, non-failure outcome:
+	// the confidence gate fired and the real PauseController completed the
+	// pause (pending-state saved, classification-uncertain + IN_PROGRESS
+	// published with broker confirms, lic-trigger=PAUSED). It is a NEW
+	// lic_pipeline_outcome_total label value beyond 036's success/failed/
+	// timeout (build-spec RECONCILIATION R7 — a deliberate, recorded
+	// extension: a paused run is neither a success nor a failure, and
+	// mislabelling it as either corrupts the success/failure SLOs).
+	outcomePaused = "paused"
 )
+
+// ErrPipelinePaused is the distinct sentinel returned by Run when the
+// confidence gate fired and the real PauseController (LIC-TASK-037) completed
+// the pause (pending-state saved, classification-uncertain + IN_PROGRESS
+// published with broker confirms, lic-trigger=PAUSED). It is NOT a
+// *model.DomainError and NOT a failure: LIC-TASK-040 maps it to "ACK the
+// source dm.events.version-artifacts-ready, do NOT publish COMPLETED, do NOT
+// publish FAILED" (high-arch §6.5 step 5 / §6.10 Pause step 6). The noop
+// PauseController does NOT return this (it returns a terminal non-retryable
+// INTERNAL_ERROR — DEFECT-3), so Pin 9 is intact (build-spec D3).
+//
+// LIC-TASK-037's *pendingconfirmation.Manager does NOT import this package; it
+// returns this exact value because LIC-TASK-047 injects it as the Manager's
+// Config.PausedSentinel (build-spec D5). errors.Is succeeds across that
+// boundary because it is the same error value (identity-comparable).
+var ErrPipelinePaused = errors.New("pipeline: paused awaiting user type confirmation")
+
+// IsPaused reports whether err is (or wraps) ErrPipelinePaused. LIC-TASK-040
+// calls this BEFORE model.IsRetryable in its ACK/NACK decision (build-spec
+// D3): IsPaused(err)==true ⇒ ACK the source without COMPLETED/FAILED.
+func IsPaused(err error) bool { return errors.Is(err, ErrPipelinePaused) }
 
 // newState builds the per-job PipelineState from the trigger. Mode stays
 // INITIAL here; resolveParentAndMode (step 6) flips it for RE_CHECK.
@@ -815,6 +1064,13 @@ func (o *Orchestrator) classifyOutcome(rootCtx context.Context, state *model.Pip
 			de = de.WithCause(bodyErr)
 		}
 		return outcomeTimeout, de
+	}
+	// LIC-TASK-037 paused outcome (build-spec D3). Placed AFTER the timeout
+	// discriminator (a deadline that fired while pausing is still a timeout)
+	// and BEFORE the success/failure split: a completed pause is neither.
+	// de is nil — it is a control-flow outcome, not a failure.
+	if errors.Is(bodyErr, ErrPipelinePaused) {
+		return outcomePaused, nil
 	}
 	if bodyErr == nil {
 		return outcomeSuccess, nil

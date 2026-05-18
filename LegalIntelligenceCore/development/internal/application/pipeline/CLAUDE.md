@@ -33,11 +33,20 @@ for the broker ACK/NACK decision). `Run` never touches the broker
 ## Files
 
 - **orchestrator.go** — package doc, `Config` (+`validate`),
-  `Orchestrator`, `NewOrchestrator`, `Run` (steps 0..21), the private
-  helpers (`newState`, `resolveParentAndMode`, `requestAndAwaitCurrent`,
+  `Orchestrator`, `NewOrchestrator`, `Run` (steps 0..12 + the single
+  `continueFromStage2` call), `continueFromStage2` (the shared
+  Stage-2..21 body — old Run steps 13..21 VERBATIM, behavior-preserving
+  extraction; LIC-TASK-037 D2), `ResumeAfterConfirmation` (the exported
+  post-confirmation resume entrypoint — re-establishes the Run wrapper
+  for an already-classified state, R1..R8) + `reCheckParentRefetchFor-
+  Resume` (the D8 `:parent:resume` degrade-never-fail block),
+  `ErrPipelinePaused`/`IsPaused`/`outcomePaused` (the LIC-TASK-037
+  paused sentinel + predicate + outcome label), the private helpers
+  (`newState`, `resolveParentAndMode`, `requestAndAwaitCurrent`,
   `awaitParentAnalysis`, `missingRequired`, `buildAggregatorInput`,
   `mergeEarly`, `finalizeLate`, `buildPayload`, `awaitPersist`), the
-  outcome path (`classifyOutcome`, `codeLabelFor`, `statusEvent`,
+  outcome path (`classifyOutcome` — now with the `ErrPipelinePaused`
+  branch + 3-way finalizer switch, `codeLabelFor`, `statusEvent`,
   `publishFailed`, `finalizePrePipeline`).
 - **seams.go** — `JobLimiter` / `PipelineMetrics` / `Tracer`+
   `PipelineSpan` / `Clock` / `Logger` / `VersionMetaCache` /
@@ -48,9 +57,14 @@ for the broker ACK/NACK decision). `Run` never touches the broker
 - **internal_test.go** — `TestHermeticImports` (4-entry allowlist +
   active-fail forbidden set incl. all third-party) + `TestGofmtClean`
   (`go/format`; the sandbox blocks `go fmt`).
-- **orchestrator_test.go** — full behavioural suite (all 17 §7 pins) with
-  in-package fakes for every seam + every port and a REAL
-  `stages.Executor` (fake `port.Agent`s) + REAL `aggregator.Aggregator`.
+- **orchestrator_test.go** — full behavioural suite with in-package
+  fakes for every seam + every port and a REAL `stages.Executor`
+  (fake `port.Agent`s) + REAL `aggregator.Aggregator`. The 24
+  pre-037 functions are UNTOUCHED by LIC-TASK-037 (the D.B reviewer
+  gate); the LIC-TASK-037 ADDITIVE pins (D.B 18..23: real-pause
+  sentinel, `ResumeAfterConfirmation` happy / RE_CHECK parent-refetch /
+  single-finalizer / job-timeout / acquire-before-WithTimeout, and the
+  `continueFromStage2` shared-body byte-identity pin) are appended only.
 - **CLAUDE.md** — this file.
 
 ## API
@@ -61,6 +75,18 @@ for the broker ACK/NACK decision). `Run` never touches the broker
   Deps) (*Orchestrator, error)`.
 - `(*Orchestrator) Run(ctx, port.VersionProcessingArtifactsReady)
   error`.
+- `(*Orchestrator) ResumeAfterConfirmation(ctx,
+  *model.PipelineState) error` — LIC-TASK-037 post-confirmation resume
+  entrypoint (Stage 2..21 for an already-classified state; nil ⇒
+  COMPLETED, else a `*model.DomainError` after publishing the single
+  terminal FAILED itself). Invoked by `pendingconfirmation.Manager`
+  via its local `PipelineResumer` seam (LIC-TASK-047 wires it; the
+  `var _` assertion is in the wiring package, NOT here — D18).
+- `ErrPipelinePaused error` + `IsPaused(error) bool` — the LIC-TASK-037
+  paused sentinel and its predicate. `pendingconfirmation.Manager`
+  returns this exact value via its injected `Config.PausedSentinel`
+  (it does NOT import this package — D5); `errors.Is` works across
+  that boundary because it is the same error value.
 - `Config{JobTimeout, DMRequestTimeout, DMPersistConfirmTimeout,
   ConfidenceThreshold, MaxIngestedBytes}`.
 - `Deps{JobLimiter, Metrics, Tracer, Clock, Logger, VersionMetaCache,
@@ -171,6 +197,39 @@ for the broker ACK/NACK decision). `Run` never touches the broker
   COMPLETED inline at step 21 (persist-confirm ordering); the finalizer
   must NOT double-publish. Pinned by `TestRun_JobTimeout_Reclassify` /
   `TestRun_SingleFailedPublish`.
+- **D-PAUSE — the LIC-TASK-037 resume continuation reuses the Run
+  wrapper + single-publish finalizer; `continueFromStage2` is the
+  shared Stage-2..21 body.** The old `Run` steps 13..21 were extracted
+  VERBATIM into `continueFromStage2` (a pure, behavior-preserving
+  refactor — the 24 pre-037 `orchestrator_test.go` functions pass
+  unedited; `TestContinueFromStage2_SharedBody` pins that `Run` and
+  `ResumeAfterConfirmation` emit byte-identical
+  `LegalAnalysisArtifactsReady` for the same post-Stage-1 state).
+  `ResumeAfterConfirmation` mirrors `Run` steps 1-5 (re-Acquire a
+  JobLimiter slot on the raw ctx — build-spec D9; fresh
+  `WithTimeout(JobTimeout)` — high-arch:784; root span linked to the
+  caller-restored trace context; the SAME 3-way finalizer reusing
+  `classifyOutcome`) MINUS artifact-request / Stage 1 / the confidence
+  gate, then re-fetches the RE_CHECK parent degradably via the
+  distinct `:parent:resume` correlation suffix (D8), then calls
+  `continueFromStage2`. The paused sentinel: `classifyOutcome` gained
+  ONE `errors.Is(bodyErr, ErrPipelinePaused)` branch (→ the new,
+  non-failure `outcomePaused`); the finalizer became a 3-way switch
+  (success / paused → `span.Finish(nil)` + return the sentinel, NO
+  FAILED / failed|timeout). **Pin 9
+  (`TestRun_LowConfidence_NoopPause_NonRetryable`) is intact** because
+  the noop `PauseController` returns a terminal non-retryable
+  `INTERNAL_ERROR` (NOT `ErrPipelinePaused`), so it falls through to
+  `outcomeFailed` exactly as before. The new label value
+  `lic_pipeline_outcome_total{outcome="paused"}` is the deliberate
+  RECONCILIATION R7 (recorded in `pendingconfirmation/CLAUDE.md`).
+  `NewOrchestrator` signature, `deps.go` (`PauseController` already a
+  `Deps` field) and the `internal_test.go` 4-entry allowlist are
+  UNCHANGED — `pipeline` does NOT import `pendingconfirmation` and
+  vice-versa (the seam is declared in `pendingconfirmation`; the
+  sentinel flows as `Config.PausedSentinel`). Pinned by
+  `TestRun_LowConfidence_RealPause_Sentinel` + the D.B-19..23 resume
+  pins.
 - **Acquire BEFORE WithTimeout (binding).** `JobLimiter.Acquire` uses
   the RAW inbound `ctx`, not the timeout-wrapped one: a job queued
   behind the concurrency cap is "queued", not "timed out" (§6.14
@@ -228,20 +287,29 @@ for the broker ACK/NACK decision). `Run` never touches the broker
 
 ## Forward notes (recorded, owners elsewhere)
 
-1. **LIC-TASK-037 (pause/resume).** Implement the real
-   `PauseController.Pause`: SET `lic-pending-state:{version_id}`
-   (gzip+b64 PendingTypeConfirmation) → `uncertainPub
-   .PublishClassificationUncertain` (publisher-confirm) →
-   `statusPub.PublishStatus(IN_PROGRESS,
-   STAGE_AWAITING_USER_CONFIRMATION)` → SET `lic-trigger=PAUSED`, strict
-   order per §6.5:611-622. `Pause` must return a DISTINCT exported
-   sentinel (e.g. `pipeline.ErrPipelinePaused`) that 040 maps to "ACK
-   source, no COMPLETED" (not FAILED). When 037 lands, add ONE
-   `errors.Is(bodyErr, ErrPipelinePaused)` branch to `classifyOutcome`
-   (a new `outcomePaused` that does NOT publish FAILED and returns the
-   sentinel) — a localized change, no signature break. `uncertainPub`
-   is ALREADY a `NewOrchestrator` param (held now precisely so 037 needs
-   no constructor change).
+1. **LIC-TASK-037 (pause/resume) — DONE (this forward note is now a
+   reconciliation pointer).** The real pause/resume body shipped in
+   `internal/application/pendingconfirmation` (the
+   `*pendingconfirmation.Manager`: `Pause` = §6.5:611-617 strict order
+   SET `lic-pending-state` → publish `classification-uncertain` →
+   publish `IN_PROGRESS{STAGE_AWAITING_USER_CONFIRMATION}` → SET
+   `lic-trigger=PAUSED`; `HandleUserConfirmedType` = §6.10 Resume;
+   `RepublishPauseEvents` = §6.5:631 safety-net). It does NOT import
+   this package: it returns this package's `ErrPipelinePaused` via the
+   injected `Config.PausedSentinel` (D5) and drives Stage 2..21 via its
+   local `PipelineResumer` seam bound to `ResumeAfterConfirmation`
+   (D11). On this side: `classifyOutcome` gained the ONE
+   `errors.Is(bodyErr, ErrPipelinePaused)` branch (→ the non-failure
+   `outcomePaused`), the finalizer became the 3-way switch, `Run`'s
+   Stage-2..21 body was extracted VERBATIM into `continueFromStage2`
+   (behavior-preserving — the 24 pre-037 pins pass unedited), and
+   `ResumeAfterConfirmation`/`reCheckParentRefetchForResume` were
+   added. `NewOrchestrator` signature, `deps.go` and the
+   `internal_test.go` allowlist are UNCHANGED. **The authoritative
+   037 reconciliations (R1..R7) live in
+   `internal/application/pendingconfirmation/CLAUDE.md`** and the
+   D-PAUSE convention bullet above; this note remains only as the
+   cross-reference.
 2. **LIC-TASK-040 (Event Router/consumer + broker ACK).** Owns the
    RabbitMQ consumer, the `lic-trigger:{version_id}` idempotency guard,
    restart-semantics (§6.5:624-634), the W3C trace-context extraction

@@ -40,6 +40,7 @@ func setEnv(t *testing.T, vars map[string]string) {
 		"LIC_REDIS_POOL_SIZE", "LIC_REDIS_DIAL_TIMEOUT",
 		"LIC_IDEMPOTENCY_TTL", "LIC_IDEMPOTENCY_PROCESSING_TTL",
 		"LIC_IDEMPOTENCY_HEARTBEAT_INTERVAL", "LIC_IDEMPOTENCY_FALLBACK_ENABLED",
+		"LIC_USER_CONFIRMED_PROCESSING_TTL",
 		"LIC_PIPELINE_CONCURRENCY", "LIC_JOB_TIMEOUT", "LIC_DM_REQUEST_TIMEOUT",
 		"LIC_DM_PERSIST_CONFIRM_TIMEOUT", "LIC_PENDING_CONFIRMATION_TTL",
 		"LIC_PROVIDER_FALLBACK_ORDER", "LIC_LLM_REQUEST_TIMEOUT", "LIC_LLM_CONCURRENCY_PER_PROVIDER",
@@ -485,6 +486,7 @@ func TestValidate_OnDirectStructInjection(t *testing.T) {
 		},
 		Idempotency: IdempotencyConfig{
 			TTL: time.Hour, ProcessingTTL: 2 * time.Second, HeartbeatInterval: time.Second,
+			UserConfirmedProcessingTTL: 90 * time.Second,
 		},
 		Pipeline: PipelineConfig{
 			Concurrency: 1, JobTimeout: time.Second, DMRequestTimeout: time.Second,

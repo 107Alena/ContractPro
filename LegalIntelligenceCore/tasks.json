@@ -1652,7 +1652,49 @@
         "LIC-TASK-039",
         "LIC-TASK-038"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-20",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/ingress/router — Event Router/Dispatcher LIC. Один экспортируемый *Router структурно реализует consumer.EventRouter seam (6 Route* методов). 7 файлов: router.go (Config{ProcessingTTL,CompletedTTL,PendingStateTTL,MetaCacheTTL,HeartbeatInterval}+validate, Router immutable, NewRouter с errors.Join fail-fast по 8 required + 5 cfg defects; 5 key-helper'ов keyTrigger/keyVersionCreated/keyArtifactsResp/keyPersistResp/keyPersistFail с не-collide-префиксами; setCompletedSafe; publishFailedTerminal с IsPublishableToOrchestrator-gate), routes.go (6 Route* методов + private route* helpers + полное §6.5:624-634 restart-decision-tree для VAR), seams.go (7 локальных seams: PipelineRunner / PendingConfirmationManager / ArtifactsAwaiterDeliverer / PersistConfirmationDeliverer / VersionMetaCacheWriter / IdempotencyGuard 7-method + Metrics/Clock/Logger/Tracer с noop defaults; var _ assertions), deps.go (Deps optional + withDefaults), internal_test.go (TestHermeticImports allowlist EXACTLY {domain/model, domain/port, application/pipeline} + active-fail на amqp091/config/observability/infra/consumer/idempotency/pendingconfirmation/egress/прочие; TestGofmtClean go/format), router_test.go (30 §C-пинов + 1 panic-stop = 31 PASS), CLAUDE.md (Files/API/Reconciliations/Conventions/Forward-notes стиль pendingconfirmation).",
+        "design_review": "code-architect → BUILD_SPEC_LIC_040.md (1729 строк, D1..D14 + R1..R7 DEFECT-style + 30 test pins + 16 reviewer-gate + 7 forward-notes). golang-pro: имплементация verbatim, 0 отклонений. code-reviewer: **APPROVE**, 0 BLOCKER / 0 HIGH / 0 MEDIUM / 1 LOW (comment-only) / 4 NIT (informational); 20/20 ключевых инвариантов подтверждены file:line.",
+        "key_decisions_and_reconciliations": "**D-decisions (build-spec §A):** D1 hermetic adapter, allowlist ровно {model,port,application/pipeline} — pipeline импортируется только для ErrPipelinePaused/IsPaused identity-sentinel; D2 NewRouter errors.Join 8 nil-checks + cfg.validate; D3 Config{5 TTL fields}; D4 RouteVersionArtifactsReady полный §6.5:624-634 decision tree (CheckAndAcquire → absent⇒StartHeartbeat+Run, runErr order: IsPaused→nil→DomainError; PROCESSING⇒NACK; PAUSED⇒Load: hit⇒RepublishPauseEvents/miss⇒publishFailed{USER_CONFIRMATION_EXPIRED}+SetCompleted+ACK / err⇒NACK; COMPLETED⇒ACK); D5 RouteVersionCreated 2-status + degrade на любой transport-err (036 DEFECT-1); D6/D7 ArtifactsProvided/Persisted/PersistFailed простой Deliver-pattern; D8 UCT mapping {nil⇒ACK, retryable⇒NACK, non-retryable⇒ACK (Manager сам DLQ-публикнул)}; D9 локальные seams (no import pipeline/pendingconfirmation/idempotency); D10 hermetic; D11 heartbeat lifecycle immediate-defer; D12 reserved no-op Metrics; D13 RequestContext untouched (Consumer-attached); D14 key helpers. **R-reconciliations (build-spec §B):** R1 x-death escalation недостижим через consumer.EventRouter seam (no Delivery) → опираемся на broker §6.4-deviation main-queue x-DLX-no-static-key + RabbitMQ x-death.count-driven retry-queue dispatch на broker-level (recorded staleness vs tasks.json); R2 double-acquire предотвращён — JobLimiter owned by pipeline.Orchestrator.Run (036 D9 commit ed05a92), Router struct БЕЗ JobLimiter поля (reflection-pin #29); R3 PENDING_STATE_LOST→model.ErrCodeUserConfirmationExpired (frozen catalog SSOT, 037 R2 прецедент); R4 Router НЕ публикует DLQ (Manager owns UCT poison-DLQ; reflection-pin #30 — нет port.DLQPublisherPort поля); R5 нет нового metric counter (reserve seam, переиспользуем lic_idempotency_lookups_total); R6 trace-context zero на ingress (Consumer 039 owned WithRequestContext, headers extract — forward-task); R7 task acceptance non-exhaustive checklist, frozen contracts win (037 R5 / 038 R2 / 039 R5 прецеденты).",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран без ошибок",
+          "make_test": "ok — все пакеты PASS, 0 регрессий",
+          "make_lint": "ok — go vet ./... clean",
+          "make_docker_build": "не выполнялся — Dockerfile в LIC-TASK-003 (pending), вне scope test_steps",
+          "go_test_router_race": "ok — 31/31 PASS, -race clean, ~1.5s",
+          "go_test_module": "ok — 38 пакетов PASS (config/domain/observability/broker/concurrency/kvstore/agents/aggregator/stages/pipeline/pendingconfirmation/idempotency/consumer/router/llm) 0 FAIL, 0 регрессий",
+          "go_mod_tidy": "0 diff (no new dependencies)"
+        },
+        "acceptance_criteria_status": {
+          "package_internal_ingress_router_with_EventRouter": "DONE — *Router структурно реализует consumer.EventRouter seam (Route* methods)",
+          "routing_table_VAR_VC_AP_Persisted_PersistFailed_UCT": "DONE — все 6 типов routed: VAR→PipelineRunner.Run; VC→VersionMetaCacheWriter.Set с TTL=MetaCacheTTL (24h); AP→ArtifactsAwaiterDeliverer.Deliver(correlationID); Persisted/PersistFailed→PersistConfirmationDeliverer.Deliver(jobID); UCT→PendingConfirmationManager.HandleUserConfirmedType",
+          "pre_routing_idempotency_via_Guard_038": "DONE — IdempotencyGuard seam (7-method: 5 frozen port + CheckAndAcquire + StartHeartbeat), CheckAndAcquire вызывается во всех 5 топиках кроме UCT (Manager-owned)",
+          "concurrency_control_semaphore": "DONE с RECONCILIATION R2 — JobLimiter (LIC_PIPELINE_CONCURRENCY=5) уже acquire'ется внутри pipeline.Orchestrator.Run (036 D9); Router НЕ acquire (double-counting), Router struct БЕЗ JobLimiter поля (reflection-pin TestRouter_NoJobLimiterField). Acceptance satisfied by 036 ownership.",
+          "transient_error_DLX_loop_NACK_with_x_death_count": "DONE с RECONCILIATION R1 — x-death.count escalation недостижим через frozen consumer.EventRouter seam (D8 YAGNI, без Delivery); Router возвращает nil/non-nil → Consumer (039) делает Ack/Nack(false); broker main-queue x-DLX без static routing-key (§6.4 deviation) + retry-queue TTL escalation 2s/10s/60s — это infra-level RabbitMQ-driven routing-key dispatch, корректно работает БЕЗ LIC-side logic. Recorded staleness vs tasks.json wording.",
+          "permanent_error_DLQ_plus_ACK": "DONE с RECONCILIATION R4 — Router НЕ публикует DLQ; ownership распределен: Manager (037) сам DLQ-публикует для UCT poison (invalid_format/whitelist/tenant_mismatch); Consumer (039) DLQ-публикует для invalid-message; broker §6.4 retry-loop DLQ-публикует для consumer-failed после ≥3 retry. Router struct БЕЗ port.DLQPublisherPort поля (reflection-pin TestRouter_NoDLQPublisherField).",
+          "restart_semantics_PAUSED_state": "DONE — RouteVersionArtifactsReady ветка alreadyExists,status=PAUSED: Load lic-pending-state → hit⇒PendingConfirmationManager.RepublishPauseEvents+ACK / miss⇒publishFailedTerminal{ErrCodeUserConfirmationExpired,non-retryable,StageAwaitingUserConfirmation}+SetCompleted(lic-trigger,PendingStateTTL)+ACK / иная Load-ошибка⇒return *model.DomainError{ErrCodeInternal,retryable}→Consumer NACK→retry-DLX. R3 reconciliation: PENDING_STATE_LOST→model.ErrCodeUserConfirmationExpired (frozen catalog)."
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/ingress/router/router.go",
+          "LegalIntelligenceCore/development/internal/ingress/router/routes.go",
+          "LegalIntelligenceCore/development/internal/ingress/router/seams.go",
+          "LegalIntelligenceCore/development/internal/ingress/router/deps.go",
+          "LegalIntelligenceCore/development/internal/ingress/router/internal_test.go",
+          "LegalIntelligenceCore/development/internal/ingress/router/router_test.go",
+          "LegalIntelligenceCore/development/internal/ingress/router/CLAUDE.md",
+          "LegalIntelligenceCore/development/internal/ingress/router/BUILD_SPEC_LIC_040.md"
+        ],
+        "deviations": [
+          "R1 (recorded): tasks.json acceptance 'read x-death count, route to retry.1/2/3 или DLQ при >3' не реализуется в Router-логике — это infra-level RabbitMQ-driven dispatch через main-queue x-DLX-no-static-key (broker §6.4 deviation) + 3 retry-queue с TTL 2s/10s/60s. consumer.EventRouter seam (039 D8 YAGNI) намеренно не несёт broker.Delivery, поэтому x-death.count читать неоткуда. Расширение seam'а до Delivery-аware — forward-task для будущих итераций (035 forward-note к 039 owner'ам).",
+          "R2 (recorded): tasks.json 'Concurrency control: acquire semaphore (LIC_PIPELINE_CONCURRENCY) для pipeline-triggering messages' satisfied through Pipeline.Orchestrator owning JobLimiter Acquire/Release (036 D9), не Router. Иначе double-counting.",
+          "R3 (recorded): §6.5:631 doc упоминает PENDING_STATE_LOST, но frozen каталог model/error_codes.go не содержит такой кода. Router использует ErrCodeUserConfirmationExpired (037 R2 прецедент, семантически идентичен).",
+          "R4 (recorded): Router НЕ потребляет port.DLQPublisherPort — DLQ-публикация для UCT poison owned by Manager 037 (security §11.2). Router struct reflection-validated to not contain any DLQ field/dependency.",
+          "make docker-build не выполнялся: Dockerfile в LIC-TASK-003 (pending), нужен docker daemon; вне scope test_steps LIC-TASK-040."
+        ],
+        "unblocks": "Прямо: LIC-TASK-041 (dmawaiter — реализует ArtifactsAwaiterDeliverer + PersistConfirmationDeliverer seams), LIC-TASK-047 (app wiring — соединяет Router с consumer.EventRouter, Pipeline.Orchestrator с PipelineRunner, Manager с PendingConfirmationManager, kvstore с VersionMetaCacheWriter, Guard с IdempotencyGuard; var _ assertions в wiring-пакете). Транзитивно: LIC-TASK-048-055 (integration tests/security/Docker Compose — критпуть 040→047→hilfreich)."
+      }
     },
     {
       "id": "LIC-TASK-041",

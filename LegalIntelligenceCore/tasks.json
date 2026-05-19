@@ -1721,7 +1721,9 @@
       "dependencies": [
         "LIC-TASK-011"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-20",
+      "completion_notes": "Реализован пакет internal/application/dmawaiter (6 файлов, 2331 строк): два exported типа *ArtifactAwaiter и *ConfirmationAwaiter, общий приватный generic slot[T any], map[string]*slot[T] под sync.Mutex, buffered chan cap=1, lazy TTL через time.NewTimer в Await (без sweeper-goroutine). Каждый awaiter satisfies три структурные роли: domain port (Register/Await/Cancel), inbound handler (HandleArtifactsProvided / HandlePersisted+HandlePersistFailed) и Router seam (Deliver) — общий приватный deliver[T] dispatcher (D6). Cancel закрывает канал ПОД мьютексом (G6 — prevent send-on-closed-channel panic). Await cleanup всегда удаляет slot с защитой `if reg[key] == s` (G8/G9). Metrics seam RecordOutcome(op,outcome,seconds) — единственный сайт в Await cleanup-tail (G10); op=get_artifacts/persist_artifacts, outcome=success/timeout/persist_failed/missing per observability.md §3.5. Дубликат Deliver → silent drop+WARN (first-wins, D7). Awaiter — pure dispatcher (D20): IsRetryable==false и UNKNOWN_ARTIFACT_TYPE (ADR-LIC-05) НЕ интерпретируются, доставляются orchestrator-side. TTL injected via Config из LIC_DM_REQUEST_TIMEOUT / LIC_DM_PERSIST_CONFIRM_TIMEOUT (047 wiring). 30/30 PASS race-clean (T1..T22 + T-CTOR-1..4 + T-RACE-1 + T-HERM-1 + T-FMT-1 + R3-defensive pin), 0 регрессий в остальных пакетах. Hermetic allowlist EXACTLY {model, port}; active-fail forbidden set incl. internal/{application/pipeline, application/pendingconfirmation, ingress/*, infra/*, config, agents} + все third-party. make build/test/lint зелёные, go mod tidy 0 diff. Все 15 reviewer-gates G1..G15 сматчены file:line. Spec в BUILD_SPEC_LIC_041.md (1477 строк, D1..D20 + R1..R3 + T-pins + G-gates + forward notes). Unblocks: LIC-TASK-047 wiring (assert var _ port.ArtifactsAwaiterPort / port.PersistConfirmationAwaiterPort / port.ArtifactsProvidedHandler / port.PersistConfirmationHandler / router.ArtifactsAwaiterDeliverer / router.PersistConfirmationDeliverer)."
     },
     {
       "id": "LIC-TASK-042",

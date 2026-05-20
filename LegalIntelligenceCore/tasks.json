@@ -1804,7 +1804,47 @@
       "dependencies": [
         "LIC-TASK-008"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-20",
+      "completion_notes": {
+        "summary": "Реализован AnalysisArtifactsPublisher — FROZEN-publisher для lic.artifacts.analysis-ready (DM event-catalog §1.5; полный payload port.LegalAnalysisArtifactsReady — 5 IDs + 8 required artifact-pointers + 2 optional: organization_id, risk_delta v1.1 per ADR-LIC-05). Sibling к LIC-TASK-042 в том же пакете internal/egress/publisher/dm/ — DRY single hermetic boundary + reuse 4 seams (Publisher/Clock/Logger + extended Metrics) + classifyOutcome + PublishError. Build-spec D1..D18 + R1..R5: same package (D1), symmetric rename Config→RequesterConfig/Deps→RequesterDeps + new PublisherConfig/PublisherDeps (D2), 12 validation branches (4 ID + 8 artifact pointer; OrganizationID/RiskDelta optional — D4), timestamp UTC RFC3339Nano rewrite через Clock на value-receiver copy — caller-payload unchanged (D5/R5), marshalArtifacts package-level injectable seam (D6), Metrics widening — 1 method ObservePublishedSize(bytes int) для observability.md §3.5 histogram lic_dm_artifacts_published_size_bytes (D15/R4) — 042 noopMetrics/fakeMetrics получили single-line empty stub, zero behavioural regression; ObservePublishedSize ВСЕГДА после успешного marshal (включая broker-fail paths — отражает wire boundary, D10), IncPublish unconditional на каждом exit path для lic_publisher_messages_total{topic, outcome} (4-value closed enum), topicAnalysisReady hardcoded (D9 FROZEN), hermetic allowlist 3-entry {model, port, broker sentinels} unchanged (D13/D17), single-call publisher — retry/DLQ/UNKNOWN_ARTIFACT_TYPE recovery — orchestrator concern (D18, ADR-LIC-05). Recommendations nil-vs-empty distinction (R5): nil → invalid (Aggregator должен инициализировать), []Recommendation{} non-nil → success.",
+        "design_review": "subagent code-architect выдал build-spec D1..D18 + R1..R5; subagent code-reviewer: ACCEPT (0 BLOCKING / 0 HIGH) — применён L4 typo-fix в errors.go:69 (D7→D4 в шапке second const block — D7 это classifier, D4 это validation reasons); subagent architect-reviewer: PASS-WITH-DEVIATIONS (один deliberate, документирован) — все 8 spec-секций PASS, один deliberate deviation: DM event-catalog §1.5:226-235 содержит outdated v1.0 draft-shape для risk_delta vs LIC §2.2 v1.1 actual shape (через *model.RiskDelta) — DM v1.0 игнорирует unknown поле целиком per ADR-LIC-05; кандидат на отдельный sync-TASK для DM consumer-side при готовности v1.1.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service ~1.6 MB stripped",
+          "make_test": "ok — все 40 LIC пакетов PASS, 0 регрессий 042",
+          "make_lint": "ok — go vet ./... 0 issues",
+          "go_test_race_dm": "ok — go test -race -count=1 ./internal/egress/publisher/dm — 39 top-level Tests PASS (~1.4s) c включением 17 новых для AnalysisArtifactsPublisher (T1..T29 + T-CTOR-1..4) + reused TestClassifyOutcome_AllBranches / TestPublishError_ErrorAndUnwrap / TestPublishOutcome_WireStringsPinned",
+          "go_test_module": "ok — go test -count=1 ./... — 40 пакетов PASS",
+          "make_docker_build": "не выполнялся — Dockerfile это deliverable LIC-TASK-003 (pending)"
+        },
+        "acceptance_criteria_status": {
+          "package_analysisready_publisher": "DONE — internal/egress/publisher/dm/publisher.go, тот же пакет как 042 sibling-room",
+          "Publish_ctx_payload": "DONE — func (p *AnalysisArtifactsPublisher) Publish(ctx, payload port.LegalAnalysisArtifactsReady) error — value receiver, реализует port.AnalysisArtifactsPublisherPort",
+          "extension_v1_1_risk_delta": "DONE — *model.RiskDelta omitempty в port.LegalAnalysisArtifactsReady; реализация LIC §2.2 v1.1 shape (deliberate vs outdated DM §1.5:226-235 draft)",
+          "json_marshal_omitempty": "DONE — encoding/json stdlib через marshalArtifacts package-level var; omitempty покрывает organization_id + risk_delta для DM v1.0 backward-compat",
+          "publisher_confirms": "DONE — через broker.Client.Publish (deferred confirm + wait-for-ack); seams.go.Publisher signature byte-identical к broker.Client.Publish",
+          "payload_inline": "DONE — inline marshalArtifacts → broker.Publish; no claim-check (event-catalog §5.5)",
+          "metric_size_histogram": "DONE — metrics.DMMetrics.ArtifactsPublishedSizeBytes (histogram no labels, buckets 64KiB..32MiB observability.md §3.5) через seam Metrics.ObservePublishedSize(bytes int); adapter в LIC-TASK-047"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/publisher.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/publisher_test.go"
+        ],
+        "files_modified": [
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/requester.go (rename Config→RequesterConfig, Deps→RequesterDeps в сигнатурах + godoc — same behaviour)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/requester_test.go (rename литералов + fakeMetrics.ObservePublishedSize noop stub)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/seams.go (Metrics interface + 1 method ObservePublishedSize; noopMetrics noop stub)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/deps.go (rename Deps→RequesterDeps; +new PublisherDeps с identical shape + withDefaults)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/errors.go (+8 new reason constants для AnalysisArtifactsPublisher в отдельном const block; L4 typo D7→D4)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/doc.go (extended attribution: D1..D15+R1..R3 для 042 + D1..D18+R1..R5 для 043)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/CLAUDE.md (extended — два publishers симметрично; forward-note про 043 переписан как implemented)"
+        ],
+        "deviations": [
+          "DM event-catalog §1.5:226-235 содержит outdated v1.0 draft-shape risk_delta ({baseline_version_id, changes[]}); реализация использует LIC event-catalog §2.2 v1.1 shape ({base_version_id, target_version_id, added/removed/changed/profile_change/summary}) через *model.RiskDelta — deliberate per ADR-LIC-05 (DM v1.0 игнорирует unknown поле целиком). Sync-TASK кандидат при готовности DM consumer-side v1.1.",
+          "make docker-build не выполнялся — нет Docker daemon; Dockerfile = deliverable отдельного pending LIC-TASK-003."
+        ],
+        "unblocks": "Прямо: LIC-TASK-047 (wiring — теперь все 4 DM publisher'а 040/041/042/043 реализованы для terminal STAGE_PUBLISHING_ARTIFACTS + STAGE_AWAITING_DM_CONFIRMATION; ждём только 044/045/046 + 009 для финальной сборки). Транзитивно — STAGE_DONE pipeline §6.5 step 8-11 (publisher = step 8 теперь реализован)."
+      }
     },
     {
       "id": "LIC-TASK-044",

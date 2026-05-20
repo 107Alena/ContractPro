@@ -90,22 +90,41 @@ func (o PublishOutcome) IsValid() bool {
 }
 
 // Metrics is the observability.md §3.9 seam for the publisher-side counter
-// lic_publisher_messages_total{topic, outcome}. Concrete prometheus is
-// forbidden here (hermeticity — the dmawaiter.Metrics / pipeline.PipelineMetrics
-// precedent). LIC-TASK-036 / TASK-047 wires a tiny adapter over
-// *metrics.PublisherMetrics that bakes both labels and calls Inc().
+// lic_publisher_messages_total{topic, outcome} and the §3.5 size histogram
+// lic_dm_artifacts_published_size_bytes (analysis-ready only). Concrete
+// prometheus is forbidden here (hermeticity — the dmawaiter.Metrics /
+// pipeline.PipelineMetrics precedent). LIC-TASK-036 / TASK-047 wires a
+// tiny adapter over *metrics.PublisherMetrics that bakes both labels and
+// calls Inc() / Observe().
 type Metrics interface {
 	// IncPublish records exactly one increment of
 	// lic_publisher_messages_total{topic, outcome} for a single
-	// RequestArtifacts call. Called UNCONDITIONALLY on every exit path
-	// (success, invalid, nacked, failure — build-spec D7) so the counter
-	// never silently drops a request.
+	// RequestArtifacts or AnalysisArtifactsPublisher.Publish call. Called
+	// UNCONDITIONALLY on every exit path (success, invalid, nacked,
+	// failure — build-spec D7) so the counter never silently drops a
+	// request.
 	//
-	// topic is the wire topic ("lic.requests.artifacts" for this
-	// publisher); outcome is one of the four PublishOutcome* constants
-	// (the local mirror of metrics.PublishOutcome — pinned in
-	// seams_test.go to prevent drift).
+	// topic is the wire topic ("lic.requests.artifacts" for the
+	// ArtifactRequester / "lic.artifacts.analysis-ready" for the
+	// AnalysisArtifactsPublisher); outcome is one of the four
+	// PublishOutcome* constants (the local mirror of
+	// metrics.PublishOutcome — pinned in seams_test.go to prevent drift).
 	IncPublish(topic string, outcome PublishOutcome)
+
+	// ObservePublishedSize records the wire size in bytes of a successfully
+	// marshalled analysis-ready payload for the
+	// lic_dm_artifacts_published_size_bytes histogram (observability.md §3.5).
+	// Called UNCONDITIONALLY on every successful marshal — including paths
+	// that subsequently fail at broker.Publish (nacked / confirm-timeout /
+	// not-connected) — so the histogram captures the size distribution of
+	// every payload that reached the wire boundary. NOT called on
+	// validation-fail or marshal-fail (no bytes were produced).
+	//
+	// The histogram has no labels (observability.md §3.10 cardinality budget),
+	// so this single-arg seam matches the metric shape exactly. ArtifactRequester
+	// (LIC-TASK-042) does NOT call this method — the metric is specific to
+	// the analysis-ready publisher.
+	ObservePublishedSize(bytes int)
 }
 
 // noopMetrics is the zero-dependency default (the dmawaiter.noopMetrics
@@ -114,6 +133,9 @@ type noopMetrics struct{}
 
 // IncPublish is a noop.
 func (noopMetrics) IncPublish(string, PublishOutcome) {}
+
+// ObservePublishedSize is a noop.
+func (noopMetrics) ObservePublishedSize(int) {}
 
 var _ Metrics = noopMetrics{}
 

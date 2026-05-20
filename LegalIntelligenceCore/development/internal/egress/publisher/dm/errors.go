@@ -66,6 +66,24 @@ const (
 	reasonMarshalFailure       = "marshal_failure"
 )
 
+// AnalysisArtifactsPublisher reasons (LIC-TASK-043, build-spec D4 — the
+// pre-publish required-field validation predicate; D7 is the broker-outcome
+// classifier below). The four ID reason constants (reasonMissingCorrelationID,
+// reasonMissingJobID, reasonMissingDocumentID, reasonMissingVersionID) are
+// REUSED from the ArtifactRequester block above — both publishers validate
+// the same envelope IDs. The eight constants below are specific to the
+// LegalAnalysisArtifactsReady payload's required artifact-pointer fields.
+const (
+	reasonMissingClassificationResult = "missing_classification_result"
+	reasonMissingKeyParameters        = "missing_key_parameters"
+	reasonMissingRiskAnalysis         = "missing_risk_analysis"
+	reasonMissingRiskProfile          = "missing_risk_profile"
+	reasonMissingRecommendations      = "missing_recommendations"
+	reasonMissingSummary              = "missing_summary"
+	reasonMissingDetailedReport       = "missing_detailed_report"
+	reasonMissingAggregateScore       = "missing_aggregate_score"
+)
+
 // classifyOutcome maps a broker.Publish return value to the local
 // PublishOutcome label for lic_publisher_messages_total{topic, outcome} —
 // build-spec D7. Validation failures are NOT classified here (the call

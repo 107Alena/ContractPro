@@ -80,6 +80,12 @@ func (f *fakeMetrics) IncPublish(topic string, outcome PublishOutcome) {
 	f.mu.Unlock()
 }
 
+// ObservePublishedSize is a noop in the requester suite — ArtifactRequester
+// (LIC-TASK-042) does NOT call this method (the histogram is specific to
+// the analysis-ready publisher, LIC-TASK-043). The method exists here only
+// to satisfy the Metrics interface contract.
+func (f *fakeMetrics) ObservePublishedSize(int) {}
+
 func (f *fakeMetrics) Records() []fakeMetricRecord {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -143,7 +149,7 @@ func newTestRequester(t *testing.T, pub Publisher, m Metrics, c Clock, l Logger)
 	if pub == nil {
 		pub = &fakePublisher{}
 	}
-	r, err := NewArtifactRequester(Config{Exchange: testExchange}, Deps{
+	r, err := NewArtifactRequester(RequesterConfig{Exchange: testExchange}, RequesterDeps{
 		Publisher: pub,
 		Metrics:   m,
 		Clock:     c,
@@ -628,11 +634,11 @@ func TestRequestArtifacts_Concurrent_DistinctCorrelationIDs(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// T-CTOR-1: Deps.Publisher=nil → constructor error
+// T-CTOR-1: RequesterDeps.Publisher=nil → constructor error
 // -----------------------------------------------------------------------------
 
 func TestNewArtifactRequester_NilPublisher_ConstructorError(t *testing.T) {
-	r, err := NewArtifactRequester(Config{Exchange: testExchange}, Deps{
+	r, err := NewArtifactRequester(RequesterConfig{Exchange: testExchange}, RequesterDeps{
 		Publisher: nil,
 		Metrics:   &fakeMetrics{},
 		Clock:     fakeClock{now: fixedTime},
@@ -650,11 +656,11 @@ func TestNewArtifactRequester_NilPublisher_ConstructorError(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// T-CTOR-2: Config.Exchange="" → constructor error
+// T-CTOR-2: RequesterConfig.Exchange="" → constructor error
 // -----------------------------------------------------------------------------
 
 func TestNewArtifactRequester_EmptyExchange_ConstructorError(t *testing.T) {
-	r, err := NewArtifactRequester(Config{Exchange: ""}, Deps{
+	r, err := NewArtifactRequester(RequesterConfig{Exchange: ""}, RequesterDeps{
 		Publisher: &fakePublisher{},
 	})
 	if err == nil {
@@ -669,13 +675,13 @@ func TestNewArtifactRequester_EmptyExchange_ConstructorError(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// T-CTOR-3: Deps.Metrics/Clock/Logger=nil → success (noop defaults),
+// T-CTOR-3: RequesterDeps.Metrics/Clock/Logger=nil → success (noop defaults),
 // RequestArtifacts works
 // -----------------------------------------------------------------------------
 
 func TestNewArtifactRequester_NilOptionalSeams_NoopDefaults(t *testing.T) {
 	pub := &fakePublisher{}
-	r, err := NewArtifactRequester(Config{Exchange: testExchange}, Deps{
+	r, err := NewArtifactRequester(RequesterConfig{Exchange: testExchange}, RequesterDeps{
 		Publisher: pub,
 		// Metrics / Clock / Logger intentionally nil — must get noop defaults.
 	})

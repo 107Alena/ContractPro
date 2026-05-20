@@ -34,12 +34,16 @@ var marshalRequest = json.Marshal
 // would force a forbidden import).
 var _ port.ArtifactRequesterPort = (*ArtifactRequester)(nil)
 
-// Config is the local startup-time config for ArtifactRequester (build-spec
-// D2). Local struct, NO internal/config import (build-spec D13 — the
-// pipeline.Config / pendingconfirmation.Config / dmawaiter.ArtifactConfig
+// RequesterConfig is the local startup-time config for ArtifactRequester
+// (build-spec D2). Local struct, NO internal/config import (build-spec D13 —
+// the pipeline.Config / pendingconfirmation.Config / dmawaiter.ArtifactConfig
 // precedent). LIC-TASK-036 / TASK-047 wires
-// config.BrokerConfig.Exchanges.LICRequests → Config.Exchange.
-type Config struct {
+// config.BrokerConfig.Exchanges.LICRequests → RequesterConfig.Exchange.
+//
+// Renamed from Config under LIC-TASK-043 (build-spec D2 symmetric rename)
+// to disambiguate from PublisherConfig (the sibling
+// AnalysisArtifactsPublisher's config).
+type RequesterConfig struct {
 	// Exchange is the topic exchange on which the GetArtifactsRequest is
 	// published. MUST be non-empty — an empty Exchange would publish to
 	// the AMQP default exchange (direct-routing by queue name), which
@@ -52,10 +56,10 @@ type Config struct {
 // at once (the dmawaiter.ArtifactConfig.validate / pendingconfirmation.
 // Config.validate precedent). NOT a domain error — this is a startup-time
 // wiring defect, not an Orchestrator-visible failure.
-func (c Config) validate() error {
+func (c RequesterConfig) validate() error {
 	var errs []error
 	if c.Exchange == "" {
-		errs = append(errs, errors.New("dm publisher: Config.Exchange must be non-empty"))
+		errs = append(errs, errors.New("dm publisher: RequesterConfig.Exchange must be non-empty"))
 	}
 	return errors.Join(errs...)
 }
@@ -74,7 +78,7 @@ func (c Config) validate() error {
 //     jobID, documentID, versionID, organizationID, []model.ArtifactType)
 //     error
 type ArtifactRequester struct {
-	cfg       Config
+	cfg       RequesterConfig
 	publisher Publisher
 	metrics   Metrics
 	clock     Clock
@@ -83,25 +87,25 @@ type ArtifactRequester struct {
 
 // NewArtifactRequester validates the wiring and assembles the requester. It
 // fails fast (NewTypeName per feedback_constructors.md; the dmawaiter /
-// pendingconfirmation / pipeline precedent): an invalid Config or a nil
-// Publisher is a LIC-TASK-036 / TASK-047 wiring defect and MUST be a startup
-// error, not a first-call nil-deref. errors.Join surfaces ALL defects at
-// once. The three OPTIONAL seams (Metrics / Clock / Logger) never cause an
-// error; Deps.withDefaults substitutes a noop for each nil one (build-spec
-// D2/D9/D10).
+// pendingconfirmation / pipeline precedent): an invalid RequesterConfig or
+// a nil Publisher is a LIC-TASK-036 / TASK-047 wiring defect and MUST be a
+// startup error, not a first-call nil-deref. errors.Join surfaces ALL
+// defects at once. The three OPTIONAL seams (Metrics / Clock / Logger)
+// never cause an error; RequesterDeps.withDefaults substitutes a noop for
+// each nil one (build-spec D2/D9/D10).
 //
 // Publisher has NO noop default and is checked AFTER withDefaults — a
 // silent-swallow Publisher would make every lic.requests.artifacts publish
 // invisible (no broker, no log, no metric, the pipeline awaiter blocks
-// forever). See Deps.Publisher godoc.
-func NewArtifactRequester(cfg Config, deps Deps) (*ArtifactRequester, error) {
+// forever). See RequesterDeps.Publisher godoc.
+func NewArtifactRequester(cfg RequesterConfig, deps RequesterDeps) (*ArtifactRequester, error) {
 	var errs []error
 	if err := cfg.validate(); err != nil {
 		errs = append(errs, err)
 	}
 	d := deps.withDefaults()
 	if d.Publisher == nil {
-		errs = append(errs, errors.New("dm publisher: Deps.Publisher must be non-nil (no noop default — silent swallow on lic.requests.artifacts is forbidden)"))
+		errs = append(errs, errors.New("dm publisher: RequesterDeps.Publisher must be non-nil (no noop default — silent swallow on lic.requests.artifacts is forbidden)"))
 	}
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)

@@ -92,22 +92,25 @@ func (o PublishOutcome) IsValid() bool {
 }
 
 // Metrics is the observability.md §3.9 seam for the publisher-side counter
-// lic_publisher_messages_total{topic, outcome}. UNLIKE the sibling dm
-// publisher's Metrics seam, this one carries ONLY IncPublish — the status
-// envelope is small and has a fixed shape (the §3.5 size histogram is
-// specific to lic.artifacts.analysis-ready). Concrete prometheus is
-// forbidden here (hermeticity — the dmawaiter.Metrics / pipeline.
-// PipelineMetrics precedent). LIC-TASK-036 / TASK-047 wires a tiny adapter
-// over *metrics.PublisherMetrics that bakes both labels and calls Inc().
+// lic_publisher_messages_total{topic, outcome}. SHARED by both publishers
+// (044 StatusPublisher + 045 UncertaintyPublisher). UNLIKE the sibling dm
+// publisher's Metrics seam, this one carries ONLY IncPublish — both
+// status and uncertain envelopes are small with a fixed shape (the §3.5
+// size histogram is specific to lic.artifacts.analysis-ready). Concrete
+// prometheus is forbidden here (hermeticity — the dmawaiter.Metrics /
+// pipeline.PipelineMetrics precedent). LIC-TASK-036 / TASK-047 wires a
+// tiny adapter over *metrics.PublisherMetrics that bakes both labels and
+// calls Inc().
 type Metrics interface {
 	// IncPublish records exactly one increment of
 	// lic_publisher_messages_total{topic, outcome} for a single
-	// StatusPublisher.PublishStatus call. Called UNCONDITIONALLY on every
-	// exit path (success, invalid, nacked, failure) so the counter never
-	// silently drops a request.
+	// PublishStatus or PublishClassificationUncertain call. Called
+	// UNCONDITIONALLY on every exit path (success, invalid, nacked,
+	// failure) so the counter never silently drops a request.
 	//
-	// topic is the wire topic ("lic.events.status-changed"); outcome is
-	// one of the four PublishOutcome* constants (the local mirror of
+	// topic is the wire topic ("lic.events.status-changed" for 044,
+	// "lic.events.classification-uncertain" for 045); outcome is one of
+	// the four PublishOutcome* constants (the local mirror of
 	// metrics.PublishOutcome — pinned in seams_test.go to prevent drift).
 	IncPublish(topic string, outcome PublishOutcome)
 }

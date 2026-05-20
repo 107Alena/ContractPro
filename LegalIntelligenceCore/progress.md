@@ -1758,3 +1758,98 @@ Production-ready Agent 7 — тонкая обёртка над BaseAgent: Summa
 
 ### Прогресс: 41/55 done → 42/55 done.
 Открыты (deps done): 003, 009, 021, 045, 046, 052, 053. Критпуть: **045+046+009 → 047 wiring → 048-055**. Рекомендация следующей итерации: **LIC-TASK-045** (Uncertainty Publisher — sibling в orch/, тот же паттерн, max reuse of design 044) ЛИБО **LIC-TASK-009** (Health handler — больше всего разблокирует 047).
+
+---
+
+## 2026-05-21 — LIC-TASK-045: Uncertainty Publisher (classification-uncertain) ✅
+
+**Цель.** Реализовать `UncertaintyPublisher` — FROZEN-publisher для `lic.events.classification-uncertain` (LIC event-catalog §1.2). Sibling к LIC-TASK-044 `StatusPublisher` в том же пакете `internal/egress/publisher/orch/`. Публикуется ровно один раз на версию когда Agent 1 возвращает `ClassificationResult.confidence < LIC_CONFIDENCE_THRESHOLD`; pipeline переходит в pause до `UserConfirmedType` от Orchestrator.
+
+**Контекст.** 044 завершён днём ранее, явно зарезервировал room для 045 в `orch/CLAUDE.md` forward-note #2 + `doc.go` package godoc. DTO `port.ClassificationUncertain` (events.go:217-233) + порт `port.UncertaintyPublisherPort` (publisher.go:19-28) + caller `pendingconfirmation.Manager.publishPauseUncertain` (manager.go:496-509) уже существовали и формировали payload точно по форме publisher'а.
+
+### План реализации
+1. Прочитать LIC architecture: event-catalog §1.2 (FROZEN JSON schema), high-architecture §6.13, observability §3.9, error-handling, security; изучить эталон 044 в `internal/egress/publisher/orch/`.
+2. Через `code-architect` adjudicate build-spec D1..D18 + R-reconciliations + ответы на 5 Open Questions (naming, file layout, alternatives cap, alternatives uniqueness, nil/empty equivalence).
+3. Через `golang-pro` реализовать в 7 шагов: rename 044 types (MUST-FIX-1) → расширить errors.go новым reason блоком (MUST-FIX-4) → расширить deps.go (UncertaintyPublisherDeps) → создать uncertainty.go (D1-D17) → создать uncertainty_test.go (D18, T1..T29 + T-CTOR-1..4) → обновить CLAUDE.md (NTH-4) → верификация.
+4. `code-reviewer` ревью (focus: validation correctness, goroutine-safety, metrics semantics, caller-immutability, hermeticity, rename consistency).
+5. `architect-reviewer` верификация против §1-§8 (event-catalog §1.2, integration-contracts §2, observability §3.9-3.10, high-architecture §6.13, error-handling, security, pendingconfirmation integration, hermeticity).
+6. Применить LOW doc-drift fix'ы (doc.go, errors.go, seams.go, internal_test.go).
+7. Update tasks.json + progress.md + git commit.
+
+### Прогресс
+- ✅ Build-spec adjudicated subagent `code-architect`: APPROVE-WITH-MUST-FIX (4 MF + 4 NTH).
+  - **MF-1** symmetric naming rename `PublisherConfig`/`PublisherDeps` → `StatusPublisherConfig`/`StatusPublisherDeps` (precedent dm/`RequesterConfig` vs `PublisherConfig`).
+  - **MF-2** Block A — 5 caller-IDs, НЕ 6 (Timestamp перезаписывается публишером, не валидируется на caller-side; симметрично 044).
+  - **MF-3** `var _ port.UncertaintyPublisherPort = (*UncertaintyPublisher)(nil)` в новом `uncertainty.go` рядом с типом.
+  - **MF-4** 5 новых reason constants отдельным `const`-блоком в `errors.go` с явным shared/specific разделением в godoc.
+  - **NTH-3** T16+T17 table-driven (nil vs empty alts equivalence — один pin, не разные ветки).
+  - **NTH-4** CLAUDE.md update в этой же задаче.
+- ✅ Реализация subagent `golang-pro` (без silent fix'ов, все шаги по spec):
+  - Шаг 1: rename 044 types в `publisher.go`/`deps.go`/`publisher_test.go` + обновление error strings/godoc/asserts.
+  - Шаг 2: +shared-godoc note в `errors.go` для 044-блока + новый 5-constant блок (`reasonInvalidSuggestedType`, `reasonInvalidConfidence`, `reasonInvalidThreshold`, `reasonInvalidAlternativeType`, `reasonInvalidAlternativeConfidence`).
+  - Шаг 3: `UncertaintyPublisherDeps` + `withDefaults()` в `deps.go` (структурно идентично `StatusPublisherDeps`).
+  - Шаг 4: `uncertainty.go` ~251 строк — topic const + marshalUncertain seam + `var _` assertion + Config/validate + struct + ctor + `PublishClassificationUncertain` (Block A→E + Timestamp rewrite + marshal + publish + per-exit metric) + private `failValidation` helper.
+  - Шаг 5: `uncertainty_test.go` ~700 строк — 29 поведенческих + 4 ctor + boundary inclusivity (0.0/1.0 accepted) + concurrency (16×64 distinct corrIDs, -race clean) + marshal failure (t.Cleanup-restored seam).
+  - Шаг 6: `CLAUDE.md` rewrite — TWO-publisher структура, D1/D9/D13 update, R5-NaN/R6-AltNilEmpty/R7-NoErrorMessageRewrite reconciliations, forward note #2 закрыт.
+- ✅ Применены 4 LOW doc-drift fix'а из code-reviewer (L1-L4): `doc.go` two-publisher narrative, `errors.go` PublishError + 13-strong godoc, `seams.go` Metrics SHARED, `internal_test.go` cosmetic comments.
+- ✅ Верификация: `make build` OK; `make test` 41/41 LIC пакетов PASS; `make lint` (`go vet`) 0 issues; `go test -race -count=1 ./internal/egress/publisher/orch/` PASS 0 races (~1.4s); `go test -v -count=1 ./internal/egress/publisher/orch/` — **56 `--- PASS` записей** (включая subtests): 29 поведенческих + 4 ctor для UncertaintyPublisher + сохранённые 26 StatusPublisher + `TestClassifyOutcome_AllBranches` + `TestPublishError_ErrorAndUnwrap` + `TestPublishOutcome_WireStringsPinned` + `TestHermeticImports` + `TestGofmtClean`.
+
+### Build-spec D-блок (краткая выжимка)
+- **D1** Same package `orch/`, sibling type. `UncertaintyPublisher` — второй exported тип в пакете.
+- **D2** Hardcoded `topicClassificationUncertain = "lic.events.classification-uncertain"`, NO env override (FROZEN, contract-break).
+- **D3** Reuse seam stack 1:1: `Publisher` REQUIRED (no noop), `Metrics`/`Clock`/`Logger` optional с noop defaults.
+- **D4** Symmetric naming pair `UncertaintyPublisherConfig`/`UncertaintyPublisherDeps` (после rename 044).
+- **D5** `NewUncertaintyPublisher(UncertaintyPublisherConfig, UncertaintyPublisherDeps) (*UncertaintyPublisher, error)` с fail-fast `errors.Join` (оба defects сразу).
+- **D6** Validation Blocks A→E в строгом порядке: A=5 envelope IDs; B=SuggestedType IsValid; C=Confidence ∈ [0,1] с math.IsNaN; D=Threshold ∈ [0,1] с math.IsNaN; E=Alternatives optional, per-item type+confidence.
+- **D7** Timestamp rewrite `evt.Timestamp = clock.Now().Format(RFC3339Nano)` UTC на value-receiver copy.
+- **D8** NO ErrorMessage rewrite (DTO field absent).
+- **D9** `marshalUncertain = json.Marshal` package-level seam (overridable в _test).
+- **D10** Reuse `classifyOutcome` 1:1 (broker-shape, не зависит от topic/payload).
+- **D11** Context errors raw passthrough.
+- **D12** Single-call publisher (no fan-out, retry, DLQ, idempotency).
+- **D13** Compile-time `var _ port.UncertaintyPublisherPort = (*UncertaintyPublisher)(nil)` в `uncertainty.go`.
+- **D14** Stateless after construction; goroutine-safe (T29 16×64 -race clean).
+- **D15** Hermetic allowlist UNCHANGED at 3 (`model`, `port`, `broker` sentinels). `math` stdlib OK.
+- **D16** 5 новых reason constants в новом блоке в `errors.go` (Block A + `reasonMarshalFailure` reused).
+- **D17** `(*UncertaintyPublisher).failValidation(reason)` private helper симметрично 044.
+- **D18** Test plan T1..T29 + T-CTOR-1..4 (детали в реализации).
+
+### R-reconciliations
+- **R1/R2/R3** inherited 1:1 от 044 (Publisher seam vs concrete broker; broker sentinels exception; validation-metric out-of-band от classifyOutcome).
+- **R4 — `organization_id` REQUIRED.** event-catalog §1.2 required list ставит явно. Block A enforce с `reasonMissingOrganizationID`. Симметрично 044.
+- **R5 — NaN-handling explicit.** *Tension:* Go float comparison с NaN всегда возвращает false, `c < 0 || c > 1` пропустит NaN. *Resolution:* три места (Block C, D, E inner) явно `math.IsNaN(c) || c < 0 || c > 1`. T9/T12/T18 (через subtests Confidence/Threshold/alt_confidence_nan) пинят все три ветки независимо.
+- **R6 — `nil` vs `[]` Alternatives equivalence.** *Tension:* JSON wire (`alternatives,omitempty`) и Go iteration treat nil/empty identically. *Resolution:* publisher accepts both без discrimination; `range` over nil — no-op. T16+T17 table-driven (NTH-3) пинят contract.
+- **R7 — NO ErrorMessage rewrite.** *Tension:* 044 R5 mandates ErrorMessage rewrite из catalog (FAILED-only). Could ask: «does §1.2 want similar?». *Resolution:* `ClassificationUncertain` DTO не содержит ErrorMessage поле. R5 044 two-half contract simplifies здесь до Timestamp-only. Caller's payload byte-for-byte unchanged after Timestamp rewrite.
+
+### Code-reviewer findings (subagent code-reviewer): APPROVE-WITH-FINDINGS, 0 BLOCKING / 0 HIGH / 0 MEDIUM.
+- L1 — `doc.go` stale single-publisher narrative → fixed (TWO-publisher rewrite + дифф 044/045).
+- L2 — `errors.go:11` PublishError godoc упоминал только PublishStatus → fixed (теперь обе функции).
+- L3 — `errors.go:58` «13-strong» комментарий устарел после добавления 5-constant блока → fixed (явное StatusPublisher / 045 add-on разграничение).
+- L4 — `internal_test.go` reviewer-gate comments + fail message упоминали только Status Publisher → fixed (replace_all `orch publishers`).
+- L5 — T29 concurrency не варьирует OrganizationID — cosmetic, accept (T29 044 такой же).
+
+### Architecture-reviewer (subagent architect-reviewer): **PASS** (без deviations).
+Strict-conformance по всем 8 разделам:
+- **§1 event-catalog.md §1.2** — wire topic hardcoded; 9 required fields enforced; SuggestedType→ContractType IsValid 12-whitelist; Confidence/Threshold inclusive `[0,1]` (boundary T13/T15 pins); alternatives optional + per-item; orchestrator-side dedup correctly out of scope.
+- **§2 integration-contracts.md §2** — publisher confirms через Publisher seam (mirrors broker.Client.Publish 1:1); exchange via Config.Exchange (no internal/config import); idempotency Orchestrator-side.
+- **§3 observability.md §3.9/§3.10** — `lic_publisher_messages_total{topic,outcome}` инкремент на КАЖДОМ exit path; 4-value enum; NO size histogram (small fixed shape); NO organization_id label (cardinality budget).
+- **§4 high-architecture.md §6.13** — stateless leaf; goroutine-safe; один call=одно wire-message; no retry/DLQ inside publisher.
+- **§5 error-handling.md** — `*PublishError` carry Reason+Cause; broker errors raw passthrough (errors.Is/As chain); context errors raw.
+- **§6 security.md** — Logger reserved noop (no PII surface); allowlist 3-entry; no raw bodies (DTO strictly typed).
+- **§7 pendingconfirmation.Manager integration** — `publishPauseUncertain` (live state) проходит validation; `publishPauseUncertainFromPending` с nil ClassificationResult intentionally отвергнут — defensive guard, не regression.
+- **§8 hermeticity** — `internal_test.go` allowlist EXACTLY 3 (`TestHermeticImports` gate); `uncertainty.go` imports = stdlib + `internal/domain/port`; ZERO new entries.
+
+### Реализация (subagent golang-pro)
+- **CREATE (2 файла):** `uncertainty.go` (~251), `uncertainty_test.go` (~700).
+- **UPDATE:** `publisher.go` (rename), `publisher_test.go` (rename + asserts), `deps.go` (rename + UncertaintyPublisherDeps), `errors.go` (shared-godoc + 5 reason), `seams.go` (Metrics SHARED godoc), `internal_test.go` (cosmetic), `doc.go` (two-publisher), `CLAUDE.md` (rewrite, TWO publishers).
+- **NO CHANGE:** `seams_test.go` (PublishOutcome SSOT pin reused 1:1 без drift).
+
+### Forward notes (owners elsewhere)
+1. **LIC-TASK-047 (wiring)** — `orch.NewUncertaintyPublisher(orch.UncertaintyPublisherConfig{Exchange: cfg.Broker.Exchanges.LICEvents}, orch.UncertaintyPublisherDeps{Publisher: brokerClient, Metrics: publisherMetricsAdapter, Clock: systemClock{}, Logger: loggerAdapter})`. Тот же `publisherMetricsAdapter` обслуживает 044 и 045 (один `IncPublish(topic, outcome)` для обоих — двух topic strings; cost adapter тот же).
+2. **LIC-TASK-046 (DLQPublisher)** — третий сосед в `orch/`; будет добавлен с `DLQPublisherConfig`/`DLQPublisherDeps` по тому же naming pattern. Allowlist остаётся 3.
+3. **Caller `pendingconfirmation.Manager`** — поведение не меняется. `publishPauseUncertain` (live state) walks happy path; `publishPauseUncertainFromPending` с nil `ClassificationResult` намеренно отвергается publisher'ом с `reasonInvalidSuggestedType` — corrupted pending blob (валидное defensive поведение).
+4. **Pre-LIC-TASK-021 forward.** Token Estimator не требуется для 045 — payload состоит из 5 UUID + ContractType + 2 float64 + опционально <= 3 alternatives, всё в пределах любого token budget.
+
+### Прогресс: 42/55 done → 43/55 done.
+Открыты (deps done): 003, 009, 021, 046, 052, 053. Критпуть: **046+009 → 047 wiring → 048-055**. Рекомендация следующей итерации: **LIC-TASK-046** (DLQPublisher — третий sibling в `orch/`, готовый naming pattern + 7-step blueprint от 045/044) ЛИБО **LIC-TASK-009** (Health check handler — последний блокер 047 после 046).
+

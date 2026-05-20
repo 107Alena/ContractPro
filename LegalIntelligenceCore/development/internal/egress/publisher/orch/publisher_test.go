@@ -177,7 +177,7 @@ func newTestPublisher(t *testing.T, pub Publisher, m Metrics, c Clock, l Logger)
 	if pub == nil {
 		pub = &fakePublisher{}
 	}
-	p, err := NewStatusPublisher(PublisherConfig{Exchange: testExchange}, PublisherDeps{
+	p, err := NewStatusPublisher(StatusPublisherConfig{Exchange: testExchange}, StatusPublisherDeps{
 		Publisher: pub,
 		Metrics:   m,
 		Clock:     c,
@@ -1005,7 +1005,7 @@ func TestPublishStatus_Concurrent_DistinctCorrelationIDs(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestNewStatusPublisher_EmptyExchange_ConstructorError(t *testing.T) {
-	p, err := NewStatusPublisher(PublisherConfig{Exchange: ""}, PublisherDeps{
+	p, err := NewStatusPublisher(StatusPublisherConfig{Exchange: ""}, StatusPublisherDeps{
 		Publisher: &fakePublisher{},
 	})
 	if err == nil {
@@ -1014,8 +1014,8 @@ func TestNewStatusPublisher_EmptyExchange_ConstructorError(t *testing.T) {
 	if p != nil {
 		t.Errorf("want nil publisher on error; got %+v", p)
 	}
-	if got := err.Error(); !strings.Contains(got, "Exchange") {
-		t.Errorf("error must name the offending field (Exchange); got %q", got)
+	if got := err.Error(); !strings.Contains(got, "StatusPublisherConfig.Exchange") {
+		t.Errorf("error must name the offending field (StatusPublisherConfig.Exchange); got %q", got)
 	}
 }
 
@@ -1024,7 +1024,7 @@ func TestNewStatusPublisher_EmptyExchange_ConstructorError(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestNewStatusPublisher_NilPublisher_ConstructorError(t *testing.T) {
-	p, err := NewStatusPublisher(PublisherConfig{Exchange: testExchange}, PublisherDeps{
+	p, err := NewStatusPublisher(StatusPublisherConfig{Exchange: testExchange}, StatusPublisherDeps{
 		Publisher: nil,
 		Metrics:   &fakeMetrics{},
 		Clock:     fakeClock{now: fixedTime},
@@ -1036,8 +1036,8 @@ func TestNewStatusPublisher_NilPublisher_ConstructorError(t *testing.T) {
 	if p != nil {
 		t.Errorf("want nil publisher on error; got %+v", p)
 	}
-	if got := err.Error(); !strings.Contains(got, "Publisher") {
-		t.Errorf("error must name the offending field (Publisher); got %q", got)
+	if got := err.Error(); !strings.Contains(got, "StatusPublisherDeps.Publisher") {
+		t.Errorf("error must name the offending field (StatusPublisherDeps.Publisher); got %q", got)
 	}
 }
 
@@ -1047,7 +1047,7 @@ func TestNewStatusPublisher_NilPublisher_ConstructorError(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestNewStatusPublisher_BothDefects_ErrorsJoinSurfacesBoth(t *testing.T) {
-	p, err := NewStatusPublisher(PublisherConfig{Exchange: ""}, PublisherDeps{
+	p, err := NewStatusPublisher(StatusPublisherConfig{Exchange: ""}, StatusPublisherDeps{
 		Publisher: nil,
 	})
 	if err == nil {
@@ -1057,11 +1057,11 @@ func TestNewStatusPublisher_BothDefects_ErrorsJoinSurfacesBoth(t *testing.T) {
 		t.Errorf("want nil publisher on error; got %+v", p)
 	}
 	got := err.Error()
-	if !strings.Contains(got, "Publisher") {
-		t.Errorf("error must mention Publisher defect; got %q", got)
+	if !strings.Contains(got, "StatusPublisherDeps.Publisher") {
+		t.Errorf("error must mention StatusPublisherDeps.Publisher defect; got %q", got)
 	}
-	if !strings.Contains(got, "Exchange") {
-		t.Errorf("error must mention Exchange defect; got %q", got)
+	if !strings.Contains(got, "StatusPublisherConfig.Exchange") {
+		t.Errorf("error must mention StatusPublisherConfig.Exchange defect; got %q", got)
 	}
 }
 
@@ -1073,7 +1073,7 @@ func TestNewStatusPublisher_BothDefects_ErrorsJoinSurfacesBoth(t *testing.T) {
 
 func TestNewStatusPublisher_NilOptionalSeams_NoopDefaults(t *testing.T) {
 	pub := &fakePublisher{}
-	p, err := NewStatusPublisher(PublisherConfig{Exchange: testExchange}, PublisherDeps{
+	p, err := NewStatusPublisher(StatusPublisherConfig{Exchange: testExchange}, StatusPublisherDeps{
 		Publisher: pub,
 		// Metrics / Clock / Logger intentionally nil — must get noop defaults.
 	})

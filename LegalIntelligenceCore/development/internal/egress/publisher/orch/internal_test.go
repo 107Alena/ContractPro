@@ -79,7 +79,7 @@ func TestHermeticImports(t *testing.T) {
 	}
 	for _, forbidden := range forbiddenInternal {
 		if _, present := allowedInternal[forbidden]; present {
-			t.Fatalf("allowedInternal must NOT contain %q — the orch Status Publisher is hermetic (stdlib + model/port/broker(sentinels) only); telemetry/clock/logger are seamed, broker.Publish is behind a seam, Config is a ctor param", forbidden)
+			t.Fatalf("allowedInternal must NOT contain %q — the orch publishers (Status + Uncertainty) is hermetic (stdlib + model/port/broker(sentinels) only); telemetry/clock/logger are seamed, broker.Publish is behind a seam, Config is a ctor param", forbidden)
 		}
 	}
 

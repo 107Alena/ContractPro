@@ -1925,7 +1925,33 @@
       "dependencies": [
         "LIC-TASK-008"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-21",
+      "completion_notes": {
+        "summary": "Реализован UncertaintyPublisher как sibling к StatusPublisher в существующем пакете internal/egress/publisher/orch/. Публикует ClassificationUncertain envelope на FROZEN-топик `lic.events.classification-uncertain` (event-catalog §1.2, observability §3.9, high-architecture §6.13). 1 новый production-файл `uncertainty.go` (~251 строк) + 1 тест-файл `uncertainty_test.go` (~700 строк). Симметричный naming через MUST-FIX-1: rename PublisherConfig/PublisherDeps → StatusPublisherConfig/StatusPublisherDeps + новые UncertaintyPublisherConfig/UncertaintyPublisherDeps; 044 поведение не меняется. Seam-стек (Publisher, Metrics, Clock, Logger) и broker classifyOutcome SHARED 1:1 — без дублирования. Hardcoded topic = NO env-override (FROZEN). Validation Blocks A-E в строгом порядке: A=5 envelope IDs (org_id REQUIRED), B=SuggestedType IsValid (12-whitelist), C/D=Confidence/Threshold ∈ [0,1] с EXPLICIT math.IsNaN guard (Go float vs NaN всегда false), E=Alternatives optional с per-item type+confidence checks. Timestamp rewrite через clock.Now().Format(RFC3339Nano) UTC на value-receiver copy — caller-side struct unchanged (T2 пинит оба пол-контракта). Hermetic allowlist UNCHANGED at 3 entries (model, port, broker sentinels). NO size histogram (small envelope), NO Orchestrator-side dedup (lic-uncertain:{version_id} — Orchestrator owns). 5 новых reason constants отдельным блоком в errors.go; Block A + reasonMarshalFailure — SHARED с 044.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран (~1.6 МБ)",
+          "make_test": "ok — все 41 пакет LIC PASS, 0 FAIL",
+          "make_lint": "ok — go vet ./... 0 errors",
+          "go_test_race": "ok — go test -race -count=1 ./internal/egress/publisher/orch/ PASS, 0 races (~1.4s)",
+          "orch_package_tests": "56 ´--- PASS´ записей (включая subtests): 29 поведенческих тестов UncertaintyPublisher (T1..T29) + 4 ctor (T-CTOR-1..4) + сохранённые 26 StatusPublisher + Classify+Error+SSOT-pin"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/uncertainty.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/uncertainty_test.go"
+        ],
+        "files_modified": [
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/publisher.go (rename PublisherConfig/Deps → StatusPublisherConfig/Deps)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/publisher_test.go (rename refs + assert substrings)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/deps.go (rename + добавлен UncertaintyPublisherDeps + withDefaults)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/errors.go (+ shared godoc note, + новый блок из 5 045-specific reason constants)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/seams.go (godoc: Metrics SHARED обоими publishers)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/internal_test.go (cosmetic: 'Status Publisher' → 'orch publishers')",
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/doc.go (two-publisher narrative, дифф 044/045)",
+          "LegalIntelligenceCore/development/internal/egress/publisher/orch/CLAUDE.md (TWO-publisher структура, R5/R6/R7)"
+        ],
+        "notes": "Design adjudicated subagent code-architect: APPROVE-WITH-MUST-FIX (4 MF + 4 NTH). MF-1 symmetric naming rename (precedent dm/ RequesterConfig vs PublisherConfig); MF-2 Block A = 5 caller-IDs (Timestamp перезаписывается публишером, не валидируется на caller-side — симметрия с 044); MF-3 `var _` assertion в новом uncertainty.go рядом с типом; MF-4 5 новых reason constants отдельным блоком в errors.go с явным shared/specific разделением в godoc. NTH-3 T16+T17 table-driven (nil vs empty alts equivalence). Реализация subagent golang-pro, без отклонений от build-spec. R-reconciliations: R1/R2/R3 inherit от 044; R4 org_id REQUIRED (event-catalog §1.2 required list); R5 math.IsNaN explicit (Go float NaN сравнения всегда false — три места: Confidence/Threshold/alternative.Confidence); R6 nil-vs-empty Alternatives equivalence (range no-op для обоих); R7 NO ErrorMessage rewrite (DTO field absent) — упрощает 044's R5 до Timestamp-only. code-reviewer APPROVE-WITH-FINDINGS (0 BLOCKING/HIGH/MEDIUM, 5 LOW все cosmetic doc drift L1-L5; L1-L4 применены тем же коммитом, L5 accept). architect-reviewer PASS (без deviations) — strict-conformance по всем 8 разделам: event-catalog §1.2, integration-contracts §2, observability §3.9/§3.10, high-architecture §6.13, error-handling, security, pendingconfirmation integration, hermeticity. Forward: caller pendingconfirmation.Manager.publishPauseUncertainFromPending намеренно оставляет SuggestedType пустым когда ClassificationResult==nil; publisher отвергает с reasonInvalidSuggestedType — defensive guard, не regression (corrupted pending blob). Разблокирует LIC-TASK-047 (main wiring) совместно с pending 046/009."
+      }
     },
     {
       "id": "LIC-TASK-046",

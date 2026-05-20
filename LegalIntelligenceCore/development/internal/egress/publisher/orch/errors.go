@@ -8,16 +8,18 @@ import (
 	"contractpro/legal-intelligence-core/internal/infra/broker"
 )
 
-// PublishError is the typed error returned by PublishStatus for the two
-// classes of failure ATTRIBUTABLE TO THIS PUBLISHER:
+// PublishError is the typed error returned by both PublishStatus
+// (StatusPublisher, LIC-TASK-044) and PublishClassificationUncertain
+// (UncertaintyPublisher, LIC-TASK-045) for the two classes of failure
+// ATTRIBUTABLE TO THE PUBLISHER:
 //
 //  1. Pre-publish validation failures — caller supplied an invalid
-//     LICStatusChangedEvent field set. Reason is one of the reason*
-//     constants in this file; Cause is nil.
+//     LICStatusChangedEvent or ClassificationUncertain field set. Reason
+//     is one of the reason* constants in this file; Cause is nil.
 //  2. JSON marshal failure — should be unreachable for compliant inputs
-//     (no exotic types in port.LICStatusChangedEvent), but a defensive
-//     wrap preserves the original encoding/json error in Cause so
-//     production triage can identify the offending field.
+//     (no exotic types in either DTO), but a defensive wrap preserves
+//     the original encoding/json error in Cause so production triage can
+//     identify the offending field.
 //
 // Broker failures pass through RAW — the caller's
 // errors.Is(err, broker.ErrPublishNack) / errors.As(err, &broker.BrokerError{})
@@ -55,7 +57,9 @@ func (e *PublishError) Unwrap() error {
 }
 
 // Validation-failure reason constants. snake_case so they map directly to
-// log/metric-friendly identifiers. The 13-strong set covers:
+// log/metric-friendly identifiers. The 13-strong StatusPublisher set
+// below covers (the 045 add-on block further down adds 5
+// UncertaintyPublisher-specific reasons for Block B/C/D/E):
 //
 //   - 5 envelope-ID required-field branches (Block A)
 //   - 1 Status-IsValid branch (Block B)
@@ -68,6 +72,9 @@ func (e *PublishError) Unwrap() error {
 //     step 9, but kept for triage if the catalog SSOT ever drifts at
 //     runtime)
 //   - 1 marshal-failure branch (defensive, encoding/json post-validation)
+//
+// Block A (envelope IDs) и reasonMarshalFailure ниже — SHARED с
+// UncertaintyPublisher (045) 1:1; Block B/C/D/defensive — StatusPublisher-only.
 const (
 	reasonMissingCorrelationID    = "missing_correlation_id"
 	reasonMissingJobID            = "missing_job_id"
@@ -82,6 +89,26 @@ const (
 	reasonUnexpectedFailureFields = "unexpected_failure_fields"
 	reasonErrorCodeNotInCatalog   = "error_code_not_in_catalog"
 	reasonMarshalFailure          = "marshal_failure"
+)
+
+// LIC-TASK-045 — ClassificationUncertain envelope validation reason
+// constants (event-catalog.md §1.2). The 044 Block A reason set
+// (reasonMissingCorrelationID..reasonMissingOrganizationID) AND
+// reasonMarshalFailure are SHARED with this publisher 1:1 — they encode
+// the same caller-side defects on the same wire fields. The five
+// constants below are UncertaintyPublisher-specific: SuggestedType enum
+// (FROZEN whitelist), the two [0,1] float ranges (Confidence /
+// Threshold), and the alternatives-inner pair. NaN-handling is folded
+// into each Confidence/Threshold reason (the offending value is visible
+// in the log payload via the caller-passed *DomainError chain — adding
+// a dedicated reasonNaN* would split one semantic into two without
+// debugger value).
+const (
+	reasonInvalidSuggestedType         = "invalid_suggested_type"
+	reasonInvalidConfidence            = "invalid_confidence"
+	reasonInvalidThreshold             = "invalid_threshold"
+	reasonInvalidAlternativeType       = "invalid_alternative_type"
+	reasonInvalidAlternativeConfidence = "invalid_alternative_confidence"
 )
 
 // classifyOutcome maps a broker.Publish return value to the local

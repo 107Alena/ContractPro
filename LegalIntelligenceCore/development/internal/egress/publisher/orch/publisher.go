@@ -31,12 +31,12 @@ var marshalStatus = json.Marshal
 // dm.ArtifactRequester / dm.AnalysisArtifactsPublisher.
 var _ port.StatusPublisherPort = (*StatusPublisher)(nil)
 
-// PublisherConfig is the local startup-time config for StatusPublisher
+// StatusPublisherConfig is the local startup-time config for StatusPublisher
 // (LIC-TASK-044). Local struct, NO internal/config import (the
 // pipeline.Config / pendingconfirmation.Config / dm.PublisherConfig
 // precedent). LIC-TASK-036 / TASK-047 wires
-// config.BrokerConfig.Exchanges.LICEvents → PublisherConfig.Exchange.
-type PublisherConfig struct {
+// config.BrokerConfig.Exchanges.LICEvents → StatusPublisherConfig.Exchange.
+type StatusPublisherConfig struct {
 	// Exchange is the topic exchange on which the LICStatusChangedEvent
 	// envelope is published. MUST be non-empty — an empty Exchange would
 	// publish to the AMQP default exchange (direct-routing by queue name),
@@ -50,10 +50,10 @@ type PublisherConfig struct {
 // Config.validate / dm.PublisherConfig.validate precedent). NOT a domain
 // error — this is a startup-time wiring defect, not an Orchestrator-visible
 // failure.
-func (c PublisherConfig) validate() error {
+func (c StatusPublisherConfig) validate() error {
 	var errs []error
 	if c.Exchange == "" {
-		errs = append(errs, errors.New("orch publisher: PublisherConfig.Exchange must be non-empty"))
+		errs = append(errs, errors.New("orch publisher: StatusPublisherConfig.Exchange must be non-empty"))
 	}
 	return errors.Join(errs...)
 }
@@ -71,7 +71,7 @@ func (c PublisherConfig) validate() error {
 //   - port.StatusPublisherPort —
 //     PublishStatus(ctx, port.LICStatusChangedEvent) error
 type StatusPublisher struct {
-	cfg       PublisherConfig
+	cfg       StatusPublisherConfig
 	publisher Publisher
 	metrics   Metrics
 	clock     Clock
@@ -81,24 +81,24 @@ type StatusPublisher struct {
 // NewStatusPublisher validates the wiring and assembles the publisher. It
 // fails fast (NewTypeName per feedback_constructors.md; the dmawaiter /
 // pendingconfirmation / pipeline / dm.NewAnalysisArtifactsPublisher
-// precedent): an invalid PublisherConfig or a nil Publisher is a
+// precedent): an invalid StatusPublisherConfig or a nil Publisher is a
 // LIC-TASK-036 / TASK-047 wiring defect and MUST be a startup error, not a
 // first-call nil-deref. errors.Join surfaces ALL defects at once. The three
 // OPTIONAL seams (Metrics / Clock / Logger) never cause an error;
-// PublisherDeps.withDefaults substitutes a noop for each nil one.
+// StatusPublisherDeps.withDefaults substitutes a noop for each nil one.
 //
 // Publisher has NO noop default and is checked AFTER withDefaults — a
 // silent-swallow Publisher would make every lic.events.status-changed
 // publish invisible (no broker, no log, no metric, the Orchestrator never
-// sees a status transition). See PublisherDeps.Publisher godoc.
-func NewStatusPublisher(cfg PublisherConfig, deps PublisherDeps) (*StatusPublisher, error) {
+// sees a status transition). See StatusPublisherDeps.Publisher godoc.
+func NewStatusPublisher(cfg StatusPublisherConfig, deps StatusPublisherDeps) (*StatusPublisher, error) {
 	var errs []error
 	if err := cfg.validate(); err != nil {
 		errs = append(errs, err)
 	}
 	d := deps.withDefaults()
 	if d.Publisher == nil {
-		errs = append(errs, errors.New("orch publisher: PublisherDeps.Publisher must be non-nil (no noop default — silent swallow on lic.events.status-changed is forbidden)"))
+		errs = append(errs, errors.New("orch publisher: StatusPublisherDeps.Publisher must be non-nil (no noop default — silent swallow on lic.events.status-changed is forbidden)"))
 	}
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)

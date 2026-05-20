@@ -1540,3 +1540,76 @@ Production-ready Agent 7 — тонкая обёртка над BaseAgent: Summa
 4. **R3 deviation recorded:** outcomeMissing под persist_artifacts — defensive fallback под programming-bug literal-form misuse port.PersistConfirmation{} (constructors panic-on-nil предотвращают normal path). Future observability-consistency pass должен либо расширить observability.md §3.5, либо добавить awaiter-side panic.
 
 **Прогресс: 38/55 done.** Открыты (deps done): 003,009,021,042,043,044,045,046,052,053. Критпуть остаётся: **042+043+044+045+046+009 → 047 wiring → 048-055**. Рекомендация следующей итерации: **LIC-TASK-044** (Status Event Publisher — Router 040 уже его потребляет в `publishFailedTerminal`, Pipeline 036 в `publishFailed`, Manager 037 в `publishPauseInProgress`+`publishFailed` — много consumers готовых), ЛИБО **LIC-TASK-042** (DM Artifact Requester — Pipeline 036 уже его потребляет в requestAndAwaitCurrent/RE_CHECK parent), ЛИБО **LIC-TASK-043** (DM Artifact Publisher — Aggregator 035 / Pipeline 036 уже потребляют). Любой из 042/043/044/045/046 + 009 закрывает 047 wiring блокер.
+
+---
+
+## LIC-TASK-042 — DM Artifact Requester (publish lic.requests.artifacts)
+- **Status:** done
+- **Completed at:** 2026-05-20
+- **Agent:** claude-opus-4-7 (subagents: code-architect → golang-pro → code-reviewer)
+
+### План реализации
+1. Прочитать architecture/integration-contracts.md §2/§6.1, DocumentManagement/architecture/event-catalog.md §1.4, high-architecture.md §6.5 step 1 / §8.3.
+2. Сверить с уже зашитым `port.ArtifactRequesterPort` (port/dm.go:33-39), `port.GetArtifactsRequest` (port/events.go:147-155), `broker.Client.Publish` сигнатурой и метрикой `lic_publisher_messages_total`.
+3. Делегировать дизайн subagent code-architect для adjudication пакета `internal/egress/publisher/dm` (получено D1..D15 + R1..R3, без reject).
+4. Делегировать реализацию subagent golang-pro: 9 файлов с hermetic-Hexagonal pattern по precedent dmawaiter.
+5. Запустить make build/test/lint + go test -race ./... — все 40 пакетов LIC PASS, 0 регрессий.
+6. Делегировать финальный review subagent code-reviewer — ACCEPT-WITH-NITS (0 BLOCKING / 0 HIGH).
+7. Применить все 3 MEDIUM (M1 marshal_failure coverage; M2 strings.Contains assert для ctor errors; M3 docstring drift в CLAUDE.md) и 2 LOW (L1/L2 — заменить self-baked strconvI/contains на stdlib strconv.Itoa/strings.Contains).
+8. Перезапустить make build/test/lint — снова зелёные.
+9. Обновить tasks.json (status=done + completion_notes) и progress.md.
+
+### Прогресс
+- Пакет `internal/egress/publisher/dm` создан: 9 файлов (5 production + 3 test + CLAUDE.md).
+- `ArtifactRequester` implements `port.ArtifactRequesterPort` (compile-time `var _` assertion).
+- Topic FROZEN: hardcoded const `"lic.requests.artifacts"` (никакого env-override — опечатка ⇒ silent de-route).
+- Exchange — через `Config.Exchange` (LIC-TASK-036/047 wiring мапит `cfg.Broker.ExchangeEvents`).
+- Validation: 5 required ID + non-empty types с `IsValid()` → `*PublishError`, метрика `invalid`, `broker.Publish` НЕ вызывается.
+- JSON: `port.GetArtifactsRequest` со всеми 7 полями; `organization_id,omitempty`; timestamp UTC RFC3339Nano через Clock seam.
+- Outcome классификатор: `nil`→success, ctx errors→failure (raw passthrough), `broker.ErrPublishNack`→nacked, `broker.ErrConfirmTimeout`/прочее→failure. Метрика ВСЕГДА инкрементируется ровно один раз.
+- Hermetic invariant: allowlist=3 (`model`, `port`, `broker` для двух sentinels). Никаких amqp091, prometheus, internal/config, internal/application/* импортов в production.
+- Publisher seam REQUIRED (no noop default — silent swallow заблокировал бы pipeline awaiter навсегда без log/metric).
+- 23 теста PASS (T1..T17 поведенческие + T-CTOR-1..3 + classifyOutcome табличный + PublishError API + marshal_failure injection + PublishOutcome wire pin), `-race` чистый.
+- Hermetic guard + gofmt self-check через `go/format`.
+- `make build/test/lint` — все зелёные; `go test -race ./...` — 40 пакетов PASS, 0 регрессий.
+
+**Ключевые решения (D1..D15 / R1..R3):**
+- **D1** Пакет `internal/egress/publisher/dm` с расчётом на sibling `AnalysisReadyPublisher` (LIC-TASK-043) в том же пакете — seams.go/deps.go/errors.go shared.
+- **D2/D9** `NewArtifactRequester(Config{Exchange}, Deps) (*ArtifactRequester, error)` fail-fast `errors.Join`; Publisher REQUIRED без noop (D2); Metrics/Clock/Logger optional с noop default.
+- **D3** Local 1-method `Publisher` interface matching `broker.Client.Publish` signature byte-for-byte — изолирует amqp091 от пакета.
+- **D4** Pre-publish validation 5 required + non-empty `IsValid()` types; duplicates NOT rejected (orchestrator может de-dup upstream).
+- **D5** Timestamp UTC RFC3339Nano через Clock seam.
+- **D6** Stdlib `encoding/json` через `marshalRequest` package-level var (injectable в _test для marshal_failure coverage M1).
+- **D7** `classifyOutcome` narrow — только broker outcomes; validation failures emit `invalid` метрику directly из `failValidation` (R3).
+- **D8** Context errors raw passthrough (broker уже так делает, dmawaiter D13 precedent).
+- **D10** Publisher single-call. RE_CHECK fan-out — orchestrator (LIC-TASK-036) calls `RequestArtifacts` дважды с разными correlation_id-суффиксами (current/parent).
+- **D11** Compile-time `var _ port.ArtifactRequesterPort = (*ArtifactRequester)(nil)` в requester.go (egress publishers concretely implement domain ports, в отличие от dmawaiter где `var _` в 047 wiring).
+- **D12** Stateless после конструктора — goroutine-safe для concurrent calls с любыми correlationIDs (broker.pubMu serialize'ит publishes сам). T17 пинит 16 параллельных goroutines.
+- **D13** Hermetic allowlist EXACTLY 3 `{model, port, broker(sentinels)}` — deviation от 4 в дизайн-спеке: `metrics/labels` не существует как подпакет, `PublishOutcome` local mirror в seams.go + pin в seams_test.go против `metrics.PublishOutcome` SSOT (universal `base.Outcome` / `router.CallOutcome` local-mirror precedent).
+- **D14** Тесты: T1 success+envelope, T2 timestamp UTC RFC3339Nano, T3-T7 5 validation failures, T8 invalid artifact type, T9 omitempty organization_id, T10-T16 broker outcomes + ctx errors, T17 concurrent goroutines, T-CTOR-1..3 ctor + nil-optional defaults, classifier table, PublishError API, marshal_failure injection, PublishOutcome wire pin.
+- **D15** Anti-scope: НЕТ RE_CHECK fan-out, DLQ, retry loop, duration histogram, env topic override, AnalysisReadyPublisher (043).
+
+**R-reconciliations:**
+- **R1** Publisher seam vs concrete `*broker.Client` — 1-method local interface, byte-identical к `broker.Client.Publish` (sig); broker error TYPES всё ещё flow back raw через `errors.Is`/`As` на sentinels.
+- **R2** TWO `internal/infra/broker` sentinels в production коде — узко-bounded exception (только `ErrPublishNack` + `ErrConfirmTimeout` для `classifyOutcome`; amqp091 НЕ leak'ит транзитивно — изолирован Publisher seam). Recorded deliberate.
+- **R3** Validation-failure metric emission OUT-OF-BAND of `classifyOutcome` — call site (`failValidation`) emits `PublishOutcomeInvalid` directly; классификатор остаётся narrow по дизайну (dmawaiter D11 классификатор-узкий-по-дизайну precedent).
+
+**Code-reviewer findings (ACCEPT-WITH-NITS):**
+- 0 BLOCKING / 0 HIGH
+- M1 marshal_failure без поведенческого покрытия → добавлен `marshalRequest` package var (default = `json.Marshal`) + `TestRequestArtifacts_MarshalFailure_EmitsFailureMetricAndPublishesNothing` с подменой через _test.
+- M2 ctor-tests не проверяли error содержимое → добавлены `strings.Contains(err.Error(), "Publisher"|"Exchange")` asserts.
+- M3 CLAUDE.md docstring drift "4-entry allowlist" + ссылка на dead `reasonBrokerFailure` → исправлено на "3-entry `{model, port, broker}`" с пояснением local-mirror precedent.
+- L1/L2 self-baked `strconvI` + `contains` → заменено на `strconv.Itoa` / `strings.Contains`.
+- L3-L6 cosmetic — приняты как noise.
+
+**Реализация:** doc.go (~60), requester.go (~225), seams.go (~158), deps.go (~38), errors.go (~104), requester_test.go (~870), internal_test.go (~142), seams_test.go (~44), CLAUDE.md (~250). 23 теста PASS race-clean.
+
+**Тесты/верификация (parent):** `make build` OK; `make test` OK (40 пакетов LIC); `make lint` (`go vet`) OK 0 issues; `go test -race -count=1 ./...` — **40 пакетов PASS, 0 регрессий**; `go test -race -count=1 ./internal/egress/publisher/dm` — **23/23 PASS** (~1.7s). Соответствие архитектуре подтверждено: integration-contracts.md §2/§6.1 (routing key + exchange topology), DM event-catalog.md §1.4 (`GetArtifactsRequest` FROZEN), high-architecture.md §6.5 step 1 / §8.3 RE_CHECK fan-out (publisher single-call, orchestrator-level fan-out), observability.md §3.9 (`lic_publisher_messages_total{topic,outcome}` с 4 closed enum values), error-handling.md §3.2 (`DM_ARTIFACTS_TIMEOUT` — owned orchestrator-side при awaiter timeout).
+
+**Forward notes (owners elsewhere):**
+1. **LIC-TASK-036 (pipeline orchestrator wiring)** — `dm.NewArtifactRequester(dm.Config{Exchange: cfg.Broker.ExchangeEvents}, dm.Deps{Publisher: brokerClient, Metrics: publisherMetricsAdapter, Clock: systemClock{}, Logger: loggerAdapter})`. Orchestrator вызывает `RequestArtifacts` ПОСЛЕ `dmawaiter.ArtifactsAwaiter.Register(correlationID)` (Register-before-publish contract dmawaiter D5). На RE_CHECK: два параллельных `RequestArtifacts(ctx, "<base>:current", ...)` + `RequestArtifacts(ctx, "<base>:parent", ..., [RISK_ANALYSIS])` через `errgroup.Group`.
+2. **LIC-TASK-043 (sibling AnalysisReadyPublisher)** — лежит в этом же пакете как `analysisready.go` + `analysisready_test.go`; reuses seams.go (Publisher/Metrics/Clock/Logger), deps.go (Deps + withDefaults), errors.go (PublishError + classifyOutcome). No new seam method needed.
+3. **LIC-TASK-046 (DLQ adapter)** — publisher's `*PublishError` не auto-DLQ; orchestrator inspects `(err, classifyOutcome(err))` и decides DLQ vs retry vs hard-fail. `nacked` + `Retryable==false` — типичные DLQ кандидаты.
+4. **PublisherMetrics adapter (LIC-TASK-036/047)** — tiny adapter над `*metrics.PublisherMessagesTotal` который calls `WithLabelValues(topic, string(outcome)).Inc()`. Conversion `PublishOutcome→string` на границе adapter'а; пакет `dm/` не импортирует concrete metrics.
+
+**Прогресс: 39/55 done → 40/55 done.** Открыты (deps done): 003, 009, 021, 043, 044, 045, 046, 052, 053. Критпуть остаётся: **043+044+045+046+009 → 047 wiring → 048-055**. Рекомендация следующей итерации: **LIC-TASK-043** (DM Artifact Publisher — Aggregator 035 / Pipeline 036 уже потребляют; sibling в том же пакете `internal/egress/publisher/dm/`), ЛИБО **LIC-TASK-044** (Status Event Publisher — Router 040 / Pipeline 036 / Manager 037 уже потребляют). LIC-TASK-042 разблокирует pair-связь с awaiter 041 — теперь существует кто будит awaiter.

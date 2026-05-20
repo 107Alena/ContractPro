@@ -1747,7 +1747,40 @@
       "dependencies": [
         "LIC-TASK-008"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-20",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/egress/publisher/dm — DM Artifact Requester для топика lic.requests.artifacts (FROZEN integration-contracts.md §6.1 / DM event-catalog.md §1.4). 5 production-файлов: doc.go (hermetic statement + D1..D15/R1..R3 attribution), requester.go (Config{Exchange} + validate, NewArtifactRequester с fail-fast errors.Join, ArtifactRequester struct, единственный метод RequestArtifacts: pre-publish validation 5 required ID + non-empty IsValid() types → *PublishError + invalid metric без publish; build envelope port.GetArtifactsRequest с omitempty organization_id; marshalRequest seam (var = json.Marshal, override-able в _test для покрытия marshal_failure ветки); broker.Publish; classifyOutcome → metric; const topicArtifactsRequest = 'lic.requests.artifacts'; var _ port.ArtifactRequesterPort = (*ArtifactRequester)(nil) compile-time assertion), seams.go (Publisher 1-method interface — REQUIRED, no noop default — match broker.Client.Publish signature byte-for-byte; PublishOutcome local mirror enum {success/failure/nacked/invalid}; Metrics + noopMetrics с IncPublish(topic, outcome); Clock + systemClock UTC; Logger + noopLogger Warn/Error reserved; var _ Seam = noop{} assertions), deps.go (Deps{Publisher, Metrics, Clock, Logger} + withDefaults — substitute noop only для Metrics/Clock/Logger), errors.go (PublishError{Reason, Cause} + Error/Unwrap nil-safe; 7 package-private reason констант: missing_correlation_id/missing_job_id/missing_document_id/missing_version_id/missing_artifact_types/invalid_artifact_type/marshal_failure; classifyOutcome(err) PublishOutcome — broker-outcome классификатор: nil→success, ctx.Canceled/DeadlineExceeded→failure, broker.ErrPublishNack→nacked, broker.ErrConfirmTimeout→failure, всё прочее→failure). 3 test-файла: requester_test.go (22 теста: T1 success+envelope, T2 timestamp RFC3339Nano UTC, T3..T7 5 validation failures, T8 invalid artifact type, T9 omitempty organization_id, T10..T16 broker outcomes + ctx errors, T17 concurrent 16 goroutines × distinct correlationIDs -race clean, T-CTOR-1..3 ctor errors с assert error-содержимого M2, marshal_failure path coverage M1, TestClassifyOutcome_AllBranches табличный, TestPublishError_ErrorAndUnwrap), internal_test.go (TestHermeticImports — allowlist EXACTLY 3 {model, port, broker(sentinels)} + active-fail forbidden set 16 пакетов + 'no third-party' guard; TestGofmtClean через go/format), seams_test.go (TestPublishOutcome_WireStringsPinned — pin локального mirror против metrics.PublishOutcome SSOT). + package CLAUDE.md (контракт пакета, R1/R2/R3 reconciliations, forward notes для LIC-TASK-036/043/047).",
+        "key_decisions": [
+          "D9 Topic — hardcoded const 'lic.requests.artifacts' (FROZEN; env-override отвергнут, ошибка опечатки была бы silent de-route).",
+          "D2 Publisher seam REQUIRED — нет noop default (silent swallow lic.requests.artifacts заблокировал бы pipeline awaiter навсегда без log/metric).",
+          "D3 Publisher seam — 1-method local interface matching broker.Client.Publish signature byte-for-byte (hermetic — amqp091 не залезает в пакет; LIC-TASK-036/047 wiring передаёт concrete *broker.Client structurally).",
+          "D7 classifyOutcome — narrow contract по broker outcomes only; validation failures emit invalid метрику directly из call site (R3 reconciliation).",
+          "D10 RE_CHECK fan-out — orchestrator-decision (LIC-TASK-036), не publisher. Publisher single-call; orchestrator вызывает RequestArtifacts дважды с разными correlation_id-суффиксами для current+parent.",
+          "D13 Hermetic allowlist size=3 (model, port, broker для двух sentinels). Deviation от 4 в design-spec — PublishOutcome mirror local в seams.go pinned в seams_test.go против metrics.PublishOutcome SSOT (universal base.Outcome/router.CallOutcome/cost.Outcome local-mirror precedent — keeps production источник hermetic, metrics import только в _test файле).",
+          "marshalRequest var — injectable JSON marshaller для тест-покрытия 'defensive' marshal_failure ветки (M1 от code-reviewer)."
+        ],
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран",
+          "make_test": "ok — все 40 пакетов LIC PASS",
+          "make_lint": "ok — go vet ./... 0 issues",
+          "go_test_race_full_module": "ok — 40 пакетов PASS, -race clean, 0 регрессий",
+          "go_test_race_dm_publisher": "ok — 22 теста PASS (~1.7s); включая T17 concurrent 16 goroutines × distinct correlationIDs"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/doc.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/requester.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/seams.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/deps.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/errors.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/requester_test.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/internal_test.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/seams_test.go",
+          "LegalIntelligenceCore/development/internal/egress/publisher/dm/CLAUDE.md"
+        ],
+        "reviews": "subagent code-architect adjudicated дизайн D1..D15 + R1..R3 (decisive, без reject). subagent golang-pro реализовал: 21 тест PASS, -race clean; deviation D-1 от спеки (codebase-authoritative): metrics/labels — это не подпакет а файл внутри metrics, mirror PublishOutcome локально + pin-test в seams_test.go (universal precedent). subagent code-reviewer ACCEPT-WITH-NITS: 0 BLOCKING / 0 HIGH; применены все 3 MEDIUM (M1 marshal_failure покрытие через injectable marshalRequest seam; M2 strings.Contains assert error-содержимого в T-CTOR-1/2; M3 docstring drift в CLAUDE.md — '4 → 3', убран reasonBrokerFailure ссылка) + 2 LOW (L1 удалён strconvI — заменён на strconv.Itoa; L2 удалён contains helper — заменён на strings.Contains). L3-L6 приняты как cosmetic.",
+        "notes": "Pure egress publisher — реализует доменный port.ArtifactRequesterPort (compile-time var _ в requester.go). Hermetic: НЕ импортирует internal/config (локальный Config — 036/047-injected), НЕ импортирует internal/infra/observability/metrics (только labels через локальный mirror + pin _test), НЕ импортирует amqp091 (Publisher seam изолирует от concrete *broker.Client; broker импортирован только для двух sentinels ErrPublishNack + ErrConfirmTimeout через errors.Is). Без новых зависимостей в go.mod. Pair-готовность с LIC-TASK-041 (dmawaiter ArtifactsAwaiter): orchestrator (LIC-TASK-036, forthcoming) вызывает awaiter.Register(correlationID) → publisher.RequestArtifacts(ctx, correlationID, ...) → awaiter.Await(ctx, correlationID). Разблокирует логику артефакт-фетча для всего pipeline. Forward TODO (CLAUDE.md): LIC-TASK-036 wiring (cfg.Broker.ExchangeEvents → Config.Exchange + Metrics adapter над *metrics.PublisherMessagesTotal), LIC-TASK-043 (AnalysisReadyPublisher) как sibling-файл в этом же пакете (same Publisher seam, same Metrics shape)."
+      }
     },
     {
       "id": "LIC-TASK-043",

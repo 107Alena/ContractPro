@@ -1853,3 +1853,75 @@ Strict-conformance по всем 8 разделам:
 ### Прогресс: 42/55 done → 43/55 done.
 Открыты (deps done): 003, 009, 021, 046, 052, 053. Критпуть: **046+009 → 047 wiring → 048-055**. Рекомендация следующей итерации: **LIC-TASK-046** (DLQPublisher — третий sibling в `orch/`, готовый naming pattern + 7-step blueprint от 045/044) ЛИБО **LIC-TASK-009** (Health check handler — последний блокер 047 после 046).
 
+
+## 2026-05-21 — LIC-TASK-009: Health check handler (/healthz, /readyz, /metrics) ✅
+
+**Status:** DONE. Critical-priority, на критпути к LIC-TASK-047 (wiring). Deps {005,007,008} → done.
+
+### Реализация (subagent golang-pro)
+- **CREATE (4 файла):** `internal/infra/health/handler.go` (~330), `handler_test.go` (~700, 27 тестов), `internal_test.go` (TestHermeticImports + TestGofmtClean), `CLAUDE.md` (D1..D8 decision log + forward notes).
+- **API public surface:**
+  - `Checker interface { Name() string; Check(ctx context.Context) error }` — seam.
+  - `NewHandler(checkers []Checker, metricsHandler http.Handler, opts ...Option) *Handler` — fail-fast panics на: empty/duplicate `Name()`, `defaultCheckerTimeout <= 0`, `readyDeadline < max checker timeout`.
+  - `(*Handler).Mux() *http.ServeMux` — D7: HTTP-сервер строит app-wiring.
+  - `(*Handler).SetNotReady()` — sticky-once через atomic.Bool (D5).
+  - Options: `WithDefaultCheckerTimeout(d)`, `WithCheckerTimeout(name, d)`, `WithReadyDeadline(d)`.
+
+### Решения (subagent code-architect: APPROVE-WITH-MUST-FIX, 8 MF + 3 NTH)
+- **D1** Hermetic seam — пакет НЕ импортирует `infra/broker`, `infra/kvstore`, `llm/router`, `prometheus/promhttp`. Concrete adapters (redisChecker, rabbitChecker, llmRouterChecker) живут в app-wiring LIC-TASK-047. *Deliberate divergence от DP, у которого binary atomic.Bool без Checker seam.*
+- **D2** `Checker` interface без bounded enum типа. Fail-fast panic на empty/duplicate `Name()` — wiring bug, no operator input. Pinned T_DuplicateName_Panics + T_EmptyName_Panics.
+- **D3** Per-checker timeout снаружи: health делает `context.WithTimeout(reqCtx, timeoutFor(name))` и пробрасывает в `Check`. Mirrors `router.probeOne`. Redis 100ms override (§10.2) — в wiring.
+- **D4** Wait-all через `sync.WaitGroup` + index-stable `[]checkResult`. Request-level deadline (default 2s) nested per-checker deadline (default 1s). Не успевшие → `status:"timeout"`. MF-3 fail-fast: `readyDeadline >= max(checker timeouts)`.
+- **D5** SetNotReady sticky-once через `atomic.Bool.Store(true)`. Конструктор стартует в **ready** (отличие от DP). *Невозможно вернуться в ready после shutdown — невозможен race graceful-shutdown ↔ readiness probe.*
+- **D6** `metricsHandler http.Handler` инжектируется. Никакого `promhttp` импорта (TestHermeticImports активно блокирует). Wiring передаёт `promhttp.HandlerFor(metrics.Registry(), opts)`.
+- **D7** Только Handler, никакого Server wrapper. `Start/Shutdown/ListenAndServe` — за LIC-TASK-047.
+- **D8** JSON shape distinct types (`livenessResponse`, `readyResponse`, `checkJSON`): `error/reason` omitempty, `checks` ВСЕГДА present (even []). Per-check status ∈ {ok|failed|timeout} (timeout = `errors.Is(err, context.DeadlineExceeded)`). `latency_ms` measured в health-пакете (MF-6).
+
+### MUST-FIX (все выполнены)
+- **MF-1** TestHermeticImports EMPTY allowlist — active fail на `internal/config`, `internal/infra/broker`, `internal/infra/kvstore`, `internal/llm/router`, `prometheus/promhttp`, `prometheus/client_golang`.
+- **MF-2** Fail-fast panic на empty/duplicate Name() с диагностическими сообщениями.
+- **MF-3** Fail-fast panic на `readyDeadline < max(checker timeouts)` + `defaultCheckerTimeout <= 0`.
+- **MF-4** SetNotReady sticky через atomic.Bool — `TestSetNotReady_SecondCallNoop` + `TestSetNotReady_DoesNotRevertToReady`.
+- **MF-5** Конструктор `NewHandler` (stutter-free, прецедент broker.NewClient/kvstore.NewClient/concurrency.New).
+- **MF-6** latency_ms измеряется в health-пакете через `time.Since(start).Milliseconds()`. Checker не возвращает latency.
+- **MF-7** error omitempty, status bounded, timeout = errors.Is(context.DeadlineExceeded).
+- **MF-8** CLAUDE.md D1..D8 + forward notes для LIC-TASK-047 + k8s probe tuning.
+
+### Code-reviewer findings (subagent code-reviewer): ACCEPT-WITH-FINDINGS, 0 BLOCKING / 0 HIGH / 3 MEDIUM (все fixed) / 5 LOW (cosmetic, accepted).
+- **M1** Ordering: `defaultCheckerTimeout <= 0` валидация перенесена ДО max-loop, чтобы 0-default не участвовал в сравнении → fixed.
+- **M2** Dead `_ = name` в timeout-loop удалён (теперь `for _, d := range h.perCheckerTimeout`) → fixed.
+- **M3** Panic recovery в горутине Checker'а: `defer func() { if rv := recover(); rv != nil { results[i] = checkResult{name, err: fmt.Errorf("checker panic: %v", rv), latency} } }()` — buggy adapter не крашит lic-service. Pinned `TestReadiness_CheckerPanic_RecoveredAsFailed`. Документировано в `Checker` godoc.
+- L1-L6 cosmetic (writeJSON ignored error, livenessResponse singleton, timing bounds, stale-name comment, mux mutability, set-not-ready monotonicity) — accepted.
+
+### Architect-reviewer (subagent architect-reviewer): **PASS-WITH-NOTES**
+Strict-conformance по 6 разделам:
+- **§1 acceptance criteria** — 5/7 PASS, 2 DEFERRED (с явным архитектурным обоснованием в CLAUDE.md): criterion 3 (concrete adapters) к LIC-TASK-047 — seam архитектурно достаточен; criterion 7 (LIC_HTTP_PORT listener) к LIC-TASK-047 — D7 fixed.
+- **§2 error-handling.md §10** — §10.1 /healthz простой 200 ✓; §10.2 /readyz seam ✓ + Redis 100ms override в CLAUDE.md примере; §10.3 dependency-impact реализуем через адаптеры.
+- **§3 observability.md §3** — `/metrics` mounted ✓; dedicated `*prometheus.Registry` via `metrics.Registry()`; no global default; health Prometheus-free.
+- **§4 configuration.md** — `LIC_HTTP_PORT=8080` ✓ в config/app.go:29,37; health НЕ читает env (TestHermeticImports forbids config).
+- **§5 deployment.md** — k8s probe paths `/healthz`, `/readyz` match handler.go:183-184; probe tuning forward note в CLAUDE.md согласован с 2s WithReadyDeadline default.
+- **§6 architecture/CLAUDE.md** — stateless (только atomic.Bool process-local), no sync REST, no streaming — ничего не нарушено.
+
+### Тесты (27 PASS под -race, 1.7s)
+- Liveness: `TestLiveness_AlwaysReturns200`, `_ContentTypeJSON`.
+- Readiness happy: `TestReadiness_NoCheckers_Returns200`, `_AllCheckersPass_Returns200`, `_ContentTypeJSON`, `_OneCheckerFails_Returns503_WithPerDepStatus`.
+- Timeout: `TestReadiness_TimeoutCheckerLabelledTimeout` (per-check timeout < sleep → "timeout"), `_RespectsRequestDeadline` (общий deadline < 1s sleep, elapsed<500ms).
+- Parallelism: `TestReadiness_ParallelExecution` (3×50ms<150ms доказывает параллелизм).
+- Panic recovery: `TestReadiness_CheckerPanic_RecoveredAsFailed` (buggy adapter → status:failed, не process crash).
+- SetNotReady sticky: `_Returns503_WithReason`, `_SkipsCheckerExecution` (checker НЕ вызывается после flip), `_SecondCallNoop`, `_DoesNotRevertToReady`.
+- Fail-fast: `TestNewHandler_DuplicateName_Panics`, `_EmptyName_Panics`, `_ReadyDeadlineLessThanCheckerTimeout_Panics`, `_ReadyDeadlineLessThanPerNameOverride_Panics`.
+- Metrics: `TestMetrics_ProxiesToInjectedHandler` (D6 injection), `_NilHandler_Returns404` (route не регистрируется).
+- D8 JSON shape: `TestErrorOmitemptyWhenOK`, `TestStatusValuesAreBounded`, `TestChecksFieldAlwaysPresent`, `TestLatencyMs_MeasuredByHealthPackage`.
+- Race: `TestReadiness_ConcurrentRequests_RaceClean` (50g×100i), `TestSetNotReady_ConcurrentWithReadyz_RaceClean`.
+- Per-checker timeout override: `TestPerCheckerTimeoutOverride`.
+- Hermeticity: `TestHermeticImports` (EMPTY allowlist; active fail на всех listed), `TestGofmtClean`.
+- `make build` / `make test` / `make lint` — все зелёные. 40+ пакетов LIC PASS.
+
+### Forward notes (owners elsewhere)
+1. **LIC-TASK-047 (app-wiring)** — построит 3 концретных Checker'а: `redisChecker{kv *kvstore.Client}.Check = kv.Ping(ctx)`, `rabbitChecker{br *broker.Client}.Check = br.Ping(ctx)`, `llmRouterChecker{rt *router.ProviderRouter}.Check = ` (requires публичный `Healthy(ctx)` или `HealthSnapshot()` в router — см. NTH-1 ниже). Wiring примет `promhttp.HandlerFor(metrics.Registry(), promhttp.HandlerOpts{})`. SIGTERM handler вызывает `h.SetNotReady()` ПЕРВЫМ шагом graceful shutdown.
+2. **router NTH-1 (forward)** — для LIC-TASK-047 health-адаптера нужен публичный `(*ProviderRouter) HealthSnapshot() map[port.LLMProviderID]HealthState` — сейчас `isHealthy` приватный. Добавить в LIC-TASK-047 или сделать тривиальный sibling task.
+3. **NTH-2 (deferred)** — `WithLogger(Logger)` seam — записан в CLAUDE.md как follow-up; не блокирует.
+4. **NTH-3 (deferred)** — `lic_readyz_check_duration_seconds`/`lic_readyz_failures_total` histograms — записаны, не добавлены до SSOT в observability.md §3.
+
+### Прогресс: 43/55 done → 44/55 done.
+Открыты (deps done): 003, 021, 046, 052, 053. Критпуть теперь **046 → 047 wiring → 048-055** (009 закрыт). Рекомендация следующей итерации: **LIC-TASK-046** (DLQ Publisher с PII-safe envelopes — high-priority sibling 044/045 publishers в orch/, готовый naming pattern; последний integration-блокер 047).

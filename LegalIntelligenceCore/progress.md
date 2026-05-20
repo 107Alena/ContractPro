@@ -1675,3 +1675,86 @@ Production-ready Agent 7 — тонкая обёртка над BaseAgent: Summa
 3. **DM event-catalog sync** — `DocumentManagement/architecture/event-catalog.md:226-235` содержит outdated v1.0 draft-shape для `risk_delta`. Sync-TASK при готовности DM v1.1 consumer-side.
 
 **Прогресс: 40/55 done → 41/55 done.** Открыты (deps done): 003, 009, 021, 044, 045, 046, 052, 053. Критпуть остаётся: **044+045+046+009 → 047 wiring → 048-055**. Рекомендация следующей итерации: **LIC-TASK-044** (Status Event Publisher — точно такая же логика выпуска через broker, отделный sub-package `egress/publisher/orch/` под status-changed/uncertain) ЛИБО **LIC-TASK-009** (health/readyz — unblocks 047 более существенно). LIC-TASK-043 разблокирует step 8 §6.5 — pipeline TERMINAL-publication теперь имеет owned publisher.
+
+---
+
+## LIC-TASK-044 — Status Event Publisher (`lic.events.status-changed`)
+- **Status:** done
+- **Completed at:** 2026-05-20
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, golang-pro, code-reviewer, architect-reviewer)
+
+### План реализации
+1. Прочитать архитектуру: event-catalog §1.1 (LICStatusChangedEvent JSON schema), error-handling §3 (catalog RU UserMessage), integration-contracts §2 (publisher confirms), observability §3.9 (lic_publisher_messages_total SSOT).
+2. Изучить эталон в `internal/egress/publisher/dm/` (паттерны 042/043).
+3. Через `code-architect` спроектировать пакет `internal/egress/publisher/orch/` — D1..D13 + R1..R6, симметричный к `dm/` с тонкостями для status-events.
+4. Через `golang-pro` реализовать 5 production-файлов + 3 теста + CLAUDE.md.
+5. `make build/test/lint`; `go test -race ./internal/egress/publisher/orch/...`.
+6. `code-reviewer` ревью → применить must/should-fix.
+7. `architect-reviewer` верификация соответствия event-catalog §1.1 / observability §3.9 / integration-contracts §2 / error-handling §3 / security / hermeticity.
+
+### Прогресс
+- ✅ Создан новый пакет `internal/egress/publisher/orch/` (symmetric к `dm/`).
+- ✅ `StatusPublisher` реализует `port.StatusPublisherPort` (compile-time `var _` assertion в publisher.go).
+- ✅ Hardcoded topic `topicStatusChanged = "lic.events.status-changed"`, без env-var override (D2).
+- ✅ Validation 11 branches в строгом порядке: Block A 5 envelope IDs → Block B Status.IsValid → Block C Stage.IsValid optional → Block D FAILED-conditional 3 поля + защитная ветка для non-FAILED стейл-полей + defensive reasonErrorCodeNotInCatalog.
+- ✅ ErrorMessage rewrite через `model.LookupErrorSpec(code).UserMessage` (для FAILED) — single source of truth, NFR-5.2 RU.
+- ✅ Timestamp rewrite через `clock.Now().Format(time.RFC3339Nano)` UTC на value-receiver copy. Caller-side variable unchanged (T2 + T19 пинят оба контракта).
+- ✅ Seams: `Publisher` REQUIRED (no noop), `Metrics` (только `IncPublish` — НЕТ ObservePublishedSize), `Clock`, `Logger` reserved.
+- ✅ `PublishOutcome` local mirror (4 values: success/failure/nacked/invalid) с SSOT pin против `metrics.PublishOutcome` в seams_test.go.
+- ✅ 13 reason-constants (5 IDs + status + stage + 3 FAILED-conditional + unexpected_failure_fields + error_code_not_in_catalog + marshal_failure).
+- ✅ Constructor `NewStatusPublisher` с errors.Join fail-fast (T-CTOR-4: both defects сразу surface).
+- ✅ Hermetic allowlist EXACTLY 3 entries (model, port, broker для sentinels) + forbidden set расширен sibling `internal/egress/publisher/dm`.
+- ✅ Goroutine-safe stateless (T26: 16 concurrent + `-race` clean).
+- ✅ `go test -race -count=1 ./internal/egress/publisher/orch/` — **31 top-level PASS / 54 sub-tests (~1.7s), 0 races**.
+- ✅ `go test -count=1 ./...` — все **41 LIC пакетов PASS**, 0 регрессий 042/043.
+- ✅ `make build` OK (~1.6MB), `make lint` (go vet) 0 issues, `make test` OK.
+
+### Build-spec D-блок (краткая выжимка)
+- **D1** Симметричное naming: `PublisherConfig` / `PublisherDeps` / `StatusPublisher` / `NewStatusPublisher` (dm-D16-precedent).
+- **D2** Hardcoded topic, NO env override.
+- **D3** Publisher seam REQUIRED (no noop) — silent-swallow на user-visible status-channel = UI freeze.
+- **D4** 11 validation branches в строгом порядке (см. completion_notes в tasks.json).
+- **D5** Timestamp + ErrorMessage rewrite через value-receiver copy.
+- **D6** `marshalStatus = json.Marshal` test-overridable seam для unreachable marshal-failure branch.
+- **D7** `classifyOutcome` broker-only narrow (R3); validation emits `PublishOutcomeInvalid` напрямую.
+- **D8** ctx errors pass-through raw (codebase-wide).
+- **D9** `IsPublishableToOrchestrator` закрывает unknown codes + codes с пустым UserMessage одной веткой.
+- **D10** Metrics seam ТОЛЬКО `IncPublish` (НЕТ ObservePublishedSize — отличие от dm/043).
+- **D11** Constructor errors.Join: both defects surface together.
+- **D12** OrganizationID REQUIRED БЕЗ omitempty (deliberate divergence от dm-envelopes; LICStatusChangedEvent always требует orgID для Orchestrator RBAC).
+- **D13** Hermetic allowlist EXACTLY 3, forbidden set активно включает sibling `dm`.
+
+### R-reconciliations
+- **R1** OrganizationID required (не omitempty) vs dm-envelopes optional — отдельная ветка validation Block A шаг 5, документировано в коде комментарием.
+- **R2** ErrorMessage rewrite vs caller-supplied — value-receiver + R5-precedent. Catalog SSOT. T-EM-1/EM-2/EM-3 пинят все три контракта.
+- **R3** Validation-metric out-of-band от classifyOutcome — тот же R3 dm.
+- **R4** `unexpected_failure_fields` — ОДНА ветка для трёх полей (caller defect одного класса; тонкая раскладка не даёт diagnostic value).
+- **R5** `reasonErrorCodeNotInCatalog` defensive — теоретически unreachable после Block D шаг 9 (IsPublishableToOrchestrator само возвращает false для unknown), но оставлен как triage signal если caталог SSOT дрейфанёт.
+- **R6** Stage validation conditional — `IsValid` только если non-empty (event-catalog §1.1 explicit omitempty).
+
+### Code-reviewer findings (subagent code-reviewer): ACCEPT, 0 BLOCKING / 0 HIGH.
+- MEDIUM (M1: reasonErrorCodeNotInCatalog post-validation provably unreachable — accept как triage signal R5; M2: reasonUnexpectedFailureFields единая ветка теряет diagnostic info — accept R4).
+- LOW (L3..L8: Logger reserved unused; defensive copy через make+copy вместо bytes.Clone; T24 не пинит errors.As; T19 caller-Timestamp не проверен на FAILED-path; forbiddenInternal содержит не-существующие paths — cosmetic; marshalStatus package-level var требует non-parallel — documented). Все accept-with-note, consistent с dm-pattern.
+
+### Architecture-reviewer (subagent architect-reviewer): **PASS** (БЕЗ deviations).
+- **event-catalog §1.1** — все 7 required envelope fields validated; status enum IsValid; conditional FAILED-fields (ErrorCode + IsPublishableToOrchestrator + IsRetryable); RU error_message rewrite per NFR-5.2.
+- **observability §3.9** — `IncPublish` на всех путях выхода (success/invalid/marshal-fail/nacked/failure); `PublishOutcome` 4-value mirror pinned против metrics SSOT.
+- **observability §3.10** — нет organization_id label в Prometheus (cardinality budget).
+- **integration-contracts §2** — publisher confirms через broker seam, wait-for-ack; идемпотентность Orchestrator-side НЕ обязанность publisher.
+- **error-handling §3** — корректное использование model.ErrorCode + LookupErrorSpec + IsPublishableToOrchestrator; пустой UserMessage блокируется.
+- **high-architecture §6.13** — stateless, goroutine-safe, без shared mutable state.
+- **security** — no PII; status events содержат UUIDs + код + catalog UserMessage; Logger reserved unused на hot path.
+- **hermeticity** — allowlist EXACTLY 3, active-fail forbidden set покрывает sibling dm + все application/ingress пакеты + concrete metrics + third-party.
+
+### Реализация (subagent golang-pro)
+- **CREATE (9 файлов):** `doc.go` (~85), `publisher.go` (~310), `seams.go` (~170), `deps.go` (~80), `errors.go` (~145), `publisher_test.go` (~1150), `seams_test.go` (~50), `internal_test.go` (~145), `CLAUDE.md` (~280).
+- **NO CHANGE:** все остальные пакеты — `internal/domain/` уже содержит порт + event DTO; sibling `dm/` не затронут.
+
+### Forward notes (owners elsewhere)
+1. **LIC-TASK-036 / TASK-047 wiring** — `orch.NewStatusPublisher(orch.PublisherConfig{Exchange: cfg.Broker.Exchanges.LICEvents}, orch.PublisherDeps{Publisher: brokerClient, Metrics: publisherMetricsAdapter, Clock: systemClock{}, Logger: loggerAdapter})`. publisherMetricsAdapter переиспользуется (тот же `lic_publisher_messages_total{topic, outcome}` SSOT — D2-D17-precedent).
+2. **LIC-TASK-045 (UncertaintyPublisher)** — естественный сосед в том же `orch/` пакете (forward-notes в CLAUDE.md). Тот же hermetic boundary + Publisher seam. deps=[008]=done — ready next.
+3. **LIC-TASK-046 (DLQPublisher)** — третий сосед в orch/; deps=[008]=done — ready.
+4. **LIC-TASK-009 (Health check handler)** — четвёртый блокер 047. deps=[005,007,008]=done — ready.
+
+### Прогресс: 41/55 done → 42/55 done.
+Открыты (deps done): 003, 009, 021, 045, 046, 052, 053. Критпуть: **045+046+009 → 047 wiring → 048-055**. Рекомендация следующей итерации: **LIC-TASK-045** (Uncertainty Publisher — sibling в orch/, тот же паттерн, max reuse of design 044) ЛИБО **LIC-TASK-009** (Health handler — больше всего разблокирует 047).

@@ -1869,7 +1869,40 @@
         "LIC-TASK-008",
         "LIC-TASK-011"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-20",
+      "completion_notes": {
+        "implementation_summary": "Создан пакет internal/egress/publisher/orch/ — symmetric counterpart к dm/. StatusPublisher реализует port.StatusPublisherPort, публикует LICStatusChangedEvent на FROZEN-топик lic.events.status-changed (hardcoded const, no env-var override). 7 файлов production + 2 теста + 1 internal_test + 1 CLAUDE.md.",
+        "files_created": [
+          "internal/egress/publisher/orch/doc.go (~85 строк) — package godoc, hermetic statement, attribution D1..D13 + R1..R6, 3-entry allowlist enumeration, list deliberate divergences-from-dm",
+          "internal/egress/publisher/orch/publisher.go (~310 строк) — StatusPublisher struct + PublisherConfig.validate() + NewStatusPublisher (errors.Join fail-fast) + PublishStatus (5+1+1+3 validation branches, value-receiver) + failValidation helper + topicStatusChanged hardcoded + var _ port.StatusPublisherPort assertion + marshalStatus test-overridable seam",
+          "internal/egress/publisher/orch/seams.go (~170 строк) — Publisher (required, no noop), PublishOutcome local mirror (4-value enum + String + IsValid), Metrics (IncPublish only — НЕТ ObservePublishedSize для status), noopMetrics, Clock + systemClock (UTC), Logger + noopLogger (reserved)",
+          "internal/egress/publisher/orch/deps.go (~80 строк) — PublisherDeps{Publisher,Metrics,Clock,Logger} + withDefaults (Publisher не substituted)",
+          "internal/egress/publisher/orch/errors.go (~145 строк) — PublishError{Reason,Cause} + Error/Unwrap + 13 reason constants + classifyOutcome (broker-only, копия dm-варианта)",
+          "internal/egress/publisher/orch/publisher_test.go (~1150 строк) — поведенческий сьют T1..T26 + T-CTOR-1..3 + T-CTOR-4 + TestClassifyOutcome_AllBranches + TestPublishError_ErrorAndUnwrap; in-package fakes fakePublisher/fakeMetrics/fakeClock/fakeLogger",
+          "internal/egress/publisher/orch/seams_test.go (~50 строк) — TestPublishOutcome_WireStringsPinned против metrics.PublishOutcome SSOT (ЕДИНСТВЕННЫЙ файл импортирующий internal/infra/observability/metrics)",
+          "internal/egress/publisher/orch/internal_test.go (~145 строк) — TestHermeticImports (allowlist EXACTLY 3, forbiddenInternal активно включает internal/egress/publisher/dm sibling) + TestGofmtClean",
+          "internal/egress/publisher/orch/CLAUDE.md (~280 строк) — паттерн-документация по образцу dm/CLAUDE.md, R1..R6 reconciliations, forward-notes для 045/046 siblings"
+        ],
+        "validation_branches": "11 branches в strict order: Block A 5 envelope IDs (CorrelationID/JobID/DocumentID/VersionID/OrganizationID — последний required без omitempty, deliberate divergence vs dm) → Block B Status.IsValid (покрывает пустую строку + unknown) → Block C Stage.IsValid only-if-non-empty (optional, omitempty на wire) → Block D FAILED-conditional: ErrorCode required + IsPublishableToOrchestrator (закрывает unknown codes + codes с пустым UserMessage) + IsRetryable non-nil — ИЛИ для non-FAILED статусов защитная ветка reasonUnexpectedFailureFields для любого из 3 полей (защита от stale-data-leak) + defensive reasonErrorCodeNotInCatalog post-validation",
+        "errormessage_rewrite": "Publisher переписывает evt.ErrorMessage = model.LookupErrorSpec(code).UserMessage (single source of truth — error-handling.md §3 / model.errorCatalog). Caller-side variable byte-for-byte unchanged (value-receiver pattern). T18 + T19 пин обе ноги контракта (rewrite happens + caller variable unchanged). Аналогично Timestamp rewrite через Clock seam (RFC3339Nano UTC) — T2 пин",
+        "deliberate_divergences_from_dm": "1) OrganizationID REQUIRED без omitempty (LICStatusChangedEvent для Orchestrator всегда требует orgID для RBAC scoping) vs dm-envelopes где orgID optional. 2) NO ObservePublishedSize метод в Metrics seam — отдельной size-histogram для status envelope не требуется (observability §3.5 специфична для analysis-ready). 3) ErrorMessage rewrite через model.LookupErrorSpec (FAILED-specific, отсутствует в dm). 4) Forbidden internal расширен sibling-package internal/egress/publisher/dm",
+        "test_results": "go test -race -count=1 ./internal/egress/publisher/orch/ — 31 top-level PASS / 54 включая subtests (~1.7s), 0 races. go test -count=1 ./... — все 41 LIC пакетов PASS, 0 регрессий. make build OK (~1.6MB), make lint (go vet 0 issues), make test OK.",
+        "code_review": "subagent code-reviewer — ACCEPT (0 BLOCKING / 0 HIGH). MEDIUM (M1: reasonErrorCodeNotInCatalog post-validation провабельно недостижимо — defensive triage signal; M2: reasonUnexpectedFailureFields единая ветка для 3 полей теряет diagnostic info — accept-with-note R6). LOW (L3..L8: Logger reserved unused, defensive copy через make+copy вместо bytes.Clone, T24 не пинит errors.As, T19 caller-Timestamp не проверен на FAILED-path, forbiddenInternal содержит не-существующие paths — cosmetic, marshalStatus package-level var требует non-parallel — documented constraint, consistent с dm/)",
+        "architecture_review": "subagent architect-reviewer — PASS (БЕЗ deviations). event-catalog §1.1 (все 7 required + status enum + conditional FAILED + RU NFR-5.2), observability §3.9 (IncPublish на всех путях + PublishOutcome SSOT pin) + §3.10 (cardinality budget — нет orgID label), integration-contracts §2 (publisher confirms + wait-for-ack), error-handling §3 (IsPublishableToOrchestrator + LookupErrorSpec), high-architecture §6.13 (stateless + goroutine-safe), security (no PII), hermetic boundary (allowlist EXACTLY 3 + active-fail set). Ready для LIC-TASK-036 / TASK-047 wiring",
+        "topic_constant": "lic.events.status-changed (hardcoded, no env override per D2 anti-scope)",
+        "test_categories": {
+          "validation": "T3..T17 (15 branches: 5 envelope IDs, status invalid, stage invalid, empty stage allowed, 4 FAILED conditional, 3 non-FAILED stale-data-leak)",
+          "rewrites": "T2 timestamp + T18/T19 ErrorMessage (rewrite + caller unchanged)",
+          "marshal": "T20 (marshal failure через package-level seam)",
+          "broker_outcomes": "T21..T25 (5: success/nack/confirm-timeout/ctx-errors/other-failures)",
+          "concurrency": "T26 (16 goroutines, distinct correlation_ids, race-clean)",
+          "constructor": "T-CTOR-1..3 + T-CTOR-4 (empty exchange, nil Publisher, both defects errors.Join)",
+          "shared": "TestClassifyOutcome_AllBranches + TestPublishError_ErrorAndUnwrap + TestPublishOutcome_WireStringsPinned (SSOT)",
+          "hermeticity": "TestHermeticImports (size==3 + forbidden set incl. sibling dm) + TestGofmtClean"
+        },
+        "unblocks": "Прямо: LIC-TASK-047 (wiring — теперь 044 завершён, остались 045 Uncertainty Publisher, 046 DLQ Publisher, 009 Health handler для финальной сборки). 045/046 — естественные соседи в том же orch/ пакете (документировано в forward-notes CLAUDE.md). Транзитивно открывает 048..055 (integration tests + security)."
+      }
     },
     {
       "id": "LIC-TASK-045",

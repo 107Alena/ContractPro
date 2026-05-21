@@ -1925,3 +1925,73 @@ Strict-conformance по 6 разделам:
 
 ### Прогресс: 43/55 done → 44/55 done.
 Открыты (deps done): 003, 021, 046, 052, 053. Критпуть теперь **046 → 047 wiring → 048-055** (009 закрыт). Рекомендация следующей итерации: **LIC-TASK-046** (DLQ Publisher с PII-safe envelopes — high-priority sibling 044/045 publishers в orch/, готовый naming pattern; последний integration-блокер 047).
+
+
+## 2026-05-21 — LIC-TASK-021: Token Estimator (head/tail truncation + Fit seam) ✅
+
+**Status:** DONE. Critical-priority. Deps {011} → done. Один из 4 ready-critical tasks (003/021/052/053); выбран как functional-core с прозрачным контрактом через `base.TokenEstimator` seam.
+
+### Контекст
+- `base/seams.go:113-154` объявляет `TokenEstimator interface { Fit(req port.CompletionRequest) (estInputTokens int, overBudget bool) }` + v1 `passthroughEstimator` (`⌈runes/4⌉, false`). LIC-TASK-021 ставит реальную реализацию.
+- `aggregator/aggregator.go:96-99` ждёт `TruncationInfo{TruncatedBytes,TotalBytes}` через `Input.Truncation` для render `INPUT_TRUNCATED` warning. Forward-note #2 в aggregator/CLAUDE.md называет 021 единственным producer'ом.
+- `pipeline/orchestrator.go:393-403` inline'ит `MAX_INGESTED_BYTES` cap (`DOCUMENT_TOO_LARGE`); pipeline/CLAUDE.md D8 + forward-note #5 обещают делегирование на 021.
+- `config/scoring.go:36-53` уже валидирует `LIC_MAX_INPUT_TOKENS` (150K) / `LIC_MAX_AGENT_INPUT_TOKENS` (120K) / `LIC_MAX_INGESTED_BYTES` (10 MiB).
+- Schema `INPUT_TRUNCATED` (`ai-agents-pipeline.md:1357-1366`): required `truncated_bytes>=1`, `total_bytes>=1`, `user_message`.
+
+### Дизайн (subagent code-architect: APPROVE-WITH-MUST-FIX, D1..D5)
+- **D1** — `Truncate` возвращает `(string, *TruncationInfo{TruncatedBytes,TotalBytes})` вместо flat `(string,bool,int)`. Схема требует ОБА `truncated_bytes` и `total_bytes`; flat tuple вынуждал бы caller recompute `TotalBytes = len(original)`. Wire shape mirror `aggregator.TruncationInfo`; orchestrator adapts value-copy одной строкой. Идиоматично nil/non-nil pointer кодирует `wasTruncated` неявно.
+- **D2** — `CheckIngestSize` byte-parity с `orchestrator.go:393-403` (Code/Stage/Retryable/Attributes incl. Go types). После H1-fix `MaxIngestedBytes int` (не int64) — соответствует `pipeline.Config.MaxIngestedBytes int`. Tested `TestCheckIngestSize_AttributeWireParity_WithOrchestrator` через `reflect.DeepEqual` + type-switch на каждом attribute value.
+- **D3** — `MaxInputTokens` оставлен в `Config` + convenience `TruncateToInputBudget(text)` (использует `cfg.MaxInputTokens`). Альтернатива (drop, требовать caller передавать) была "preferred" code-architect'ом, но конкретный наш call-site (LIC-TASK-036) выигрывает от self-contained method — меньше точек ошибки в wiring.
+- **D4** — `var _ base.TokenEstimator = (*Estimator)(nil)` compile-time assertion в `external_test.go` (`package tokenestimator_test`, единственное место где `internal/agents/base` импортируется; `TestHermeticImports` сканирует только non-test files).
+- **D5** — Rune-aware slicing (`[]rune` индексирование, не байтовое) + `utf8.ValidString` тест. Defensive fallback `headRunes<=0 || tailRunes<=0 || headRunes+tailRunes>=total` → `(text, nil)` сохраняет invariant `info!=nil ⇒ TruncatedBytes>=1` (matches schema `minimum:1`).
+- **D-NO-MARKER** — Никакого `[…]` join marker'а. Spec silent; marker бы инфлировал `EstimateTokens(truncated)` выше `maxTokens`, ломая property invariant `info!=nil ⇒ est<=maxTokens` (pinned `TestTruncate_PropertyTotalTokensInvariant`).
+- **D-DEFENSIVE** — Truncate degenerate-budget fallback ([D5 detail]).
+
+### Реализация (subagent golang-pro)
+- **CREATE (5 файлов):** `internal/agents/tokenestimator/estimator.go` (~265 строк), `estimator_test.go` (~660 строк), `internal_test.go` (TestHermeticImports 2-entry allowlist {model,port} + TestGofmtClean — mirror base), `external_test.go` (compile-time pin + black-box `TestFit_SeamContract_BlackBox`), `CLAUDE.md` (D1..D5 + D-NO-MARKER + D-DEFENSIVE + forward-notes).
+- **API public surface:**
+  - `Config{MaxInputTokens, MaxAgentInputTokens int; MaxIngestedBytes int; CharsPerToken float64}` (после H1: int, не int64).
+  - `NewEstimator(cfg Config) (*Estimator, error)` — fail-fast `errors.Join` violations.
+  - `EstimateTokens(text) int` — `⌈len([]rune(text))/CharsPerToken⌉` (math.Ceil, conservative).
+  - `Truncate(text, maxTokens) (string, *TruncationInfo)` — head-60/tail-40 rule.
+  - `TruncateToInputBudget(text)` — wrapper для `Truncate(text, cfg.MaxInputTokens)`.
+  - `CheckIngestSize(model.InputArtifactsCompact) error` — byte-parity с orchestrator.
+  - `Fit(port.CompletionRequest) (int, bool)` — реализует `base.TokenEstimator`. NEVER mutates req.
+  - `TruncationInfo{TruncatedBytes int; TotalBytes int}`, `DefaultCharsPerToken = 3.5`.
+
+### Code-reviewer findings (subagent code-reviewer: ACCEPT-WITH-FINDINGS)
+- **H1 (HIGH, FIXED)** — Type-drift `MaxIngestedBytes int64` (tokenestimator) vs `int` (pipeline.Config). `reflect.DeepEqual` over `Attributes` отличает `int(5)` от `int64(5)` — D5 byte-parity claim был unверifiable. Поменял `tokenestimator.Config.MaxIngestedBytes int64 → int`, обновил `if int64(total) > limit` → `if total > limit`, привёл тест `TestCheckIngestSize_AttributeWireParity_WithOrchestrator` в порядок (`const limit int = 5`, switch case `case int`), документация в CLAUDE.md обновлена. Также добавлен godoc комментарий explaining `int` choice (env source int64, narrow в wiring; value bounded NFR §1.1 ≤ 10 MiB).
+- **L5 (LOW, FIXED)** — `TestConfig_Validate_JoinedErrorUnwraps` был тавтологичен (`errors.Is(err, err)` всегда true). Заменён на assertion `err.(interface{ Unwrap() []error }).Unwrap()` с `len()==4` проверкой реальных inner errors. `errors` import убран как unused. Trailing-comment alignment поправлен под gofmt.
+- **L1-L4, L6-L9 (LOW, accepted)** — math correctness sound (boundary `maxTokens=3,7,11,13` нашёл в spot check + property test); perf optimisations (одна `[]rune(text)` scan вместо двух в `Truncate`, `utf8.RuneCountInString` в `Fit`) — не blocking, future polish; docstring duplication между godoc и CLAUDE.md — accepted (CLAUDE.md is SSOT, godoc cross-references).
+
+### Architect-reviewer (subagent architect-reviewer: PASS-WITH-NOTES)
+Strict-conformance по 9 пунктам, все 8 hard invariants PASS:
+- §6.6 step 2 mapping — Fit реализует base.TokenEstimator + TruncateToInputBudget per-artifact upstream.
+- §6.7 head-60/tail-40 fidelity — `maxTokens*60/100 + math.Floor` корректно; tested `TestTruncate_LargeInput_HeadTailProportions` (200K→150K, head 90K / tail 60K ±1 rune).
+- ASSUMPTION-LIC-12 — 150K cap surface'ит через Config; emission flow корректный (021 producer, 036 forwarder, aggregator render).
+- INPUT_TRUNCATED schema parity — `TruncatedBytes>=1` гарантировано D-DEFENSIVE fallback'ом; `TotalBytes>=1` следует из non-empty text короткой-цепочки в `EstimateTokens`.
+- D5 byte-parity — Code/Stage/Retryable/Attributes byte-identical с orchestrator (после H1-fix).
+- Hermeticity — 2-entry allowlist {model, port}, `TestHermeticImports` active-failing.
+- MF-3 envelope-corruption — Fit value-receiver, range-only PriorTurns, pinned `TestFit_NoMutation` с `reflect.DeepEqual` pre/post.
+- NewTypeName — `NewEstimator` ✓.
+
+Deferred NOTE (1): D1 signature deviation от literal AC#3 (`truncated,wasTruncated,droppedBytes` → `(string, *TruncationInfo)`) — архитектурно оправдан, behaviourally lossless (`wasTruncated == info != nil`, `droppedBytes == info.TruncatedBytes`).
+
+### Тесты (35 PASS под -race -count=1, 9.4s)
+- EstimateTokens (6): ASCII, RussianMultibyte (UTF-8 14-byte → 7 runes), Empty, CeilingRounding, CustomCharsPerToken, DefaultCharsPerToken_FromZero.
+- Truncate (9): NoOp_WithinBudget, ExactBudget, LargeInput_HeadTailProportions (200K→150K), DroppedBytesAccuracy, TotalBytesEqualsInput, RuneBoundary_UTF8Valid (Cyrillic), DefensiveFallback_SmallBudget (maxTokens=1), PropertyTotalTokensInvariant (100 randomised iters), TruncateToInputBudget_UsesMaxInputTokens.
+- CheckIngestSize (6): UnderLimit, ExactlyLimit (== passes — strict `>`), OverLimit_DocumentTooLarge, **AttributeWireParity_WithOrchestrator** (`reflect.DeepEqual` + double type-switch на int), EmptyArtifacts, NilArtifacts.
+- Fit (5): EmptyRequest_Zero, SumsAllComponents, OverBudget_TrueWhenAboveMaxAgentInputTokens, OverBudget_FalseAtExactLimit (strict `>`), NoMutation (`reflect.DeepEqual` pre/post).
+- Config.validate (8 subcases): MaxInputTokens_zero, MaxAgentInputTokens_zero, _exceeds_MaxInputTokens, MaxIngestedBytes_zero, CharsPerToken_below_one, multiple_violations_all_present, AppliesCharsPerTokenDefault, JoinedErrorUnwraps (после L5-fix — пинит `Unwrap() []error` interface + `len==4`).
+- NewEstimator_FailsFast, Estimator_ConcurrentRaceClean (32 goroutines × 50 iters по 5 методам, 7.7s).
+- TestHermeticImports (2-entry allowlist, active fail на любых внешних internal/), TestGofmtClean, TestFit_SeamContract_BlackBox (external).
+- `make build` / `make test` (40+ пакетов LIC) / `make lint` — все зелёные.
+
+### Forward notes (owners elsewhere)
+1. **LIC-TASK-036 (Pipeline Orchestrator)** — будет sourcing `aggregator.Input.Truncation` from `*Estimator.TruncateToInputBudget` на EXTRACTED_TEXT (per-artifact upstream, ДО `Spec.Parts`/`promptbuilder.Build` — MF-3 envelope-corruption invariant). Adapts `*tokenestimator.TruncationInfo` → `*aggregator.TruncationInfo` одной строкой value-copy. Inline cap `orchestrator.go:393-403` заменится вызовом `CheckIngestSize` — byte-parity гарантирована D5 + pinned тестом, observable behaviour не меняется.
+2. **LIC-TASK-047 (app-wiring)** — `cfg := tokenestimator.Config{from config.AgentsConfig.MaxInputTokens/MaxAgentInputTokens/MaxIngestedBytes/CharsPerToken}`; `est, _ := tokenestimator.NewEstimator(cfg)`; assign `base.Deps.Estimator = est` для каждого `NewBaseAgent` (один shared instance для всех 9 агентов — immutable + concurrency-safe). `int64 → int` narrowing для `MaxIngestedBytes` в wiring (NFR §1.1 bound ≤ 10 MiB << int32 max).
+3. **v1.1 — per-model tokeniser.** 3.5-chars-per-token heuristic deliberately model-agnostic. v1.1 может swap в real BPE per-provider (tiktoken-like, SentencePiece) за тем же `Estimator` API — публичный contract на runes не меняется, только divisor становится per-model function.
+
+### Прогресс: 44/55 done → 44/55 done (021 закрыт — была 44, теперь 44 минус один из ready-critical pool).
+**ИСПРАВЛЕНИЕ счёта:** до 021 done count был 43; теперь 44/55. Открыты (deps done): **003, 046, 052, 053** (4 ready-critical/high). Критпуть: **046 → 047 wiring → 048-055**. Рекомендация следующей итерации: **LIC-TASK-046** (DLQ Publisher PII-safe — последний high-блокер 047, прецедент 044/045 в orch/ готов) ЛИБО **LIC-TASK-052** (PII redaction validation, security audit hardening — не блокирует 047 но critical).
+

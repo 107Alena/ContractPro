@@ -1995,3 +1995,68 @@ Deferred NOTE (1): D1 signature deviation от literal AC#3 (`truncated,wasTrunc
 ### Прогресс: 44/55 done → 44/55 done (021 закрыт — была 44, теперь 44 минус один из ready-critical pool).
 **ИСПРАВЛЕНИЕ счёта:** до 021 done count был 43; теперь 44/55. Открыты (deps done): **003, 046, 052, 053** (4 ready-critical/high). Критпуть: **046 → 047 wiring → 048-055**. Рекомендация следующей итерации: **LIC-TASK-046** (DLQ Publisher PII-safe — последний high-блокер 047, прецедент 044/045 в orch/ готов) ЛИБО **LIC-TASK-052** (PII redaction validation, security audit hardening — не блокирует 047 но critical).
 
+---
+
+## LIC-TASK-003 — Multi-stage Dockerfile (distroless nonroot base)
+- **Status:** done
+- **Completed at:** 2026-05-21
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, code-reviewer)
+
+### План реализации
+1. Прочитать SSOT `deployment.md §2` и существующий skeleton `Dockerfile` от LIC-TASK-001.
+2. Спроектировать через `code-architect` финальную distroless multi-stage версию + минимальный fail-fast guard в `main.go` (без скоупа полного 047 wiring).
+3. Заменить skeleton `Dockerfile` (alpine runtime) на финальный (distroless/static-debian12:nonroot runtime, CA bundle, build-args, USER nonroot, EXPOSE 8080).
+4. Расширить scaffolding `cmd/lic-service/main.go` от LIC-TASK-001 (`log.Printf + os.Exit(0)`) до минимального fail-fast (`config.Load() + log.Fatalf при ошибке`).
+5. `make build / test / lint` + `go test -race` для проверки регрессий.
+6. `code-reviewer` финал.
+
+### Прогресс
+- ✅ Адъюдикация дизайна `code-architect`: D1..D11 — distroless/static-debian12:nonroot; `-trimpath` + `go mod verify` (hardening additions поверх SSOT); explicit `GOARCH=amd64`; нет HEALTHCHECK (k8s probes per deployment.md §4); минимальный main.go fail-fast.
+- ✅ `Dockerfile`: ~40 строк, multi-stage (golang:1.26.1-alpine builder → gcr.io/distroless/static-debian12:nonroot); cache-friendly COPY split (go.mod/go.sum first, then source); CGO=0 / ldflags `-s -w -X main.version=${VERSION}` / `-trimpath`; CA bundle `/etc/ssl/certs/ca-certificates.crt`; EXPOSE 8080; USER nonroot:nonroot; ENTRYPOINT exec-form.
+- ✅ `cmd/lic-service/main.go`: расширен до 31 строки — `config.Load()` + `log.Fatalf` на ошибке; полное wiring (broker/consumer/publisher/HTTP/pipeline) deferred к LIC-TASK-047.
+- ✅ `make build / make test / make lint` — зелёные.
+- ✅ `go test -race -count=1 ./...` — **43 пакета PASS, 0 FAIL**, race-clean.
+- ✅ Static linux/amd64 stripped binary = **2.2 MB** → expected image ≈ 4 MB << 50 MB cap (deployment.md §2.1 budget ~30 MB после полного 047 wiring).
+- ✅ `code-reviewer` финал: **ACCEPT** (0 BLOCKING / 0 HIGH / 0 MEDIUM, 2 LOW informational — отсутствие `.dockerignore` + отсутствие HEALTHCHECK без healthcheck-subcommand — оба orthogonal к LIC-TASK-003).
+
+### Acceptance criteria (file:line pinned via code-reviewer)
+- AC#1 stage 1 golang:1.26-alpine builder + stage 2 distroless/static-debian12:nonroot — Dockerfile:4 / Dockerfile:28
+- AC#2 CGO_ENABLED=0 + ldflags `-s -w -X main.version=${VERSION}` — Dockerfile:18-23
+- AC#3 CA-certificates скопированы в runtime — Dockerfile:33
+- AC#4 USER nonroot + EXPOSE 8080 — Dockerfile:38 / Dockerfile:40
+- AC#5 Build arg VERSION — Dockerfile:17
+- AC#6 image < 50 МБ — 2.2 MB static binary + ~2 MB distroless = ~4 MB (well under cap)
+- AC#7 fail-fast на missing config — main.go:23-29 (Load → log.Fatalf → exit 1), regression в config_test.go:147 `TestLoad_MissingRequired_AggregatesAllErrors` (Load() при пустом env возвращает aggregated error со всеми required vars surfaced)
+
+### Spec conformance
+3 deviations от deployment.md §2 — все строго **hardening-positive** (не behavioural changes):
+1. **+`-trimpath`** (Dockerfile:21) — reproducible builds + удаляет host filesystem paths из binary.
+2. **+`go mod verify`** (Dockerfile:12) — checksum verification против go.sum, defense-in-depth supply-chain.
+3. **Pinned `golang:1.26.1-alpine`** vs spec `golang:1.26-alpine` (Dockerfile:4) — exact match с go.mod's `go 1.26.1`.
+4. **`USER nonroot:nonroot`** explicit group (Dockerfile:38) — semantically equivalent к spec `USER nonroot`.
+5. **CA bundle explicit file vs directory** (Dockerfile:33) — копирует в тот же стандартный путь, более precise.
+
+Никаких deviations с runtime impact или противоречащих SSOT spec.
+
+### Файлы
+**Изменённые:**
+- `LegalIntelligenceCore/development/Dockerfile` (skeleton → production distroless, ~40 строк)
+- `LegalIntelligenceCore/development/cmd/lic-service/main.go` (scaffolding stub → fail-fast guard, ~31 строка)
+
+**Не тронуты:**
+- `LegalIntelligenceCore/development/Makefile` (docker-build цель уже передаёт `--build-arg VERSION=$(VERSION)` от LIC-TASK-001 — работает с новым Dockerfile без изменений)
+- `go.mod` / `go.sum` (no new dependencies — main.go только импортирует уже-присутствующий `contractpro/legal-intelligence-core/internal/config`)
+
+### Notes (deferred verification + scope discipline)
+1. **Docker daemon недоступен в окружении** — `docker build / docker run` НЕ выполнялся (precedent всех прежних LIC-задач: 003 был причина "make docker-build вне scope"). Verification переезжает на CI. Locally доказано: (a) static linux/amd64 binary builds c теми же CGO/ldflags/-trimpath флагами — 2.2 MB, well under cap; (b) `TestLoad_MissingRequired_AggregatesAllErrors` regression уже пинит fail-fast поведение которое main.go проксирует.
+2. **main.go scope discipline** — code-reviewer независимо подтвердил scope-чистоту: не инстанцируем `app.App`, не открываем broker/Redis/HTTP, не spawn'им goroutines. Doc comment явно defer'ит полное wiring к LIC-TASK-047. Это минимально достаточная surface для AC#7.
+3. **HEALTHCHECK deliberately отсутствует** — distroless = no shell/wget/curl, добавление healthcheck требует CLI-subcommand в бинаре (out of scope). K8s `httpGet` probes против `/readyz` (LIC-TASK-009 уже merged) — canonical path per deployment.md §4.
+4. **.dockerignore** — code-reviewer LOW: текущий `COPY . .` копирует весь context включая `bin/`, `.env`, test fixtures. Stripping происходит в build stage (только бинарь летит в runtime stage), но `.dockerignore` уменьшит build context size. Не блокирует AC, отдельная задача.
+
+### Forward notes
+- **LIC-TASK-055 (Docker Compose integration)** — теперь deps `{003, 047}`: 003 done; ждёт только 047. Dockerfile готов к использованию через `docker compose build lic-service` без изменений.
+- **LIC-TASK-047 (Application wiring)** — заменит tail main.go (`log.Printf "config loaded"`) на `app.Run(ctx, cfg)` без необходимости удалять hard `os.Exit(0)` (уже убрали в этой задаче).
+- **Image labels (`LABEL org.opencontainers.image.*`)** — отсутствуют, sibling DP Dockerfile тоже без них. Consistent с project norm. При желании добавить в отдельной задаче.
+
+### Прогресс: 44/55 → 45/55 done (003 закрыт). Открыты (deps done): **046 (high), 052 (critical), 053 (critical)**. Критпуть: **046 → 047 wiring → 048-055**. Следующая итерация: **LIC-TASK-046** (DLQ Publisher — последний блокер 047, sibling orch/ готов 044/045) ЛИБО **LIC-TASK-052** (PII redaction security audit, не блокирует 047).
+

@@ -1,39 +1,42 @@
-# Skeleton Dockerfile — LIC-TASK-001 scaffolding.
-#
-# The full distroless/nonroot multi-stage image (CA-certs, fixed ldflags, sub-50MB,
-# distroless/static-debian12:nonroot base) is the deliverable of LIC-TASK-003.
-# This stub only proves that `make docker-build` is wired correctly and produces
-# a runnable image consistent with the rest of the repo (DP).
-
+# ============================================================================
+# Stage 1: Build
+# ============================================================================
 FROM golang:1.26.1-alpine AS builder
 
-RUN apk add --no-cache git ca-certificates tzdata
+RUN apk add --no-cache git ca-certificates
 
-WORKDIR /build
+WORKDIR /workspace
 
-COPY go.mod ./
-RUN go mod download
+# Cache dependency layer: copy manifests first, then download + verify checksums.
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
 
+# Copy source and build a fully static, stripped, reproducible binary.
 COPY . .
 
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build \
     -ldflags="-s -w -X main.version=${VERSION}" \
     -trimpath \
-    -o /lic-service \
+    -o /out/lic-service \
     ./cmd/lic-service/
 
-FROM alpine:3.21
+# ============================================================================
+# Stage 2: Runtime (distroless, non-root)
+# ============================================================================
+FROM gcr.io/distroless/static-debian12:nonroot
 
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S licservice \
-    && adduser -S -G licservice -H -D -s /sbin/nologin licservice
+WORKDIR /
 
-COPY --from=builder /lic-service /usr/local/bin/lic-service
+# CA bundle for outbound HTTPS to LLM providers (Claude/OpenAI/Gemini).
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
-# Health/metrics port (LIC_HTTP_PORT, default 8080). Wired up by LIC-TASK-009.
+COPY --from=builder /out/lic-service /lic-service
+
+# HTTP port for /healthz, /readyz, /metrics (LIC_HTTP_PORT, default 8080).
 EXPOSE 8080
 
-USER licservice:licservice
+USER nonroot:nonroot
 
-ENTRYPOINT ["/usr/local/bin/lic-service"]
+ENTRYPOINT ["/lic-service"]

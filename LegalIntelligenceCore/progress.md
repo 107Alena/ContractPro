@@ -2210,3 +2210,106 @@ Deferred NOTE (1): D1 signature deviation от literal AC#3 (`truncated,wasTrunc
 
 ### Прогресс: 46/55 → 47/55 done. Открыты (deps done): **053 (high)**. **LIC-TASK-047 (critical) теперь разблокирован** — все 11 dependencies (009/036/037/039-046) выполнены. Критпуть: **047 wiring → 048-051 integration tests → 054 isolation → 055 docker compose**. Следующая итерация: **LIC-TASK-047** (App wiring + main.go + graceful shutdown — самая большая разблокирующая задача в графе).
 
+
+---
+
+## LIC-TASK-047 — Application wiring + main.go + graceful shutdown — DONE (2026-05-23)
+
+### Контекст
+LIC-TASK-047 — последняя «инфраструктурная» задача перед интеграционными тестами (048-051). Все 11 dependencies (009 health, 036 pipeline orch, 037 pending mgr, 039 consumer, 040 router, 041 dmawaiter, 042 artifact requester, 043 analysis publisher, 044 status publisher, 045 uncertainty publisher, 046 DLQ publisher) — выполнены. Задача собирает 46 пакетов в один App-объект с фазовой DI, добавляет HTTP-сервер health/metrics, signal handler, graceful shutdown по deployment.md §6.
+
+### Реализация
+
+**Файлы:**
+- `internal/app/app.go` (983 строки) — App struct + New(ctx, cfg, BuildInfo) + Run(ctx) + Shutdown(ctx) + ReloadSecrets(ctx) + lazyResumer
+- `internal/app/adapters.go` (426 строк) — seam-адаптеры от центральных logger/metrics/tracer к узким интерфейсам пакетов (pipeline.Logger, pendingconfirmation.Metrics, dmawaiter.Clock, consumer.Logger, router.Metrics + UsageTracker, cost.Recorder, dlq.Metrics, health.Checker и т.д.)
+- `internal/app/pending_state.go` (77 строк) — pendingStateStore реализует port.PendingStatePort через kvstore (gzip+base64 encode/decode через model)
+- `internal/app/version_meta_cache.go` (74 строки) — versionMetaCache реализует одновременно ingressrouter.VersionMetaCacheWriter и pipeline.VersionMetaCache (один Redis namespace = SSOT)
+- `internal/app/app_test.go` (227 строк) — 8 unit-тестов с in-memory fakes (никаких Redis/RabbitMQ)
+- `cmd/lic-service/main.go` (106 строк) — config load → App.New → signal handler (SIGTERM/SIGINT/SIGHUP) → Shutdown с outer-deadline 150s (cfg.ShutdownTimeout 120s + 10s buffer + 20s teardown)
+
+### Архитектура wiring (`App.New` фазы)
+
+```
+ 1. logger          (slog allowlist для PII)
+ 2. metrics + tracer (Prometheus + OTel SDK)
+ 3. kvstore + broker (Redis + RabbitMQ; fail-fast Ping)
+ 4. pricing.Table + cost.Tracker
+ 5. 3 LLM providers (Claude/OpenAI/Gemini — только при наличии API key)
+ 6. ratelimit.Limiter (token bucket в Redis)
+ 7. llm.Router (per-agent primary + fallback chain)
+ 8. 9 agents (общий base.Deps; model resolved via cfg.Agents.Providers)
+ 9. stages.Executor + aggregator.Aggregator
+10. pendingStateStore + versionMetaCache + jobLimiter (concurrency.Semaphore с metrics gauge) + idempotency.Guard
+11. 2 dmawaiters (artifact + confirmation)
+12. 5 publishers (status, uncertainty, artifact-requester, analysis-ready, dlq)
+13. pendingconfirmation.Manager (с lazyResumer заглушкой) → pipeline.Orchestrator (manager как PauseController) → lazyResumer.set(orchestrator)
+14. ingress.Router (8 deps)
+15. consumer.Consumer (broker + router + dlq + dlqHashKey)
+16. health.Handler (redis + rabbitmq checkers; promhttp метрик через registry)
+```
+
+### Lifecycle
+
+**Run(ctx) error:**
+1. Создаёт `consumerCtx, consumerCancel = context.WithCancel(ctx)` для централизованной отмены пайплайнов
+2. Запускает HTTP-server (`:LIC_HTTP_PORT`, Mux от health.Handler, ReadHeaderTimeout 5s) в goroutine с errCh
+3. `llmRouter.Start(consumerCtx)` — health-check loop для providers
+4. `consumer.Start()` — подписывает 6 queues (broker управляет per-subscription goroutines)
+5. Блокируется на `<-ctx.Done()` или `<-httpErrCh` (что наступит раньше)
+
+**Shutdown(ctx) error** (sync.Once, deployment.md §6):
+1. `healthHandler.SetNotReady()` → /readyz=503
+2. `time.After(readinessDrainDelay=5s)` — окно для kube readinessProbe failure detection
+3. `consumerCancel()` — отменяет consumerCtx, через цепочку router → orchestrator останавливает in-flight
+4. WaitGroup-drain через канал `drained` с cap = `cfg.App.ShutdownTimeout` (120s). При timeout — Warn в лог, продолжаем (broker.Close выполнит NACK+requeue)
+5. `llmRouter.Stop()` — health-check loop stop
+6. `httpServer.Shutdown(httpCtx)` — 5s timeout
+7. `broker.Close()` — закрывает все channels + reconnect-loop
+8. `kv.Close()` — закрывает Redis pool
+9. `tracer.Shutdown(flushCtx)` — 5s timeout, flush OTel traces ПОСЛЕДНИМ (чтобы log-lines выше попали в спан)
+10. `errors.Join(errs...)` — собирает все ошибки teardown в один error без short-circuit
+
+**ReloadSecrets(ctx) error (SIGHUP)** — atomic.Bool reload guard от concurrent rotations. В v1 логирует warning ("rolling restart required") — `*claude.Provider/*openai.Provider/*gemini.Provider` — concrete pointers, atomic swap потребует pointer indirection через все слои; задача отложена в backlog (seam preserved, signal handler рабочий).
+
+### Циклическая зависимость pipeline.Orchestrator ↔ pendingconfirmation.Manager
+
+**Проблема:** Manager нужен Orchestrator'у как PauseController; Orchestrator нужен Manager'у как PipelineResumer. Прямое DI невозможно (один создаётся раньше другого).
+
+**Решение:** `lazyResumer` (sync.RWMutex placeholder) передаётся в Manager при построении. После построения Orchestrator вызывается `lazy.set(orchestrator)`. ResumeAfterConfirmation — runtime-only (никогда не вызывается при construction), поэтому placeholder безопасен. Concurrent set+call race-tested.
+
+### Тесты (8 штук, все с in-memory fakes)
+
+1. **Test_New_NilConfig** — fail-fast на nil cfg, типизированная ошибка
+2. **Test_LazyResumer_BeforeSet** — pre-wire call возвращает "not yet wired" error
+3. **Test_LazyResumer_ForwardsAfterSet** — state pointer и ошибка проходят насквозь
+4. **Test_LazyResumer_ConcurrentSetAndCall** — 64×2 goroutines, -race clean
+5. **Test_MapAgentID** — все 9 agents + unknown fallthrough
+6. **Test_AgentModelForProvider** — claude/openai/gemini + unknown→claude default
+7. **Test_ReloadSecrets_Reentrancy** — guard rejects concurrent SIGHUP
+8. **Test_ReloadSecrets_GuardReleasedOnReturn** — 5× sequential calls, guard back to false
+9. **Test_VersionMetaPayload_JSON** — parent_version_id (both nil и non-nil), origin_type round-trip
+10. **Test_PendingStateStore_EmptyArgs** + **Test_VersionMetaCache_EmptyID** — input-validation arms без Redis
+
+### Subagents
+- **Explore** — собрал signatures 28 пакетов LIC за один проход (constructor signatures, lifecycle methods, seam-интерфейсы, common Logger/Metrics/Tracer семантика)
+- **golang-pro** — спроектировал и написал app.go + adapters.go + pending_state.go + version_meta_cache.go + main.go с правильным разрешением циклической зависимости (lazyResumer)
+
+### Test results
+- `make build`: ok — `bin/lic-service` ~21 MB (с `-ldflags "-s -w"`)
+- `make test`: ok — все 40 пакетов passed, в т.ч. `internal/app` (8 tests)
+- `make lint`: ok — `go vet` 0 errors
+- `go test -race ./internal/app`: ok — конкурентные тесты lazyResumer race-clean
+
+### Архитектурное соответствие
+- **deployment.md §6** — graceful shutdown sequence: SetNotReady → 5s drain → cancel consumers → wait in-flight ≤ shutdownTimeout → close broker → close redis → flush OTel ✓
+- **error-handling.md §12** — SIGTERM/SIGINT → Shutdown; SIGHUP → ReloadSecrets; crash recovery через stateless Redis idempotency ✓
+- **llm-provider-abstraction.md §6.3** — SIGHUP rotation seam готов, atomic guard от concurrent rotations ✓
+- **observability.md §4** — tracer.Shutdown ПОСЛЕДНИМ в shutdown sequence с отдельным flush timeout 5s ✓
+
+### Open items (для следующих задач)
+1. **LIC-TASK-048..051 (integration tests)** — теперь разблокированы. App.New() с in-memory fakes (RedisAPI seam в kvstore, AMQP fakes в broker) — рабочая основа для E2E happy/sad path tests.
+2. **Hot secret rotation** — текущий ReloadSecrets логирует "rolling restart required". Для полноценной реализации потребуется обёртка-провайдер с `atomic.Pointer[port.LLMProviderPort]` либо метод `Router.UpdateProvider(id, p)`. Не блокирует v1.
+3. **`docker-build`** — не запускался (Docker daemon required); Dockerfile из LIC-TASK-003 готов к сборке.
+
+### Прогресс: 47/55 → **48/55 done**. Открыты (deps done): **048 (high)** unblocked through 047. Критпуть: **048 (integration fakes) → 049-051 (happy/pause/RE_CHECK/error scenarios) → 054 (isolation) → 055 (docker compose)**. Следующая итерация: **LIC-TASK-048** (integration test framework — in-memory fakes для Redis/RabbitMQ/LLM/DM persistence).

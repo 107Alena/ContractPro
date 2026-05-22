@@ -2053,7 +2053,34 @@
         "LIC-TASK-045",
         "LIC-TASK-046"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-23",
+      "completion_notes": {
+        "summary": "Application wiring (LIC-TASK-047) — реализован пакет internal/app: app.go (983 строки), adapters.go (426), pending_state.go (77), version_meta_cache.go (74), app_test.go (227). Расширен cmd/lic-service/main.go (106 строк) с signal handler SIGTERM/SIGINT/SIGHUP. App.New() выполняет 9-фазовый DI: config → logger → metrics → tracer → kvstore → broker → pricing/cost → 3 LLM providers (только при наличии API keys) → ratelimit → router → 9 agents (общий base.Deps) → stages.Executor → aggregator → pending state + version meta + jobLimiter + idempotency.Guard → 2 dmawaiters → 5 publishers (status, uncertainty, artifact-requester, analysis, dlq) → pendingconfirmation.Manager (через lazyResumer для разрешения циклической зависимости с pipeline.Orchestrator) → pipeline.Orchestrator (manager как PauseController) → ingress.Router → consumer → health.Handler. Run(ctx) стартует http-server (probes+metrics), llmRouter.Start() для health-check loop, consumer.Start() (broker управляет 6 subscription goroutines). Shutdown(ctx) — sync.Once, последовательность по deployment.md §6: SetNotReady → 5s drain → consumerCancel → WaitGroup drain (cap = cfg.App.ShutdownTimeout) → llmRouter.Stop → httpServer.Shutdown → broker.Close → kv.Close → tracer.Shutdown; ошибки агрегируются errors.Join. ReloadSecrets(ctx) с atomic guard от реентрантности (в v1 логирует требование rolling restart, seam готов для hot-rotation).",
+        "test_results": {
+          "make_build": "ok — bin/lic-service ~21 MB",
+          "make_test": "ok — все 40 пакетов passed, в т.ч. internal/app (8 unit-тестов: New nil-check, lazyResumer before/after/concurrent set, mapAgentID, agentModelForProvider, ReloadSecrets reentrancy, versionMetaPayload JSON round-trip, pendingStateStore/versionMetaCache validation)",
+          "make_lint": "ok — go vet 0 errors",
+          "race_detector": "ok — go test -race ./internal/app PASS"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/app/app.go",
+          "LegalIntelligenceCore/development/internal/app/adapters.go",
+          "LegalIntelligenceCore/development/internal/app/pending_state.go",
+          "LegalIntelligenceCore/development/internal/app/version_meta_cache.go",
+          "LegalIntelligenceCore/development/internal/app/app_test.go"
+        ],
+        "files_modified": [
+          "LegalIntelligenceCore/development/cmd/lic-service/main.go"
+        ],
+        "architecture_alignment": {
+          "deployment.md §6": "graceful shutdown sequence соблюдена (SetNotReady → 5s drain → cancel consumers → wait in-flight ≤ shutdownTimeout → close broker → close redis → flush OTel)",
+          "error-handling.md §12": "SIGTERM/SIGINT → Shutdown, SIGHUP → ReloadSecrets, crash recovery через stateless Redis-backed idempotency",
+          "llm-provider-abstraction.md §6.3": "SIGHUP reload seam готов (v1: rolling restart; в коде — atomic.Bool guard от concurrent rotations)",
+          "observability.md §4": "tracer.Shutdown в самом конце shutdown sequence, отдельный 5s timeout для flush"
+        },
+        "notes": "Циклическая зависимость pipeline.Orchestrator ↔ pendingconfirmation.Manager разрешена через lazyResumer (sync.RWMutex placeholder, заполняется set() после построения orchestrator). Provider registry строится только для тех LLM, для которых заданы API keys — fail-fast только при пустом registry. concurrency.Semaphore интегрирован с lic_pipeline_concurrent_jobs gauge через WithGauge option. Тесты используют пакет logger напрямую — не требует Redis/RabbitMQ. Integration-тесты (E2E с in-memory fakes для всех зависимостей) — отдельные LIC-TASK-048..051."
+      }
     },
     {
       "id": "LIC-TASK-048",

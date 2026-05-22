@@ -2060,3 +2060,68 @@ Deferred NOTE (1): D1 signature deviation от literal AC#3 (`truncated,wasTrunc
 
 ### Прогресс: 44/55 → 45/55 done (003 закрыт). Открыты (deps done): **046 (high), 052 (critical), 053 (critical)**. Критпуть: **046 → 047 wiring → 048-055**. Следующая итерация: **LIC-TASK-046** (DLQ Publisher — последний блокер 047, sibling orch/ готов 044/045) ЛИБО **LIC-TASK-052** (PII redaction security audit, не блокирует 047).
 
+---
+
+## LIC-TASK-052 — PII redaction validation в логах (allowlist-strategy enforcement) — DONE (2026-05-22)
+- **Status:** done
+- **Completed at:** 2026-05-22
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, code-reviewer, architect-reviewer)
+
+### План реализации
+1. Прочитать security.md §6.1/§6.2/§6.4 + observability.md §2.4 — фиксировать allowlist/denylist + HMAC-формулу.
+2. Изучить существующий logger пакет (LIC-TASK-004): handler.go с auto-sanitization, sanitizer.go с key/bearer regex, keys.go с allowlist константами.
+3. Через `code-architect` спроектировать минимальную реализацию — 2 файла исходников + 4 теста (всё в `internal/infra/observability/logger/`); решения: HashContent в logger-пакете (byte-truncation @ 1024, fail-loud на empty key); testing-only enforcement без runtime guard (per §6.3); AST-based анализатор вместо regex; closed allowlist в audit-тесте по observability.md §2.4 + §2.3.
+4. Написать `hash.go` + `forbidden_keys.go` (production) + 4 теста (hash, pii_redaction, audit_agent_invocation, static_analyzer).
+5. Прогнать `make test/lint/build`; race-check logger пакета.
+6. `code-reviewer` ревью — 0 BLOCKING/HIGH, 5 MEDIUM (все forward-looking, не блокеры).
+7. Применить наиболее значимые правки: расширить audit allowlist под `pipeline.completed`/`pipeline.start` поля (observability.md §2.3); задокументировать известные ограничения static analyzer (identifier keys, concat literals, subject/price коллизия).
+8. `architect-reviewer` верификация — **PASS** с минорным гэпом (`full_llm_response`), закрыт defence-in-depth.
+
+### Прогресс
+- ✅ Изучены: security.md §6.1 (что PII в РФ-контексте: ФИО, ИНН, ОГРН, паспорт, адреса физлиц, реквизиты, email, телефоны), §6.2 (allowlist/denylist), §6.3 (strict whitelist через API discipline — не runtime), §6.4 (HMAC-SHA-256 + per-deployment secret + sample `rawResponse[:min(len, 1024)]`); observability.md §2.1 (mandatory fields), §2.3 (canonical INFO/ERROR lines), §2.4 (allowed/NOT allowed enumerated).
+- ✅ `hash.go` — `HashContent(content string, key []byte) string`. Byte-truncated @ 1024 (matches §6.4 sample); HMAC-SHA-256 hex (full 64 chars); empty key → empty string (fail-loud, upstream guarded by config.SecurityConfig.validate).
+- ✅ `forbidden_keys.go` — `var ForbiddenLogKeys []string` — 19 entries: 4 document/artifacts spellings + 6 LLM I/O variants + 8 §6.2 PII fields + 3 секреты. Защита от developer-drift: `raw_llm_response` / `raw_response` / `llm_response` / `full_llm_response` все деноминированы.
+- ✅ `hash_test.go` — 8 тестов: deterministic, keyed, byte-cap pin, below-cap full-write, empty-key→"", empty-content-stable, output-shape (64 hex), unicode byte-truncation, §6.4 sample pin (HMAC reference equivalence).
+- ✅ `pii_redaction_test.go` — 5 тестов: raw_response_hash safe surrogate (5 PII samples × 24-byte sliding fragment-leak prober), API key в URL redacted end-to-end (Gemini ?key= / OpenAI Bearer / Anthropic x-api-key), allowlist attrs pass through clean, content в sanitized channel still scrubbed, ForbiddenLogKeys non-empty sanity.
+- ✅ `audit_agent_invocation_test.go` — 3 теста (criterion #3): canonical "agent invocation completed" + "pipeline failed" + "prompt injection detected" log lines simulate observability.md §2.3; closed allowlist covers all §2.4 allowed fields + §2.3 pipeline.start/completed totals; raw fragment ассерт-отсутствует в JSON.
+- ✅ `static_analyzer_test.go` — Go AST walker (criterion #2): inspect slog.{String,Any,Int,Int64,Uint64,Float64,Bool,Duration,Time,Group}, logger.{Debug,Info,Warn,Error,Fatal,LogAttrs}+Ctx variants, slog.Attr composite literals; walks `internal/`, skips `_test.go`/logger pkg itself/testdata/vendor; self-test pins analyzer fires на synthetic source с 4 shapes; документированы 3 known limitations.
+- ✅ `make build / make test / make lint` — все три зелёные. **43 пакета PASS, 0 FAIL**.
+- ✅ `go test -race -count=1 ./internal/infra/observability/logger/...` — PASS, race-clean.
+- ✅ Logger пакет: 65 top-level тестов PASS (39 unchanged + 26 новых), 0 FAIL.
+
+### Acceptance criteria (file:line pinned)
+- AC#1 unit-test for logger (PII content редактируется или log fails) — pii_redaction_test.go:54 `TestPII_RawResponseHash_NeverLeaksContent` + pii_redaction_test.go:89 `TestPII_APIKey_InErrorURL_RedactedEndToEnd` + pii_redaction_test.go:163 `TestPII_ContentInSanitizedChannel_StillSanitized`.
+- AC#2 static analyzer / test helper (no log.Info().Interface forbidden) — static_analyzer_test.go:79 `TestNoForbiddenKeysInCallSites` + static_analyzer_test.go:99 `TestStaticAnalyzer_SelfTest`.
+- AC#3 audit test для agent.Run() (только allowed fields) — audit_agent_invocation_test.go:108 `TestAudit_AgentInvocation_OnlyAllowlistedKeys` + audit_agent_invocation_test.go:155 `TestAudit_PipelineFailed_OnlyAllowlistedKeys` + audit_agent_invocation_test.go:185 `TestAudit_PromptInjectionDetected_OnlyAllowlistedKeys`.
+- AC#4 raw_response_hash logging (HMAC-SHA-256 first 1024 chars) — hash.go:32 `HashContent` + hash_test.go:30 `TestHashContent_TruncatesAtMaxBytes` + hash_test.go:115 `TestHashContent_MatchesSpecSample` (§6.4 reference equivalence).
+- AC#5 error sanitization end-to-end (API key в URL → log clean) — pii_redaction_test.go:89 `TestPII_APIKey_InErrorURL_RedactedEndToEnd/{gemini,openai,anthropic}`.
+
+### Spec conformance (architect-reviewer verdict: PASS)
+- HashContent matches security.md §6.4 sample byte-for-byte (byte-truncation, HMAC-SHA-256, hex output, per-deployment key via `SecurityConfig.{DLQHashKey,PromptInjectionHashKey}`).
+- ForbiddenLogKeys покрывает все entries из observability.md §2.4 "NOT allowed in logs" и security.md §6.2 list (расширено: `full_llm_response` добавлен defence-in-depth по post-review feedback).
+- Audit-test allowlist покрывает все §2.4 "Allowed in logs" + §2.3 canonical lines (`mode`, `origin_type`, `total_*`, `types`, `received_size_bytes` — пинит forward-compat с LIC-TASK-047 orchestrator wiring).
+- Static analyzer call-site coverage соответствует §6.3 "strict whitelist via API discipline".
+
+### Файлы
+**Созданы (6 новых файлов в `internal/infra/observability/logger/`):**
+- `hash.go` (44 строки) — HashContent HMAC-SHA-256 primitive.
+- `forbidden_keys.go` (65 строк) — ForbiddenLogKeys deny-list (19 entries).
+- `hash_test.go` (8 тестов).
+- `pii_redaction_test.go` (5 тестов).
+- `audit_agent_invocation_test.go` (3 теста, closed allowlist constant).
+- `static_analyzer_test.go` (2 теста + self-test, Go AST walker).
+
+**Не тронуты (additive, backwards-compat):** существующие logger.go / handler.go / sanitizer.go / keys.go / context.go / level.go + их тесты.
+
+### Notes
+1. **Testing-only enforcement** — нет runtime guard в handler. Per security.md §6.3 "strict whitelist через API discipline" — runtime check был бы (a) false sense of safety (developer перестаёт читать analyzer output), (b) silent attr drop в prod — failure mode хуже бага. Static analyzer и audit test — bulwark.
+2. **Byte-truncation @ 1024** — matches §6.4 sample (`rawResponse[:min(len, 1024)]`). Multi-byte rune split mid-codepoint не проблема — хешируем байты, не отображаем. Pin: hash_test.go:115 `TestHashContent_MatchesSpecSample` независимо строит §6.4 reference HMAC и сравнивает.
+3. **Empty key → empty hash** — fail-loud. Upstream guard: `internal/config/security.go` SecurityConfig.validate() требует обе key startup. Empty `raw_response_hash` поле в логе immediately suspicious — operator caught.
+4. **Static analyzer false positives** — `subject` / `price` короткие English words. Если call site пишет `log.Info("updated subject", "field", "subject")` — analyzer flag-нёт literal "subject" даже как value. Это deliberate: deny-list зеркалит security.md §6.2 verbatim; false positive вынуждает human review call site — дешевле чем missed leak. Зафиксировано в static_analyzer_test.go:50-65.
+5. **Code-reviewer MEDIUM #2 (`provider` vs `provider_id`)** — spec drift между observability.md §2.3 (`provider`) и §2.4 (`provider_id`). Implementation следует §2.4 (security policy authoritative). Если call site использует §2.3 spelling `provider` — audit test fail-нёт его как not-allowlisted (forcing reconciliation). Не блокирует merge.
+6. **Code-reviewer MEDIUM #1 (audit allowlist coverage)** — закрыт расширением allowlist под §2.3 `pipeline.completed` / `pipeline.start` поля (`mode`, `origin_type`, totals, `types`, `received_size_bytes`). Без этого LIC-TASK-047 orchestrator wiring был бы заблокирован.
+7. **Hermetic** — нет новых зависимостей. Stdlib only: `crypto/hmac`, `crypto/sha256`, `encoding/hex`, `go/parser`, `go/ast`, `go/token`, `path/filepath`, `runtime`.
+8. **Forward-uses HashContent** — future call sites для `raw_response_hash` (schemavalidator RepairLoop при invalid output) и `raw_fragment_hash` (audit log на prompt injection detection — security.md §4.3). Сейчас не call-сайт-ово используется, но API готов.
+
+### Прогресс: 45/55 → 46/55 done. Открыты (deps done): **046 (high), 053 (critical)**. Критпуть: **046 → 047 wiring → 048-055**. Следующая итерация: **LIC-TASK-046** (DLQ Publisher — последний блокер 047) ЛИБО **LIC-TASK-053** (prompt injection 5-layer defense end-to-end verification).
+

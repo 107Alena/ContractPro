@@ -2136,7 +2136,44 @@
       "dependencies": [
         "LIC-TASK-004"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-22",
+      "completion_notes": {
+        "summary": "PII redaction validation для LIC logger — реализовано 2 production-файла + 4 test-файла в internal/infra/observability/logger/ (additive, backwards-compat). hash.go: HashContent(content, key) HMAC-SHA-256 byte-truncated @ 1024 (matches security.md §6.4 sample byte-for-byte; empty key fail-loud → empty hash, upstream guarded SecurityConfig.validate). forbidden_keys.go: ForbiddenLogKeys deny-list 19 entries покрывающий все security.md §6.2 NOT-logged категории + observability.md §2.4 NOT-allowed list (документ/артефакты + 6 LLM I/O spellings включая full_llm_response для defence-in-depth + 8 §6.2 PII fields + 3 секреты). pii_redaction_test.go: 5 тестов — raw_response_hash safe surrogate (5 PII samples × 24-byte sliding fragment-leak prober), API key в URL redacted end-to-end (Gemini ?key= / OpenAI Bearer / Anthropic x-api-key), allowlist passthrough, content в sanitized channel scrubbed, deny-list sanity. audit_agent_invocation_test.go: 3 теста — canonical observability.md §2.3 lines (agent invocation completed / pipeline failed / prompt injection detected) с closed allowlist константой проверяющей каждый emitted JSON key против §2.4 allowed list + §2.3 pipeline.start/completed fields (mode, origin_type, total_*, types, received_size_bytes) — pin forward-compat с LIC-TASK-047 wiring. static_analyzer_test.go: Go AST walker по internal/... flagging slog.{String,Any,Int,Int64,Uint64,Float64,Bool,Duration,Time,Group}, logger.{Debug,Info,Warn,Error,Fatal,LogAttrs}+Ctx variants, slog.Attr{Key:...} composite literals для любого literal из ForbiddenLogKeys; skips _test.go/logger pkg itself/testdata/vendor; self-test pin'ит analyzer fires на synthetic source с 4 shapes. hash_test.go: 8 тестов включая spec-sample pin (TestHashContent_MatchesSpecSample независимо строит §6.4 reference HMAC и сравнивает).",
+        "design_review": "code-architect (Option C — testing-only enforcement без runtime guard per §6.3 strict-whitelist-via-discipline; byte-truncation matches §6.4 sample; AST analyzer вместо regex — избегает false-positives в comments/strings). code-reviewer: 0 BLOCKING / 0 HIGH / 5 MEDIUM (все forward-looking, не блокеры). Applied fixes: MEDIUM #1 (audit allowlist расширен под §2.3 canonical lines), MEDIUM #3/#4 (документированы known limitations static analyzer — identifier keys, concat literals, subject/price collision). architect-reviewer verdict: PASS — HashContent matches §6.4 byte-for-byte; ForbiddenLogKeys покрывает все §2.4+§6.2 NOT-allowed; audit allowlist покрывает все §2.4 Allowed + §2.3; static analyzer соответствует §6.3 strict-whitelist-via-API-discipline.",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран с -ldflags '-s -w -X main.version=19d695c'",
+          "make_test": "ok — go test ./... 43 пакета PASS, 0 FAIL",
+          "make_lint": "ok — go vet ./... 0 issues",
+          "go_test_race_logger": "ok — go test -race -count=1 ./internal/infra/observability/logger/... PASS, race-clean",
+          "logger_test_count": "65 top-level тестов PASS (39 existing + 26 новых), 0 FAIL; 68 RUN entries (включая 3 subtests от TestPII_APIKey_InErrorURL_RedactedEndToEnd)",
+          "make_docker_build": "не выполнялся — Docker daemon недоступен, не входит в test_steps LIC-TASK-052"
+        },
+        "acceptance_criteria_status": {
+          "AC1_unit_test_pii_redacted_or_fails": "DONE — pii_redaction_test.go:54 TestPII_RawResponseHash_NeverLeaksContent (5 PII samples — key_parameters/risks/parties/semantic_tree/raw_llm_response) + pii_redaction_test.go:89 TestPII_APIKey_InErrorURL_RedactedEndToEnd + pii_redaction_test.go:163 TestPII_ContentInSanitizedChannel_StillSanitized",
+          "AC2_static_analyzer_no_forbidden_patterns": "DONE — static_analyzer_test.go:79 TestNoForbiddenKeysInCallSites (AST walker over internal/) + static_analyzer_test.go:99 TestStaticAnalyzer_SelfTest (4 synthetic shapes)",
+          "AC3_audit_test_only_allowed_fields": "DONE — audit_agent_invocation_test.go:108 TestAudit_AgentInvocation_OnlyAllowlistedKeys + audit_agent_invocation_test.go:155 TestAudit_PipelineFailed_OnlyAllowlistedKeys + audit_agent_invocation_test.go:185 TestAudit_PromptInjectionDetected_OnlyAllowlistedKeys (closed allowlist constant с §2.4 + §2.3 coverage)",
+          "AC4_raw_response_hash_HMAC_SHA256_first_1024": "DONE — hash.go:32 HashContent (byte-truncation @ 1024 — matches §6.4 sample) + hash_test.go:30 TestHashContent_TruncatesAtMaxBytes + hash_test.go:115 TestHashContent_MatchesSpecSample (independent §6.4 reference equivalence)",
+          "AC5_error_sanitization_end_to_end": "DONE — pii_redaction_test.go:89 TestPII_APIKey_InErrorURL_RedactedEndToEnd с 3 sub-tests (gemini_query_key, openai_authorization_bearer, anthropic_x_api_key_header)"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/hash.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/forbidden_keys.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/hash_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/pii_redaction_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/audit_agent_invocation_test.go",
+          "LegalIntelligenceCore/development/internal/infra/observability/logger/static_analyzer_test.go"
+        ],
+        "files_modified": [],
+        "deviations": [
+          "Testing-only enforcement — нет runtime guard в handler. Per security.md §6.3 'strict whitelist через API discipline' runtime check был бы (a) false sense of safety и (b) silent attr drop в prod — failure mode хуже бага. Static analyzer + audit test — bulwark.",
+          "Byte-truncation @ 1024 (не rune) — matches security.md §6.4 sample (`rawResponse[:min(len, 1024)]`). Multi-byte rune split mid-codepoint не проблема — хешируем байты, не отображаем.",
+          "Static analyzer flagging short English words 'subject'/'price' даже как value — false positive deliberate: deny-list зеркалит §6.2 verbatim; false positive вынуждает human review call site — дешевле missed leak. Документировано в static_analyzer_test.go:50-65.",
+          "make docker-build не выполнялся — Docker daemon недоступен, прецедент всех LIC-задач, не входит в test_steps."
+        ],
+        "hermetic": "Нет новых зависимостей. Stdlib only: crypto/hmac, crypto/sha256, encoding/hex, go/parser, go/ast, go/token, path/filepath, runtime, os, sort, strings.",
+        "unblocks": "Прямо: HashContent готов для будущих call sites raw_response_hash (schemavalidator RepairLoop при invalid output) и raw_fragment_hash (security.md §4.3 prompt injection audit log). Audit allowlist готов для LIC-TASK-047 orchestrator wiring (pinned forward-compat под §2.3 canonical lines). ForbiddenLogKeys + static analyzer защищают весь internal/ codebase от случайного PII leak'а в любых будущих call sites."
+      }
     },
     {
       "id": "LIC-TASK-053",

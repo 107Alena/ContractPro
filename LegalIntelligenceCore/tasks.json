@@ -1979,7 +1979,46 @@
       "dependencies": [
         "LIC-TASK-008"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-22",
+      "completion_notes": {
+        "summary": "Реализован пакет internal/egress/dlq — DLQ Publisher для четырёх PII-safe LIC DLQ-топиков (LIC-TASK-046). Файлы: doc.go (package overview + 3-entry allowlist), hash.go (HashPayload uncapped + HashRawLLMResponse 1024-byte cap per security.md §6.4), errors.go (PublishError + classifyOutcome + reason constants), seams.go (Publisher/Metrics/Clock/Logger seams + local PublishOutcome mirror), deps.go (Deps bundle с REQUIRED Publisher), publisher.go (DLQPublisher + Config + NewDLQPublisher + PublishDLQ + topicToReason), CLAUDE.md (package doc). 4 test файла: 47 RUN/PASS, 0 FAIL, race-clean. Сохраняет hermetic boundary (3-entry allowlist {model, port, broker}). Метрики: lic_dlq_published_total{topic,reason} (на broker-ack success) + lic_publisher_messages_total{topic,outcome} (unconditional на каждом exit-path).",
+        "design_review": "code-architect (Q1..Q6): Q1=hash в dlq, Q2=4 reasons 1:1 с topics, Q3=best-effort correlation IDs + ErrorCode не валидируется против catalog, Q4=caller логирует raw payload до PublishDLQ, Q5=Logger noop на hot path (mirror dm/orch), Q6=FailedAt stamp только если пуст. code-reviewer: APPROVE WITH NIT-FIXES, 0 BLOCKING/0 HIGH/2 MEDIUM/5 LOW/7 NIT. Применены M1 (TestDLQReason_TopicMappingExhaustive теперь активно вызывает topicToReason), M2 (TestTopicToReason_DefensiveDefault покрывает unreachable arm), N1 (math typo: 4 series, not 16 — 1:1 mapping).",
+        "test_results": {
+          "make_build": "ok — bin/lic-service пересобран",
+          "make_test": "ok — 44 пакета PASS, 0 FAIL",
+          "make_lint": "ok — go vet 0 issues",
+          "go_test_race_dlq": "ok — go test -race -count=1 ./internal/egress/dlq/... PASS",
+          "go_test_race_module": "ok — go test -race -count=1 ./... 44 пакетов PASS, race-clean",
+          "make_docker_build": "не выполнялся — Docker daemon недоступен в окружении (прецедент LIC-TASK-003/052); не входит в test_steps LIC-TASK-046"
+        },
+        "acceptance_criteria_status": {
+          "package_egress_dlq": "DONE — internal/egress/dlq с DLQPublisher (реализует port.DLQPublisherPort, compile-time var _ assertion)",
+          "four_dlq_topics": "DONE — port.DLQTopic константы invalidMessage/consumerFailed/publishFailed/agentOutputInvalid; routing key = literal topic string на ExchangeDLX",
+          "pii_safe_envelope": "DONE — port.LICDLQEnvelope (определён в LIC-TASK-018, исп. в этой задаче) с original_message_hash (HMAC-SHA-256 первые 64 chars hex), original_message_size_bytes, error_code, error_message, retry_count, 5 ID-полей (best-effort omitempty), agent_id/stage/raw_llm_response_hash/payload_storage_key (optional), failed_at. HashPayload (full bytes) + HashRawLLMResponse (1024-byte cap) — публичные helpers пакета",
+          "publish_failed_warning": "DONE — caller-side responsibility (architect Q4); CLAUDE.md + publisher.go godoc документируют контракт. LIC-TASK-036 (pipeline orch wiring) MUST log raw payload as WARN до PublishDLQ для DLQTopicPublishFailed; v1 object-storage retention опционально (§10.2)",
+          "metric_lic_dlq_published_total": "DONE — IncDLQPublished(topic, reason) seam method, реализуется в LIC-TASK-047 adapter поверх *metrics.DLQMetrics. 4 reasons (invalid_message, consumer_failed, publish_failed, agent_output_invalid) — 1:1 derived from DLQTopic, эмитят 4 series. Тесты пинят bothcounter contract"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/egress/dlq/doc.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/hash.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/errors.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/seams.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/deps.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/publisher.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/hash_test.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/publisher_test.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/seams_test.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/internal_test.go",
+          "LegalIntelligenceCore/development/internal/egress/dlq/CLAUDE.md"
+        ],
+        "deviations": [
+          "FailedAt не overwrite-ится always (asymmetry vs dm/orch) — stamp только если empty per architect Q6 (semantic: failed_at = when failure happened, caller knows; not when envelope was constructed). Document-ировано в seams.go.Clock godoc + CLAUDE.md.",
+          "make docker-build не запускался (нет Docker daemon в окружении; прецедент всех прежних LIC задач; не входит в test_steps).",
+          "L/N item-ы code-reviewer (нумерация L1-L5/N2-N7) не применены — все documentation polish или pattern-consistency с siblings; задокументированы в CLAUDE.md где relevant (L1 byte-vs-char cap)."
+        ],
+        "unblocks": "Прямо: LIC-TASK-047 (App wiring + main.go — последний оставшийся dep). Транзитивно: LIC-TASK-048..051 (integration tests), LIC-TASK-054 (organization isolation), LIC-TASK-055 (Docker Compose)."
+      }
     },
     {
       "id": "LIC-TASK-047",

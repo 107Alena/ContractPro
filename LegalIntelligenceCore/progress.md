@@ -2125,3 +2125,88 @@ Deferred NOTE (1): D1 signature deviation от literal AC#3 (`truncated,wasTrunc
 
 ### Прогресс: 45/55 → 46/55 done. Открыты (deps done): **046 (high), 053 (critical)**. Критпуть: **046 → 047 wiring → 048-055**. Следующая итерация: **LIC-TASK-046** (DLQ Publisher — последний блокер 047) ЛИБО **LIC-TASK-053** (prompt injection 5-layer defense end-to-end verification).
 
+---
+
+## LIC-TASK-046 — DLQ Publisher с PII-safe envelopes
+- **Status:** done
+- **Completed at:** 2026-05-22
+- **Agent:** claude-opus-4-7 (с консультациями code-architect, code-reviewer)
+
+### План реализации
+1. Изучить архитектурные SSOT: `error-handling.md` §9 (DLQ strategy), `security.md` §6.4-6.5 (HMAC + PII в DLQ payload), `observability.md` §3.8 (`lic_dlq_published_total{topic,reason}`) + §3.10 (cardinality budget), `integration-contracts.md` §10 (envelope shape + topology), `event-catalog.md` §3 (LICDLQEnvelope JSON schema).
+2. Сверить с уже определёнными доменными артефактами: `port.DLQPublisherPort`, `port.LICDLQEnvelope`, `port.DLQTopic` (все объявлены в LIC-TASK-018; этой задаче нужно только их реализовать).
+3. Согласовать спорные решения с code-architect — 6 вопросов: где располагать hash helpers, как маппить topic→reason для метрик, какова минимальная required-set валидация, как обрабатывать `lic.dlq.publish-failed` warning, использовать ли Logger на hot-path, как stamp-ить FailedAt (always-overwrite vs only-if-empty).
+4. Реализовать `internal/egress/dlq/` — модель публикации зеркалит sibling dm/orch publisher pattern (Publisher seam + local PublishOutcome mirror + Metrics seam с двумя counter-методами + Clock/Logger noops + REQUIRED-Publisher Deps + `var _ port.DLQPublisherPort` compile-time assertion + hermeticity allowlist=3).
+5. Тестовое покрытие: hash semantics (cap, key-dependence, payload-dependence, empty-key→empty-hash, stdlib HMAC vector, boundary byte), publisher behavior (7 validation branches, 6 broker outcomes, marshal-failure, FailedAt asymmetry, best-effort IDs, omitempty, optional fields, 32×16 concurrency race-clean), seams pinning (local PublishOutcome против metrics SSOT), hermeticity (3-entry allowlist + forbidden set + gofmt self-check).
+6. code-reviewer ревью, применить дешёвые fix-ы.
+7. CLAUDE.md для пакета, обновить tasks.json/progress.md, git commit.
+
+### Прогресс
+- ✅ Изучены 5 architecture docs + 12 кросс-ссылочных файлов (port/events.go LICDLQEnvelope, port/publisher.go DLQPublisherPort, metrics/dlq.go lic_dlq_published_total, broker/topology.go ExchangeDLX, sibling dm/orch publishers, config/security.go DLQHashKey).
+- ✅ code-architect Q1..Q6 ответы (~1000 слов):
+  - **Q1**: HashPayload + HashRawLLMResponse co-located в dlq, без import logger. `logger.HashContent` имеет byte-cap 1024 и locked к log-field use case — расширение через extension-pattern или новый shared package — over-scope для этой задачи.
+  - **Q2**: 1:1 topic→reason (4 distinct reasons). Эмит = 4 series. Альтернатива (3 reasons, fold invalid-message + consumer-failed) — теряет диагностический сигнал; per-ErrorCode (80+ series) — violates §3.10 budget.
+  - **Q3**: Минимальный required-set (topic + OriginalTopic + OriginalMessageHash + ErrorCode + ErrorMessage + non-negative RetryCount/SizeBytes). Correlation IDs best-effort per integration-contracts §10.1 ("если удалось извлечь"). ErrorCode НЕ валидируется против ErrorCatalog/IsPublishableToOrchestrator — DLQ ловит ВСЕ terminal errors включая non-publishable codes.
+  - **Q4**: Caller (LIC-TASK-036 pipeline orch) логирует raw payload как WARN ДО PublishDLQ. Publisher только envelope обрабатывает, raw payload не видит. "Warning + alert" intent — caller's WARN + §11 LICDLQGrowth alert + v1-optional §10.2 object storage. Cross-package coupling минимизирован.
+  - **Q5**: Logger не вызывается на hot-path. Mirror dm/orch consistency (build-spec D15). Metric — sole observability signal на этом пути (structured, unrate-limited, alertable — лучше log line).
+  - **Q6**: FailedAt asymmetry — auto-stamp ТОЛЬКО если empty, caller-set preserved. Semantic: failed_at = "когда failure произошёл" (caller знает), не "когда envelope опубликован". Always-overwrite (dm/orch pattern) исказил бы failure window для LICPipelineFailureRate §11 alert.
+- ✅ Реализовано 6 production файлов:
+  - `doc.go` (60 строк) — package overview + 3-entry hermetic allowlist.
+  - `hash.go` (~80 строк) — HashPayload (uncapped, full bytes) + HashRawLLMResponse (1024-byte cap per §6.4) + RawLLMResponseHashMaxBytes constant. Empty-key→empty-string defensive misconfig-visible behavior.
+  - `errors.go` (~120 строк) — PublishError{Reason, Cause} + classifyOutcome + 8 validation reason constants + 4 topic-derived reason constants. classifyOutcome зеркалит dm/orch branches (nil/ctx/Nack/ConfirmTimeout/unknown → success/failure/nacked/failure/failure).
+  - `seams.go` (~170 строк) — Publisher (broker seam, REQUIRED) + PublishOutcome typed enum (local mirror) + Metrics interface (IncPublish unconditional + IncDLQPublished broker-ack-only) + Clock + Logger + noop defaults + `var _ Seam = noop{}` assertions.
+  - `deps.go` (~50 строк) — Deps{Publisher, Metrics, Clock, Logger} с withDefaults.
+  - `publisher.go` (~220 строк) — DLQPublisher struct, Config{Exchange} + validate, NewDLQPublisher (errors.Join для both-defects), PublishDLQ (7 validation branches → marshal → broker.Publish → metric pair), topicToReason (4-arm + defensive default), failValidation private helper, package-level marshalEnvelope test-overridable seam, `var _ port.DLQPublisherPort = (*DLQPublisher)(nil)` compile-time assertion.
+- ✅ Реализовано 4 test файла, 47 тестов RUN/PASS:
+  - `hash_test.go` (10 тестов) — determinism, key-dependence, payload-dependence, empty-key→empty-hash, nil-payload-valid, full-bytes-not-truncated, stdlib HMAC vector pin, cap behavior at 1024-byte boundary, short-payload no-pad, RawLLMResponseHashMaxBytes constant pin.
+  - `publisher_test.go` (29 тестов) — T1 success-with-both-counters, T2 FailedAt auto-stamped-when-empty, T3 FailedAt preserved-when-caller-set (Q6 asymmetry), T4-T9 7 validation branches, T10 best-effort empty IDs accepted, T11 non-publishable ErrorCode accepted (Q3), T12 marshal-failure via package seam, T13-T17 6 broker outcomes (Nack/ConfirmTimeout/NotConnected/non-retryable AMQP/ctx.Canceled/ctx.DeadlineExceeded), T18 all-four topic→reason mappings, T19 agent-output-invalid optional fields, T20 publish-failed PayloadStorageKey, T21 omitempty contract, T22 32×16 concurrency race-clean, T-CTOR-1..4 constructor branches (Exchange empty / Publisher nil / both defects errors.Join / nil optional seams), T-CLASSIFIER 8-case classifyOutcome exhaustive, T-ERR PublishError.Error/Unwrap.
+  - `seams_test.go` (3 теста) — TestPublishOutcome_WireStringsPinned (4-value SSOT pin против metrics.PublishOutcome), TestDLQReason_TopicMappingExhaustive (active topicToReason invocation — M1 fix), TestTopicToReason_DefensiveDefault (unreachable arm exercise — M2 fix).
+  - `internal_test.go` (2 теста) — TestHermeticImports (3-entry allowlist + forbidden set incl config/metrics-parent/logger/application/ingress/sibling-publishers/third-party) + TestGofmtClean (go/format self-check).
+- ✅ code-reviewer ревью: APPROVE WITH NIT-FIXES — 0 BLOCKING, 0 HIGH, 2 MEDIUM, 5 LOW, 7 NIT. Applied M1 (seams_test теперь активно вызывает topicToReason), M2 (TestTopicToReason_DefensiveDefault покрывает unreachable arm), N1 (math typo в errors.go + seams.go — 4 series 1:1, не 16 series 4×4). L/N — documentation polish, pattern-consistency с siblings; задокументировано в CLAUDE.md где relevant (L1 byte-vs-char cap interpretation).
+- ✅ CLAUDE.md (~250 строк) — package doc с архитектурой файлов, API contract, Q1..Q6 reconciliations DEFECT-style, deliberate decisions, forward notes для LIC-TASK-047 wiring.
+- ✅ make build / make test / make lint — все три зелёные; `go test -race -count=1 ./... PASS`. 44 пакета PASS, 0 FAIL. make docker-build не запускался — Docker daemon недоступен в окружении (прецедент 003/052); не входит в test_steps этой задачи.
+- ✅ tasks.json LIC-TASK-046 status=done с completion_notes.
+
+### Acceptance criteria (file:line pinned)
+- AC#1 пакет internal/egress/dlq с DLQPublisher → publisher.go:74 DLQPublisher struct + publisher.go:28 `var _ port.DLQPublisherPort = (*DLQPublisher)(nil)` compile-time assertion.
+- AC#2 4 топика lic.dlq.* → routing key = `string(topic)` (publisher.go:241), topology + DLX exchange задаются broker.DeclareTopology (LIC-TASK-008 done); port.DLQTopic константы определены в port/events.go.
+- AC#3 PII-safe envelope с HMAC-SHA-256 → port.LICDLQEnvelope struct (port/events.go:272-300, определён в LIC-TASK-018, реализуется в этой задаче через HashPayload + HashRawLLMResponse + publisher.go validation). hash_test.go:101 TestHashPayload_KnownVector / hash_test.go:148 TestHashRawLLMResponse_BoundaryByte / publisher_test.go T1 / T10 / T19 / T20 пинят envelope shape end-to-end.
+- AC#4 publish-failed warning + alert (v1 object storage опционально) → caller-side responsibility (architect Q4). Documented в publisher.go:130-141 godoc + seams.go.Logger godoc + CLAUDE.md "Forward notes" #3. publisher.go:243-249 поддерживает caller-set PayloadStorageKey (T20 pin), §11 LICDLQGrowth alert reads lic_dlq_published_total{topic="lic.dlq.publish-failed"}.
+- AC#5 lic_dlq_published_total{topic,reason} метрика → Metrics.IncDLQPublished(topic, reason) seam в seams.go (вызывается только на broker-ack success — publisher.go:248-250). Реализуется в LIC-TASK-047 adapter поверх *metrics.DLQMetrics. 4 distinct reasons (invalid_message/consumer_failed/publish_failed/agent_output_invalid) — 1:1 derived from DLQTopic. Тесты publisher_test.go T18 пинят все 4 mapping; T1 / T13-17 пинят broker-ack-only contract.
+
+### Spec conformance (code-architect verdict via Q1..Q6 + code-reviewer verdict)
+- HashPayload (uncapped, full bytes) matches integration-contracts §10.1 ("HMAC-SHA-256 от полного payload через LIC_DLQ_HASH_KEY; first 64 chars hex"). HashRawLLMResponse (1024-byte cap) matches security.md §6.4 worked example byte-for-byte.
+- 1:1 topic→reason mapping consistent с observability.md §3.8 (`topic` ∈ 4 значения) + §3.10 cardinality budget (4 series < estimated 12 budget < instance cap 1500).
+- DLQ envelope без raw payload — closes F-8.4 (security.md §6.5).
+- ErrorCode НЕ validated против catalog — DLQ catches non-publishable codes (INVALID_MESSAGE_SCHEMA, INVALID_ORG_ID_MISMATCH, IDEMPOTENCY_STORE_UNAVAILABLE) per integration-contracts §10.1 + error-handling.md §3.1.
+- FailedAt semantic = "когда failure произошёл" — caller-set preserved (publish-failed/consumer-failed buffer across reconnect не corrupt-ит failure window для §11 alert).
+- Hermetic allowlist EXACTLY 3 entries ({model, port, broker}) — same precedent dm/orch siblings.
+
+### Файлы
+**Созданы (11 новых файлов в `internal/egress/dlq/`):**
+- `doc.go` — package godoc.
+- `hash.go` — HashPayload + HashRawLLMResponse helpers.
+- `errors.go` — PublishError + reason constants + classifyOutcome.
+- `seams.go` — Publisher/Metrics/PublishOutcome/Clock/Logger seams.
+- `deps.go` — Deps bundle с withDefaults.
+- `publisher.go` — DLQPublisher + Config + NewDLQPublisher + PublishDLQ + topicToReason.
+- `hash_test.go` (10 тестов).
+- `publisher_test.go` (29 тестов).
+- `seams_test.go` (3 теста).
+- `internal_test.go` (2 теста — hermeticity + gofmt).
+- `CLAUDE.md` — package doc.
+
+**Не тронуты:** все sibling пакеты (dm, orch publishers, broker, metrics) — additive package, никаких regression.
+
+### Notes
+1. **FailedAt asymmetry (Q6)** — sole semantic divergence от dm/orch publishers Timestamp-always-overwrite pattern. Documented в seams.go.Clock godoc + CLAUDE.md "Q6 reconciliation" + tested через T2 (auto-stamp при empty) + T3 (caller-set preserved). Если future review предложит "consistency normalization" — defend через CLAUDE.md.
+2. **Hash byte-vs-char cap (L1)** — security.md §6.4 говорит "first 1024 chars" но worked example использует byte indexing (`rawResponse[:min(len, 1024)]`). Following worked example as authoritative; documented в hash.go godoc + CLAUDE.md "API → Hash helpers" section. Если §6.4 ever pin "chars = runes", needs `utf8.RuneCount` rework.
+3. **Caller-side raw-payload logging for publish-failed (Q4)** — LIC-TASK-036 (pipeline orch wiring) MUST log full LegalAnalysisArtifactsReady payload as structured WARN ДО PublishDLQ(DLQTopicPublishFailed, ...). Зафиксировано в CLAUDE.md Forward note #3 как "Register-before-publish-style contract" — нужно pin-ить в LIC-TASK-036 теста после wiring.
+4. **Metrics seam carries TWO methods, не один** — отклонение от dm/orch single-IncPublish pattern. Justified: DLQ counter is the §11 alert source (alert reads "envelopes that REACHED the DLQ" — success path only). Без отдельного IncDLQPublished мы бы либо (i) обогатили обычный IncPublish дополнительным "is_dlq_topic" arg-ом (bigger label vocabulary churn) либо (ii) loose-coupled через post-hoc metric translation в adapter (fragile). 2-method seam — самый чистый split.
+5. **L/N items from code-reviewer not applied** — L1 (byte-vs-char), L2 (nil vs []byte payload collision), L3 (error string missing topic context), L4 (value-receiver subtle gotcha), L5 (marshalEnvelope race latent), N2-N7 (doc polish). Все либо documentation-only либо pattern-consistency с siblings. Не блокируют merge; могут land follow-up если потребуется.
+6. **Hermetic** — никаких новых зависимостей. Production source: stdlib (`context`, `crypto/hmac`, `crypto/sha256`, `encoding/hex`, `encoding/json`, `errors`, `fmt`, `time`) + 3 internal (`domain/model`, `domain/port`, `infra/broker`-sentinels). `go mod tidy` no-op.
+7. **Concurrency model** — PublishDLQ stateless после construction; goroutine-safe across distinct envelopes без mutex (broker.Publish сериализует на собственном pubMu). 32×16 race test пинят contract.
+8. **Public hash API** — HashPayload и HashRawLLMResponse exported из пакета. Callers (consumer adapter для invalid-message, orchestrator для publish-failed, schemavalidator для agent-output-invalid) вычисляют HMAC ДО построения LICDLQEnvelope, затем передают envelope в PublishDLQ. Publisher не вычисляет hash сам — keeps the publisher API minimal (one method, one envelope arg).
+
+### Прогресс: 46/55 → 47/55 done. Открыты (deps done): **053 (high)**. **LIC-TASK-047 (critical) теперь разблокирован** — все 11 dependencies (009/036/037/039-046) выполнены. Критпуть: **047 wiring → 048-051 integration tests → 054 isolation → 055 docker compose**. Следующая итерация: **LIC-TASK-047** (App wiring + main.go + graceful shutdown — самая большая разблокирующая задача в графе).
+

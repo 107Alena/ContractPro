@@ -2385,3 +2385,66 @@ ADR-LIC-07 формулирует 5-уровневую защиту от prompt 
 2. **LIC-TASK-054 (tenant isolation)** — отдельная задача, не пересекается с PI defense.
 
 ### Прогресс: 48/55 → **49/55 done**. Открыты (deps done): **048 (high)**, **054 (high)**. Критпуть: **048 → 049-051 → 054 → 055**. Следующая итерация: **LIC-TASK-048** (integration test framework — in-memory fakes для Redis/RabbitMQ/LLM/DM persistence) — критпуть к happy-path и pause-resume scenarios.
+
+---
+
+## 2026-05-23 — LIC-TASK-048 (high) ✅
+
+### План
+Создать `internal/integration/fakes/` — in-memory тестовая инфраструктура, на которой 049/050/051/054 (happy-path INITIAL, low-confidence pause+resume, RE_CHECK/agent failure/provider fallback/DLQ/prompt injection, tenant isolation) построят integration-тесты.
+
+Acceptance:
+- FakeBroker: in-memory pub/sub с manual ACK semantics
+- FakeKVStore: in-memory map с real-time TTL
+- FakeLLMProvider: deterministic responses keyed (AgentID, model); inject errors per call; JSONSchema strict mode passthrough
+- FakeDM: симулирует ArtifactsProvided / Persisted ответы
+- Helper BuildTestApp(t): wires fakes в App
+- Verifier: assert на publish'и (topic + payload schema)
+- Test data: фикстуры с realistic SEMANTIC_TREE / EXTRACTED_TEXT
+
+### Реализация (delegated к backend-reliability-engineer для inventory, golang-pro implicit для кода, architect-reviewer для аудита)
+Файлы созданы в `internal/integration/fakes/`:
+- `doc.go` — package documentation + BuildTestApp deferral rationale
+- `broker.go` — FakeBroker (consumer.BrokerSubscriber + dm/orch/dlq.Publisher seams; 6 LIC queues + 4 outbound + 4 DLQ routing keys как константы; manual-ACK FakeDelivery; XDeathHeader helper; sync Inject; OnPublish wildcard/exact listeners; recorded log для publish+inject)
+- `kvstore.go` — FakeKVStore (real-time TTL lazy sweep; idempotency.RedisSeam + ratelimit.LuaEvaluator; распознаёт luaSetNXOrGet и tokenBucketScript по substring marker; Get/Set/SetNX/Delete/Expire/Eval/Ping/Close; FIFO Ping-failure injection)
+- `llm.go` — FakeLLMProvider (port.LLMProviderPort; FIFO responses keyed (AgentID, Model); per-call error injection auto-wrapped в *LLMProviderError; JSONSchemaSet recording; latency; HealthCheck dual-mode {typed wire-failure, transport})
+- `dm.go` — FakeDM (listener на FakeBroker.OnPublish для lic.requests.artifacts + lic.artifacts.analysis-ready; programmable per-version ArtifactsResponse{Success/Partial/Error/Drop} + PersistOutcome{Success/Failure/Drop}; configurable delay для драйва awaiter-timeout путей; observed-request log)
+- `fixtures.go` — реалистичный русскоязычный контракт-поставка (SemanticTreeRU/ExtractedTextRU/DocumentStructureRU/ProcessingWarningsRU + ParentRiskAnalysisRU для RE_CHECK) + 9 canned agent responses schema-valid против `internal/agents/schemas/*.json`:
+  - ClassifierResponse / ClassifierLowConfidenceResponse (correct 12-value enum tokens SUPPLY/OTHER/SERVICES)
+  - KeyParamsResponse (parties[] + price/duration/penalties/jurisdiction as string|null)
+  - PartyConsistencyResponse (findings[] with required type+severity+description+clause_ref)
+  - MandatoryConditionsResponse (contract_type + conditions[].code matching ^MC_*; status enum FOUND_OK)
+  - RiskDetectionResponse (risks[].id ^R-[0-9]{3,}$; level high/medium/low; required legal_basis)
+  - RecommendationResponse (TOP-LEVEL ARRAY — recommendation.json declares "type":"array")
+  - SummaryResponse (text minLength 200 — 250+ chars)
+  - DetailedReportResponse (section_code enum; items shape; warnings as object-map without PROMPT_INJECTION_DETECTED entry when undetected)
+  - RiskDeltaResponse (uuid-format ids; added/removed/changed/profile_change/summary)
+- `verifier.go` — Tb minimal interface; AssertPublished / AssertNotPublished / WaitForPublish[After] / MatchEvent / AssertPayloadField / AssertNoErrors / IsTimeout
+- `rig.go` — TestRig bundle (Broker + KV + per-LLMProviderID FakeLLMProvider × 3 + FakeDM Start-ed; t.Cleanup); InstallCannedAgentResponses helper
+- `CLAUDE.md` — house-style doc: API, conventions, deliberate decisions, sentinel-adapter note для 049+, BuildTestApp deferral rationale
+- Тесты (всё `-race` clean):
+  - `broker_test.go` (20 tests: topology preset, Subscribe/Publish/Inject fan-out, FakeDelivery Ack/Nack/Reject/XDeath/double-terminate, OnPublish wildcard, race 16×32 publish+listener)
+  - `kvstore_test.go` (19 tests: miss→ErrKeyNotFound, SetNX first-writer-wins + expired-key allows re-set, Expire true/false, idempotency Lua acquired/present/TTL re-acquire, token-bucket allow-then-deny + hash persistence, ctx, Reset, race 32-goroutine SetNX fairness)
+  - `llm_test.go` (14 tests: no-response→typed-malformed, FIFO drain, error-wins-over-response, bare→typed wrap, typed passthrough, JSONSchemaSet recording, ctx cancel during latency, HealthCheck three modes, race 16×32 Complete)
+  - `dm_test.go` (8 tests: default echo, per-version override, Drop→no-publish, persist success/failure, response delay drives timeout, observed-logs, Stop drains in-flight)
+  - `fixtures_test.go` (9 tests: every fixture valid JSON; every canned response **schema-valid via gojsonschema against the real internal/agents/schemas/*.json**)
+  - `verifier_test.go` (11 tests; recording-Tb pattern with runtime.Goexit)
+  - `rig_test.go` (5 tests)
+  - `seams_check_test.go` — 7 cross-package satisfaction assertions: consumer.BrokerSubscriber / dm.Publisher / orch.Publisher / dlq.Publisher / idempotency.RedisSeam / ratelimit.LuaEvaluator / port.LLMProviderPort
+- Hermeticity: stdlib + domain/{model,port} + infra/broker (types only — broker.MessageHandler/Delivery/XDeathEntry) + llm/ratelimit (LuaEvaluator type assertion); production-code _test imports of consumer/idempotency/dm/orch/dlq в seams_check_test.go (_test scope only).
+
+### Architect audit (architect-reviewer)
+Первая итерация фикстур не была schema-valid (тестовые ответы агентов скопированы из произвольной модели). Architect-reviewer провёл compliance-аудит против integration-contracts.md / event-catalog.md / high-architecture.md §6 / ai-agents-pipeline.md и выявил CRITICAL: 6 из 9 canned responses не пройдут schema-валидатор LIC-TASK-023. Переписал фикстуры под реальные схемы; добавил автоматический per-agent gojsonschema-тест, который теперь пинит соответствие. Также добавлены 4 RoutingKeyDLQ* константы для симметрии. BuildTestApp deferral явно задокументирован — app.New() = 983 строк concrete wiring, рефакторинг под seam-injection — отдельная задача (consumer-задачи 049+ выбирают стратегию: либо адаптер вокруг pendingStateStore/versionMetaCache, либо рефактор app.New).
+
+### Тестирование
+- `go test ./internal/integration/fakes/... -race`: PASS
+- `go test ./...`: 47 пакетов PASS, нет регрессий
+- `go vet ./...`: clean
+- `make build`, `make lint`, `make test`: все цели зелёные
+
+### Open items (для следующих задач)
+1. **Sentinel adapter** — `fakes.ErrKeyNotFound` ≠ `kvstore.ErrKeyNotFound` по identity. LIC-TASK-049+ либо обернёт Get в адаптер при инстанциации pending-state/version-meta-cache, либо проверит по string. Записано в CLAUDE.md.
+2. **BuildTestApp ↔ TestRig** — 049/050/051 выбирают: refactor `app.New` (фактории) или построить parallel orchestrator-only wiring, обходящее concrete-kvstore consumers (pendingStateStore, versionMetaCache).
+3. **prompt-injection-detected** в fixtures сегодня всегда `false`. 051 тесты, которым нужны hostile-fixtures, конструируют их сами через `FakeLLMProvider.SetResponseJSON`.
+
+### Прогресс: 49/55 → **50/55 done**. Открыты (deps done): **049 (high, deps 048✓)**, **055 (high, deps 003✓+047✓)**. Критпуть: **049 → 050 → 051 → 054 → 055**. Следующая итерация: **LIC-TASK-049** (Integration test — happy path INITIAL pipeline). Использует rig из 048; конструирует production orchestrator + idempotency.Guard + dmawaiter + 3 publishers поверх fakes; устанавливает CannedResponseFor(model.AllAgentIDs()[:8]) — без AgentRiskDelta.

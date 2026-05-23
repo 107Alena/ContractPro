@@ -2105,7 +2105,8 @@
       "dependencies": [
         "LIC-TASK-047"
       ],
-      "status": "pending"
+      "status": "done",
+      "completion_notes": "Implemented internal/integration/fakes: FakeBroker (consumer.BrokerSubscriber + dm/orch/dlq.Publisher seams; LIC topology preset; manual-ACK FakeDelivery; XDeath helper; sync Inject; one recorded log for publish+inject). FakeKVStore (real-time TTL; idempotency.RedisSeam + ratelimit.LuaEvaluator; recognises luaSetNXOrGet + tokenBucketScript by substring marker; Get/Set/SetNX/Delete/Expire/Eval/Ping/Close; FIFO Ping-failure injection). FakeLLMProvider (port.LLMProviderPort; FIFO responses keyed by (AgentID, Model); per-call error injection auto-wrapped to *LLMProviderError; JSONSchemaSet recording; latency; HealthCheck dual-mode). FakeDM (listener on FakeBroker.OnPublish for lic.requests.artifacts + lic.artifacts.analysis-ready; programmable per-version ArtifactsResponse/PersistOutcome with Drop for timeout; configurable delay; observed-request log). Realistic Russian fixtures + 9 schema-valid canned agent responses pinned by gojsonschema against internal/agents/schemas. Verifier helpers + narrow Tb interface tested via recording-Tb with runtime.Goexit. TestRig bundle (Broker + KV + 3 FakeLLMProvider + FakeDM, t.Cleanup registered). Full BuildTestApp(t) deferred to consumer tasks (049+) with documented reason: app.New() is 983 lines of concrete kvstore/broker wiring; refactoring out of 048 scope. Hermetic: stdlib + domain/{model,port} + infra/broker (types only) + llm/ratelimit. 7 cross-package seam-satisfaction assertions in seams_check_test.go. Tests: 20 broker, 19 kvstore, 14 llm, 8 dm, 9 fixtures (per-agent schema validation), 11 verifier, 5 rig, seams compile-check; race-clean."
     },
     {
       "id": "LIC-TASK-049",

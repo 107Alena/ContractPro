@@ -133,7 +133,9 @@ LLM строго должен вернуть JSON по схеме. Через `C
 
 #### Уровень 4: prompt_injection_detected флаг + дополнительный риск
 
-Агенты 1, 2, 3, 4, 5, 8 имеют поле `prompt_injection_detected: bool`. Агент 5 (Risk Detection) дополнительно при detection добавляет риск с `category=PROMPT_INJECTION_ATTEMPT, level=medium`.
+Агенты **1-5** (TypeClassifier, KeyParams, PartyConsistency, MandatoryConditions, RiskDetection) имеют поле `prompt_injection_detected: bool` в своей JSON-схеме (SSOT — `ai-agents-pipeline.md` §1-5). Агент 5 (Risk Detection) дополнительно при detection добавляет риск с `category=PROMPT_INJECTION_ATTEMPT, level=medium`.
+
+Агенты 6-9 (Recommendation, Summary, DetailedReport, RiskDelta) **не имеют** top-level флага: они обрабатывают уже структурированные upstream-данные, а не raw `<contract_document>`. Для них injection-сигнал пробрасывается через `DETAILED_REPORT.warnings.PROMPT_INJECTION_DETECTED` (см. Уровень 5), которое Result Aggregator детерминистично заполняет по флагам агентов 1-5.
 
 #### Уровень 5: warning в DETAILED_REPORT (C-lite reaction-policy)
 

@@ -2608,3 +2608,69 @@ Fix: Manager re-marshalит typed `cmd` (deterministic для stringish struct) 
 3. **CONTENT_POLICY вместо 5xx в Scenario 4.** 5xx (ServerError) даёт one-retry перед fallback'ом + poisoning через consecutive++. CONTENT_POLICY — единственный код с (Retryable=false, FallbackEligible=true, не auth, не quota), удовлетворяющий 4 ограничениям одновременно.
 
 ### Прогресс: 52/55 → **53/55 done**. Открыты (deps done): **054 (high, deps 049✓)**, **055 (high, deps 003✓+047✓)**. Критпуть: **054 → 055**. Следующая итерация: **LIC-TASK-054** (Tenant isolation tests).
+
+---
+
+## LIC-TASK-054 — Tenant isolation checks (security, high)
+
+**Дата:** 2026-05-25. **Категория:** security. **Приоритет:** high. **Зависимости:** LIC-TASK-049 (done).
+
+### Цель
+Integration-тесты, пинающие multi-tenancy инварианты (security.md §2.2 + §11.2): organization_id propagation в исходящие события, cross-event matching для UserConfirmedType, отсутствие org-id в LLM-wire, OTel correlation-attribute key, Prometheus label hygiene.
+
+### План
+1. Изучить integration framework (lictestapp/fakes/happypath/pauseresume) — паттерн.
+2. Картировать organization_id surface: DTO с полем OrganizationID, pipeline/pending state, cross-event matching место, OTel attr key, Prometheus registry, LLM port.
+3. Спроектировать 6 Test_*: PropagationINITIAL, PropagationPauseResume, UserConfirmedTypeMismatchDLQ, LLMRequestNoOrgIDInMessages, OTelAttributeKeyPin, PrometheusNoOrgIDLabel.
+4. Реализовать tenantisolation_test.go + json_helpers_test.go + CLAUDE.md.
+5. Прогнать make build/test/lint, проверить -race.
+6. Обновить tasks.json и progress.md; commit.
+
+### Архитектурные reconciliations (deviations vs literal task brief)
+
+- **R1 — ArtifactsProvided без OrganizationID.** `port.ArtifactsProvided` (events.go:81-91) во frozen event-catalog §2.1 не несёт `OrganizationID`. Cross-event matching на JSON-payload уровне невозможен. Единственная реальная org-id cross-event проверка — `pendingconfirmation.Manager.HandleUserConfirmedType` (manager.go:396), сравнивающая `cmd.OrganizationID` ↔ `ptc.OrganizationID` из persisted pending state. Test #3 покрывает РЕАЛЬНУЮ ветку, не фабрикованную. AC#2 переадресован к UserConfirmedType path; добавление поля в ArtifactsProvided — frozen-contract change, owned by DM/architecture.
+- **R2 — OTel constant литерально "organization_id".** В `tracer/attrs.go:22` — `AttrOrganizationID = attribute.Key("organization_id")` (correlation-level wire key, observability.md §4.3). Не `"lic.pipeline.organization_id"` (lic.pipeline.* зарезервировано под mode/outcome/stage attrs — attrs.go:31-38). Test #5 пинает константу.
+- **R3 — port.CompletionRequest без OrganizationID field by design.** Godoc llm.go:134-136 явно: «Correlation identifiers ... are propagated via context, not fields, so the wire envelope stays minimal and PII-free». Security model «organization_id передаётся в Metadata LLM-вызова» удовлетворён СТРУКТУРНО — нет поля на wire. Test #4 проверяет (a) substring отсутствует в System/User; (b) reflection — нет поля {OrganizationID, TenantID, OrgID}.
+
+### Реализация
+
+**Файлы (3):**
+- `internal/integration/tenantisolation/tenantisolation_test.go` — 6 тестов, external test package, 682 строки.
+- `internal/integration/tenantisolation/json_helpers_test.go` — `jsonMarshal` / `jsonUnmarshal` wrappers (mirror happypath / pauseresume).
+- `internal/integration/tenantisolation/CLAUDE.md` — package doc (purpose, files, 6-row test table, R1/R2/R3, hermeticity, forward note).
+
+**Тесты (все PASS, -race, 1.398s):**
+| # | Test | Coverage |
+|---|------|----------|
+| 1 | `TestTenantIsolation_OrgID_PropagationToOutgoing_INITIAL` | happy-path INITIAL: org-id в `GetArtifactsRequest`, каждом `LICStatusChangedEvent`, `LegalAnalysisArtifactsReady` |
+| 2 | `TestTenantIsolation_OrgID_PropagationToOutgoing_PauseResume` | pause+resume same org-id: `ClassificationUncertain`, каждый pause-phase + post-resume status, persisted `PendingTypeConfirmation` (декодируется `model.DecodePendingTypeConfirmation`), `analysis-ready` |
+| 3 | `TestTenantIsolation_UserConfirmedType_OrgIDMismatch_DLQ` | forged cmd.org != ptc.org → DLQ envelope (OriginalTopic, ErrorCode=INVALID_ORG_ID_MISMATCH, OrganizationID=forged, 64-hex hash, VersionID/JobID/CorrelationID); pending-state НЕ потреблён (security.md §11.2:496); analysis-ready нет; не публикуется FAILED с непубликуемым кодом; ACK (poison-loop стоп); lic-user-confirmed остаётся в `PROCESSING` (SETNX до tenant check, setUserConfirmedCompleted НЕ вызывается на этой ветке) |
+| 4 | `TestTenantIsolation_LLMRequest_NoOrgIDLeakIntoMessages` | для каждого `FakeLLMCall`: System/User без org-id substring; reflection — `port.CompletionRequest` без полей OrganizationID/TenantID/OrgID |
+| 5 | `TestTenantIsolation_OTelAttributeKey_OrganizationID_Pin` | `tracer.AttrOrganizationID == "organization_id"`; `SpanFields.AsKeyValues()` несёт правильный kv |
+| 6 | `TestTenantIsolation_PrometheusMetrics_NoOrganizationIDLabel` | `metrics.New(BuildInfo).Registry().Gather()` → walk family/metric/label, отвергает organization_id + варианты (organizationid/orgid/org_id/tenant_id/tenantid) case-insensitively |
+
+### Тестирование
+- `go test ./internal/integration/tenantisolation/... -race -count=1 -v`: 6/6 PASS, 1.398s.
+- `make test` (50 packages): all PASS, ноль регрессий, tenantisolation в списке.
+- `make build`: ok, bin/lic-service создан.
+- `make lint` (go vet ./...): clean.
+- `make docker-build`: не выполнялся (Docker daemon недоступен — прецедент LIC-задач, вне test_steps).
+
+### Architecture compliance — итог
+- ✅ `security.md §2.2 #1` (propagation): Tests #1, #2.
+- ✅ `security.md §2.2 #3` (cross-event matching mismatch → DLQ + alert): Test #3 для UserConfirmedType (R1 объяснение для ArtifactsProvided).
+- ✅ `security.md §2.2 #4` (org-id в Metadata, не в messages): Test #4 (R3 — структурно satisfied).
+- ✅ `security.md §2.2 #5` (Pending state isolation, resume tenant check): Test #2 пинает persisted org-id; Test #3 пинает mismatch path.
+- ✅ `security.md §11.2` (Mandatory defence, audit, pending NOT consumed): Test #3.
+- ✅ `observability.md §3.10` (organization_id forbidden в Prometheus labels): Test #6.
+- ✅ `observability.md §4.3` (wire-stable OTel correlation key): Test #5.
+
+### Делегирование subagent'ам
+- **Explore** — разведка organization_id surface (DTO/state/router/OTel/Prometheus/LLM).
+- **golang-pro** — реализация tenantisolation_test.go + json_helpers + CLAUDE.md (682 строки теста), gofmt-самопроверка через `go/format`.
+
+### Известные deviations (forward notes)
+1. **FakeLLMCall не несёт PriorTurns content.** Test #4 проверяет только `System`/`User` substring. Если future agent утечёт org-id в `PriorTurn.Content` (repair-loop conversation history), тест не поймает. Forward note в CLAUDE.md: расширить `fakes/llm.go` `FakeLLMCall` до `PriorTurns []port.Turn` и перепрогнать.
+2. **AC#2 ArtifactsProvided org_id check (литерально по tasks.json) — невозможен.** Frozen event-catalog не несёт поля. Cross-event matching реализован только для UserConfirmedType. Forward note R1 в test comments + CLAUDE.md.
+
+### Прогресс: 53/55 → **54/55 done**. Открыта (deps done): **055 (high, deps 003✓+047✓)**. Следующая итерация: **LIC-TASK-055** (Docker Compose integration).

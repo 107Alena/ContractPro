@@ -396,6 +396,7 @@ func newHarness(t *testing.T) *harness {
 			CompletedTTL:               24 * time.Hour,
 			ConfidenceThreshold:        0.7,
 			PausedSentinel:             testPaused,
+			DLQHashKey:                 "test-dlq-hmac-key-32-bytes-or-more-here-xx",
 		},
 		rec:     rec,
 		pending: &fakePending{rec: rec},
@@ -785,6 +786,54 @@ func TestHandleUserConfirmedType_InvalidContractType_WhitelistReject(t *testing.
 	}
 }
 
+// Pin 8b — DLQ envelopes from the invalid-contract-type and tenant-mismatch
+// paths MUST carry a non-empty OriginalMessageHash + OriginalMessageSizeBytes.
+// LIC-TASK-050 regression: an empty hash is rejected by dlq.DLQPublisher
+// (publisher.go:193 reasonMissingOriginalHash), silently dropping the
+// envelope on the floor; the security.md §11.2 mandatory DLQ contract
+// requires non-empty hashes.
+func TestHandleUserConfirmedType_DLQEnvelopeHashPopulated(t *testing.T) {
+	// Sub-case 1 — invalid contract_type (whitelist reject).
+	h := newHarness(t)
+	m := h.mgr()
+	if err := m.HandleUserConfirmedType(context.Background(), userCmd("ZZZ_NOT_WHITELISTED")); err != nil {
+		t.Fatalf("invalid ⇒ nil, got %v", err)
+	}
+	if h.dlq.count() != 1 {
+		t.Fatalf("invalid: DLQ once, got %d", h.dlq.count())
+	}
+	_, env, _ := h.dlq.last()
+	if env.OriginalMessageHash == "" {
+		t.Error("invalid: OriginalMessageHash empty (would be rejected by dlq.DLQPublisher)")
+	}
+	if len(env.OriginalMessageHash) != 64 {
+		t.Errorf("invalid: hash length = %d, want 64 (SHA-256 = 32 bytes hex)", len(env.OriginalMessageHash))
+	}
+	if env.OriginalMessageSizeBytes <= 0 {
+		t.Errorf("invalid: OriginalMessageSizeBytes = %d, want > 0", env.OriginalMessageSizeBytes)
+	}
+
+	// Sub-case 2 — tenant mismatch.
+	h2 := newHarness(t)
+	blob := pendingBlob()
+	blob.OrganizationID = "org-OTHER"
+	h2.pending.loadRet = blob
+	m2 := h2.mgr()
+	if err := m2.HandleUserConfirmedType(context.Background(), userCmd("SUPPLY")); err != nil {
+		t.Fatalf("tenant mismatch ⇒ nil, got %v", err)
+	}
+	if h2.dlq.count() != 1 {
+		t.Fatalf("tenant mismatch: DLQ once, got %d", h2.dlq.count())
+	}
+	_, env2, _ := h2.dlq.last()
+	if env2.OriginalMessageHash == "" {
+		t.Error("tenant mismatch: OriginalMessageHash empty")
+	}
+	if env2.OriginalMessageSizeBytes <= 0 {
+		t.Errorf("tenant mismatch: OriginalMessageSizeBytes = %d, want > 0", env2.OriginalMessageSizeBytes)
+	}
+}
+
 // Pin 9 — tenant mismatch (§11.2 R5).
 func TestHandleUserConfirmedType_TenantMismatch(t *testing.T) {
 	h := newHarness(t)
@@ -895,7 +944,7 @@ func TestNewManager_FailFast(t *testing.T) {
 	msg := err.Error()
 	for _, want := range []string{
 		"PendingStateTTL", "UserConfirmedProcessingTTL", "CompletedTTL",
-		"ConfidenceThreshold", "PausedSentinel",
+		"ConfidenceThreshold", "PausedSentinel", "DLQHashKey",
 		"pending", "idem", "uncert", "status", "dlq", "resumer",
 	} {
 		if !strings.Contains(msg, want) {

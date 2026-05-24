@@ -2497,3 +2497,57 @@ Acceptance:
 3. **Test-local pendingStateStore + versionMetaCache.** Зеркало `internal/app/pending_state.go` + `internal/app/version_meta_cache.go` (которые жёстко привязаны к `*kvstore.Client`). Production refactor под seam-injected stores — отдельная задача (forward-noted в fakes/CLAUDE.md как BuildTestApp deferral). 049-054 живут с дуплицированным wiring (~80 LOC).
 
 ### Прогресс: 50/55 → **51/55 done**. Открыты (deps done): **050 (high, deps 049✓)**, **055 (high, deps 003✓+047✓)**. Критпуть: **050 → 051 → 054 → 055**. Следующая итерация: **LIC-TASK-050** (Integration test — low-confidence pause + resume). Reuse `lictestapp.NewTestApp(t, WithCannedResponses(map{AgentTypeClassifier: ClassifierLowConfidenceResponse, ...}))`; assert classification-uncertain publish + IN_PROGRESS{STAGE_AWAITING_USER_CONFIRMATION} + Redis lic-pending-state + lic-trigger=PAUSED; затем Inject(UserConfirmedType{contract_type: SUPPLY}) и assert Stage 2..5 + COMPLETED + cleanup keys.
+
+---
+
+## LIC-TASK-050 — Integration test: low-confidence pause + resume
+- **Status:** done
+- **Completed at:** 2026-05-24
+- **Agent:** claude-opus-4-7 (с делегированием golang-pro для test code; code-reviewer для plan-sanity)
+
+### План реализации
+1. Изучить sequence-diagrams §2.1/§2.2, pendingconfirmation/manager.go (Pause + HandleUserConfirmedType), happy-path harness.
+2. Спроектировать тест: 2 sub-теста (valid resume + invalid contract_type) поверх lictestapp.NewTestApp с WithCannedResponses(AGENT_TYPE_CLASSIFIER → ClassifierLowConfidenceResponse).
+3. Делегировать реализацию golang-pro.
+4. Принять/отклонить найденные подводные камни; применить production fixes если в скоупе.
+5. Проверить тесты (race), линтер, Makefile, архитектурное соответствие.
+
+### Прогресс
+- ✅ `internal/integration/pauseresume/pauseresume_test.go` (~530 LOC) — `TestPauseResume_INITIAL_Pipeline` с двумя sub-тестами:
+  - `valid_contract_type_resumes_to_completed`: pause → assert (classification-uncertain payload + status-changed IN_PROGRESS{REQUESTING_ARTIFACTS,AWAITING_USER_CONFIRMATION} + publish order + Redis lic-pending-state + lic-trigger=PAUSED + no analysis-ready) → resume UserConfirmedType{SUPPLY} → assert (1× analysis-ready с overridden ContractType=SUPPLY+Confidence=1.0, all Stage 2-5 артефакты, RiskDelta=nil, last status COMPLETED, cleanup: pending-state deleted, lic-trigger=COMPLETED, lic-user-confirmed=COMPLETED, DLQ empty).
+  - `invalid_contract_type_dlqs_and_fails`: pause → UserConfirmedType{INVALID_TYPE_NOT_IN_WHITELIST} → assert (last status FAILED{INVALID_CONTRACT_TYPE,IsRetryable=false}, 1× DLQ invalid-message с OriginalTopic+ErrorCode+OriginalMessageHash(64 hex)+OriginalMessageSizeBytes>0+VersionID+OrgID+JobID+CorrelationID, lic-user-confirmed=COMPLETED, pending-state STILL present, no analysis-ready).
+- ✅ `internal/integration/pauseresume/json_helpers_test.go` — копия happypath wrappers.
+- ✅ Production bug-fix: `internal/application/pendingconfirmation/manager.go` — добавлен `Config.DLQHashKey` (required, validate non-empty); `publishInvalidDLQ` теперь `json.Marshal(cmd)` + `hmacFirst64` + populate `OriginalMessageHash` + `OriginalMessageSizeBytes`. Mirror consumer/dlq_envelope.go pattern.
+- ✅ `internal/application/pendingconfirmation/manager_test.go` — `DLQHashKey` в `newHarness`; "DLQHashKey" в `TestNewManager_FailFast` expected substrings; новый Pin 8b `TestHandleUserConfirmedType_DLQEnvelopeHashPopulated` (assertions на non-empty hash + size для обоих rejection paths).
+- ✅ `internal/app/app.go` — `DLQHashKey: a.cfg.Security.DLQHashKey` в `wirePendingManager` (wiring invariant: равен consumer's dlqHashKey).
+- ✅ `internal/integration/lictestapp/lictestapp.go` — `DLQHashKey: testDLQHMACKey` в `pendingconfirmation.Config`; `WithCannedResponses` исправлен на `SetResponses` (REPLACE) вместо `SetResponseJSON` (APPEND) — docstring обещал replace, реализация appendила.
+
+### Production bug discovered & fixed
+`pendingconfirmation.Manager.publishInvalidDLQ` строил `port.LICDLQEnvelope` с пустым `OriginalMessageHash` (комментарий ссылался на несуществующий "adapter computes HMAC"). `*dlq.DLQPublisher.PublishDLQ` отвергает envelope с пустым hash через Block B validation (publisher.go:193 `reasonMissingOriginalHash`). Manager логировал DLQ error и продолжал — silent drop. Эффект: forged/invalid `UserConfirmedType` (invalid contract_type или tenant mismatch) терял DLQ envelope — нарушение `security.md §11.2` "Mandatory defence не safety net".
+
+Fix: Manager re-marshalит typed `cmd` (deterministic для stringish struct) и считает HMAC-SHA-256 keyed by `DLQHashKey`. Хеш стабилен для same-topic dedup; не сравним с consumer's invalid-message хешами (разные inputs — разные codepaths) — задокументировано в godoc.
+
+### Harness fix
+`lictestapp.WithCannedResponses` использовал `SetResponseJSON` (FIFO append), хотя docstring обещал "Each entry replaces the default canned response". Stage 1 drainал высоко-confidence default первым, тест таймаутил. Fix: использовать `SetResponses` (REPLACE).
+
+### Тестирование
+- `go test -race -count=1 ./internal/integration/pauseresume/... -v`: PASS, 40ms wall (pause 10ms + resume 12ms).
+- `go test -count=1 ./...`: 50/50 пакетов PASS (включая новый pauseresume).
+- `go test -race -count=1 ./internal/integration/... ./internal/application/pendingconfirmation/...`: PASS, ноль race warnings.
+- `go vet ./...`: clean.
+- `make build` / `make test` / `make lint`: все зелёные.
+
+### Architecture compliance
+- `sequence-diagrams.md §2.1 Pause`: SET lic-pending-state → publish classification-uncertain → publish status-changed{IN_PROGRESS,AWAITING_USER_CONFIRMATION} → SET lic-trigger=PAUSED → ACK (тест пинит triplet + order).
+- `sequence-diagrams.md §2.2 Resume`: UserConfirmedType → SETNX lic-user-confirmed → Load pending → tenant check → restore + override → drive Stage 2..5 → analysis-ready → DM persist → COMPLETED → cleanup keys (тест пинит все).
+- `security.md §11.2 Mandatory DLQ`: исправлено — Manager теперь публикует DLQ envelope с непустым HMAC (раньше silent drop).
+- `error-handling.md §3.6 INVALID_CONTRACT_TYPE`: non-retryable=false, ACK исходного сообщения, FAILED + DLQ + lic-user-confirmed=COMPLETED (тест пинит).
+- `consumer/CLAUDE.md R3` (HMAC ownership): Manager использует тот же `hmacFirst64` pattern (HMAC-SHA-256 first 64 hex) — local helper в `pendingconfirmation/manager.go`, no cross-package import (hermeticity {stdlib, model, port} preserved).
+- `pendingconfirmation/CLAUDE.md D4/D7/D10` (Pause/Resume bodies): неизменены — fix только в `publishInvalidDLQ` + `Config`.
+
+### Известные deviations (forward notes)
+1. **lictestapp.WithCannedResponses semantics change.** Was: APPEND (FIFO add). Now: REPLACE (drop existing default). Callers (если появятся новые) должны рассчитывать на REPLACE — docstring всегда обещал это. Тестам, которые полагались на APPEND, потребуется явный override через `app.LLM[port.ProviderClaude].SetResponse(...)` для append. На текущей кодовой базе только pauseresume использует override; других callers нет — изменение совместимо.
+2. **publishInvalidDLQ hash semantics.** Manager хеширует re-marshalled `cmd`, не оригинальные wire bytes (которые consumer декодировал). Forensic дедупликация работает same-topic (две одинаковые invalid commands → одинаковый хеш), но cross-topic корреляция с consumer's invalid-message envelopes невозможна — задокументировано в `publishInvalidDLQ` godoc. Acceptable per code-reviewer.
+3. **`tenant_mismatch` path also gets DLQ now.** Был тот же bug — теперь Pin 8b покрывает оба пути (invalid-contract-type + tenant-mismatch) в Manager unit tests.
+
+### Прогресс: 51/55 → **52/55 done**. Открыты (deps done): **051 (high, deps 050✓)**, **054 (high, deps 049✓)**, **055 (high, deps 003✓+047✓)**. Критпуть: **051 → 054 → 055**. Следующая итерация: **LIC-TASK-051** (Integration tests — RE_CHECK / agent failure+repair / provider fallback / timeout / DLQ / prompt injection). Reuse `lictestapp.NewTestApp`; per-test programming через `FakeLLMProvider.InjectError` + `FakeDM.SetResponseDelay` + `FakeBroker.InjectPublishError` + `ReCheckArtifactsBundle`.

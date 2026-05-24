@@ -700,6 +700,11 @@ func (a *App) wirePendingManager(resumer pendingconfirmation.PipelineResumer) er
 			CompletedTTL:               a.cfg.Idempotency.TTL,
 			ConfidenceThreshold:        a.cfg.Scoring.ConfidenceThreshold,
 			PausedSentinel:             pipeline.ErrPipelinePaused,
+			// MUST equal the dlqHashKey passed to consumer.NewConsumer
+			// (a.cfg.Security.DLQHashKey, see consumer wiring below) so
+			// invalid-message envelopes from the consumer and the
+			// pending manager share a same-topic dedup hash space.
+			DLQHashKey: a.cfg.Security.DLQHashKey,
 		},
 		a.pendingStore,
 		a.idempGuard,

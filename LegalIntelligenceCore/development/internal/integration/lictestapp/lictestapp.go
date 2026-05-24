@@ -339,9 +339,21 @@ func NewTestApp(t *testing.T, opts ...Option) *TestApp {
 		}
 		rig.InstallCannedAgentResponses(providerByAgent, modelByAgent, initialAgents)
 	}
-	// Layer custom responses on top.
+	// Layer custom responses on top — REPLACE the per-agent FIFO so
+	// the caller's content drains first (SetResponses replaces, vs
+	// SetResponseJSON which appends — fakes/llm.go:99,120). Without
+	// the replace semantics a previously installed canned default
+	// would be served first and the override would never reach the
+	// pipeline (LIC-TASK-050 low-confidence override regression).
 	for a, content := range cfg.extraResponses {
-		rig.LLMByID[port.ProviderClaude].SetResponseJSON(a, testModelID, content)
+		rig.LLMByID[port.ProviderClaude].SetResponses(a, testModelID, []fakes.CompletionScript{
+			{
+				Content:      content,
+				InputTokens:  100,
+				OutputTokens: len(content) / 4,
+				StopReason:   port.StopReasonEndTurn,
+			},
+		})
 	}
 
 	// 8. Stage executor + aggregator.
@@ -468,6 +480,9 @@ func NewTestApp(t *testing.T, opts ...Option) *TestApp {
 			CompletedTTL:               defaultIdempCompletedTTL,
 			ConfidenceThreshold:        defaultConfidenceThreshold,
 			PausedSentinel:             pipeline.ErrPipelinePaused,
+			// Same key as the consumer's dlqHashKey (testDLQHMACKey)
+			// so all invalid-message envelopes share a hash space.
+			DLQHashKey: testDLQHMACKey,
 		},
 		pendingStore,
 		guard,

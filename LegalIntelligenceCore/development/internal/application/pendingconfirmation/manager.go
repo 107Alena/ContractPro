@@ -36,6 +36,10 @@ package pendingconfirmation
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -90,6 +94,17 @@ type Config struct {
 	// value. Required (non-nil) — a Manager that cannot signal "paused" is
 	// misconfigured.
 	PausedSentinel error
+	// DLQHashKey is LIC_DLQ_HASH_KEY — the HMAC-SHA-256 key used by
+	// publishInvalidDLQ to compute LICDLQEnvelope.OriginalMessageHash for
+	// the rejected UserConfirmedType paths (invalid contract_type / cross-
+	// tenant). MUST equal the value passed to consumer.NewConsumer so a
+	// future operator can correlate forensic hashes across consumer- and
+	// manager-owned invalid-message envelopes (same-topic dedup only —
+	// cross-topic comparability is not expected). Required (non-empty) —
+	// LIC-TASK-046 dlq.DLQPublisher rejects an envelope with an empty
+	// OriginalMessageHash, so an unset key disables the DLQ branch
+	// silently.
+	DLQHashKey string
 }
 
 // validate fails fast on misconfiguration (errors.Join surfaces ALL at once —
@@ -110,6 +125,9 @@ func (c Config) validate() error {
 	}
 	if c.PausedSentinel == nil {
 		errs = append(errs, errors.New("pendingconfirmation: Config.PausedSentinel must not be nil (LIC-TASK-047 injects pipeline.ErrPipelinePaused)"))
+	}
+	if c.DLQHashKey == "" {
+		errs = append(errs, errors.New("pendingconfirmation: Config.DLQHashKey must not be empty (LIC_DLQ_HASH_KEY; required by publishInvalidDLQ — empty hash is rejected by dlq.DLQPublisher)"))
 	}
 	if c.UserConfirmedProcessingTTL > 0 && c.PendingStateTTL > 0 && c.UserConfirmedProcessingTTL >= c.PendingStateTTL {
 		errs = append(errs, errors.New("pendingconfirmation: Config.UserConfirmedProcessingTTL must be < PendingStateTTL"))
@@ -594,25 +612,61 @@ func (m *Manager) publishFailed(ctx context.Context, cmd port.UserConfirmedType,
 }
 
 // publishInvalidDLQ routes a poison UserConfirmedType to lic.dlq.invalid-
-// message with a PII-safe envelope (best-effort correlation fields from cmd;
-// the adapter computes the HMAC of the raw payload — DLQPublisherPort godoc).
-// A DLQ publish error is logged but does not change the caller's decision.
+// message with a PII-safe envelope (best-effort correlation fields from cmd).
+//
+// Unlike the consumer's invalid-message path — which hashes the raw inbound
+// bytes (consumer/dlq_envelope.go:29-37, CLAUDE.md R3) — the Manager runs
+// post-decode and does NOT hold the raw payload. We compute the HMAC over
+// the canonical Go-stdlib re-marshalled form of `cmd`; the hash is a stable
+// forensic identifier for same-topic dedup but is NOT comparable across the
+// consumer's invalid-message hashes (different inputs). `port.UserConfirmed-
+// Type` is a stringish-only struct (no maps) so json.Marshal is deterministic
+// in field order — if a future field is a `map[string]X`, this property
+// breaks and the hash loses its stable-identifier semantics.
+//
+// A marshal failure (defensive — unreachable for a typed struct of stringish
+// fields) skips the DLQ publish and logs at Error; the FAILED status + audit
+// trail still carry the rejection. A DLQ publish error is logged but does
+// not change the caller's decision.
 func (m *Manager) publishInvalidDLQ(ctx context.Context, cmd port.UserConfirmedType, code model.ErrorCode) {
+	body, mErr := json.Marshal(cmd)
+	if mErr != nil {
+		m.log.Error(ctx, "DLQ envelope marshal errored; DLQ publish skipped",
+			"marshal_error", mErr, "error_code", code.String(), "version_id", cmd.VersionID)
+		return
+	}
 	env := port.LICDLQEnvelope{
-		OriginalTopic:  sourceTopicUserConfirmedType,
-		ErrorCode:      code,
-		ErrorMessage:   model.NewDomainError(code, model.StageAwaitingUserConfirmation).DevMessage,
-		CorrelationID:  cmd.CorrelationID,
-		JobID:          cmd.JobID,
-		DocumentID:     cmd.DocumentID,
-		VersionID:      cmd.VersionID,
-		OrganizationID: cmd.OrganizationID,
-		FailedAt:       m.clock.Now().Format(time.RFC3339),
+		OriginalTopic:            sourceTopicUserConfirmedType,
+		OriginalMessageHash:      hmacFirst64(body, m.cfg.DLQHashKey),
+		OriginalMessageSizeBytes: len(body),
+		ErrorCode:                code,
+		ErrorMessage:             model.NewDomainError(code, model.StageAwaitingUserConfirmation).DevMessage,
+		CorrelationID:            cmd.CorrelationID,
+		JobID:                    cmd.JobID,
+		DocumentID:               cmd.DocumentID,
+		VersionID:                cmd.VersionID,
+		OrganizationID:           cmd.OrganizationID,
+		FailedAt:                 m.clock.Now().Format(time.RFC3339),
 	}
 	if err := m.dlq.PublishDLQ(ctx, port.DLQTopicInvalidMessage, env); err != nil {
 		m.log.Error(ctx, "DLQ publish errored; decision stands",
 			"dlq_error", err, "error_code", code.String(), "version_id", cmd.VersionID)
 	}
+}
+
+// hmacFirst64 computes HMAC-SHA-256(body, key) and returns the first 64
+// hex chars — mirrors consumer/dlq_envelope.go:29-37 (R3 contract: the
+// caller fills OriginalMessageHash because the frozen DLQPublisherPort
+// signature passes no raw bytes). SHA-256 is 32 bytes ⇒ 64 hex chars
+// exactly; the length guard is defensive.
+func hmacFirst64(body []byte, key string) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write(body) // hmac.Write never errors
+	full := hex.EncodeToString(mac.Sum(nil))
+	if len(full) > 64 {
+		return full[:64]
+	}
+	return full
 }
 
 // setUserConfirmedCompleted moves lic-user-confirmed:{version_id} to

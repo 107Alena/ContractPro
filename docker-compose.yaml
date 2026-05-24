@@ -38,6 +38,7 @@
 #        Orchestrator API  http://localhost:8080/healthz
 #        DM API            http://localhost:8081/readyz
 #        DP health         http://localhost:8082/healthz
+#        LIC health        http://localhost:8083/healthz
 #        RabbitMQ UI       http://localhost:15672  (guest/guest)
 #        pgAdmin           http://localhost:5050   (admin@contractpro.local / admin)
 #        Redis Insight     http://localhost:5540   (без auth)
@@ -243,6 +244,75 @@ services:
         condition: service_healthy
 
   # ===========================================================================
+  # Legal Intelligence Core
+  # ===========================================================================
+  #
+  # ВНИМАНИЕ: lic-service требует LIC_CLAUDE_API_KEY (Anthropic API key).
+  # Без него сервис не стартанёт (fail-fast валидация). Заполните .env.
+  # LIC_OPENAI_API_KEY и LIC_GEMINI_API_KEY опциональны для fallback —
+  # если не заданы, провайдеры исключаются из `LIC_PROVIDER_FALLBACK_ORDER`
+  # на старте.
+  #
+  # OTel: LIC использует OTLP gRPC, поэтому таргетит jaeger:4317 (а не :4318
+  # как DM/DP/Orchestrator — у них OTLP HTTP). jaeger all-in-one принимает оба.
+  #
+  # Метрики /metrics экспонируются на том же порту что и /healthz и /readyz
+  # (LIC_HTTP_PORT, default 8080) — отдельный metrics-порт не нужен (см.
+  # LegalIntelligenceCore/development/internal/infra/health/handler.go).
+
+  lic-service:
+    build:
+      context: ./LegalIntelligenceCore/development
+      args:
+        VERSION: dev
+    container_name: cp-lic-service
+    environment:
+      LIC_ENV: local
+      LIC_LOG_LEVEL: debug
+      LIC_BROKER_URL: amqp://guest:guest@rabbitmq:5672/
+      LIC_REDIS_URL: redis://redis:6379
+      # Logical DB 2 isolates LIC's idempotency / pending-state keys from
+      # DM (DB 0) and Orchestrator (DB 0) — see deployment.md §3.
+      LIC_REDIS_DB: "2"
+      LIC_PIPELINE_CONCURRENCY: "2"
+      LIC_CONFIDENCE_THRESHOLD: "0.75"
+      LIC_PROVIDER_FALLBACK_ORDER: claude,openai,gemini
+      # LLM API keys — Claude required, OpenAI/Gemini optional fallback.
+      LIC_CLAUDE_API_KEY: ${LIC_CLAUDE_API_KEY:?set LIC_CLAUDE_API_KEY in .env}
+      LIC_OPENAI_API_KEY: ${LIC_OPENAI_API_KEY:-}
+      LIC_GEMINI_API_KEY: ${LIC_GEMINI_API_KEY:-}
+      # HMAC secrets — required at all environments (security.md §4.3, §6.4).
+      LIC_PROMPT_INJECTION_HASH_KEY: ${LIC_PROMPT_INJECTION_HASH_KEY:?set LIC_PROMPT_INJECTION_HASH_KEY in .env}
+      LIC_DLQ_HASH_KEY: ${LIC_DLQ_HASH_KEY:?set LIC_DLQ_HASH_KEY in .env}
+      # OTel → jaeger (OTLP gRPC, plaintext внутри compose-сети).
+      LIC_OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+      LIC_OTEL_EXPORTER_OTLP_INSECURE: "true"
+      LIC_OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      LIC_OTEL_TRACES_SAMPLER_ARG: "1.0"
+      LIC_OTEL_SERVICE_NAME: lic-service-local
+    ports:
+      - "8083:8080"   # API + health + metrics (single HTTP server)
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    healthcheck:
+      # Distroless static — no shell/curl/wget. The binary itself implements
+      # the probe via --healthcheck subcommand (deployment.md §5.4).
+      test: ["CMD", "/lic-service", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # Pipeline drain budget — LIC_SHUTDOWN_TIMEOUT default 120s, plus 10s
+    # outer buffer for broker/redis close + OTel flush (deployment.md §6).
+    stop_grace_period: 130s
+    restart: unless-stopped
+
+  # ===========================================================================
   # API Backend Orchestrator
   # ===========================================================================
   #
@@ -358,6 +428,8 @@ services:
       dm-service:
         condition: service_started
       dp-worker:
+        condition: service_started
+      lic-service:
         condition: service_started
 
   # Grafana — UI для метрик и трейсов. Datasources автопровижатся из

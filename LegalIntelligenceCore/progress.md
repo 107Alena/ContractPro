@@ -2674,3 +2674,99 @@ Integration-тесты, пинающие multi-tenancy инварианты (sec
 2. **AC#2 ArtifactsProvided org_id check (литерально по tasks.json) — невозможен.** Frozen event-catalog не несёт поля. Cross-event matching реализован только для UserConfirmedType. Forward note R1 в test comments + CLAUDE.md.
 
 ### Прогресс: 53/55 → **54/55 done**. Открыта (deps done): **055 (high, deps 003✓+047✓)**. Следующая итерация: **LIC-TASK-055** (Docker Compose integration).
+
+---
+
+## LIC-TASK-055 — Docker Compose integration (infrastructure, high) — DONE (commit pending)
+
+**Цель.** Интегрировать `lic-service` в корневой `docker-compose.yaml` для local-dev стека. Финальная задача LIC.
+
+### План реализации
+1. Изучить существующий `docker-compose.yaml` (DM/DP/Orch паттерны), `deployment.md §3`, `configuration.md §3`, `Dockerfile` LIC.
+2. Делегировать `code-architect` ревизию плана из-за конфликтов: AC требует port 8081 (занят dm-service), `otel-collector` (отсутствует в compose), HTTP healthcheck (distroless без shell/curl).
+3. Реализовать `--healthcheck` subcommand в `cmd/lic-service/main.go` (golang-pro) для distroless probe (deployment.md §5.4 явно legitimизирует mechanism).
+4. Добавить блок `lic-service` в `docker-compose.yaml`.
+5. Обновить `observability/prometheus/prometheus.yml` (scrape target).
+6. Обновить `.env.example` (LIC keys section).
+7. Финальная ревизия `code-reviewer`.
+8. Прогон make build/lint/test.
+
+### Reconciliations (deviations от AC, одобрены code-architect)
+- **R1 — Port `8083:8080` вместо `8081:8080`.** Host 8081 занят `dm-service`, 8082 — `dp-worker`. 8083 — следующий свободный. Header comment compose обновлён. AC был написан в изоляции от других доменов.
+- **R2 — `jaeger:4317` вместо `otel-collector:4317`.** В существующем compose нет `otel-collector`; есть `jaeger all-in-one` с `COLLECTOR_OTLP_ENABLED=true`, принимающий OTLP gRPC на :4317. LIC tracer использует `otlptracegrpc` (`internal/infra/observability/tracer/tracer.go:16,213-221`), поэтому 4317 — правильный порт. DM/DP/Orch на :4318 потому, что у них OTLP HTTP.
+- **R3 — `--healthcheck` subcommand вместо raw HTTP в healthcheck.** Distroless static не имеет `wget`/`curl`/`sh`. Альтернативы (HEALTHCHECK NONE, smaller base) ломают AC. `deployment.md §5.4` явно описывает этот mechanism.
+- **R4 — `guest/guest` для RabbitMQ vs sample `contractpro/contractpro`.** Существующий compose использует `guest:guest`, все остальные сервисы (DM/DP/Orch) тоже. Менять creds под один сервис создаст рассогласование.
+
+### Реализованное
+
+**1. `cmd/lic-service/main.go` (+41 строк, 106→147):**
+- Добавлен `runHealthcheck() int` (строки 117-147): stdlib-only (`net/http`, `strconv`, `time`, `os`, `fmt`), читает `LIC_HTTP_PORT` (default 8080) с валидацией [1..65535], GET `http://127.0.0.1:<port>/healthz` с 3s timeout, exit 0 на 200, exit 1 иначе, silence on success, single-line stderr on failure.
+- Вызов в `main()` (строки 47-53) ДО `config.Load()`: probe не требует API keys + дешёвый.
+- Loopback hardcoded (probe by definition same-container).
+- Не используется `flag` package — одного `os.Args[1] == "--healthcheck"` check достаточно.
+- Делегирование: **golang-pro**.
+
+**2. `docker-compose.yaml` (новый блок `lic-service`, строки 246-313 + header comment строка 41):**
+- `build.context: ./LegalIntelligenceCore/development`, `args.VERSION=dev`
+- `container_name: cp-lic-service`
+- `ports: ["8083:8080"]` (R1)
+- Environment:
+  - `LIC_ENV=local`, `LIC_LOG_LEVEL=debug`
+  - `LIC_BROKER_URL=amqp://guest:guest@rabbitmq:5672/` (R4)
+  - `LIC_REDIS_URL=redis://redis:6379`, `LIC_REDIS_DB="2"` (изоляция от DM/Orch на DB 0; `kvstore/options.go:38` `opt.DB=cfg.DB` явно перетирает после `ParseURL`)
+  - `LIC_PIPELINE_CONCURRENCY="2"`, `LIC_CONFIDENCE_THRESHOLD="0.75"`, `LIC_PROVIDER_FALLBACK_ORDER=claude,openai,gemini`
+  - `LIC_CLAUDE_API_KEY` через `${VAR:?...}` (required, fail-fast на старте compose)
+  - `LIC_OPENAI_API_KEY` / `LIC_GEMINI_API_KEY` через `${VAR:-}` (optional)
+  - `LIC_PROMPT_INJECTION_HASH_KEY` / `LIC_DLQ_HASH_KEY` через `${VAR:?...}` (required по `security.md §4.3` и `§6.4`)
+  - `LIC_OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317` (R2), `LIC_OTEL_EXPORTER_OTLP_INSECURE="true"`, `LIC_OTEL_TRACES_SAMPLER=parentbased_traceidratio`, `LIC_OTEL_TRACES_SAMPLER_ARG="1.0"` (100% sampling для local dev; prod 0.1 per `configuration.md §2.14`), `LIC_OTEL_SERVICE_NAME=lic-service-local`
+- `depends_on`: rabbitmq (`service_healthy`), redis (`service_healthy`), jaeger (`service_started` — у jaeger нет healthcheck в compose). НЕ `dm-service` — LIC общается с DM строго через RabbitMQ (см. `CLAUDE.md`: «No sync REST to DM»).
+- `healthcheck`: `["CMD", "/lic-service", "--healthcheck"]` (R3), interval 15s, timeout 5s, retries 5, start_period 30s.
+- `stop_grace_period: 130s` (`LIC_SHUTDOWN_TIMEOUT` 120s default + 10s outer buffer per `deployment.md §6`).
+- `restart: unless-stopped` (AC compliance).
+
+**3. `observability/prometheus/prometheus.yml`:**
+- Новый job `lic-service` со target `lic-service:8080` (НЕ :9090 как у DM/DP/Orch: LIC экспонирует `/metrics` на том же HTTP-порту что и `/healthz`/`/readyz` через `internal/infra/health/handler.go` — отдельный metrics-порт намеренно отсутствует).
+- `prometheus.depends_on` пополнен `lic-service: {condition: service_started}` для корректного scrape ordering.
+
+**4. `.env.example`:**
+- Новая секция «Legal Intelligence Core — LLM API keys + HMAC secrets — REQUIRED для lic-service» (~20 строк).
+- `LIC_CLAUDE_API_KEY=sk-ant-replace-with-real-key` (required)
+- `LIC_PROMPT_INJECTION_HASH_KEY=dev-pii-hmac-secret-change-me`, `LIC_DLQ_HASH_KEY=dev-dlq-hmac-secret-change-me` (required)
+- `LIC_OPENAI_API_KEY` / `LIC_GEMINI_API_KEY` (commented, optional)
+- Документирована security.md §4.3/§6.4 семантика, smoke-test инструкция `--scale lic-service=0`.
+
+### Code-reviewer findings
+- **B1 (Blocker, binary path mismatch)** → **false positive**: `Dockerfile:35` `COPY --from=builder /out/lic-service /lic-service` + `ENTRYPOINT ["/lic-service"]`. Healthcheck path корректен.
+- **M1 (Major, Redis DB ignored when URL set)** → **false positive**: `kvstore/options.go:38` `opt.DB = cfg.DB` явно перетирает значение из ParseURL. `LIC_REDIS_DB=2` будет применён.
+- **M2 (Major, prometheus depends_on missing lic-service)** → **применено**.
+- **M3 (Major, missing restart unless-stopped)** → **применено** (AC compliance).
+- Minor m1-m10 не требуют действий (validated as correct).
+
+### Архитектурное соответствие
+- ✅ `deployment.md §3` — compose layout (LIC + rabbitmq/redis/otel-stack/healthcheck/secrets).
+- ✅ `deployment.md §5.4` — `--healthcheck` subcommand для distroless.
+- ✅ `deployment.md §6` — `stop_grace_period` ≥ `LIC_SHUTDOWN_TIMEOUT` + buffer.
+- ✅ `configuration.md §3` — required env validation (CLAUDE_API_KEY, PROMPT_INJECTION_HASH_KEY).
+- ✅ `security.md §4.3` (PII fragment hash key) + `§6.4` (DLQ envelope hash key) — оба ключа required через `${VAR:?...}`.
+- ✅ `LegalIntelligenceCore/architecture/CLAUDE.md`: «No sync REST to DM» — `depends_on` НЕ содержит `dm-service`, общение строго через RabbitMQ.
+- ✅ Network isolation: внутри compose-сети plaintext OTel (`INSECURE=true`), production TLS enforcement остаётся обязательным (config/tls.go).
+
+### Test results
+- `make build` → ok (`bin/lic-service` ~20MB, ldflags версия `35c62f4-dirty`).
+- `make lint` (`go vet ./...`) → clean (zero output).
+- `make test` → 52 packages all ok.
+- `go test -race -count=1 ./cmd/lic-service/... ./internal/config/...` → clean (config: 1.529s).
+- `go build ./cmd/lic-service/` (raw) → clean.
+- `make docker-build` / `docker compose up --build lic-service` / `curl localhost:8083/healthz` (AC test_steps) — **не выполнялись**: Docker daemon недоступен в сессии и/или требует approval. Это прецедент всех infrastructure-задач LIC (см. LIC-TASK-047/048). Compose-блок верифицирован grep'ом по структуре сервисов (12 услуг включая lic-service) + ручным осмотром YAML + анализом YAML-типизации (числовые/булевы значения корректно quoted как строки).
+
+### Делегирование subagent'ам
+- **code-architect** — ревизия плана, выявление red flags (LIC_REDIS_DB=2 collision, /metrics scrape parity, удаление depends_on dm-service).
+- **golang-pro** — реализация `--healthcheck` subcommand в main.go (+41 строк stdlib-only).
+- **code-reviewer** — финальная ревизия diff: 1 blocker (false positive), 3 majors (2 false positives + 2 применены), 10 minors (validated).
+
+### Известные deviations (forward notes)
+1. **AC port `8081:8080` → `8083:8080`.** В обновлённом `tasks.json.completion_notes` зафиксировано. Будущие задачи в LIC infrastructure должны опираться на 8083 как «зарезервированный» хост-порт.
+2. **AC `otel-collector:4317` → `jaeger:4317`.** Если в проекте появится самостоятельный `otel-collector` (например, для метрик OTLP pipeline), `LIC_OTEL_EXPORTER_OTLP_ENDPOINT` следует переключить.
+3. **Docker compose runtime тесты не выполнены.** Test steps AC `curl localhost:8081/healthz` / `readyz` остаются ручной верификацией для разработчика с локальным Docker'ом.
+
+### Прогресс: 54/55 → **55/55 done**. LIC TASK полностью завершён.

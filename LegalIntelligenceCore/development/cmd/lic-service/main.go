@@ -17,10 +17,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -42,6 +45,13 @@ var (
 const shutdownGrace = 150 * time.Second
 
 func main() {
+	// --healthcheck subcommand: lightweight probe for distroless containers
+	// (no shell/curl/wget). Must run BEFORE config.Load() so the probe stays
+	// cheap and does not require API keys to be present.
+	if len(os.Args) > 1 && os.Args[1] == "--healthcheck" {
+		os.Exit(runHealthcheck())
+	}
+
 	log.Printf("lic-service starting (version=%s commit=%s)", version, commit)
 
 	cfg, err := config.Load()
@@ -103,4 +113,35 @@ func main() {
 		os.Exit(1)
 	}
 	log.Printf("lic-service: clean shutdown")
+}
+
+// runHealthcheck performs a lightweight HTTP probe against the local /healthz
+// endpoint. Intended to be invoked as `lic-service --healthcheck` from a
+// distroless Docker HEALTHCHECK directive. Returns 0 on HTTP 200, 1 otherwise.
+// Silent on success; on failure writes a single line to stderr.
+func runHealthcheck() int {
+	const defaultPort = 8080
+	port := defaultPort
+	if raw := os.Getenv("LIC_HTTP_PORT"); raw != "" {
+		p, err := strconv.Atoi(raw)
+		if err != nil || p < 1 || p > 65535 {
+			fmt.Fprintf(os.Stderr, "healthcheck failed: invalid LIC_HTTP_PORT=%q\n", raw)
+			return 1
+		}
+		port = p
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	url := fmt.Sprintf("http://127.0.0.1:%d/healthz", port)
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck failed: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "healthcheck failed: status %d\n", resp.StatusCode)
+		return 1
+	}
+	return 0
 }

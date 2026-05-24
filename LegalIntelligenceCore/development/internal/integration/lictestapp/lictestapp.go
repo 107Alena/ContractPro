@@ -139,6 +139,10 @@ type config struct {
 	// extraResponses — per-agent JSON content layered on top of the
 	// canned responses (replaces canned for the given agent).
 	extraResponses map[model.AgentID]string
+	// pipelineOverride is an optional closure that mutates the fully-
+	// defaulted pipeline.Config BEFORE NewOrchestrator validates it.
+	// Used by LIC-TASK-051 timeout / document-too-large scenarios.
+	pipelineOverride func(*pipeline.Config)
 }
 
 // WithCannedAgentResponses opts INTO the default install (no-op if used
@@ -156,6 +160,25 @@ func WithCannedAgentResponses() Option {
 func WithoutCannedAgentResponses() Option {
 	return func(c *config) {
 		c.installCannedAgents = false
+	}
+}
+
+// WithPipelineConfigOverride installs a closure that mutates the fully-
+// defaulted pipeline.Config BEFORE the orchestrator validates it. Used
+// to drive scenarios that need atypical timeouts or limits — the
+// LIC-TASK-051 timeout test sets JobTimeout / DMRequestTimeout /
+// DMPersistConfirmTimeout to milliseconds; the DOCUMENT_TOO_LARGE test
+// shrinks MaxIngestedBytes below the fixture's raw size.
+//
+// The closure receives the Config AFTER the harness defaults are
+// applied. pipeline.NewOrchestrator validates the mutated value via
+// Config.validate(), so a violation of the coupled invariants
+// (DMRequestTimeout < JobTimeout, MaxIngestedBytes > 0,
+// ConfidenceThreshold ∈ [0,1], every duration > 0) still fail-fasts
+// at harness build time — never silently.
+func WithPipelineConfigOverride(fn func(*pipeline.Config)) Option {
+	return func(c *config) {
+		c.pipelineOverride = fn
 	}
 }
 
@@ -498,14 +521,18 @@ func NewTestApp(t *testing.T, opts ...Option) *TestApp {
 		t.Fatalf("lictestapp: pendingconfirmation.NewManager: %v", err)
 	}
 
+	pipelineCfg := pipeline.Config{
+		JobTimeout:              defaultJobTimeout,
+		DMRequestTimeout:        defaultDMRequestTimeout,
+		DMPersistConfirmTimeout: defaultDMPersistConfirmTimeout,
+		ConfidenceThreshold:     defaultConfidenceThreshold,
+		MaxIngestedBytes:        defaultMaxIngestedBytes,
+	}
+	if cfg.pipelineOverride != nil {
+		cfg.pipelineOverride(&pipelineCfg)
+	}
 	orchestrator, err := pipeline.NewOrchestrator(
-		pipeline.Config{
-			JobTimeout:              defaultJobTimeout,
-			DMRequestTimeout:        defaultDMRequestTimeout,
-			DMPersistConfirmTimeout: defaultDMPersistConfirmTimeout,
-			ConfidenceThreshold:     defaultConfidenceThreshold,
-			MaxIngestedBytes:        defaultMaxIngestedBytes,
-		},
+		pipelineCfg,
 		executor,
 		agg,
 		artReq,

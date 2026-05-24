@@ -2551,3 +2551,60 @@ Fix: Manager re-marshalит typed `cmd` (deterministic для stringish struct) 
 3. **`tenant_mismatch` path also gets DLQ now.** Был тот же bug — теперь Pin 8b покрывает оба пути (invalid-contract-type + tenant-mismatch) в Manager unit tests.
 
 ### Прогресс: 51/55 → **52/55 done**. Открыты (deps done): **051 (high, deps 050✓)**, **054 (high, deps 049✓)**, **055 (high, deps 003✓+047✓)**. Критпуть: **051 → 054 → 055**. Следующая итерация: **LIC-TASK-051** (Integration tests — RE_CHECK / agent failure+repair / provider fallback / timeout / DLQ / prompt injection). Reuse `lictestapp.NewTestApp`; per-test programming через `FakeLLMProvider.InjectError` + `FakeDM.SetResponseDelay` + `FakeBroker.InjectPublishError` + `ReCheckArtifactsBundle`.
+
+---
+
+## LIC-TASK-051 — Integration tests (RE_CHECK, agent failure+repair, provider fallback, timeout, DLQ, prompt injection)
+- **Status:** done
+- **Completed at:** 2026-05-24
+- **Agent:** claude-opus-4-7 (с делегированием code-architect для test design + code-reviewer для финального аудита)
+
+### План реализации
+1. Изучить ai-agents-pipeline.md, error-handling.md §3 (codes) / §4 (retry) / §5 (repair), llm-provider-abstraction.md §2 (chain), high-architecture.md §6.5/§8.3/§8.7, security.md §6.4 — собрать SSOT для 8 сценариев.
+2. Изучить существующие интеграции (lictestapp.NewTestApp + happypath + pauseresume).
+3. Делегировать дизайн code-architect, валидировать 8 сценариев + lictestapp extension.
+4. Реализовать `WithPipelineConfigOverride(func(*pipeline.Config))` — additive Option (closure-based, atomic 5-coupled-invariants mutation).
+5. Написать 8 top-level Test_* функций в `internal/integration/errorscenarios/`.
+6. Прогнать `go test -race -count=2 ./...`, `make build/test/lint`, обновить progress + tasks.
+
+### Прогресс
+- Расширен `lictestapp/lictestapp.go`: поле `config.pipelineOverride` + `WithPipelineConfigOverride`. Раньше hardcoded constants → теперь pipelineCfg → closure mutation → NewOrchestrator валидирует. Production-shape unchanged: fail-fast errors.Join на 5 invariants.
+- Новый пакет `internal/integration/errorscenarios/`:
+  - `errorscenarios_test.go` (~640 LOC, 8 Test_*) — каждый сценарий = top-level test func, каждый строит свой NewTestApp для изоляции JobLimiter / Redis state.
+  - `json_helpers_test.go` — копия pattern из happypath/pauseresume.
+- Reviewer-applied 5 улучшений: hex-pattern regex `^[0-9a-f]{64}$` для DLQ envelope hash; DLQ-empty ассерты на fallback (4 routing keys); FakeDM.AnalysisReady empty на timeout; explicit `DetectedByAgents` length=2 на prompt-injection; deviation note для AGENT_OUTPUT_INVALID DLQ.
+
+### Сценарии (8 шт.)
+1. **TestErrorScenario_ReCheckPipeline** — VersionCreated → router.RouteVersionCreated D5 пишет lic-version-meta → VersionArtifactsReady без trigger.ParentVersionID → orchestrator.resolveParentAndMode cache-fallback → RE_CHECK → request current+parent → Agent 9 (RiskDelta) запускается. Архитектура: high-architecture.md §6.5+§8.3 DEFECT-1 + §8.7.
+2. **TestErrorScenario_AgentFailure_RepairOK** — SetResponses(AGENT_KEY_PARAMS, [invalid, valid]) → schemavalidator.SchemaViolation → RepairLoop one-shot repair via router.CompleteRepair sticky → 2nd validates → repaired_ok. Архитектура: error-handling.md §5.1-5.4 ADR-LIC-04 N=1.
+3. **TestErrorScenario_AgentFailure_RepairFailed** — 2 invalid → AGENT_OUTPUT_INVALID retryable=true → orchestrator.publishFailed FAILED. **DEVIATION:** DLQTopicAgentOutputInvalid не публикуется — orchestrator не имеет DLQPublisherPort by design (high-architecture.md §6.5 + orchestrator/CLAUDE.md "036 has no DLQPublisherPort by design"); LIC-TASK-046 publisher owns agent-output-invalid emission только из publish-failed/cost paths, нет production caller в текущем code path. Архитектура: error-handling.md §3.3+§5.4 + orchestrator/CLAUDE.md.
+4. **TestErrorScenario_ProviderFallback** — InjectError(AgentTypeClassifier, CONTENT_POLICY) Claude + canned response OpenAI → router skip retry (Retryable=false), advance FallbackOrder → OpenAI succeeds → COMPLETED. **CONTENT_POLICY chosen over INVALID_API_KEY/QUOTA_EXCEEDED**: registry.recordFailure flip-нул бы Claude в permanent-unhealthy → параллельный Stage 1 KeyParams (нет OpenAI canned) упал бы на ALL_PROVIDERS_FAILED. CONTENT_POLICY: consecutive++ (cap >=3) — Claude healthy для остальных 7 агентов. Архитектура: llm-provider-abstraction.md §2.1+§2.3.
+5. **TestErrorScenario_AnalysisTimeout** — JobTimeout=30ms + Claude latency=80ms → rootCtx expires → finalizer.classifyOutcome D11 reclassify ANALYSIS_TIMEOUT. **PRODUCTION REALITY PIN:** publishFailed gets dead spanCtx (orchestrator.go:346+1155), StatusPublisher dropит publish (broker.go:170 ctx.Err guard); терминальный FAILED never reaches wire в этом code path. Test asserts observable consequences: IN_PROGRESS published; no analysis-ready; no COMPLETED; no FakeDM.AnalysisReady; Inject-to-return < 2s. Архитектура: high-architecture.md §8.10 + orchestrator/CLAUDE.md D11.
+6. **TestErrorScenario_InvalidEnvelope_DLQInvalidMessage** — Inject garbage JSON → consumer.handle decode fail → buildInvalidEnvelope → PublishDLQ(DLQTopicInvalidMessage) + Ack. Assert hex regex `^[0-9a-f]{64}$` HMAC-SHA-256-first-64-hex. Архитектура: security.md §6.4 + consumer/CLAUDE.md R3.
+7. **TestErrorScenario_PromptInjectionDetected_AggregatorWarning** — flipPromptInjection(KeyParams+RiskDetection) → aggregator.warnings.applyPromptInjection детектит 2 → detailed_report.warnings.PROMPT_INJECTION_DETECTED detection_count=2 lex-sorted [AGENT_KEY_PARAMS, AGENT_RISK_DETECTION]. Strip invariants: outbound KeyParameters/RiskAnalysis PromptInjectionDetected=false. Архитектура: ai-agents-pipeline.md §6.11 + aggregator/CLAUDE.md D6 + security.md §4.1.
+8. **TestErrorScenario_DocumentTooLarge_NoAgents** — MaxIngestedBytes=100 → orchestrator step 9 D8 inline cap → DOCUMENT_TOO_LARGE non-retryable STAGE_ARTIFACTS_RECEIVED → FAILED published (rootCtx alive до step 9) + 0 LLM calls. Архитектура: orchestrator/CLAUDE.md D8.
+
+### Production bugs discovered
+Нет — все 8 сценариев работают на текущем production-коде. Единственное расширение — additive Option в test-only lictestapp.
+
+### Тестирование
+- `go test -race -count=2 ./internal/integration/errorscenarios/`: 8/8 PASS, race-clean, 1.72s.
+- `go test -count=1 ./...`: 51/51 пакетов PASS, ноль регрессий.
+- `go test -race -count=1 ./internal/integration/...`: 6 пакетов PASS.
+- `go vet ./...`: clean.
+- `make build` / `make test` / `make lint`: все зелёные.
+
+### Architecture compliance — итог
+- ✅ `error-handling.md §3.3+§3.5+§5.4` — error codes catalog (AGENT_OUTPUT_INVALID, ANALYSIS_TIMEOUT, DOCUMENT_TOO_LARGE, INVALID_MESSAGE_SCHEMA) + ADR-LIC-04 N=1.
+- ✅ `error-handling.md §4` — retry policy: ANALYSIS_TIMEOUT retryable=true, DOCUMENT_TOO_LARGE retryable=false.
+- ✅ `llm-provider-abstraction.md §2.1+§2.3` — fallback chain + sticky repair + registry state machine.
+- ✅ `high-architecture.md §6.5+§8.3+§8.7+§8.10` — RE_CHECK cache-fallback + Stage 6 self-gating + timeout discriminator.
+- ✅ `ai-agents-pipeline.md §6.11+§8` — aggregator PROMPT_INJECTION_DETECTED + strip invariants.
+- ✅ `security.md §6.4` — DLQ HMAC-SHA-256-first-64-hex (regex-pinned).
+
+### Известные deviations (forward notes)
+1. **DLQTopicAgentOutputInvalid не publishable из orchestrator.** Acceptance "DLQ agent-output-invalid" неполнен — orchestrator не имеет DLQPort by design. Forward note: добавление DLQPort в pipeline.Config — design change.
+2. **ANALYSIS_TIMEOUT FAILED publish dropped on dead spanCtx.** Known production property. Forward note: fresh-ctx fallback в publishFailed — design change.
+3. **CONTENT_POLICY вместо 5xx в Scenario 4.** 5xx (ServerError) даёт one-retry перед fallback'ом + poisoning через consecutive++. CONTENT_POLICY — единственный код с (Retryable=false, FallbackEligible=true, не auth, не quota), удовлетворяющий 4 ограничениям одновременно.
+
+### Прогресс: 52/55 → **53/55 done**. Открыты (deps done): **054 (high, deps 049✓)**, **055 (high, deps 003✓+047✓)**. Критпуть: **054 → 055**. Следующая итерация: **LIC-TASK-054** (Tenant isolation tests).

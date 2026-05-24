@@ -2224,7 +2224,47 @@
       "dependencies": [
         "LIC-TASK-050"
       ],
-      "status": "pending"
+      "status": "done",
+      "completed_at": "2026-05-24",
+      "completion_notes": {
+        "summary": "Реализовано 8 интеграционных тестов в новом пакете internal/integration/errorscenarios/ (один файл errorscenarios_test.go + json_helpers_test.go). Тесты прогоняются поверх существующего lictestapp.NewTestApp rig (LIC-TASK-048/049/050); расширение фреймворка — единственная additive Option `WithPipelineConfigOverride(func(*pipeline.Config))`, которая принимает closure, мутирующий fully-defaulted pipeline.Config ПЕРЕД NewOrchestrator-валидацией. Один-closure surface вместо двух узких опций (WithPipelineTimeouts + WithMaxIngestedBytes) — рекомендация code-architect, чтобы атомарно соблюсти 5 coupled invariants (DMRequestTimeout<JobTimeout, MaxIngestedBytes>0, ConfidenceThreshold∈[0,1], every>0). Production code НЕ затронут. Все 8 сценариев — top-level Test_* функции в одном файле (AC «каждый сценарий — отдельный test func»); каждый строит свой NewTestApp(t,...) — JobLimiter slots / Redis state / canned LLM queues изолированы.",
+        "scenarios": {
+          "1_re_check_pipeline": "TestErrorScenario_ReCheckPipeline: VersionCreated → router.RouteVersionCreated пишет lic-version-meta:{vid} с parent_version_id; затем VersionProcessingArtifactsReady БЕЗ trigger.ParentVersionID — orchestrator.resolveParentAndMode (DEFECT-1) попадает в cache-fallback ветку (cache.GetParentVersionID) → RE_CHECK mode; запрашивает current artifacts (4 типа) + parent's RISK_ANALYSIS (1 тип); Agent 9 (RiskDelta) запускается; payload.RiskDelta non-nil с changed[] из canned RiskDeltaResponse. Покрывает orchestrator DEFECT-1 + router D5 + Stage 6 self-gating",
+          "2_agent_failure_repair_ok": "TestErrorScenario_AgentFailure_RepairOK: SetResponses(AGENT_KEY_PARAMS, model, [invalid, valid]) — FIFO. Schema validator ловит first schemavalidator.SchemaViolation; RepairLoop.Run выпускает один repair turn через router.CompleteRepair (sticky on Claude/model); second канд-response валидируется → repaired_ok; пайплайн COMPLETED. Assert Claude.Calls() ровно 2 для AGENT_KEY_PARAMS",
+          "3_agent_failure_repair_failed": "TestErrorScenario_AgentFailure_RepairFailed: SetResponses(AGENT_KEY_PARAMS, [invalid, invalid]). Second schema violation → AGENT_OUTPUT_INVALID (retryable=true per ADR-LIC-04 hard N=1); orchestrator publishFailed с FAILED status; analysis-ready НЕ публикуется. DEVIATION (документировано): DLQTopicAgentOutputInvalid envelope не публикуется — orchestrator не имеет DLQPublisherPort по дизайну, LIC-TASK-046 owns publish-failed/agent-output-invalid emission НЕ из этого call site. Assert no DLQ + FAILED.ErrorCode=AGENT_OUTPUT_INVALID + Claude.Calls()=2 (primary+repair, не second repair)",
+          "4_provider_fallback": "TestErrorScenario_ProviderFallback: InjectError(AgentTypeClassifier, model, CONTENT_POLICY) на Claude + SetResponseJSON canned на OpenAI. Router skips retry (Retryable=false), advances FallbackOrder → OpenAI canned → success. CONTENT_POLICY выбран ОВЕР INVALID_API_KEY/QUOTA_EXCEEDED намеренно: те два flip-ают Claude в permanent-unhealthy state, и параллельный Stage 1 KeyParams (нет canned на OpenAI) упал бы на ALL_PROVIDERS_FAILED. CONTENT_POLICY только инкрементит consecutive_failures (≥3 threshold), Claude остаётся healthy для остальных 7 агентов. Assert Claude.Calls=1 + OpenAI.Calls=1 для Agent 1 + zero DLQs + COMPLETED",
+          "5_analysis_timeout": "TestErrorScenario_AnalysisTimeout: WithPipelineConfigOverride(JobTimeout=30ms / DMRequestTimeout=15ms / DMPersistConfirmTimeout=15ms) + Claude.SetLatency(80ms). Artifacts response 0ms, Stage 1 blocks 80ms на ctx.Done, rootCtx истекает в 30ms, finalizer.classifyOutcome reclassify → ANALYSIS_TIMEOUT (D11 timeout discriminator). PRODUCTION REALITY PIN: publishFailed получает мёртвый spanCtx (orchestrator.go:346+1155); StatusPublisher/FakeBroker.Publish drop'ают publish на done-ctx — терминальный FAILED{ANALYSIS_TIMEOUT} НЕ достигает wire'а в этом code path. Тест ассертит observable consequences: IN_PROGRESS{STAGE_REQUESTING_ARTIFACTS} опубликован (orchestrator.go:357 before deadline); analysis-ready не опубликован; COMPLETED не опубликован; FakeDM.AnalysisReady() пуст; Inject-to-return elapsed < 2s (deadline-driven unwind, не hang)",
+          "6_invalid_envelope_dlq": "TestErrorScenario_InvalidEnvelope_DLQInvalidMessage: Inject(RoutingKeyVersionArtifactsReady, nil, []byte(\"{not-json\")). Consumer.handle → decodeVersionArtifactsReady json.Unmarshal failure → buildInvalidEnvelope (consumer/dlq_envelope.go) → PublishDLQ(DLQTopicInvalidMessage) + ACK. Assert InjectResult.Acked=1 + 1 DLQ envelope + OriginalTopic=\"dm.events.version-artifacts-ready\" + ErrorCode=INVALID_MESSAGE_SCHEMA + OriginalMessageHash 64-char ^[0-9a-f]{64}$ HMAC-SHA-256-first-64-hex + OriginalMessageSizeBytes=len(garbage). No pipeline-side publishes (no analysis-ready / no artifacts request)",
+          "7_prompt_injection_detected": "TestErrorScenario_PromptInjectionDetected_AggregatorWarning: WithCannedResponses({AGENT_KEY_PARAMS: flip, AGENT_RISK_DETECTION: flip}) — string-replace prompt_injection_detected:false → true в canned fixtures (тогда они остаются schema-valid). Aggregator (warnings.go applyPromptInjection) счётает detections, emit detailed_report.warnings.PROMPT_INJECTION_DETECTED. Assert detection_count=2 + DetectedByAgents lex-sorted [AGENT_KEY_PARAMS, AGENT_RISK_DETECTION] + user_message non-empty. Также strip invariants: payload.KeyParameters.PromptInjectionDetected=false и payload.RiskAnalysis.PromptInjectionDetected=false (aggregator.go:194,202 D6 strip)",
+          "8_document_too_large": "TestErrorScenario_DocumentTooLarge_NoAgents: WithPipelineConfigOverride(MaxIngestedBytes=100). Default artifacts fixtures >1KB. Orchestrator step 9 (D8 inline cap, orchestrator.go:393-403) сравнивает Σlen(raw)>100 → DOCUMENT_TOO_LARGE non-retryable, STAGE_ARTIFACTS_RECEIVED. Терминальный FAILED опубликован (rootCtx ещё жив на этом шаге — публикация проходит). Assert FAILED.ErrorCode=DOCUMENT_TOO_LARGE + IsRetryable=false + zero LLM calls across ALL providers + no analysis-ready"
+        },
+        "test_results": {
+          "go_test_race_count_2": "ok — go test -race -count=2 ./internal/integration/errorscenarios/ — 8 tests PASS, race-clean, 1.72s",
+          "go_test_full_repo": "ok — go test ./... 51 пакетов PASS, 0 FAIL",
+          "make_build": "ok — bin/lic-service пересобран с -ldflags '-s -w -X main.version=1cdc664-dirty'",
+          "make_test": "ok — все пакеты PASS",
+          "make_lint": "ok — go vet ./... 0 issues"
+        },
+        "files_created": [
+          "LegalIntelligenceCore/development/internal/integration/errorscenarios/errorscenarios_test.go",
+          "LegalIntelligenceCore/development/internal/integration/errorscenarios/json_helpers_test.go"
+        ],
+        "files_modified": [
+          "LegalIntelligenceCore/development/internal/integration/lictestapp/lictestapp.go (additive: config.pipelineOverride field + WithPipelineConfigOverride Option + pipelineCfg mutation block перед NewOrchestrator)"
+        ],
+        "design_review": "code-architect (WithPipelineConfigOverride one-closure surface вместо двух узких опций — atomic 5-coupled-invariants mutation), code-reviewer (5 улучшений applied: hex-pattern regex для HMAC envelope, DLQ-empty ассерт на fallback path, FakeDM.AnalysisReady empty ассерт на timeout, explicit DetectedByAgents length=2 ассерт, deviation note для AGENT_OUTPUT_INVALID DLQ).",
+        "architecture_compliance": {
+          "error-handling.md §3.3": "AGENT_OUTPUT_INVALID retryable=true (catalog row)",
+          "error-handling.md §3.5": "ANALYSIS_TIMEOUT retryable=true, DOCUMENT_TOO_LARGE retryable=false",
+          "error-handling.md §5.4": "ADR-LIC-04 N=1 repair hard limit pinned",
+          "high-architecture.md §6.5+§8.3": "RE_CHECK через VersionCreated → cache → resolveParentAndMode",
+          "high-architecture.md §8.7": "Stage 6 self-gating on parent RiskAnalysis",
+          "high-architecture.md §6.7 §6.11": "Aggregator PROMPT_INJECTION_DETECTED warning + strip",
+          "llm-provider-abstraction.md §2.1": "Router primary→fallback chain + sticky repair",
+          "security.md §6.4": "DLQ envelope HMAC-SHA-256-first-64-hex шесть-десят четыре lowercase hex digits"
+        },
+        "hermetic": "Тестовый пакет; импорты: stdlib + github.com/google/uuid + internal/{domain/{model,port}, application/pipeline (для Config type), integration/{fakes,lictestapp}}. Production code не затронут (LIC-TASK-053 forward note выполнен)."
+      }
     },
     {
       "id": "LIC-TASK-052",

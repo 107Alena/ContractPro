@@ -161,8 +161,10 @@ func (recommenderSpec) Parts(_ *promptbuilder.Builder, in model.AgentInput) ([]p
 	}, nil
 }
 
-// Decode unmarshals the schema-validated response into *model.Recommendations
-// (the concrete port.AgentResult the Stage Executor narrows by AgentID).
+// Decode unmarshals the schema-validated response into model.Recommendations
+// (the concrete port.AgentResult the Stage Executor narrows by AgentID — the
+// lone VALUE-type asymmetry across the 9-agent dispatch, pinned by
+// stages.assign at internal/application/pipeline/stages/stages.go:218).
 //
 // base schema-validates the bytes against the embedded recommendation.json
 // BEFORE calling Decode (MF-1). CRUCIAL DIVERGENCE from Agents 4/5: the §6
@@ -216,5 +218,5 @@ func (recommenderSpec) Decode(content []byte) (port.AgentResult, error) {
 			return nil, fmt.Errorf("recommendation: recommendations[%d].risk_id %q does not match the frozen ^R-(P|M)?[0-9]{3,}$ merged-id format (schema is silent on risk_id ⇒ this is the sole/terminal format guard)", i, rec.RiskID)
 		}
 	}
-	return &r, nil
+	return r, nil
 }

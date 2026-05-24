@@ -2448,3 +2448,52 @@ Acceptance:
 3. **prompt-injection-detected** в fixtures сегодня всегда `false`. 051 тесты, которым нужны hostile-fixtures, конструируют их сами через `FakeLLMProvider.SetResponseJSON`.
 
 ### Прогресс: 49/55 → **50/55 done**. Открыты (deps done): **049 (high, deps 048✓)**, **055 (high, deps 003✓+047✓)**. Критпуть: **049 → 050 → 051 → 054 → 055**. Следующая итерация: **LIC-TASK-049** (Integration test — happy path INITIAL pipeline). Использует rig из 048; конструирует production orchestrator + idempotency.Guard + dmawaiter + 3 publishers поверх fakes; устанавливает CannedResponseFor(model.AllAgentIDs()[:8]) — без AgentRiskDelta.
+
+---
+
+## LIC-TASK-049 — Integration test — happy path INITIAL pipeline
+- **Status:** done
+- **Completed at:** 2026-05-24
+- **Agent:** claude-opus-4-7 (1M ctx, с делегированием реализации subagent **golang-pro** ~1800s/201tool-uses; production bug-fix adjudication выполнен главным агентом)
+
+### План реализации
+1. Изучить production wiring `internal/app/app.go` (983 LOC) + seam-интерфейсы каждого consumer'а fake'ов: consumer / orchestrator / router / pendingconfirmation / dmawaiter / idempotency / publishers / llm router / aggregator / stage executor.
+2. Спроектировать harness `internal/integration/lictestapp/` который собирает production-идентичный wiring поверх fakes (рig из LIC-TASK-048) без модификации production code. Решить sentinel-translation проблему (fakes.ErrKeyNotFound ↔ kvstore.ErrKeyNotFound).
+3. Делегировать сборку `lictestapp` + `internal/integration/happypath/` subagent **golang-pro** с детальным брифом (acceptance criteria, файловая структура, seam-list, конкретные deviations).
+4. Самопроверка результата + adjudication обнаруженных deviations (production bug в recommendation/spec.go, filteredBrokerSubscriber pattern, fixtures shape).
+5. Применить production bug-fix вместо harness workaround.
+6. Прогон тестов, обновление tasks.json + progress.md, git commit.
+
+### Прогресс
+- ✅ `internal/integration/lictestapp/lictestapp.go` (460 LOC) — `TestApp` struct + `NewTestApp(t, ...Option)` собирает: idempotency.Guard, 9 real agents (typeclassifier/keyparams/partyconsistency/mandatoryconditions/riskdetection/recommendation/summary/detailedreport/riskdelta), llm router (3 providers, primary Claude), ratelimit limiter, cost tracker (in-memory pricing table), stages.Executor, aggregator (scoring config от config defaults), concurrency.Semaphore(2), 2 dmawaiters, 5 publishers (status/uncertainty/artifactRequester/analysisArtifacts/dlq), pendingconfirmation.Manager (с lazyResumer-pattern для circular dependency), pipeline.Orchestrator (PauseController=manager), ingressrouter.Router, consumer.Consumer + Start. Options: `WithCannedAgentResponses` (default), `WithCannedResponses`.
+- ✅ `internal/integration/lictestapp/adapters.go` (460 LOC) — kvAdapter (sentinel translator fakes.ErrKeyNotFound→kvstore.ErrKeyNotFound на границе seam), pendingStateStore (test-local зеркало app/pending_state.go над kvAdapter), versionMetaCache (test-local зеркало app/version_meta_cache.go), lazyResumer (зеркало app.lazyResumer), filteredBrokerSubscriber (consumer подписывается только на 3 trigger queues — обход :current/:parent suffix vs UUID strict validation), registerDMResponseRoutes (3 DM-response queue routes напрямую в ingress router), все noop loggers/metrics/clocks для каждого seam (pipeline.PipelineMetrics, stages.StageMetrics, aggregator.Metrics, base.Metrics, schemavalidator.Metrics, dmawaiter.Metrics, pendingconfirmation.Metrics, idempotency.Metrics, consumer.Metrics, dmpub.Metrics, orch.Metrics, dlq.Metrics, llmrouter.Metrics, cost.Recorder), consumerLogger с WithRequestContext stub, costRecorder/usageTracker shims.
+- ✅ `internal/integration/lictestapp/lictestapp_test.go` (40 LOC) — sanity test что NewTestApp возвращает non-nil fields.
+- ✅ `internal/integration/happypath/happypath_test.go` (295 LOC) — `TestHappyPath_INITIAL_Pipeline` + helper `waitForCompletedStatus`.
+- ✅ `internal/integration/happypath/json_helpers_test.go` (helpers).
+- ✅ Production bug-fix: `internal/agents/recommendation/spec.go` Decode return `r` вместо `&r` + godoc-update + 3 cast обновления в `recommendation_test.go`.
+- ✅ Removed harness workaround `recommendationResultAdapter` после bug-fix.
+- ✅ Fixed `internal/integration/fakes/fixtures.go` ExtractedTextRU shape под DP wire-format `{document_id, pages:[{page_number, text}]}` (был `{version, text, page_count, char_count}` — не валидировал agent decoders).
+
+### Production bug discovered & fixed
+`recommendation.Decode` возвращал `*model.Recommendations` (pointer), но stages.assign at `internal/application/pipeline/stages/stages.go:218` ожидает `model.Recommendations` (value, "the lone asymmetry" per stages CLAUDE.md). Канонический SSOT — `port/agents.go:47` ("model.Recommendations" no asterisk). Bug latent с момента создания recommendation package — orchestrator при работе с реальным агентом 6 возвращал бы INTERNAL_ERROR/STAGE_AGENT_RECOMMENDATION. Не ловился ни recommendation-package тестами (касты *model.Recommendations отражали bug), ни stages тестами (использовали value-fakes). LIC-TASK-049 integration test — первый end-to-end run агентов через реальный stage executor — поймал.
+
+### Тестирование
+- `go test -race -count=1 ./internal/integration/happypath/...`: PASS, ~16-20ms wall (well under 30s acceptance budget)
+- `go test -count=1 ./...`: 49/49 packages PASS, ноль регрессий
+- `go vet ./...`: clean
+- `make build` / `make test` / `make lint`: все зелёные
+- `make docker-build`: не выполнялся (Docker daemon недоступен, прецедент всех LIC-задач — out-of-test_steps)
+
+### Architecture compliance
+- §6.5 step order соблюдён: IN_PROGRESS{STAGE_REQUESTING_ARTIFACTS} → lic.requests.artifacts → lic.artifacts.analysis-ready → lic-artifacts-persisted (DM) → COMPLETED.
+- §6.13 — analysis-ready payload содержит все 8 артефактов + RiskDelta=nil для INITIAL.
+- §6.6 / ai-agents-pipeline.md §0 — agent 9 (RiskDelta) gated out на INITIAL.
+- Aggregator MERGE-EARLY (после Stage 3) + FINALIZE-LATE (после Stage 6) — RiskProfile и AggregateScore рассчитаны.
+- KeyParameters stripped: InternalExtras=nil, PromptInjectionDetected=false (aggregator D6 stripping invariant).
+
+### Известные deviations (forward notes)
+1. **filteredBrokerSubscriber bypass.** Production `consumer.decodeArtifactsProvided` строгая UUID-валидация для correlation_id отвергает orchestrator-генерируемые ':current'/':parent' суффиксы (pipeline/orchestrator.go:367,376). Архитектурная несогласованность между orchestrator (suffix correlation_id) и consumer (strict UUID — D9/D10 binding). Harness обходит через registerDMResponseRoutes (test-only). Production wiring остаётся 100% unchanged. **Recommended follow-up:** либо relax consumer UUID validation для DM-response topics, либо переосмыслить orchestrator suffix mechanism. Forward-noted для будущей задачи.
+2. **kvAdapter sentinel translation.** fakes.ErrKeyNotFound declared separately from kvstore.ErrKeyNotFound — оба errors.New("...") с identical messages но disjoint identity. idempotency.Guard.Get + test-local pendingStateStore.Load делают `errors.Is(err, kvstore.ErrKeyNotFound)`, поэтому harness wrap'ит fake-Get на границе. Альтернатива (alias re-export в fakes) сделала бы fakes хрупким к kvstore-package изменениям. Recommended for 050+: reuse существующий lictestapp.kvAdapter.
+3. **Test-local pendingStateStore + versionMetaCache.** Зеркало `internal/app/pending_state.go` + `internal/app/version_meta_cache.go` (которые жёстко привязаны к `*kvstore.Client`). Production refactor под seam-injected stores — отдельная задача (forward-noted в fakes/CLAUDE.md как BuildTestApp deferral). 049-054 живут с дуплицированным wiring (~80 LOC).
+
+### Прогресс: 50/55 → **51/55 done**. Открыты (deps done): **050 (high, deps 049✓)**, **055 (high, deps 003✓+047✓)**. Критпуть: **050 → 051 → 054 → 055**. Следующая итерация: **LIC-TASK-050** (Integration test — low-confidence pause + resume). Reuse `lictestapp.NewTestApp(t, WithCannedResponses(map{AgentTypeClassifier: ClassifierLowConfidenceResponse, ...}))`; assert classification-uncertain publish + IN_PROGRESS{STAGE_AWAITING_USER_CONFIRMATION} + Redis lic-pending-state + lic-trigger=PAUSED; затем Inject(UserConfirmedType{contract_type: SUPPLY}) и assert Stage 2..5 + COMPLETED + cleanup keys.

@@ -333,17 +333,17 @@ func TestSpec_Decode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode valid: %v", err)
 	}
-	r, ok := res.(*model.Recommendations)
+	r, ok := res.(model.Recommendations)
 	if !ok {
-		t.Fatalf("decoded type = %T, want *model.Recommendations", res)
+		t.Fatalf("decoded type = %T, want model.Recommendations", res)
 	}
-	if len(*r) != 3 {
-		t.Fatalf("decode wrong: recommendations=%d, want 3", len(*r))
+	if len(r) != 3 {
+		t.Fatalf("decode wrong: recommendations=%d, want 3", len(r))
 	}
 	// MF-D4.2: all three post-merge id namespaces pass the frozen merged
 	// ^R-(P|M)?[0-9]{3,}$ guard (acceptance test_step 2).
 	wantIDs := []string{"R-001", "R-P001", "R-M001"}
-	for i, rec := range *r {
+	for i, rec := range r {
 		if rec.RiskID != wantIDs[i] {
 			t.Fatalf("recommendations[%d].risk_id = %q, want %q", i, rec.RiskID, wantIDs[i])
 		}
@@ -387,7 +387,7 @@ func TestSpec_Decode_OrphanRefNotGuarded(t *testing.T) {
 // Шаг 1: integration with a mock provider — the assembled envelope is correct
 // (4 blocks in §6 order), the §6 budget params are applied (incl. the FIRST
 // non-zero temperature 0.2), strict structured output is requested, a valid
-// response decodes to *model.Recommendations.
+// response decodes to model.Recommendations.
 // Шаг 2: risk_id values are the R-/R-P/R-M merged namespaces.
 func TestRun_Integration_ValidEnvelope(t *testing.T) {
 	var seen port.CompletionRequest
@@ -408,13 +408,13 @@ func TestRun_Integration_ValidEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	recs, ok := res.(*model.Recommendations)
-	if !ok || len(*recs) != 3 {
-		t.Fatalf("result = %#v, want *model.Recommendations with 3 items", res)
+	recs, ok := res.(model.Recommendations)
+	if !ok || len(recs) != 3 {
+		t.Fatalf("result = %#v, want model.Recommendations with 3 items", res)
 	}
 	for i, want := range []string{"R-001", "R-P001", "R-M001"} {
-		if (*recs)[i].RiskID != want {
-			t.Fatalf("recommendations[%d].risk_id = %q, want %q", i, (*recs)[i].RiskID, want)
+		if recs[i].RiskID != want {
+			t.Fatalf("recommendations[%d].risk_id = %q, want %q", i, recs[i].RiskID, want)
 		}
 	}
 	if seen.System == "" {

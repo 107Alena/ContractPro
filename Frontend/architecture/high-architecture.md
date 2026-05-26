@@ -760,47 +760,82 @@ Page (route)                             — например, ResultPage
 
 ### 8.2 Дизайн-система: токены из Figma
 
-```css
-/* shared/styles/tokens.css
- * Source of truth: Figma file Lxhk7jQyXL3iuoTpiOHxcb (без Variables — hex'и сняты вручную).
- * Любое изменение — синхронно с Figma. См. ADR-FE-09 (token pipeline).
- */
-:root {
-  --color-brand-500: #F55E12;  /* primary CTA */
-  --color-brand-600: #D14D0D;  /* hover/active */
-  --color-brand-50:  #FFF3EB;  /* light tint (производный) */
-  --color-fg:        #11111C;  /* ink */
-  --color-fg-muted:  #666B78;
-  --color-bg:        #FFFFFF;
-  --color-bg-muted:  #F9FAFB;
-  --color-border:    #D9DEE5;
-  --color-success:   #21966B;
-  --color-warning:   #FAD133;
-  --color-danger:    #DB2626;
-  --color-risk-high:    #DB2626;
-  --color-risk-medium:  #FAD133;
-  --color-risk-low:     #21966B;
+Источник истины — Figma file `Lxhk7jQyXL3iuoTpiOHxcb` (см. [`figma-mapping.md`](./figma-mapping.md)). В файле **не используются Figma Variables** — hex'и сняты вручную через `get_design_context` по представительным фреймам (Button, Badge, Headline, Risk Summary, Dashboard Active). Полный pipeline описан в [`adr/009-token-pipeline.md`](./adr/009-token-pipeline.md).
 
-  --font-sans: 'Inter', 'PT Root UI', system-ui, sans-serif;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --shadow-sm: 0 1px 2px rgba(15,17,21,.06);
-  --shadow-md: 0 4px 12px rgba(15,17,21,.08);
+**Колоры:**
 
-  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
-  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px;
-}
-```
+| Семантика | Token | Hex | Назначение |
+|---|---|---|---|
+| Brand | `--color-brand-500` | `#f55e12` | primary CTA bg |
+|  | `--color-brand-600` | `#d14d0d` | hover/active, brand text on light bg |
+|  | `--color-brand-50` | `#fff3eb` | light tint, badges |
+| Foreground | `--color-fg` | `#11111c` | основной текст |
+|  | `--color-fg-muted` | `#4d5261` | вторичный текст, описания |
+|  | `--color-fg-subtle` | `#80858c` | tertiary (stats labels) |
+|  | `--color-fg-disabled` | `#999ea6` | disabled, timestamps |
+| Background | `--color-bg` | `#ffffff` | page bg |
+|  | `--color-bg-muted` | `#f9fafb` | secondary surfaces |
+| Borders | `--color-border` | `#d9dbe0` | inputs, buttons (1px / 1.5px) |
+|  | `--color-border-subtle` | `#e8ebed` | card borders |
+|  | `--color-divider` | `#ebedf0` | horizontal rules |
+| Semantic | `--color-success` | `#21966b` | success banner/toast |
+|  | `--color-warning` | `#fad133` | warning banner/toast |
+|  | `--color-danger` | `#db2626` | danger banner, alert count |
+|  | `--color-processing` | `#d98700` | in-progress статус |
+| Risk (label/icon) | `--color-risk-high` | `#c83232` | high risk text & dot |
+|  | `--color-risk-medium` | `#c88c0a` | medium risk |
+|  | `--color-risk-low` | `#229a3e` | low risk |
+| Risk (фон) | `--color-risk-high-bg` | `#fff0f0` | high-risk callout bg |
+|  | `--color-risk-high-bg-soft` | `#fff5f5` | high-risk chip bg |
+|  | `--color-risk-medium-bg` | `#fff9eb` | medium-risk chip bg |
+|  | `--color-risk-low-bg` | `#ecfdf0` | low-risk chip bg |
 
-Маппится в `tailwind.config.ts` (source: Figma file `Lxhk7jQyXL3iuoTpiOHxcb`):
+> `--color-risk-*` и `--color-{success,warning,danger}` — **разные семантические шкалы**: первая для оценок риска договора, вторая для системных уведомлений. Не объединять, несмотря на близкие оттенки.
+
+**Typography:**
+`--font-sans: 'Inter', 'PT Root UI', system-ui, sans-serif;`
+
+| Token | Size | Применение |
+|---|---|---|
+| `--text-11` | 11px | chip caption |
+| `--text-12` | 12px | timestamps |
+| `--text-13` | 13px | activity items, stats labels |
+| `--text-14` | 14px | body, descriptions |
+| `--text-15` | 15px | buttons (Primary CTA, Secondary) |
+| `--text-16` | 16px | risk badge title |
+| `--text-20` | 20px | card titles |
+| `--text-60` | 60px | hero headline |
+
+Веса используем Tailwind: `font-normal` (400), `font-medium` (500), `font-semibold` (600), `font-bold` (700).
+
+**Radii:**
+`--radius-sm: 6px` · `--radius-md: 10px` · `--radius-lg: 14px` · `--radius-xl: 16px` (cards) · `--radius-pill: 20px` (badges/pills).
+
+**Shadows:**
+`--shadow-sm: 0 1px 2px rgba(15,17,21,.06)` · `--shadow-md: 0 4px 12px rgba(15,17,21,.08)` · `--shadow-lg: 0 12px 32px rgba(15,17,21,.12)` (modals) · `--shadow-card: 0 2px 8px rgba(0,0,0,.06)` (elevated cards).
+
+**Spacing (px = base × 4 + half-steps):**
+`--space-1: 4` · `--space-1-5: 6` · `--space-2: 8` · `--space-2-5: 10` · `--space-3: 12` · `--space-3-5: 14` · `--space-4: 16` · `--space-5: 20` · `--space-6: 24` · `--space-7: 28` · `--space-8: 32` · `--space-10: 40` · `--space-12: 48`.
+
+**Маппинг в `tailwind.config.ts`** (все токены экспонированы как утилиты):
 ```ts
 // source: Figma fileKey Lxhk7jQyXL3iuoTpiOHxcb — hex'и продублированы из tokens.css
 colors: {
-  brand: { 50: 'var(--color-brand-50)', 500: 'var(--color-brand-500)', 600: 'var(--color-brand-600)' },
-  risk: { high: 'var(--color-risk-high)', medium: 'var(--color-risk-medium)', low: 'var(--color-risk-low)' },
-}
+  brand: { 50: '…', 500: '…', 600: '…' },
+  risk:  { high: '…', medium: '…', low: '…',
+           'high-bg': '…', 'high-bg-soft': '…', 'medium-bg': '…', 'low-bg': '…' },
+  fg:    { DEFAULT, muted, subtle, disabled },
+  bg:    { DEFAULT, muted },
+  border:{ DEFAULT, subtle },
+  divider, success, warning, danger, processing,
+},
+fontSize:    { 11, 12, 13, 14, 15, 16, 20, 60 },
+borderRadius:{ sm, md, lg, xl, pill },
+boxShadow:   { sm, md, lg, card },
+spacing:     { 1, '1.5', 2, '2.5', 3, '3.5', 4, 5, 6, 7, 8, 10, 12 },
 ```
+
+> История правок токенов — в commit log, не дублируем здесь. См. `style(fe):` коммиты в `Frontend/src/app/styles/tokens.css`.
 
 ### 8.3 Ключевые shared-компоненты
 
@@ -1725,6 +1760,7 @@ const mutation = useMutation({
 | ADR-FE-06 | SSE с нативным EventSource + polling-fallback | Accepted |
 | ADR-FE-07 | Vite + SWC вместо Next.js (SSR не требуется) | Accepted |
 | ADR-FE-08 | Ссылка на Figma как обязательный артефакт для каждого UI-PR | Proposed |
+| ADR-FE-09 | Token pipeline: синхронизация Figma ↔ `tokens.css` ([adr/009-token-pipeline.md](adr/009-token-pipeline.md)) | Accepted |
 | ADR-FE-10 | Аутентификация SSE через одноразовый `sse_ticket` вместо JWT в URL ([adr/010-sse-ticket-auth.md](adr/010-sse-ticket-auth.md)) | Proposed, зависит от `ORCH-TASK-047` |
 
 **Архитектурные решения, разделяемые с backend** (живут в `ApiBackendOrchestrator/architecture/high-architecture.md`):

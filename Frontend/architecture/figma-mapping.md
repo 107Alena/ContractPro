@@ -176,7 +176,7 @@
 
 ## Constraints discovered (важно для дальнейших этапов)
 
-1. **Figma Variables не используются** в файле. `get_variable_defs` на главных фреймах возвращает `{}`. Tokens (`src/app/styles/tokens.css`) сняты вручную, hex'и могут расходиться с фактическими fill'ами. На Этапе 2 — re-extract через `get_design_context` по design-system фреймам и diff с `tokens.css`.
+1. **Figma Variables не используются** в файле. `get_variable_defs` на главных фреймах возвращает `{}`. Tokens (`src/app/styles/tokens.css`) снимаются вручную через `get_design_context` по representative-фреймам. Полная процедура re-extraction'а описана в [`adr/009-token-pipeline.md`](./adr/009-token-pipeline.md); текущая таблица токенов — §8.2 в [`high-architecture.md`](./high-architecture.md).
 
 2. **Собственной design-system библиотеки ContractPro в Figma нет.** Подключены только community-киты (Material 3, Apple iOS/macOS/watchOS/visionOS, Simple Design System). Кнопки/инпуты в файле — обычные auto-layout frames с именами `Button/Login`, `Card/Risk` и т.д. Mapping `Figma frame → код` ведётся по соглашению об именах.
 

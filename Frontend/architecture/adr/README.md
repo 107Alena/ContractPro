@@ -25,7 +25,7 @@
 | ADR-FE-06 | SSE с нативным `EventSource` + polling-fallback | Accepted | §7.7, §21 high-architecture.md | Отказ от `event-source-polyfill` и WebSocket; фоллбек — кратковременный poll при проблемах с соединением |
 | ADR-FE-07 | Vite + SWC вместо Next.js (SSR не требуется) | Accepted | §3, §21 high-architecture.md | SPA за nginx покрывает требования; Next добавляет split-runtime сложность без выгоды |
 | ADR-FE-08 | Ссылка на Figma — обязательный артефакт для каждого UI-PR | Proposed | §21 high-architecture.md, [`CONTRIBUTING.md`](../../CONTRIBUTING.md) §3 | Дисциплина review: без Figma-ссылки UI-PR не принимается |
-| ADR-FE-09 | Token pipeline: синхронизация токенов Figma ↔ `tokens.css` | **Не формализован** (упоминается) | §8.2 high-architecture.md (комментарий), [`../../src/app/styles/tokens.css`](../../src/app/styles/tokens.css), `tasks.json` FE-TASK-019 | Gap в §21 таблице: пропуск между ADR-08 и ADR-10. Extension-блок в `tokens.css` (`--shadow-lg`, `--focus-ring-*`) ждёт формализации правила «при рассинхронизации обновляем §8.2, а не `tokens.css`» |
+| ADR-FE-09 | Token pipeline: синхронизация токенов Figma ↔ `tokens.css` | Accepted | [`009-token-pipeline.md`](./009-token-pipeline.md), §8.2 high-architecture.md, [`../figma-mapping.md`](../figma-mapping.md) | Формализован по итогам Этапа 2 Figma alignment (коммит `8fa8adb`). Процедура re-extraction, naming-конвенции, discipline-правила. Источник правды — `tokens.css`, экспорт в `tailwind.config.ts`, человекочитаемая таблица — §8.2 |
 | ADR-FE-10 | Аутентификация SSE через одноразовый `sse_ticket` вместо JWT в URL | Proposed | [`010-sse-ticket-auth.md`](./010-sse-ticket-auth.md) | Снижение клиентской поверхности утечки JWT (history, DevTools, расширения). Блокируется backend-задачей `ORCH-TASK-047` |
 
 ### Связанные (backend-side) ADR
@@ -93,5 +93,4 @@
 ## TODO
 
 - Формализовать ADR-FE-01..08 отдельными файлами `001-...` … `008-...` — сейчас эти решения живут только в таблице §21 архитектуры.
-- Закрыть gap по ADR-FE-09 (token pipeline): либо создать `009-token-pipeline.md`, либо явно декларировать решение «не выделяем в ADR» и удалить упоминание из §8.2.
 - Добавить `000-template.md` как отдельный файл-болванку, когда будет создан первый формализованный ADR из пункта выше.

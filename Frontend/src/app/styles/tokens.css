@@ -1,37 +1,70 @@
 /* shared/styles/tokens.css
  * Source of truth: Figma file Lxhk7jQyXL3iuoTpiOHxcb (без Variables — hex'и сняты вручную).
- * Любое изменение — синхронно с Figma. См. ADR-FE-09 (token pipeline).
+ * Любое изменение — синхронно с Figma. См. ADR-FE-09 (token pipeline) + figma-mapping.md.
  * Спецификация: high-architecture.md §8.2.
+ *
+ * Re-extraction Этап 2 (Figma alignment): уточнены risk-/fg-muted/border colors,
+ * добавлены вторичные fg, divider, risk-bg тинты, processing, radius-xl/pill,
+ * spacing 6/10/14/28, typography scale и shadow-card.
  */
 :root {
   --color-brand-500: #f55e12; /* primary CTA */
   --color-brand-600: #d14d0d; /* hover/active */
   --color-brand-50: #fff3eb; /* light tint (производный) */
   --color-fg: #11111c; /* ink */
-  --color-fg-muted: #666b78;
+  --color-fg-muted: #4d5261; /* secondary text */
+  --color-fg-subtle: #80858c; /* tertiary text (stats labels) */
+  --color-fg-disabled: #999ea6; /* disabled / timestamps */
   --color-bg: #ffffff;
   --color-bg-muted: #f9fafb;
-  --color-border: #d9dee5;
-  --color-success: #21966b;
-  --color-warning: #fad133;
-  --color-danger: #db2626;
-  --color-risk-high: #db2626;
-  --color-risk-medium: #fad133;
-  --color-risk-low: #21966b;
+  --color-border: #d9dbe0; /* default border (Button, Input) */
+  --color-border-subtle: #e8ebed; /* card borders */
+  --color-divider: #ebedf0; /* horizontal rule */
+  --color-success: #21966b; /* success banner / toast */
+  --color-warning: #fad133; /* warning banner / toast */
+  --color-danger: #db2626; /* danger banner / alert count */
+  --color-processing: #d98700; /* in-progress status */
+  --color-risk-high: #c83232; /* risk-high label/icon */
+  --color-risk-medium: #c88c0a; /* risk-medium label/icon */
+  --color-risk-low: #229a3e; /* risk-low label/icon */
+  --color-risk-high-bg: #fff0f0; /* risk-high callout bg */
+  --color-risk-high-bg-soft: #fff5f5; /* risk-high chip bg */
+  --color-risk-medium-bg: #fff9eb; /* risk-medium chip bg */
+  --color-risk-low-bg: #ecfdf0; /* risk-low chip bg */
 
   --font-sans: 'Inter', 'PT Root UI', system-ui, sans-serif;
+
+  /* Typography scale (px). Раньше токенов не было — добавлены по выборке
+   * Этапа 2: Headlines 60, Card titles 20, Body 14-16, Stats labels 12-13,
+   * Chip captions 11, Buttons 15. */
+  --text-11: 11px;
+  --text-12: 12px;
+  --text-13: 13px;
+  --text-14: 14px;
+  --text-15: 15px;
+  --text-16: 16px;
+  --text-20: 20px;
+  --text-60: 60px;
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
+  --radius-xl: 16px; /* cards (Dashboard Active) */
+  --radius-pill: 20px; /* badges, pills */
   --shadow-sm: 0 1px 2px rgba(15, 17, 21, 0.06);
   --shadow-md: 0 4px 12px rgba(15, 17, 21, 0.08);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.06); /* elevated card surfaces */
 
   --space-1: 4px;
+  --space-1-5: 6px;
   --space-2: 8px;
+  --space-2-5: 10px;
   --space-3: 12px;
+  --space-3-5: 14px;
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  --space-7: 28px;
   --space-8: 32px;
   --space-10: 40px;
   --space-12: 48px;

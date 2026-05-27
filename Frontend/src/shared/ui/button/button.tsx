@@ -64,7 +64,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   },
   ref,
 ) {
-  const Comp = asChild ? Slot : 'button';
   const isDisabled = disabled || loading;
 
   // Slot пробрасывает disabled в ребёнка; для <a>/<div> это невалидный HTML и не блокирует
@@ -84,21 +83,32 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     onClick?.(e);
   }
 
+  const sharedProps = {
+    className: cn(buttonVariants({ variant, size, fullWidth }), className),
+    'aria-busy': loading || undefined,
+    'data-loading': loading || undefined,
+    onClick: handleClick,
+    ...a11yDisabledProps,
+    ...rest,
+  };
+
+  // При asChild оборачиваем единственный child от потребителя через Radix Slot —
+  // injection icon/spinner недоступен (Slot.Children.only требует ровно 1 элемент);
+  // потребитель размещает иконки внутри своего <a>/<Link> сам.
+  if (asChild) {
+    return (
+      <Slot ref={ref} {...sharedProps}>
+        {children}
+      </Slot>
+    );
+  }
+
   return (
-    <Comp
-      ref={ref}
-      className={cn(buttonVariants({ variant, size, fullWidth }), className)}
-      aria-busy={loading || undefined}
-      data-loading={loading || undefined}
-      type={asChild ? undefined : (type ?? 'button')}
-      onClick={handleClick}
-      {...a11yDisabledProps}
-      {...rest}
-    >
+    <button ref={ref} type={type ?? 'button'} {...sharedProps}>
       {loading ? <Spinner size={size === 'lg' ? 'md' : 'sm'} /> : iconLeft}
       {children}
       {!loading && iconRight}
-    </Comp>
+    </button>
   );
 });
 

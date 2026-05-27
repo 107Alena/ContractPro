@@ -3208,6 +3208,35 @@
           "000-template.md — создать при backfill первого из ADR-FE-01..08."
         ]
       }
+    },
+    {
+      "id": "FE-TASK-057",
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "Address npm audit vulnerabilities: 16 уязвимостей (3 high — axios, protobufjs, fast-uri; 13 moderate — esbuild через Vite, micromatch через eslint-plugin-boundaries, brace-expansion, @protobufjs/utf8, и др.). Часть лечится safe `npm audit fix` (semver-compatible: axios/protobufjs/fast-uri/brace-expansion), часть требует major-апгрейдов с breaking changes (vite 5→8, eslint-plugin-boundaries 4→6). Открыто после chromatic@17 upgrade когда стали видны pre-existing vulnerabilities. НЕ часть Figma alignment работы — отложено до её завершения, чтобы любой странный сетевой/билд-баг не привязывался по времени к UI-фиксам.",
+      "acceptance_criteria": [
+        "Запустить `npm audit fix` (без --force) — safe semver-compatible апгрейды axios/protobufjs/@protobufjs/utf8/fast-uri/brace-expansion. Проверить, что `npm audit --omit=dev` после прогона возвращает 0 production-уязвимостей",
+        "После safe fix — полный прогон: typecheck, lint, test (1294+), e2e (Playwright), build, size-limit. Каждый должен быть зелёным. Регрессий быть не должно",
+        "Особое внимание на axios: запустить интеграционные тесты features/*/api/*.integration.test.ts и проверить, что MSW-моки правильно перехватывают requests; проверить refresh-token flow вручную (shared/auth)",
+        "Оценить отдельной задачей (или в этой же) breaking-апгрейды: vite 5→8 (требует чтения migration guide, проверки vite.config.ts на deprecated API, прогона storybook build); eslint-plugin-boundaries 4→6 (новая конфигурация FSD-правил)",
+        "Если breaking-апгрейды решено отложить — оставить `esbuild`/`micromatch` уязвимости с комментарием в коммите про accepted risk (обе категоризированы как moderate и в dev-only, не уходят в production bundle)",
+        "Обновить package-lock.json без `--legacy-peer-deps` (npm 10+ должен резолвить чисто)",
+        "Чек: `npm run gen:api && git diff --exit-code -- src/shared/api/openapi.d.ts` — openapi-typescript генерирует тот же output (нет регрессии)"
+      ],
+      "test_steps": [
+        "Шаг 1: создать ветку chore/security-audit-fixes; запустить `npm audit fix` (без --force); зафиксировать diff package.json/package-lock.json",
+        "Шаг 2: npm run typecheck — 0 ошибок",
+        "Шаг 3: npm run lint — 0 предупреждений",
+        "Шаг 4: npm run test -- --run — 1294+/1294+ passed",
+        "Шаг 5: npm run e2e — все Playwright тесты passed; особенно auth/upload/comparison flows (используют axios)",
+        "Шаг 6: npm run build — собрался; npx size-limit — все chunks в пределах budgets",
+        "Шаг 7: npm run chromatic — нет визуальных регрессий относительно baseline после Figma alignment",
+        "Шаг 8: npm audit --omit=dev — 0 production vulnerabilities; npm audit — оставшиеся только dev (esbuild/micromatch) либо принять решение по breaking-апгрейдам отдельно",
+        "Шаг 9: коммит `chore(fe): npm audit fix — resolve safe vulnerabilities` + при необходимости отдельный commit для breaking-апгрейдов с детальным changelog"
+      ],
+      "dependencies": [],
+      "blocked_until_completion_of": "Figma alignment work (Этапы 3-6) — открыто после завершения визуальной сверки frontend с макетами Figma fileKey Lxhk7jQyXL3iuoTpiOHxcb",
+      "status": "pending"
     }
   ]
 }

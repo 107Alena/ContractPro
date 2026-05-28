@@ -18,4 +18,10 @@ describe('popoverContentVariants', () => {
   it('has z-popover class', () => {
     expect(popoverContentVariants({})).toContain('z-popover');
   });
+
+  it('uses figma-aligned border-subtle + text-13', () => {
+    const cls = popoverContentVariants({});
+    expect(cls).toContain('border-border-subtle');
+    expect(cls).toContain('text-13');
+  });
 });

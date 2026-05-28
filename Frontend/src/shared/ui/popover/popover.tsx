@@ -4,9 +4,13 @@ import { type ComponentPropsWithoutRef, type ElementRef, forwardRef } from 'reac
 
 import { cn } from '@/shared/lib/cn';
 
+// Figma-aligned: elevated-panels (как Modal) используют border-border-subtle
+// (#e8ebed) вместо default border (#d9dbe0) — мягче на elevated overlay.
+// text-13 — consistent с Modal body / Chip / Badge. Конкретного frame для
+// открытого Popover в Figma нет; alignment по общим паттернам системы.
 const contentVariants = cva(
   [
-    'z-popover rounded-md border border-border bg-bg p-3 text-sm text-fg shadow-md outline-none',
+    'z-popover rounded-md border border-border-subtle bg-bg p-3 text-13 text-fg shadow-md outline-none',
     'focus-visible:ring focus-visible:ring-offset-0',
     'motion-safe:transition motion-safe:duration-100',
     'data-[state=closed]:motion-safe:opacity-0',

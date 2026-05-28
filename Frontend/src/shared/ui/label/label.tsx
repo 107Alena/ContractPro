@@ -4,11 +4,14 @@ import { type ComponentPropsWithoutRef, forwardRef } from 'react';
 
 import { cn } from '@/shared/lib/cn';
 
-const labelVariants = cva(['inline-flex items-center gap-1 font-sans font-medium text-fg'], {
+// Figma-aligned: text-fg-strong (#333340) — выделенный gray для labels,
+// между fg и fg-muted. Source: nodes 56:9 (Email label), 56:13 (Password label)
+// — Auth Desktop. См. §8.2 high-architecture.md.
+const labelVariants = cva(['inline-flex items-center gap-1 font-sans font-medium text-fg-strong'], {
   variants: {
     size: {
-      sm: 'text-xs leading-4',
-      md: 'text-sm leading-5',
+      sm: 'text-12 leading-4',
+      md: 'text-14 leading-5',
     },
   },
   defaultVariants: { size: 'md' },

@@ -12,6 +12,7 @@
   --color-brand-600: #d14d0d; /* hover/active */
   --color-brand-50: #fff3eb; /* light tint (производный) */
   --color-fg: #11111c; /* ink */
+  --color-fg-strong: #333340; /* form labels, prominent UI labels */
   --color-fg-muted: #4d5261; /* secondary text */
   --color-fg-subtle: #80858c; /* tertiary text (stats labels) */
   --color-fg-disabled: #999ea6; /* disabled / timestamps */

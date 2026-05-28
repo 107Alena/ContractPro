@@ -769,7 +769,8 @@ Page (route)                             — например, ResultPage
 | Brand | `--color-brand-500` | `#f55e12` | primary CTA bg |
 |  | `--color-brand-600` | `#d14d0d` | hover/active, brand text on light bg |
 |  | `--color-brand-50` | `#fff3eb` | light tint, badges |
-| Foreground | `--color-fg` | `#11111c` | основной текст |
+| Foreground | `--color-fg` | `#11111c` | основной текст, заголовки |
+|  | `--color-fg-strong` | `#333340` | form labels, prominent UI labels |
 |  | `--color-fg-muted` | `#4d5261` | вторичный текст, описания |
 |  | `--color-fg-subtle` | `#80858c` | tertiary (stats labels) |
 |  | `--color-fg-disabled` | `#999ea6` | disabled, timestamps |
@@ -825,7 +826,7 @@ colors: {
   brand: { 50: '…', 500: '…', 600: '…' },
   risk:  { high: '…', medium: '…', low: '…',
            'high-bg': '…', 'high-bg-soft': '…', 'medium-bg': '…', 'low-bg': '…' },
-  fg:    { DEFAULT, muted, subtle, disabled },
+  fg:    { DEFAULT, strong, muted, subtle, disabled },
   bg:    { DEFAULT, muted },
   border:{ DEFAULT, subtle },
   danger:{ DEFAULT, bg },

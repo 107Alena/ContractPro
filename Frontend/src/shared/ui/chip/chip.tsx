@@ -3,24 +3,33 @@ import { forwardRef, type HTMLAttributes, type KeyboardEvent, type MouseEvent } 
 
 import { cn } from '@/shared/lib/cn';
 
+// Figma-aligned: nodes 177:3 (FilterChip selected — solid brand) и 177:5
+// (FilterChip unselected — white + subtle border) — Comparison page.
+// Selected = solid brand-500 + white text (не светло-оранжевый, как было).
 const chipVariants = cva(
   [
     'inline-flex items-center gap-1.5 whitespace-nowrap',
-    'rounded-md border border-border bg-bg-muted px-3 py-1',
-    'text-sm font-medium text-fg',
+    // pill 20px + figma padding 14/7 (py-[7px] inline — нет 7-pt в token-scale)
+    'rounded-pill border px-3.5 py-[7px]',
+    'text-13 font-medium leading-4',
     'transition-colors duration-150',
   ],
   {
     variants: {
       selected: {
-        true: 'border-brand-500 bg-brand-50 text-brand-600',
-        false: '',
+        true: 'border-transparent bg-brand-500 text-white',
+        false: 'border-border-subtle bg-bg text-fg-muted',
       },
       interactive: {
-        true: 'cursor-pointer hover:border-brand-500 focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-2',
+        true: 'cursor-pointer focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-2',
         false: '',
       },
     },
+    compoundVariants: [
+      // Hover: selected → darker brand; unselected → выделить border брендом.
+      { interactive: true, selected: true, class: 'hover:bg-brand-600' },
+      { interactive: true, selected: false, class: 'hover:border-brand-500' },
+    ],
     defaultVariants: { selected: false, interactive: false },
   },
 );

@@ -40,7 +40,10 @@ export default {
         divider: 'var(--color-divider)',
         success: 'var(--color-success)',
         warning: 'var(--color-warning)',
-        danger: 'var(--color-danger)',
+        danger: {
+          DEFAULT: 'var(--color-danger)',
+          bg: 'var(--color-danger-bg)',
+        },
         processing: 'var(--color-processing)',
       },
       fontFamily: {

@@ -3,25 +3,31 @@ import { forwardRef, type InputHTMLAttributes } from 'react';
 
 import { cn } from '@/shared/lib/cn';
 
+// Figma-aligned: bg-white / border-border (1px) / rounded-md (10px) / px-4 (16px)
+// / text-15 (Inter Regular). Placeholder темнее fg-muted, ближе к figma #a6abb2 →
+// text-fg-disabled (#999ea6). Source: nodes 56:10, 58:15, 59:6, 59:28 (Auth Desktop).
 const inputVariants = cva(
   [
     'block w-full rounded-md border bg-bg text-fg',
-    'px-3 h-10 text-sm leading-5',
-    'placeholder:text-fg-muted',
+    'px-4 h-10 text-15 leading-5',
+    'placeholder:text-fg-disabled',
     'transition-colors duration-150',
     'focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-0',
-    'disabled:cursor-not-allowed disabled:bg-bg-muted disabled:text-fg-muted',
+    // disabled: opacity-70 на весь input (figma) + smoother text muting.
+    'disabled:cursor-not-allowed disabled:bg-bg-muted disabled:text-fg-subtle disabled:opacity-70',
   ],
   {
     variants: {
       state: {
         default: 'border-border focus-visible:border-brand-500',
-        error: 'border-danger focus-visible:border-danger focus-visible:ring-danger/60',
+        // Error: 1.5px borderwidth + light danger tint bg (figma node 58:15).
+        error:
+          'border-[1.5px] border-danger bg-danger-bg focus-visible:border-danger focus-visible:ring-danger/60',
       },
       size: {
-        sm: 'h-8 text-sm',
-        md: 'h-10 text-sm',
-        lg: 'h-12 text-base',
+        sm: 'h-8 text-13',
+        md: 'h-10 text-15',
+        lg: 'h-12 text-16',
       },
     },
     defaultVariants: { state: 'default', size: 'md' },

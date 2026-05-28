@@ -31,6 +31,7 @@
   --color-risk-high-bg-soft: #fff5f5; /* risk-high chip bg */
   --color-risk-medium-bg: #fff9eb; /* risk-medium chip bg */
   --color-risk-low-bg: #ecfdf0; /* risk-low chip bg */
+  --color-danger-bg: #fffafa; /* validation/error input tint */
 
   --font-sans: 'Inter', 'PT Root UI', system-ui, sans-serif;
 

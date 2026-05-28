@@ -780,7 +780,8 @@ Page (route)                             — например, ResultPage
 |  | `--color-divider` | `#ebedf0` | horizontal rules |
 | Semantic | `--color-success` | `#21966b` | success banner/toast |
 |  | `--color-warning` | `#fad133` | warning banner/toast |
-|  | `--color-danger` | `#db2626` | danger banner, alert count |
+|  | `--color-danger` | `#db2626` | danger banner, alert count, validation error border |
+|  | `--color-danger-bg` | `#fffafa` | validation error input tint |
 |  | `--color-processing` | `#d98700` | in-progress статус |
 | Risk (label/icon) | `--color-risk-high` | `#c83232` | high risk text & dot |
 |  | `--color-risk-medium` | `#c88c0a` | medium risk |
@@ -827,7 +828,8 @@ colors: {
   fg:    { DEFAULT, muted, subtle, disabled },
   bg:    { DEFAULT, muted },
   border:{ DEFAULT, subtle },
-  divider, success, warning, danger, processing,
+  danger:{ DEFAULT, bg },
+  divider, success, warning, processing,
 },
 fontSize:    { 11, 12, 13, 14, 15, 16, 20, 60 },
 borderRadius:{ sm, md, lg, xl, pill },

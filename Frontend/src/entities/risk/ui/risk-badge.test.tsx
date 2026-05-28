@@ -24,10 +24,10 @@ describe('RiskBadge', () => {
     expect(badge.className).toContain('text-danger');
   });
 
-  it('medium использует warning-tone', () => {
+  it('medium использует warning-tone + text-risk-medium (figma-aligned)', () => {
     render(<RiskBadge level="medium" />);
     const badge = screen.getByTestId('risk-badge');
-    expect(badge.className).toContain('text-fg');
+    expect(badge.className).toContain('text-risk-medium');
   });
 
   it('low использует success-tone', () => {

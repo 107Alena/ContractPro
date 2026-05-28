@@ -57,6 +57,7 @@ export default {
         14: 'var(--text-14)',
         15: 'var(--text-15)',
         16: 'var(--text-16)',
+        18: 'var(--text-18)',
         20: 'var(--text-20)',
         60: 'var(--text-60)',
       },

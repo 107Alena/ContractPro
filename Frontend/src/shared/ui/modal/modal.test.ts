@@ -18,4 +18,8 @@ describe('modalContentVariants', () => {
   it('always pins to z-modal', () => {
     expect(modalContentVariants({})).toContain('z-modal');
   });
+
+  it('uses figma-aligned 12px corner radius', () => {
+    expect(modalContentVariants({})).toContain('rounded-[12px]');
+  });
 });

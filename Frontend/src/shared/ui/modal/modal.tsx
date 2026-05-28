@@ -9,11 +9,13 @@ import {
 
 import { cn } from '@/shared/lib/cn';
 
+// Figma-aligned: node 233:50 (Export Modal). Container radius 12px (one-off,
+// между --radius-md и --radius-lg — собственное решение дизайна для модалок).
 const contentVariants = cva(
   [
     'fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
     'flex max-h-[85vh] w-[calc(100vw-2rem)] flex-col',
-    'rounded-lg bg-bg text-fg shadow-lg outline-none',
+    'rounded-[12px] bg-bg text-fg shadow-lg outline-none',
     'focus-visible:ring focus-visible:ring-offset-0',
     'motion-safe:transition motion-safe:duration-150 motion-safe:ease-out',
     'data-[state=closed]:motion-safe:opacity-0 data-[state=closed]:motion-safe:scale-95',
@@ -97,12 +99,15 @@ export const ModalContent = forwardRef<ElementRef<typeof Dialog.Content>, ModalC
   },
 );
 
+// Figma-aligned: padding p-5 (20px) per section — node 233:50 Export Modal
+// использует p-[20px] overall. Title text-18 / font-bold; description text-13
+// medium; body text-13.
 export const ModalHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   function ModalHeader({ className, ...rest }, ref) {
     return (
       <div
         ref={ref}
-        className={cn('flex flex-col gap-1 border-b border-border px-6 py-4', className)}
+        className={cn('flex flex-col gap-1 border-b border-border px-5 py-4', className)}
         {...rest}
       />
     );
@@ -116,7 +121,7 @@ export const ModalTitle = forwardRef<
   return (
     <Dialog.Title
       ref={ref}
-      className={cn('text-lg font-semibold leading-6 text-fg', className)}
+      className={cn('text-18 font-bold leading-6 text-fg', className)}
       {...rest}
     />
   );
@@ -127,7 +132,11 @@ export const ModalDescription = forwardRef<
   ComponentPropsWithoutRef<typeof Dialog.Description>
 >(function ModalDescription({ className, ...rest }, ref) {
   return (
-    <Dialog.Description ref={ref} className={cn('text-sm text-fg-muted', className)} {...rest} />
+    <Dialog.Description
+      ref={ref}
+      className={cn('text-13 font-medium text-fg-muted', className)}
+      {...rest}
+    />
   );
 });
 
@@ -136,7 +145,7 @@ export const ModalBody = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElemen
     return (
       <div
         ref={ref}
-        className={cn('flex-1 overflow-y-auto px-6 py-4 text-sm text-fg', className)}
+        className={cn('flex-1 overflow-y-auto px-5 py-4 text-13 text-fg', className)}
         {...rest}
       />
     );
@@ -149,7 +158,7 @@ export const ModalFooter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElem
       <div
         ref={ref}
         className={cn(
-          'flex flex-col-reverse gap-2 border-t border-border px-6 py-4 sm:flex-row sm:justify-end',
+          'flex flex-col-reverse gap-2 border-t border-border px-5 py-4 sm:flex-row sm:justify-end',
           className,
         )}
         {...rest}

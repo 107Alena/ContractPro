@@ -31,9 +31,10 @@ ContractPro использует Figma как единый источник ис
    1. Через MCP `mcp__plugin_figma_figma__get_design_context` извлечь representative-фреймы: Button/Login, Button/PrimaryCTA, Badge, Headline, Risk Summary (`159:3`, `159:19`), Dashboard Active (`100:2`). Полный список фреймов — [`../figma-mapping.md`](../figma-mapping.md).
    2. Сделать diff с `tokens.css` — выписать каждое drift-значение и каждый новый токен.
    3. Обновить `tokens.css` (источник правды) и `tailwind.config.ts` (экспорт утилит) в одном коммите.
-   4. Обновить §8.2 в `high-architecture.md` (таблица токенов).
-   5. Прогнать `npm run typecheck && npm run lint && npm run test` — должны быть зелёные.
-   6. Запустить `npm run chromatic` вручную; визуальные изменения принимает дизайнер/разработчик в web UI Chromatic. Это становится новым baseline.
+   4. **Обязательно** — при добавлении новых ключей в `tailwind.config.ts → theme.extend.{fontSize, boxShadow, borderRadius}` синхронно расширить `extendTailwindMerge` в [`src/shared/lib/cn/cn.ts`](../../src/shared/lib/cn/cn.ts) для соответствующих `classGroups` (`font-size`, `shadow`, `rounded`). Без этого `cn()` через twMerge классифицирует кастомные `text-{N}` как color-утилиты и перетирает `text-white` → text падает в browser default (поймано Chromatic'ом после Этапа 3.1: чёрный текст на оранжевых Primary-кнопках).
+   5. Обновить §8.2 в `high-architecture.md` (таблица токенов).
+   6. Прогнать `npm run typecheck && npm run lint && npm run test` — должны быть зелёные. Регресс-тесты на `cn()` (`src/shared/lib/cn/cn.test.ts`) обязаны падать, если шаг 4 пропустили.
+   7. Запустить `npm run chromatic` вручную; визуальные изменения принимает дизайнер/разработчик в web UI Chromatic. Это становится новым baseline.
 
 3. **Naming convention токенов:**
    - Цвета: `--color-{role}` (`fg`, `bg`, `border`, `success`, `risk-high` и т.д.), производные тинты — `--color-{role}-bg`/`-bg-soft`.

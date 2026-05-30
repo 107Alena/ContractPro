@@ -1,18 +1,17 @@
-// RecentChecksTable — виджет «Последние проверки» на dashboard (§17.4).
+// RecentChecksTable — «Недавние проверки» на dashboard (Figma 84:2 → 90:2).
 //
-// Композиция DataTable (FE-TASK-021) с 5 последними договорами из
-// /contracts?size=5. SSE-обновления статусов — через useEventStream на
-// уровне страницы; setQueryData(qk.contracts.status(...)) не влияет на
-// список /contracts, но сама /contracts перезапрашивается при invalidate.
-// Для стабильного UX при SSE-статусе мы отображаем processing_status из
-// ContractSummary (snapshot по времени /contracts) — для мгновенного
-// real-time status отдельный useQuery по status-ключу в FE-TASK-044.
+// Композиция DataTable с 5 последними договорами из /contracts?size=5.
+// Колонки Тип и Риск присутствуют структурно (Figma), но рендерятся как «—»:
+// contract_type и risk-level не входят в ContractSummary (приходят из /risks,
+// FE-TASK-046). SSE-обновления статусов — через useEventStream на уровне
+// страницы; на /contracts snapshot не инвалидируется, отображаем
+// processing_status из ContractSummary.
 import type { ColumnDef } from '@tanstack/react-table';
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 
 import { type ContractSummary, viewStatus } from '@/entities/contract';
-import { Badge, buttonVariants, DataTable, DataTableContent } from '@/shared/ui';
+import { Badge, buttonVariants, Card, DataTable, DataTableContent } from '@/shared/ui';
 
 export interface RecentChecksTableProps {
   items?: readonly ContractSummary[] | undefined;
@@ -27,12 +26,16 @@ function formatDate(iso?: string): string {
   return date.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function Dash(): JSX.Element {
+  return <span className="text-fg-disabled">—</span>;
+}
+
 function useColumns(): ColumnDef<ContractSummary, unknown>[] {
   return useMemo<ColumnDef<ContractSummary, unknown>[]>(
     () => [
       {
         id: 'title',
-        header: 'Название',
+        header: 'Документ',
         accessorFn: (row) => row.title ?? 'Без названия',
         cell: ({ row }) => {
           const contract = row.original;
@@ -41,14 +44,31 @@ function useColumns(): ColumnDef<ContractSummary, unknown>[] {
             return (
               <Link
                 to={`/contracts/${contract.contract_id}`}
-                className="text-fg hover:text-brand-600 focus-visible:text-brand-600 focus-visible:outline-none"
+                className="font-medium text-fg hover:text-brand-600 focus-visible:text-brand-600 focus-visible:outline-none"
               >
                 {title}
               </Link>
             );
           }
-          return <span className="text-fg">{title}</span>;
+          return <span className="font-medium text-fg">{title}</span>;
         },
+      },
+      {
+        // Тип договора недоступен в ContractSummary — структурный «—» (FE-TASK-046).
+        id: 'type',
+        header: 'Тип',
+        accessorFn: () => '—',
+        cell: () => <Dash />,
+      },
+      {
+        id: 'updated_at',
+        header: 'Дата',
+        accessorFn: (row) => row.updated_at ?? row.created_at ?? '',
+        cell: ({ row }) => (
+          <span className="text-fg-muted">
+            {formatDate(row.original.updated_at ?? row.original.created_at)}
+          </span>
+        ),
       },
       {
         id: 'status',
@@ -60,14 +80,28 @@ function useColumns(): ColumnDef<ContractSummary, unknown>[] {
         },
       },
       {
-        id: 'updated_at',
-        header: 'Обновлён',
-        accessorFn: (row) => row.updated_at ?? row.created_at ?? '',
-        cell: ({ row }) => (
-          <span className="text-fg-muted">
-            {formatDate(row.original.updated_at ?? row.original.created_at)}
-          </span>
-        ),
+        // Уровень риска недоступен — структурный «—» (FE-TASK-046).
+        id: 'risk',
+        header: 'Риск',
+        accessorFn: () => '—',
+        cell: () => <Dash />,
+      },
+      {
+        id: 'actions',
+        header: '',
+        enableSorting: false,
+        cell: ({ row }) => {
+          const id = row.original.contract_id;
+          if (!id) return null;
+          return (
+            <Link
+              to={`/contracts/${id}`}
+              className="text-13 font-medium text-brand-600 hover:text-brand-500 focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-2"
+            >
+              Открыть
+            </Link>
+          );
+        },
       },
     ],
     [],
@@ -83,16 +117,14 @@ export function RecentChecksTable({
   const data = items ? Array.from(items) : [];
 
   return (
-    <section
-      aria-label="Последние проверки"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
-    >
+    <Card aria-label="Недавние проверки" className="flex flex-col gap-4 px-6 py-[22px]">
       <header className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Последние проверки
-        </h2>
-        <Link to="/contracts" className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
-          Смотреть все
+        <h2 className="text-17 font-semibold text-fg">Недавние проверки</h2>
+        <Link
+          to="/contracts"
+          className="text-13 font-medium text-brand-600 hover:text-brand-500 focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-2"
+        >
+          Все проверки →
         </Link>
       </header>
 
@@ -121,6 +153,6 @@ export function RecentChecksTable({
       >
         <DataTableContent />
       </DataTable>
-    </section>
+    </Card>
   );
 }

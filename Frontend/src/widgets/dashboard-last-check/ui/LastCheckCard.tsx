@@ -1,19 +1,19 @@
-// LastCheckCard — «последняя проверка» на главном экране (§17.4).
+// LastCheckCard — «Последняя проверка» на главном экране (Figma 84:2 → 89:4).
 //
-// Показывает самый свежий договор из списка /contracts?size=5: название, статус
-// через Badge, CTA «Открыть результат». Rich-данные AggregateScore/RiskProfile
-// требуют /results endpoint — отложено в FE-TASK-046 (ResultPage).
+// Показывает самый свежий договор из /contracts?size=5. Уровень риска и счётчики
+// (высокий/средний/низкий) приходят из /risks — отложено (FE-TASK-046). Поэтому:
+//   • бейдж в шапке — это СТАТУС обработки (реальные данные), не риск-уровень;
+//   • счётчики рисков рендерятся структурно с «—» (данные появятся после анализа);
+//   • описание — статусная подсказка, без выдуманного summary рисков.
 //
-// CTA-кнопки реализованы как <Link className={buttonVariants(...)}>, а не через
-// <Button asChild>. Причина: Button.tsx оборачивает children тремя JSX-слотами
-// (iconLeft / children / iconRight) — при asChild Slot в jsdom (Radix 1.2+)
-// падает на `React.Children.only` из-за множественных children даже если лишние
-// — undefined. Пограничный случай, не блокирующий asChild в целом; локальный
-// workaround — прямая стилизация Link через `buttonVariants`.
+// CTA реализованы как <Link className={buttonVariants(...)}> (не <Button asChild>):
+// Button оборачивает children тремя слотами (iconLeft/children/iconRight), из-за
+// чего Radix Slot падает на React.Children.only в jsdom. Прямая стилизация Link
+// через buttonVariants — локальный обход.
 import { Link } from 'react-router-dom';
 
 import { type ContractSummary, viewStatus } from '@/entities/contract';
-import { Badge, buttonVariants, Spinner } from '@/shared/ui';
+import { Badge, buttonVariants, Card, Spinner } from '@/shared/ui';
 
 export interface LastCheckCardProps {
   contract?: ContractSummary | undefined;
@@ -21,16 +21,33 @@ export interface LastCheckCardProps {
   error?: unknown;
 }
 
+const RISK_LEVELS = [
+  { key: 'high', label: 'высокий', dot: 'bg-risk-high' },
+  { key: 'medium', label: 'средний', dot: 'bg-risk-medium' },
+  { key: 'low', label: 'низкий', dot: 'bg-risk-low' },
+] as const;
+
+function formatDateTime(iso?: string): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 export function LastCheckCard({ contract, isLoading, error }: LastCheckCardProps): JSX.Element {
+  const view = contract ? viewStatus(contract.processing_status) : null;
+
   return (
-    <section
-      aria-label="Последняя проверка"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
-    >
+    <Card aria-label="Последняя проверка" className="flex flex-col gap-4 px-6 py-[22px]">
       <header className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Последняя проверка
-        </h2>
+        <h2 className="text-17 font-semibold text-fg">Последняя проверка</h2>
+        {view ? <Badge variant={view.tone}>{view.label}</Badge> : null}
       </header>
 
       {isLoading && !contract ? (
@@ -38,7 +55,7 @@ export function LastCheckCard({ contract, isLoading, error }: LastCheckCardProps
           <Spinner size="md" aria-hidden="true" />
         </div>
       ) : error ? (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-14 text-danger">
           Не удалось загрузить последнюю проверку.
         </p>
       ) : !contract ? (
@@ -46,14 +63,14 @@ export function LastCheckCard({ contract, isLoading, error }: LastCheckCardProps
       ) : (
         <Content contract={contract} />
       )}
-    </section>
+    </Card>
   );
 }
 
 function EmptyState(): JSX.Element {
   return (
     <div className="flex flex-col items-start gap-3 py-4">
-      <p className="text-base text-fg-muted">
+      <p className="text-14 text-fg-muted">
         Пока нет проверок. Загрузите договор — и через минуту увидите результат.
       </p>
       <Link to="/contracts/new" className={buttonVariants({ variant: 'primary', size: 'md' })}>
@@ -64,45 +81,76 @@ function EmptyState(): JSX.Element {
 }
 
 function Content({ contract }: { contract: ContractSummary }): JSX.Element {
-  const status = contract.processing_status;
-  const view = viewStatus(status);
+  const view = viewStatus(contract.processing_status);
   const isReady = view.bucket === 'ready';
-  const isTerminalFailure = view.bucket === 'failed';
+  const isFailed = view.bucket === 'failed';
+  const id = contract.contract_id;
+  const version = contract.current_version_number;
 
-  const contractId = contract.contract_id;
-  const versionNumber = contract.current_version_number ?? null;
+  const meta = [
+    formatDateTime(contract.updated_at ?? contract.created_at),
+    version != null ? `Версия ${version}` : null,
+  ]
+    .filter(Boolean)
+    .join('  ·  ');
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-lg font-semibold text-fg">
-          {contract.title ?? 'Договор без названия'}
-        </h3>
-        <Badge variant={view.tone}>{view.label}</Badge>
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1.5">
+        <p className="text-15 font-semibold text-fg">{contract.title ?? 'Договор без названия'}</p>
+        {meta ? <p className="text-13 text-fg-subtle">{meta}</p> : null}
       </div>
 
-      {status && !isReady && !isTerminalFailure ? (
-        <p className="text-sm text-fg-muted">Идёт обработка — обновим результат автоматически.</p>
+      <p className="text-14 leading-5 text-fg-muted">
+        {isFailed
+          ? 'Обработка завершилась с ошибкой. Откройте карточку договора для подробностей.'
+          : !isReady
+            ? 'Идёт обработка — обновим результат автоматически.'
+            : 'Откройте результат, чтобы увидеть риски и рекомендации.'}
+      </p>
+
+      {isReady ? (
+        // Счётчики рисков — структура с «—»: high/medium/low появятся после /risks.
+        <div className="flex flex-wrap gap-3" aria-label="Счётчики рисков (данные готовятся)">
+          {RISK_LEVELS.map((level) => (
+            <span
+              key={level.key}
+              className="inline-flex items-center gap-1.5 rounded-sm bg-bg-muted px-3 py-1.5"
+            >
+              <span className={`size-2 rounded-full ${level.dot}`} aria-hidden="true" />
+              <span className="text-14 font-bold text-fg">—</span>
+              <span className="text-13 text-fg-subtle">{level.label}</span>
+            </span>
+          ))}
+        </div>
       ) : null}
 
-      {isTerminalFailure ? (
-        <p className="text-sm text-danger">
-          Обработка завершилась с ошибкой. Откройте карточку договора для подробностей.
-        </p>
-      ) : null}
-
-      <div className="flex gap-2">
-        {isReady && contractId && versionNumber !== null ? (
+      <div className="flex flex-wrap gap-2.5">
+        {isReady && id ? (
+          <>
+            <Link
+              to={`/contracts/${id}`}
+              className={buttonVariants({ variant: 'primary', size: 'sm' })}
+            >
+              Открыть результат
+            </Link>
+            <Link
+              to={`/contracts/${id}`}
+              className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+            >
+              Повторная проверка
+            </Link>
+            <Link
+              to={`/contracts/${id}/compare`}
+              className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+            >
+              Сравнить версии
+            </Link>
+          </>
+        ) : id ? (
           <Link
-            to={`/contracts/${contractId}`}
-            className={buttonVariants({ variant: 'primary', size: 'md' })}
-          >
-            Открыть результат
-          </Link>
-        ) : contractId ? (
-          <Link
-            to={`/contracts/${contractId}`}
-            className={buttonVariants({ variant: 'secondary', size: 'md' })}
+            to={`/contracts/${id}`}
+            className={buttonVariants({ variant: 'secondary', size: 'sm' })}
           >
             Перейти к договору
           </Link>

@@ -12,6 +12,7 @@
 import { FAQAccordion } from './sections/FAQAccordion';
 import { FeaturesSection } from './sections/FeaturesSection';
 import { HeroSection } from './sections/HeroSection';
+import { HowItWorksSection } from './sections/HowItWorksSection';
 import { PricingSection } from './sections/PricingSection';
 import { TrustStripSection } from './sections/TrustStripSection';
 
@@ -21,6 +22,7 @@ export function LandingPage(): JSX.Element {
       <HeroSection />
       <TrustStripSection />
       <FeaturesSection />
+      <HowItWorksSection />
       <PricingSection />
       <FAQAccordion />
     </main>

@@ -121,6 +121,41 @@ export const FEATURES: FeatureCard[] = [
   },
 ];
 
+// HowItWorks — Figma node 15:2.
+export interface HowItWorksStep {
+  id: string;
+  number: string;
+  title: string;
+  description: string;
+}
+
+export const HOW_IT_WORKS_STEPS: HowItWorksStep[] = [
+  {
+    id: 'upload',
+    number: '01',
+    title: 'Загрузите документ',
+    description: 'Перетащите файл, вставьте текст или загрузите PDF',
+  },
+  {
+    id: 'analyze',
+    number: '02',
+    title: 'AI-анализ',
+    description: 'ContractPro определит тип договора и проведёт проверку по всем параметрам',
+  },
+  {
+    id: 'result',
+    number: '03',
+    title: 'Результат',
+    description: 'Получите список рисков, рекомендации по формулировкам и краткое резюме',
+  },
+  {
+    id: 'act',
+    number: '04',
+    title: 'Действуйте',
+    description: 'Скачайте отчёт, отправьте ссылку коллегам или сравните с другой версией',
+  },
+];
+
 export interface PricingPlan {
   id: string;
   name: string;

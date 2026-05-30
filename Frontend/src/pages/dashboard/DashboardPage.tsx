@@ -15,9 +15,11 @@ import { useContracts } from '@/entities/contract';
 import { useMe } from '@/entities/user';
 import { useEventStream } from '@/shared/api';
 import { Can } from '@/shared/auth';
+import { BusinessSummary } from '@/widgets/dashboard-business-summary';
 import { KeyRisksCards } from '@/widgets/dashboard-key-risks';
 import { LastCheckCard } from '@/widgets/dashboard-last-check';
 import { OrgCard } from '@/widgets/dashboard-org-card';
+import { ProcessingStatus } from '@/widgets/dashboard-processing-status';
 import { QuickStart } from '@/widgets/dashboard-quick-start';
 import { RecentChecksTable } from '@/widgets/dashboard-recent-checks';
 import { TrustFooter } from '@/widgets/dashboard-trust-footer';
@@ -65,6 +67,8 @@ export function DashboardPage(): JSX.Element {
           <Can I="contract.upload">
             <QuickStart />
           </Can>
+          <BusinessSummary total={total ?? undefined} isLoading={isLoading} error={error} />
+          <ProcessingStatus items={items} isLoading={isLoading} error={error} />
           <OrgCard
             user={meQuery.data}
             isLoading={meQuery.isLoading}

@@ -101,8 +101,11 @@ describe('DashboardPage', () => {
     expect(screen.getByRole('region', { name: 'Последняя проверка' })).toBeDefined();
     // «Аренда» встречается в LastCheckCard (h3) и в RecentChecksTable (link)
     expect(screen.getAllByText('Аренда').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Услуги')).toBeDefined();
+    // «Услуги» (ANALYZING) — в RecentChecksTable (link) и ProcessingStatus (название)
+    expect(screen.getAllByText('Услуги').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole('region', { name: 'Организация' })).toBeDefined();
+    expect(screen.getByRole('region', { name: 'Сводка' })).toBeDefined();
+    expect(screen.getByRole('region', { name: 'Статус обработки' })).toBeDefined();
   });
 
   it('Empty — /contracts пустой: показывает empty state в LastCheck и RecentChecks', () => {

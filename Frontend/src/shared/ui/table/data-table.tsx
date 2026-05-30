@@ -268,7 +268,10 @@ export function DataTableViewOptions({
 // Таблица (thead + tbody + state slots)
 // --------------------------------------------------------------------
 
-const tableVariants = cva('w-full border-collapse text-sm text-fg');
+// Figma-aligned: nodes 90:6 (TableHeader) + 90:18 (TableRow) — Dashboard
+// RecentChecks. Body text-13 (figma), header text-12 без uppercase,
+// borders divider (lighter), no header bg.
+const tableVariants = cva('w-full border-collapse text-13 text-fg');
 
 export interface DataTableContentProps extends TableHTMLAttributes<HTMLTableElement> {
   /** Плотность строк: comfortable (default) — py-3, compact — py-2. */
@@ -298,10 +301,13 @@ export function DataTableContent({
 function DataTableHead<T>() {
   const { table } = useDataTableContext<T>();
 
+  // Figma: thead без bg (transparent), border-b divider — отличается от текущего
+  // bg-bg-muted/border-border. Distinction теперь только через border + размер
+  // шрифта (12 vs 13).
   return (
-    <thead className="bg-bg-muted">
+    <thead>
       {table.getHeaderGroups().map((headerGroup) => (
-        <tr key={headerGroup.id} className="border-b border-border">
+        <tr key={headerGroup.id} className="border-b border-divider">
           {headerGroup.headers.map((header) => (
             <DataTableHeaderCell key={header.id} header={header} />
           ))}
@@ -330,7 +336,8 @@ function DataTableHeaderCell<T>({ header }: { header: Header<T, unknown> }) {
     <th
       scope="col"
       aria-sort={ariaSort}
-      className="h-10 whitespace-nowrap px-3 text-left align-middle text-xs font-medium uppercase tracking-wide text-fg-muted"
+      // Figma: text-12 font-medium text-fg-disabled, БЕЗ uppercase/tracking-wide.
+      className="h-10 whitespace-nowrap px-3 text-left align-middle text-12 font-medium text-fg-disabled"
     >
       {canSort ? (
         <button
@@ -339,7 +346,7 @@ function DataTableHeaderCell<T>({ header }: { header: Header<T, unknown> }) {
           className="inline-flex items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
         >
           {flexRender(header.column.columnDef.header, header.getContext())}
-          <span aria-hidden="true" className="text-fg-muted">
+          <span aria-hidden="true" className="text-fg-disabled">
             {direction === 'asc' ? '▲' : direction === 'desc' ? '▼' : '↕'}
           </span>
         </button>
@@ -404,7 +411,8 @@ function DataTableRow<T>({ row }: { row: Row<T> }) {
   return (
     <tr
       data-state={row.getIsSelected() ? 'selected' : undefined}
-      className="border-b border-border last:border-b-0 hover:bg-bg-muted data-[state=selected]:bg-brand-50"
+      // Figma: row border — lighter divider color (не default border).
+      className="border-b border-divider last:border-b-0 hover:bg-bg-muted data-[state=selected]:bg-brand-50"
     >
       {row.getVisibleCells().map((cell) => (
         <DataTableCell key={cell.id} cell={cell} />
@@ -414,8 +422,9 @@ function DataTableRow<T>({ row }: { row: Row<T> }) {
 }
 
 function DataTableCell<T>({ cell }: { cell: Cell<T, unknown> }) {
+  // Figma: cell py-3 (12px) / text-13 — body размер по дашборду.
   return (
-    <td className="whitespace-nowrap px-3 py-2.5 align-middle text-sm text-fg data-[compact=true]:py-1.5">
+    <td className="whitespace-nowrap px-3 py-3 align-middle text-13 text-fg data-[compact=true]:py-1.5">
       {flexRender(cell.column.columnDef.cell, cell.getContext())}
     </td>
   );

@@ -18,6 +18,7 @@ import { OutcomesSection } from './sections/OutcomesSection';
 import { PricingSection } from './sections/PricingSection';
 import { SecuritySection } from './sections/SecuritySection';
 import { TrustStripSection } from './sections/TrustStripSection';
+import { WhyContractProSection } from './sections/WhyContractProSection';
 
 export function LandingPage(): JSX.Element {
   return (
@@ -30,6 +31,7 @@ export function LandingPage(): JSX.Element {
       <OutcomesSection />
       <SecuritySection />
       <PricingSection />
+      <WhyContractProSection />
       <FAQAccordion />
     </main>
   );

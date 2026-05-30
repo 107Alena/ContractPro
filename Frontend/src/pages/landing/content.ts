@@ -169,6 +169,48 @@ export const AUDIENCES: AudienceCard[] = [
   },
 ];
 
+// WhyContractPro — Figma node 22:2.
+export interface WhyReason {
+  id: string;
+  title: string;
+  description: string;
+}
+
+export const WHY_REASONS: WhyReason[] = [
+  {
+    id: 'practical',
+    title: 'Практический результат',
+    description:
+      'Не абстрактный отчёт, а конкретные рекомендации: что исправить, что проверить, на что обратить внимание',
+  },
+  {
+    id: 'speed',
+    title: 'Скорость без потери качества',
+    description:
+      'AI-анализ за минуты вместо часов ручной проверки, при высокой точности выявления рисков',
+  },
+  {
+    id: 'plain',
+    title: 'Без юридического жаргона',
+    description: 'Результат понятен менеджеру, закупщику и руководителю — не только юристу',
+  },
+  {
+    id: 'ru',
+    title: 'Работа в юрисдикции РФ',
+    description: 'Учитываем нормы российского законодательства, а не шаблонный зарубежный подход',
+  },
+  {
+    id: 'team',
+    title: 'Командная работа',
+    description: 'Делитесь отчётами внутри компании через защищённые ссылки и единый формат',
+  },
+  {
+    id: 'control',
+    title: 'Контроль, а не магия',
+    description: 'Вы видите, что проверяет сервис, на каком основании, и принимаете решение сами',
+  },
+];
+
 // Security — Figma node 18:2.
 export interface SecurityFeature {
   id: string;

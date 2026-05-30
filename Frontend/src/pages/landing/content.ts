@@ -169,6 +169,20 @@ export const AUDIENCES: AudienceCard[] = [
   },
 ];
 
+// Outcomes — Figma node 17:2.
+export interface OutcomeMetric {
+  id: string;
+  metric: string;
+  label: string;
+}
+
+export const OUTCOMES: OutcomeMetric[] = [
+  { id: 'speed', metric: 'в 10×', label: 'быстрее проверка договора' },
+  { id: 'risks', metric: '85%', label: 'рисков выявляются автоматически' },
+  { id: 'time', metric: '−40%', label: 'меньше времени на согласование' },
+  { id: 'format', metric: '1 формат', label: 'единый отчёт для всей команды' },
+];
+
 // HowItWorks — Figma node 15:2.
 export interface HowItWorksStep {
   id: string;

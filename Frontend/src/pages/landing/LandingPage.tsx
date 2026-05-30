@@ -14,6 +14,7 @@ import { FeaturesSection } from './sections/FeaturesSection';
 import { ForWhomSection } from './sections/ForWhomSection';
 import { HeroSection } from './sections/HeroSection';
 import { HowItWorksSection } from './sections/HowItWorksSection';
+import { OutcomesSection } from './sections/OutcomesSection';
 import { PricingSection } from './sections/PricingSection';
 import { TrustStripSection } from './sections/TrustStripSection';
 
@@ -25,6 +26,7 @@ export function LandingPage(): JSX.Element {
       <FeaturesSection />
       <HowItWorksSection />
       <ForWhomSection />
+      <OutcomesSection />
       <PricingSection />
       <FAQAccordion />
     </main>

@@ -34,8 +34,17 @@ describe('tabsListVariants', () => {
 });
 
 describe('tabsTriggerVariants', () => {
-  it('default variant underline has data-[state=active] styles', () => {
-    expect(tabsTriggerVariants({})).toContain('data-[state=active]:border-brand-500');
+  it('default underline has figma-aligned active styles (brand-500 + semibold)', () => {
+    const cls = tabsTriggerVariants({});
+    expect(cls).toContain('data-[state=active]:border-brand-500');
+    expect(cls).toContain('data-[state=active]:text-brand-500');
+    expect(cls).toContain('data-[state=active]:font-semibold');
+  });
+
+  it('underline inactive uses figma fg-subtle + px-4', () => {
+    const cls = tabsTriggerVariants({});
+    expect(cls).toContain('text-fg-subtle');
+    expect(cls).toContain('px-4');
   });
 
   it('variant pills has shadow on active', () => {
@@ -44,6 +53,11 @@ describe('tabsTriggerVariants', () => {
 
   it('fullWidth → flex-1', () => {
     expect(tabsTriggerVariants({ fullWidth: true })).toContain('flex-1');
+  });
+
+  it('size sm/md use token-based text-12/text-14', () => {
+    expect(tabsTriggerVariants({ size: 'sm' })).toContain('text-12');
+    expect(tabsTriggerVariants({ size: 'md' })).toContain('text-14');
   });
 });
 

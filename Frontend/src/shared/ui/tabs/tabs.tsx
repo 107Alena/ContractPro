@@ -4,6 +4,9 @@ import { type ComponentPropsWithoutRef, type ElementRef, forwardRef } from 'reac
 
 import { cn } from '@/shared/lib/cn';
 
+// Figma-aligned: nodes 116:4 (Tab/Active — brand-500 underline + brand-500 text
+// font-semibold) и 116:7 (Tab/Inactive — fg-subtle text font-medium), NewCheck
+// page. Padding px-4 / py — задаётся через высоту List'а.
 const tabsListVariants = cva('inline-flex items-center gap-1', {
   variants: {
     variant: {
@@ -11,8 +14,8 @@ const tabsListVariants = cva('inline-flex items-center gap-1', {
       pills: 'rounded-md bg-bg-muted p-1',
     },
     size: {
-      sm: 'h-8 text-xs',
-      md: 'h-10 text-sm',
+      sm: 'h-8 text-12',
+      md: 'h-10 text-14',
     },
     fullWidth: {
       true: 'w-full',
@@ -33,19 +36,19 @@ const tabsTriggerVariants = cva(
     variants: {
       variant: {
         underline: [
-          'h-full border-b-2 border-transparent px-3 text-fg-muted',
+          'h-full border-b-2 border-transparent px-4 text-fg-subtle',
           'hover:text-fg',
-          'data-[state=active]:border-brand-500 data-[state=active]:text-brand-600',
+          'data-[state=active]:border-brand-500 data-[state=active]:text-brand-500 data-[state=active]:font-semibold',
         ],
         pills: [
-          'h-full rounded-sm px-3 text-fg-muted',
+          'h-full rounded-sm px-3 text-fg-subtle',
           'hover:text-fg',
           'data-[state=active]:bg-bg data-[state=active]:text-fg data-[state=active]:shadow-sm',
         ],
       },
       size: {
-        sm: 'text-xs',
-        md: 'text-sm',
+        sm: 'text-12',
+        md: 'text-14',
       },
       fullWidth: {
         true: 'flex-1',

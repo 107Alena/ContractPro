@@ -24,8 +24,17 @@ describe('accordionItemVariants', () => {
 });
 
 describe('accordionTriggerVariants', () => {
-  it('size sm → py-2', () => {
-    expect(accordionTriggerVariants({ size: 'sm' })).toContain('py-2');
+  it('size sm → py-2 text-13', () => {
+    const cls = accordionTriggerVariants({ size: 'sm' });
+    expect(cls).toContain('py-2');
+    expect(cls).toContain('text-13');
+  });
+
+  it('default md → py-3 text-15 + figma-aligned font-semibold', () => {
+    const cls = accordionTriggerVariants({});
+    expect(cls).toContain('py-3');
+    expect(cls).toContain('text-15');
+    expect(cls).toContain('font-semibold');
   });
 
   it('default has chevron rotation rule', () => {

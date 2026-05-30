@@ -14,9 +14,14 @@ const accordionItemVariants = cva('', {
   defaultVariants: { variant: 'bordered' },
 });
 
+// Figma-aligned: nodes 23:7 (FAQItem expanded) и 23:13 (FAQItem collapsed) —
+// Landing FAQ section. Title font-semibold, content text-15. FAQ-specific
+// padding 24px и кастомный +/− индикатор переопределяется через className.
+// Базовый Accordion остаётся с chevron — для нескольких контекстов
+// (Risk list, Filter sections, Settings).
 const accordionTriggerVariants = cva(
   [
-    'flex w-full items-center justify-between gap-2 py-3 text-left text-sm font-medium text-fg',
+    'flex w-full items-center justify-between gap-2 py-3 text-left font-semibold text-fg',
     'transition-colors',
     'hover:text-brand-600',
     'focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-2',
@@ -27,8 +32,8 @@ const accordionTriggerVariants = cva(
   {
     variants: {
       size: {
-        sm: 'py-2 text-xs',
-        md: 'py-3 text-sm',
+        sm: 'py-2 text-13',
+        md: 'py-3 text-15',
       },
     },
     defaultVariants: { size: 'md' },
@@ -37,7 +42,7 @@ const accordionTriggerVariants = cva(
 
 const accordionContentVariants = cva(
   [
-    'overflow-hidden text-sm text-fg-muted',
+    'overflow-hidden text-15 text-fg-muted',
     'motion-safe:data-[state=closed]:animate-accordion-up',
     'motion-safe:data-[state=open]:animate-accordion-down',
   ],

@@ -805,6 +805,7 @@ Page (route)                             — например, ResultPage
 | `--text-14` | 14px | body, descriptions |
 | `--text-15` | 15px | buttons (Primary CTA, Secondary) |
 | `--text-16` | 16px | risk badge title |
+| `--text-17` | 17px | landing hero CTAs, FAQ titles |
 | `--text-18` | 18px | modal titles |
 | `--text-20` | 20px | card titles |
 | `--text-60` | 60px | hero headline |
@@ -833,7 +834,7 @@ colors: {
   danger:{ DEFAULT, bg },
   divider, success, warning, processing,
 },
-fontSize:    { 11, 12, 13, 14, 15, 16, 18, 20, 60 },
+fontSize:    { 11, 12, 13, 14, 15, 16, 17, 18, 20, 60 },
 borderRadius:{ sm, md, lg, xl, pill },
 boxShadow:   { sm, md, lg, card },
 spacing:     { 1, '1.5', 2, '2.5', 3, '3.5', 4, 5, 6, 7, 8, 10, 12 },

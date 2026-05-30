@@ -15,6 +15,8 @@ import { FeaturesSection } from './sections/FeaturesSection';
 import { ForWhomSection } from './sections/ForWhomSection';
 import { HeroSection } from './sections/HeroSection';
 import { HowItWorksSection } from './sections/HowItWorksSection';
+import { LandingFooter } from './sections/LandingFooter';
+import { LandingHeader } from './sections/LandingHeader';
 import { OutcomesSection } from './sections/OutcomesSection';
 import { PricingSection } from './sections/PricingSection';
 import { SecuritySection } from './sections/SecuritySection';
@@ -23,18 +25,22 @@ import { WhyContractProSection } from './sections/WhyContractProSection';
 
 export function LandingPage(): JSX.Element {
   return (
-    <main data-testid="page-landing" className="flex flex-col">
-      <HeroSection />
-      <TrustStripSection />
-      <FeaturesSection />
-      <HowItWorksSection />
-      <ForWhomSection />
-      <OutcomesSection />
-      <SecuritySection />
-      <PricingSection />
-      <WhyContractProSection />
-      <FAQAccordion />
-      <CtaBannerSection />
-    </main>
+    <div className="flex flex-col">
+      <LandingHeader />
+      <main data-testid="page-landing" className="flex flex-col">
+        <HeroSection />
+        <TrustStripSection />
+        <FeaturesSection />
+        <HowItWorksSection />
+        <ForWhomSection />
+        <OutcomesSection />
+        <SecuritySection />
+        <PricingSection />
+        <WhyContractProSection />
+        <FAQAccordion />
+        <CtaBannerSection />
+      </main>
+      <LandingFooter />
+    </div>
   );
 }

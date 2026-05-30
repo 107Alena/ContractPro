@@ -74,12 +74,14 @@ afterEach(() => {
 });
 
 describe('DashboardPage', () => {
-  it('рендерит главный заголовок «Главная»', () => {
+  it('рендерит приветствие по имени пользователя', () => {
     const qc = makeClient();
     qc.setQueryData(qk.me, baseUser);
     qc.setQueryData(qk.contracts.list({ size: 5 }), { items: [], total: 0 });
     renderPage(qc);
-    expect(screen.getByRole('heading', { level: 1, name: /главная/i })).toBeDefined();
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Добро пожаловать, Мария' }),
+    ).toBeDefined();
   });
 
   it('Default — показывает карточки и таблицу с данными', () => {

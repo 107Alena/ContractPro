@@ -1,20 +1,16 @@
 // DashboardPage (FE-TASK-042) — главный экран после логина.
-// Архитектура: §17.1 (auth, GET /users/me + GET /contracts?size=5 + SSE),
-// §17.4 (widgets: WhatMattersCards, LastCheckCard, QuickStart, OrgCard,
-// RecentChecksTable, KeyRisksCards), §9.3 (error-state), §5.6 (RBAC guards).
+// Figma-alignment этап 4.3 (Figma 84:2): WelcomeBlock → «Что важно сейчас» →
+// двухколоночный layout (776/340) → «Ключевые риски» → TrustFooter.
 //
-// 4 состояния (из AC FE-TASK-042):
-//   Default — данные загружены, все виджеты отрисованы.
-//   Loading — isLoading=true на useMe/useContracts → виджеты показывают spinner.
-//   Empty — useMe ок, /contracts пустой → LastCheckCard/RecentChecks/KeyRisks
-//           в Empty-варианте; WhatMatters показывает нули; QuickStart видим.
-//   Error — useContracts.error → соответствующие виджеты в error-варианте;
-//           useMe.error → OrgCard в error-варианте.
+// Архитектура: §17.1 (auth, GET /users/me + GET /contracts?size=5 + SSE),
+// §17.4 (widgets), §9.3 (error-state), §5.6 (RBAC guards).
+//
+// 4 состояния (AC FE-TASK-042): Default / Loading (spinner в виджетах) /
+// Empty (/contracts пуст → empty-варианты) / Error (виджеты в error-варианте).
 //
 // SSE: useEventStream без document_id подписывается на глобальный feed (§7.7);
 // status-update попадает в qk.contracts.status(id,vid); /contracts сам по себе
-// не инвалидируется (snapshot-цельность на момент запроса), но refetch по
-// staleTime актуализирует снимок.
+// не инвалидируется (snapshot-цельность), но refetch по staleTime актуализирует.
 import { useContracts } from '@/entities/contract';
 import { useMe } from '@/entities/user';
 import { useEventStream } from '@/shared/api';
@@ -24,6 +20,8 @@ import { LastCheckCard } from '@/widgets/dashboard-last-check';
 import { OrgCard } from '@/widgets/dashboard-org-card';
 import { QuickStart } from '@/widgets/dashboard-quick-start';
 import { RecentChecksTable } from '@/widgets/dashboard-recent-checks';
+import { TrustFooter } from '@/widgets/dashboard-trust-footer';
+import { WelcomeBlock } from '@/widgets/dashboard-welcome';
 import { WhatMattersCards } from '@/widgets/dashboard-what-matters';
 
 const CONTRACTS_PARAMS = { size: 5 } as const;
@@ -39,35 +37,34 @@ export function DashboardPage(): JSX.Element {
   const items = contractsQuery.data?.items ?? [];
   const total = contractsQuery.data?.total;
   const latestContract = items[0];
+  const isLoading = contractsQuery.isLoading;
+  const error = contractsQuery.error ?? undefined;
 
   return (
     <main
       data-testid="page-dashboard"
-      className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8"
+      className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-8 md:py-8"
     >
-      <header>
-        <h1 className="text-2xl font-semibold text-fg">Главная</h1>
-        <p className="mt-1 text-sm text-fg-muted">
-          Быстрый обзор проверок договоров и состояния вашей организации.
-        </p>
-      </header>
+      <WelcomeBlock user={meQuery.data} />
 
       <WhatMattersCards
         items={items}
         total={total ?? undefined}
-        isLoading={contractsQuery.isLoading}
-        error={contractsQuery.error ?? undefined}
+        isLoading={isLoading}
+        error={error}
       />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="md:col-span-2">
-          <LastCheckCard
-            contract={latestContract}
-            isLoading={contractsQuery.isLoading}
-            error={contractsQuery.error ?? undefined}
-          />
+      {/* Двухколоночный layout 776/340 (Figma 89:2). Слева — последняя проверка
+          и недавние проверки; справа — быстрый старт и карточка организации. */}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="flex min-w-0 flex-col gap-5">
+          <LastCheckCard contract={latestContract} isLoading={isLoading} error={error} />
+          <RecentChecksTable items={items} isLoading={isLoading} error={error} />
         </div>
-        <div>
+        <div className="flex flex-col gap-5">
+          <Can I="contract.upload">
+            <QuickStart />
+          </Can>
           <OrgCard
             user={meQuery.data}
             isLoading={meQuery.isLoading}
@@ -76,26 +73,11 @@ export function DashboardPage(): JSX.Element {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <Can I="contract.upload">
-          <QuickStart />
-        </Can>
-        <Can I="risks.view">
-          <div className="md:col-span-2">
-            <KeyRisksCards
-              items={items}
-              isLoading={contractsQuery.isLoading}
-              error={contractsQuery.error ?? undefined}
-            />
-          </div>
-        </Can>
-      </div>
+      <Can I="risks.view">
+        <KeyRisksCards items={items} isLoading={isLoading} error={error} />
+      </Can>
 
-      <RecentChecksTable
-        items={items}
-        isLoading={contractsQuery.isLoading}
-        error={contractsQuery.error ?? undefined}
-      />
+      <TrustFooter />
     </main>
   );
 }

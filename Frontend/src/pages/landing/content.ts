@@ -26,6 +26,41 @@ export const HERO_CONTENT: HeroContent = {
   trustBadges: [],
 };
 
+// TrustStrip — Figma node 13:2.
+export interface TrustItem {
+  id: string;
+  emoji: string;
+  title: string;
+  description: string;
+}
+
+export const TRUST_ITEMS: TrustItem[] = [
+  {
+    id: 'jurisdiction',
+    emoji: '🇷🇺',
+    title: 'Юрисдикция РФ',
+    description: 'Работа с договорами по российскому праву',
+  },
+  {
+    id: 'confidential',
+    emoji: '🛡',
+    title: 'Конфиденциально',
+    description: 'Безопасная обработка документов',
+  },
+  {
+    id: 'speed',
+    emoji: '⚡',
+    title: 'Быстрый результат',
+    description: 'Анализ договора за несколько минут',
+  },
+  {
+    id: 'clarity',
+    emoji: '💡',
+    title: 'Понятно каждому',
+    description: 'Результат без юридического жаргона',
+  },
+];
+
 export interface FeatureCard {
   id: string;
   icon: FeatureIconId;

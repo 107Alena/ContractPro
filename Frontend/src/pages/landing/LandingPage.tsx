@@ -13,11 +13,13 @@ import { FAQAccordion } from './sections/FAQAccordion';
 import { FeaturesSection } from './sections/FeaturesSection';
 import { HeroSection } from './sections/HeroSection';
 import { PricingSection } from './sections/PricingSection';
+import { TrustStripSection } from './sections/TrustStripSection';
 
 export function LandingPage(): JSX.Element {
   return (
     <main data-testid="page-landing" className="flex flex-col">
       <HeroSection />
+      <TrustStripSection />
       <FeaturesSection />
       <PricingSection />
       <FAQAccordion />

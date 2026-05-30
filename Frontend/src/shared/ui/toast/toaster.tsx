@@ -12,10 +12,15 @@ import { cn } from '@/shared/lib/cn';
 
 import { type ToastRecord, type ToastVariant, useToastStore } from './toast-store';
 
+// Figma-aligned: node 58:7 (ErrorToast) — Auth Desktop. Error использует
+// tinted bg (danger @ ~8%) + colored text вместо нашего белого bg + colored
+// border. Применяем pattern симметрично ко всем семантическим вариантам:
+// success/error/warning имеют semantic-tinted bg + colored text;
+// info/sticky остаются нейтральными.
 const itemVariants = cva(
   [
-    'pointer-events-auto flex w-full gap-3 rounded-md border p-3 shadow-md',
-    'text-sm text-fg',
+    'pointer-events-auto flex w-full gap-2.5 rounded-md border px-3.5 py-3 shadow-md',
+    'text-13',
     'motion-safe:transition motion-safe:duration-150',
     'data-[state=closed]:motion-safe:opacity-0',
     'data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)]',
@@ -25,11 +30,14 @@ const itemVariants = cva(
   {
     variants: {
       variant: {
-        success: 'border-success/40 bg-bg',
-        error: 'border-danger/40 bg-bg',
-        warning: 'border-warning/40 bg-bg',
-        info: 'border-border bg-bg-muted',
-        sticky: 'border-border bg-bg-muted',
+        success:
+          'border-success/20 bg-[color-mix(in_srgb,var(--color-success)_8%,transparent)] text-success',
+        error:
+          'border-danger/20 bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)] text-danger',
+        warning:
+          'border-warning/30 bg-[color-mix(in_srgb,var(--color-warning)_15%,transparent)] text-fg',
+        info: 'border-border bg-bg-muted text-fg',
+        sticky: 'border-border bg-bg-muted text-fg',
       },
     },
     defaultVariants: { variant: 'info' },
@@ -91,18 +99,18 @@ export const ToastTitle = forwardRef<
   ElementRef<typeof Toast.Title>,
   ComponentPropsWithoutRef<typeof Toast.Title>
 >(function ToastTitle({ className, ...rest }, ref) {
-  return (
-    <Toast.Title ref={ref} className={cn('font-medium leading-5 text-fg', className)} {...rest} />
-  );
+  // Цвет наследуется от variant'а через item (text-success/danger/fg). Title
+  // оставляем без explicit color — пусть item диктует семантический оттенок.
+  return <Toast.Title ref={ref} className={cn('font-medium leading-5', className)} {...rest} />;
 });
 
 export const ToastDescription = forwardRef<
   ElementRef<typeof Toast.Description>,
   ComponentPropsWithoutRef<typeof Toast.Description>
 >(function ToastDescription({ className, ...rest }, ref) {
-  return (
-    <Toast.Description ref={ref} className={cn('text-xs text-fg-muted', className)} {...rest} />
-  );
+  // Description слегка приглушённый (наследует variant-цвет с opacity-80 для
+  // дополнительного контраста с title).
+  return <Toast.Description ref={ref} className={cn('text-12 opacity-80', className)} {...rest} />;
 });
 
 export const ToastAction = forwardRef<

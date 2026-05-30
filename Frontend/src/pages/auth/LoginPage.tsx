@@ -34,10 +34,7 @@ const LOGIN_PATH = '/login';
  * ('https://...'). Такой параметр мог прийти из интерсептора 401-redirect
  * (§5.3 «/login?redirect=<current>»).
  */
-export function sanitizeRedirect(
-  raw: string | null,
-  fallback: string = DEFAULT_REDIRECT,
-): string {
+export function sanitizeRedirect(raw: string | null, fallback: string = DEFAULT_REDIRECT): string {
   if (!raw) return fallback;
   // Запрещаем: absolute URL, protocol-relative, empty, backslash-trick.
   if (!raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) {
@@ -78,27 +75,27 @@ export function LoginPage(): JSX.Element {
   }
 
   return (
-    <div className="min-h-screen bg-bg text-fg md:grid md:grid-cols-[minmax(360px,45%)_1fr]">
+    <div className="min-h-screen bg-bg text-fg md:grid md:grid-cols-[minmax(360px,62%)_1fr]">
       <PromoSidebar />
       <main
         data-testid="page-login"
-        className="flex min-h-screen items-center justify-center px-6 py-12 md:px-10 md:py-16"
+        className="flex min-h-screen items-center justify-center border-l border-border-subtle px-6 py-12 md:px-10 md:py-16"
       >
-        <div className="flex w-full max-w-sm flex-col gap-8">
+        <div className="flex w-full max-w-[400px] flex-col gap-6">
           <header className="flex flex-col gap-2">
             <MobileBrandMark className="md:hidden" />
-            <h1 className="text-2xl font-semibold text-fg md:text-3xl">Вход в&nbsp;ContractPro</h1>
-            <p className="text-sm text-fg-muted">
-              Введите email и пароль, выданные администратором организации.
+            <h1 className="text-[28px] font-bold leading-tight text-fg">Вход в ContractPro</h1>
+            <p className="text-15 leading-[22px] text-fg-muted">
+              Введите данные для входа в рабочее пространство
             </p>
           </header>
 
           <LoginForm onSubmit={handleSubmit} />
 
-          <p className="text-xs text-fg-muted">
-            Пользуясь сервисом, вы соглашаетесь с политикой обработки данных.
-            ContractPro не заменяет консультацию юриста.
-          </p>
+          <div className="flex items-center justify-center gap-1.5 text-12 text-fg-disabled">
+            <span aria-hidden="true">🔒</span>
+            <span>Защищённое соединение. Данные передаются в зашифрованном виде</span>
+          </div>
         </div>
       </main>
     </div>

@@ -1,8 +1,10 @@
 // ProcessingStatus — карточка «Статус обработки» на dashboard (Figma 84:2 → 91:16).
 //
 // Показывает пошаговый прогресс активной (in_progress/awaiting) проверки из
-// /contracts?size=5. Шаги выводятся из РЕАЛЬНОГО processing_status — без
-// выдуманных ETA. Если активных проверок нет — empty-state.
+// /contracts?size=5. Шаги выводятся из РЕАЛЬНОГО processing_status, монотонно и
+// БЕЗ завышения прогресса. Шаги переименованы под реальные фазы пайплайна
+// (status-view §5.2): Загружен → Извлечение текста → Юр. анализ → Отчёт, чтобы
+// статус не «перескакивал» дальше реального этапа. Нет активных — empty-state.
 import { type ContractSummary, viewStatus } from '@/entities/contract';
 import { Card, Spinner } from '@/shared/ui';
 
@@ -12,20 +14,22 @@ export interface ProcessingStatusProps {
   error?: unknown;
 }
 
-const STEPS = ['Загружен', 'Тип определён', 'Анализ рисков', 'Отчёт готов'] as const;
+const STEPS = ['Загружен', 'Извлечение текста', 'Юр. анализ', 'Отчёт'] as const;
 
-// Индекс текущего шага из статуса. Вызывается только для активных проверок
-// (bucket in_progress/awaiting), поэтому READY/failed сюда не попадают.
-function currentStepIndex(status: ContractSummary['processing_status']): number {
+// Индекс активного шага из статуса (шаги < active → done, == active → active).
+// Канон фаз (openapi UserProcessingStatus): UPLOADED→QUEUED→PROCESSING(извлечение)
+// →ANALYZING(юр-анализ)→AWAITING_USER_INPUT(подтверждение типа)→GENERATING_REPORTS.
+// Вызывается только для активных проверок (in_progress/awaiting).
+function activeStepIndex(status: ContractSummary['processing_status']): number {
   switch (status) {
-    case 'PROCESSING':
-    case 'ANALYZING':
-      return 2;
     case 'GENERATING_REPORTS':
       return 3;
+    case 'ANALYZING':
+    case 'AWAITING_USER_INPUT':
+      return 2;
     case 'UPLOADED':
     case 'QUEUED':
-    case 'AWAITING_USER_INPUT':
+    case 'PROCESSING':
     default:
       return 1;
   }
@@ -39,15 +43,17 @@ function findActive(items: readonly ContractSummary[]): ContractSummary | undefi
 }
 
 export function ProcessingStatus({ items, isLoading, error }: ProcessingStatusProps): JSX.Element {
-  const active = items ? findActive(items) : undefined;
+  const list = items ?? [];
+  const active = findActive(list);
 
   return (
-    <Card aria-label="Статус обработки" className="flex flex-col gap-3 p-5">
+    <Card as="article" aria-label="Статус обработки" className="flex flex-col gap-3 p-5">
       <h2 className="text-15 font-semibold text-fg">Статус обработки</h2>
 
-      {isLoading && !items ? (
+      {isLoading && list.length === 0 ? (
         <div className="flex min-h-[60px] items-center justify-center" aria-busy="true">
           <Spinner size="sm" aria-hidden="true" />
+          <span className="sr-only">Загрузка статуса обработки…</span>
         </div>
       ) : error ? (
         <p role="alert" className="text-14 text-danger">
@@ -63,7 +69,7 @@ export function ProcessingStatus({ items, isLoading, error }: ProcessingStatusPr
 }
 
 function Steps({ contract }: { contract: ContractSummary }): JSX.Element {
-  const current = currentStepIndex(contract.processing_status);
+  const current = activeStepIndex(contract.processing_status);
 
   return (
     <div className="flex flex-col gap-3">

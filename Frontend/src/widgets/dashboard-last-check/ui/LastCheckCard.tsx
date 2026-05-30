@@ -53,6 +53,7 @@ export function LastCheckCard({ contract, isLoading, error }: LastCheckCardProps
       {isLoading && !contract ? (
         <div className="flex min-h-[120px] items-center justify-center" aria-busy="true">
           <Spinner size="md" aria-hidden="true" />
+          <span className="sr-only">Загрузка…</span>
         </div>
       ) : error ? (
         <p role="alert" className="text-14 text-danger">
@@ -111,13 +112,18 @@ function Content({ contract }: { contract: ContractSummary }): JSX.Element {
 
       {isReady ? (
         // Счётчики рисков — структура с «—»: high/medium/low появятся после /risks.
-        <div className="flex flex-wrap gap-3" aria-label="Счётчики рисков (данные готовятся)">
+        <div
+          className="flex flex-wrap gap-3"
+          role="group"
+          aria-label="Счётчики рисков — данные готовятся"
+        >
           {RISK_LEVELS.map((level) => (
             <span
               key={level.key}
+              aria-hidden="true"
               className="inline-flex items-center gap-1.5 rounded-sm bg-bg-muted px-3 py-1.5"
             >
-              <span className={`size-2 rounded-full ${level.dot}`} aria-hidden="true" />
+              <span className={`size-2 rounded-full ${level.dot}`} />
               <span className="text-14 font-bold text-fg">—</span>
               <span className="text-13 text-fg-subtle">{level.label}</span>
             </span>

@@ -35,6 +35,7 @@ const ACTIONS: ReadonlyArray<{ label: string; to: string; Icon: IconComponent }>
 export function QuickStart({ className }: QuickStartProps): JSX.Element {
   return (
     <Card
+      as="article"
       aria-label="Быстрый старт"
       className={['flex flex-col gap-3 p-5', className ?? ''].filter(Boolean).join(' ')}
     >

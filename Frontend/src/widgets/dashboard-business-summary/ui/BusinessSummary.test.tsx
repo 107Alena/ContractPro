@@ -9,7 +9,7 @@ afterEach(cleanup);
 describe('BusinessSummary', () => {
   it('показывает total в «проверено», прочее — «—»', () => {
     render(<BusinessSummary total={12} />);
-    const region = screen.getByRole('region', { name: 'Сводка' });
+    const region = screen.getByRole('article', { name: 'Сводка' });
     expect(within(region).getByText('12')).toBeDefined();
     expect(within(region).getAllByText('—')).toHaveLength(2);
   });

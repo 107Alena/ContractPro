@@ -98,15 +98,15 @@ describe('DashboardPage', () => {
 
     expect(screen.getByRole('region', { name: 'Что важно сейчас' })).toBeDefined();
     // total «12» переехал из KPI в карточку «Сводка»
-    expect(within(screen.getByRole('region', { name: 'Сводка' })).getByText('12')).toBeDefined();
+    expect(within(screen.getByRole('article', { name: 'Сводка' })).getByText('12')).toBeDefined();
     expect(screen.getByRole('region', { name: 'Последняя проверка' })).toBeDefined();
     // «Аренда» встречается в LastCheckCard (h3) и в RecentChecksTable (link)
     expect(screen.getAllByText('Аренда').length).toBeGreaterThanOrEqual(1);
     // «Услуги» (ANALYZING) — в RecentChecksTable (link) и ProcessingStatus (название)
     expect(screen.getAllByText('Услуги').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByRole('region', { name: 'Организация' })).toBeDefined();
-    expect(screen.getByRole('region', { name: 'Сводка' })).toBeDefined();
-    expect(screen.getByRole('region', { name: 'Статус обработки' })).toBeDefined();
+    expect(screen.getByRole('article', { name: 'Организация' })).toBeDefined();
+    expect(screen.getByRole('article', { name: 'Сводка' })).toBeDefined();
+    expect(screen.getByRole('article', { name: 'Статус обработки' })).toBeDefined();
   });
 
   it('Empty — /contracts пустой: показывает empty state в LastCheck и RecentChecks', () => {
@@ -130,7 +130,7 @@ describe('DashboardPage', () => {
     renderPage(qc, bu);
 
     // QuickStart виден — у BUSINESS_USER есть contract.upload
-    expect(screen.getByRole('region', { name: 'Быстрый старт' })).toBeDefined();
+    expect(screen.getByRole('article', { name: 'Быстрый старт' })).toBeDefined();
     // KeyRisksCards скрыт (risk.view — только LAWYER/ORG_ADMIN)
     expect(screen.queryByRole('region', { name: 'Ключевые риски' })).toBeNull();
   });

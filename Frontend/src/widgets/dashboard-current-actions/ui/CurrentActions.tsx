@@ -70,7 +70,7 @@ export function selectActionItems(items: readonly ContractSummary[], limit = 3):
 }
 
 export function CurrentActions({ items, isLoading, error }: CurrentActionsProps): JSX.Element {
-  if (isLoading && !items) {
+  if (isLoading && (!items || items.length === 0)) {
     return (
       <section
         aria-label="Что важно сейчас"
@@ -78,6 +78,7 @@ export function CurrentActions({ items, isLoading, error }: CurrentActionsProps)
         className="flex min-h-[120px] items-center justify-center rounded-[12px] bg-bg-muted"
       >
         <Spinner size="md" aria-hidden="true" />
+        <span className="sr-only">Загрузка…</span>
       </section>
     );
   }

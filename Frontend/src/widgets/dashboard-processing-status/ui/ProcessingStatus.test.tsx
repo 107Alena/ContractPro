@@ -9,14 +9,26 @@ import { ProcessingStatus } from './ProcessingStatus';
 afterEach(cleanup);
 
 describe('ProcessingStatus', () => {
-  it('активная проверка → шаги + название', () => {
+  it('активная проверка (ANALYZING) → шаги + название, 2 завершённых', () => {
     const items: ContractSummary[] = [
       { contract_id: 'c1', title: 'Аренда', processing_status: 'ANALYZING' },
     ];
     render(<ProcessingStatus items={items} />);
-    const region = screen.getByRole('region', { name: 'Статус обработки' });
-    expect(within(region).getByText('Анализ рисков')).toBeDefined();
+    const region = screen.getByRole('article', { name: 'Статус обработки' });
+    expect(within(region).getByText('Юр. анализ')).toBeDefined();
     expect(within(region).getByText('Аренда')).toBeDefined();
+    // honesty: Загружен + Извлечение текста done (✓✓), Юр. анализ — активный
+    expect(within(region).getAllByText('✓')).toHaveLength(2);
+  });
+
+  it('PROCESSING не завышает прогресс — done только «Загружен»', () => {
+    const items: ContractSummary[] = [
+      { contract_id: 'c1', title: 'X', processing_status: 'PROCESSING' },
+    ];
+    render(<ProcessingStatus items={items} />);
+    const region = screen.getByRole('article', { name: 'Статус обработки' });
+    expect(within(region).getAllByText('✓')).toHaveLength(1);
+    expect(within(region).getByText('Извлечение текста')).toBeDefined();
   });
 
   it('нет активных → empty-state', () => {

@@ -14,12 +14,13 @@ export interface BusinessSummaryProps {
 
 export function BusinessSummary({ total, isLoading, error }: BusinessSummaryProps): JSX.Element {
   return (
-    <Card aria-label="Сводка" className="flex flex-col gap-3.5 p-5">
+    <Card as="article" aria-label="Сводка" className="flex flex-col gap-3.5 p-5">
       <h2 className="text-15 font-semibold text-fg">Сводка</h2>
 
       {isLoading && total === undefined ? (
         <div className="flex min-h-[60px] items-center justify-center" aria-busy="true">
           <Spinner size="sm" aria-hidden="true" />
+          <span className="sr-only">Загрузка…</span>
         </div>
       ) : error ? (
         <p role="alert" className="text-14 text-danger">
@@ -28,7 +29,7 @@ export function BusinessSummary({ total, isLoading, error }: BusinessSummaryProp
       ) : (
         <>
           <div className="flex items-start">
-            <Stat value={total ?? 0} label="проверено" />
+            <Stat value={total ?? '—'} label="проверено" muted={total === undefined} />
             <Stat value="—" label="внимание" muted />
             <Stat value="—" label="готовы" muted />
           </div>

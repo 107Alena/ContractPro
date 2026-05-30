@@ -20,9 +20,10 @@ export function KeyRisksCards({ items, isLoading, error }: KeyRisksCardsProps): 
     <section aria-label="Ключевые риски" className="flex flex-col gap-4">
       <h2 className="text-17 font-semibold text-fg">Ключевые риски за последнее время</h2>
 
-      {isLoading && !items ? (
+      {isLoading && (!items || items.length === 0) ? (
         <div className="flex min-h-[120px] items-center justify-center" aria-busy="true">
           <Spinner size="md" aria-hidden="true" />
+          <span className="sr-only">Загрузка…</span>
         </div>
       ) : error ? (
         <p role="alert" className="text-14 text-danger">

@@ -43,7 +43,7 @@ export function DashboardPage(): JSX.Element {
   const error = contractsQuery.error ?? undefined;
 
   return (
-    <main
+    <div
       data-testid="page-dashboard"
       className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-8 md:py-8"
     >
@@ -77,6 +77,6 @@ export function DashboardPage(): JSX.Element {
       </Can>
 
       <TrustFooter />
-    </main>
+    </div>
   );
 }

@@ -24,12 +24,13 @@ const ROLE_LABEL: Record<UserProfile['role'], string> = {
 
 export function OrgCard({ user, isLoading, error }: OrgCardProps): JSX.Element {
   return (
-    <Card aria-label="Организация" className="flex flex-col gap-2.5 p-5">
+    <Card as="article" aria-label="Организация" className="flex flex-col gap-2.5 p-5">
       <h2 className="text-15 font-semibold text-fg">Организация</h2>
 
       {isLoading && !user ? (
         <div className="flex min-h-[60px] items-center justify-center" aria-busy="true">
           <Spinner size="sm" aria-hidden="true" />
+          <span className="sr-only">Загрузка…</span>
         </div>
       ) : error ? (
         <p role="alert" className="text-14 text-danger">

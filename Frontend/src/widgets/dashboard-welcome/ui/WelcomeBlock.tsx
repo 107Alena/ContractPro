@@ -51,7 +51,9 @@ export function WelcomeBlock({ user }: WelcomeBlockProps): JSX.Element {
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-12 text-fg-disabled">
         <span>Формат: PDF · до 20 МБ</span>
-        <span>🔒 Документы защищены и не передаются третьим лицам</span>
+        <span>
+          <span aria-hidden="true">🔒</span> Документы защищены и не передаются третьим лицам
+        </span>
       </div>
     </Card>
   );

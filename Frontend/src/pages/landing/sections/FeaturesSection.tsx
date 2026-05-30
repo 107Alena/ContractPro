@@ -1,7 +1,7 @@
-// FeaturesSection — сетка карточек «что умеет ContractPro». Responsive:
-// 1 колонка < md, 2 колонки md–lg, 3 колонки lg+. Иконки — inline SVG (см. icons.tsx).
+// FeaturesSection — Figma node 14:2. 7 карточек с emoji-иконками, 4+3 layout
+// на desktop, адаптив до 1 col на mobile. Каждая карточка: emoji в brand-pill
+// квадрате + title + description.
 import { type FeatureCard, FEATURES } from '../content';
-import { FeatureIcon } from './icons';
 
 export interface FeaturesSectionProps {
   items?: FeatureCard[];
@@ -12,35 +12,33 @@ export function FeaturesSection({ items = FEATURES }: FeaturesSectionProps): JSX
     <section
       id="features"
       aria-labelledby="features-title"
-      className="bg-bg py-16 md:py-20 lg:py-24"
+      className="bg-bg-muted px-4 py-16 sm:py-20 lg:px-20"
     >
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-4">
-        <header className="flex flex-col gap-3 text-center">
-          <p className="text-sm font-semibold uppercase tracking-wider text-brand-600">
-            Возможности
-          </p>
-          <h2 id="features-title" className="text-2xl font-semibold text-fg md:text-3xl">
-            Всё необходимое для быстрой проверки договора
+      <div className="mx-auto flex w-full max-w-[1280px] flex-col items-center gap-12">
+        <header className="flex flex-col items-center gap-4 text-center">
+          <p className="text-14 font-semibold tracking-[2px] text-brand-500">ВОЗМОЖНОСТИ</p>
+          <h2
+            id="features-title"
+            className="text-3xl font-bold leading-[1.1] tracking-[-0.5px] text-fg sm:text-4xl md:text-[44px] md:tracking-[-1px]"
+          >
+            Что умеет ContractPro
           </h2>
-          <p className="mx-auto max-w-2xl text-base text-fg-muted">
-            От распознавания PDF до готового отчёта — без переключения между инструментами.
+          <p className="max-w-2xl text-18 text-fg-muted">
+            Полный набор инструментов для быстрой и безопасной работы с договорами
           </p>
         </header>
 
-        <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <ul className="grid w-full grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {items.map((item) => (
-            <li
-              key={item.id}
-              className="flex flex-col gap-3 rounded-lg border border-border bg-bg p-6 shadow-sm transition-colors hover:border-brand-500"
-            >
+            <li key={item.id} className="flex flex-col gap-3 rounded-xl bg-bg p-7 shadow-card">
               <span
                 aria-hidden="true"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-md bg-brand-50 text-brand-600"
+                className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-50 text-2xl"
               >
-                <FeatureIcon id={item.icon} />
+                {item.emoji}
               </span>
-              <h3 className="text-base font-semibold text-fg">{item.title}</h3>
-              <p className="text-sm text-fg-muted">{item.description}</p>
+              <h3 className="text-18 font-semibold text-fg">{item.title}</h3>
+              <p className="text-15 leading-[23px] text-fg-muted">{item.description}</p>
             </li>
           ))}
         </ul>

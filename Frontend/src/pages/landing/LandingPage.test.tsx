@@ -26,7 +26,7 @@ describe('LandingPage', () => {
     expect(
       within(main).getByRole('heading', {
         level: 2,
-        name: /Всё необходимое для быстрой проверки договора/i,
+        name: /Что умеет ContractPro/i,
       }),
     ).toBeDefined();
     expect(

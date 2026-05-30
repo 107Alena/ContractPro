@@ -169,6 +169,41 @@ export const AUDIENCES: AudienceCard[] = [
   },
 ];
 
+// Security — Figma node 18:2.
+export interface SecurityFeature {
+  id: string;
+  emoji: string;
+  title: string;
+  description: string;
+}
+
+export const SECURITY_FEATURES: SecurityFeature[] = [
+  {
+    id: 'confidential',
+    emoji: '🔒',
+    title: 'Конфиденциальность',
+    description: 'Документы обрабатываются в защищённой среде и не передаются третьим лицам',
+  },
+  {
+    id: 'jurisdiction',
+    emoji: '🇷🇺',
+    title: 'Юрисдикция РФ',
+    description: 'Анализ на основе действующего российского законодательства',
+  },
+  {
+    id: 'transparency',
+    emoji: '📊',
+    title: 'Прозрачность',
+    description: 'Каждая рекомендация сопровождается пояснением и ссылкой на источник',
+  },
+  {
+    id: 'liability',
+    emoji: '⚖️',
+    title: 'Границы ответственности',
+    description: 'Сервис выдаёт рекомендации, но не заменяет полноценное юридическое заключение',
+  },
+];
+
 // Outcomes — Figma node 17:2.
 export interface OutcomeMetric {
   id: string;

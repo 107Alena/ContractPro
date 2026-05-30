@@ -15,7 +15,7 @@
 //  * A11y: `aria-invalid`, `aria-describedby` с message-хинтом ошибки,
 //    role=alert для form-level сообщений, focus-ring, видимые labels.
 import { zodResolver } from '@hookform/resolvers/zod';
-import { type FormEvent, useCallback, useEffect, useId } from 'react';
+import { type FormEvent, useCallback, useEffect, useId, useState } from 'react';
 import { type SubmitHandler, useForm } from 'react-hook-form';
 
 import {
@@ -26,7 +26,7 @@ import {
 } from '@/shared/api';
 import { Button, Input, Label } from '@/shared/ui';
 
-import { type LoginFormValues,loginSchema } from '../model/schema';
+import { type LoginFormValues, loginSchema } from '../model/schema';
 
 export interface LoginFormProps {
   /**
@@ -83,6 +83,9 @@ export function LoginForm({
   const formErrorId = useId();
   const formErrorMessage = errors.root?.serverError?.message;
 
+  // Toggle visibility пароля (Figma node 56:16 — eye icon в правой части поля).
+  const [showPassword, setShowPassword] = useState(false);
+
   const submit = useCallback<SubmitHandler<LoginFormValues>>(
     async (values) => {
       // На новой попытке гасим предыдущие server-ошибки — RHF не делает это
@@ -133,12 +136,13 @@ export function LoginForm({
     >
       <div className="flex flex-col gap-2">
         <Label htmlFor="login-email" required>
-          Email
+          Рабочий email
         </Label>
         <Input
           id="login-email"
           type="email"
           autoComplete="email"
+          placeholder="name@company.ru"
           error={!!errors.email}
           aria-describedby={errors.email ? emailHintId : undefined}
           {...register('email')}
@@ -158,14 +162,30 @@ export function LoginForm({
         <Label htmlFor="login-password" required>
           Пароль
         </Label>
-        <Input
-          id="login-password"
-          type="password"
-          autoComplete="current-password"
-          error={!!errors.password}
-          aria-describedby={errors.password ? passwordHintId : undefined}
-          {...register('password')}
-        />
+        <div className="relative">
+          <Input
+            id="login-password"
+            type={showPassword ? 'text' : 'password'}
+            autoComplete="current-password"
+            placeholder="Введите пароль"
+            className="pr-11"
+            error={!!errors.password}
+            aria-describedby={errors.password ? passwordHintId : undefined}
+            {...register('password')}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((v) => !v)}
+            // Без слова «пароль» — иначе getByLabelText(/пароль/i) в тестах
+            // натыкается на две метки. Контекст очевиден из позиции внутри
+            // password-input + смены иконки глаза.
+            aria-label={showPassword ? 'Скрыть' : 'Показать'}
+            aria-pressed={showPassword}
+            className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-sm text-fg-disabled hover:text-fg-muted focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
+          >
+            <EyeIcon open={showPassword} />
+          </button>
+        </div>
         {errors.password?.message ? (
           <p id={passwordHintId} className="text-xs text-danger">
             {errors.password.message}
@@ -198,5 +218,39 @@ export function LoginForm({
 
       {footerSlot}
     </form>
+  );
+}
+
+function EyeIcon({ open }: { open: boolean }): JSX.Element {
+  // Открытый глаз — пароль виден; перечёркнутый — скрыт.
+  return (
+    <svg
+      aria-hidden="true"
+      focusable="false"
+      width="18"
+      height="18"
+      viewBox="0 0 20 20"
+      fill="none"
+    >
+      {open ? (
+        <>
+          <path
+            d="M10 4.5c-4 0-7 3-8.5 5.5C3 12.5 6 15.5 10 15.5s7-3 8.5-5.5C17 7.5 14 4.5 10 4.5z"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
+          <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.5" />
+        </>
+      ) : (
+        <>
+          <path
+            d="M3 3l14 14M7.6 7.6A2.5 2.5 0 0 0 12.4 12.4M5.4 5.7C3.6 6.9 2.2 8.6 1.5 10c1.5 2.5 4.5 5.5 8.5 5.5 1.4 0 2.7-.4 3.8-.9M9 4.6c.3 0 .7-.1 1-.1 4 0 7 3 8.5 5.5-.5.8-1.2 1.8-2.2 2.7"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </>
+      )}
+    </svg>
   );
 }

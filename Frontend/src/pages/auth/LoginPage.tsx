@@ -75,43 +75,65 @@ export function LoginPage(): JSX.Element {
   }
 
   return (
-    <div className="min-h-screen bg-bg text-fg md:grid md:grid-cols-[minmax(360px,62%)_1fr]">
-      <PromoSidebar />
-      <main
-        data-testid="page-login"
-        className="flex min-h-screen items-center justify-center border-l border-border-subtle px-6 py-12 md:px-10 md:py-16"
-      >
-        <div className="flex w-full max-w-[400px] flex-col gap-6">
-          <header className="flex flex-col gap-2">
-            <MobileBrandMark className="md:hidden" />
-            <h1 className="text-[28px] font-bold leading-tight text-fg">Вход в ContractPro</h1>
-            <p className="text-15 leading-[22px] text-fg-muted">
-              Введите данные для входа в рабочее пространство
-            </p>
-          </header>
+    <div className="flex min-h-screen flex-col bg-bg text-fg">
+      <AuthHeader />
+      <div className="flex flex-1 flex-col md:grid md:grid-cols-[minmax(360px,62%)_1fr]">
+        <PromoSidebar />
+        <main
+          data-testid="page-login"
+          className="flex items-center justify-center border-l border-border-subtle px-6 py-12 md:px-10 md:py-16"
+        >
+          <div className="flex w-full max-w-[400px] flex-col gap-6">
+            <header className="flex flex-col gap-2">
+              <h1 className="text-[28px] font-bold leading-tight text-fg">Вход в ContractPro</h1>
+              <p className="text-15 leading-[22px] text-fg-muted">
+                Введите данные для входа в рабочее пространство
+              </p>
+            </header>
 
-          <LoginForm onSubmit={handleSubmit} />
+            <LoginForm onSubmit={handleSubmit} />
 
-          <div className="flex items-center justify-center gap-1.5 text-12 text-fg-disabled">
-            <span aria-hidden="true">🔒</span>
-            <span>Защищённое соединение. Данные передаются в зашифрованном виде</span>
+            <div className="flex items-center justify-center gap-1.5 text-12 text-fg-disabled">
+              <span aria-hidden="true">🔒</span>
+              <span>Защищённое соединение. Данные передаются в зашифрованном виде</span>
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
 
-function MobileBrandMark({ className }: { className?: string }): JSX.Element {
+// AuthHeader — Figma node 50:2. Минимальная верхняя панель с лого и nav.
+// Отличается от LandingHeader: меньше высоты (64px), nav-ссылки маркетинг-only,
+// не sticky.
+function AuthHeader(): JSX.Element {
   return (
-    <div className={['flex items-center gap-2 text-lg font-semibold', className ?? ''].join(' ')}>
-      <span
-        aria-hidden="true"
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-brand-500 text-white"
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-divider bg-bg px-6 md:px-20">
+      <a
+        href="/"
+        className="flex items-center gap-2 focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-2"
+        aria-label="ContractPro главная"
       >
-        CP
-      </span>
-      ContractPro
-    </div>
+        <span
+          aria-hidden="true"
+          className="flex h-7 items-center justify-center rounded-md bg-brand-600 px-1.5 text-16 font-bold text-white"
+        >
+          C
+        </span>
+        <span className="text-20 font-bold text-fg">ContractPro</span>
+      </a>
+      <nav aria-label="Дополнительные ссылки" className="hidden items-center gap-8 text-14 md:flex">
+        <a className="font-medium text-fg-muted hover:text-fg" href="/">
+          На главную
+        </a>
+        <a className="font-medium text-fg-muted hover:text-fg" href="mailto:support@contractpro.ru">
+          Нужна помощь?
+        </a>
+        <a className="font-medium text-brand-600 hover:text-brand-500" href="/">
+          Запросить демо
+        </a>
+      </nav>
+    </header>
   );
 }

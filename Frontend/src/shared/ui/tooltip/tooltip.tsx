@@ -4,9 +4,12 @@ import { type ComponentPropsWithoutRef, type ElementRef, forwardRef, type ReactN
 
 import { cn } from '@/shared/lib/cn';
 
+// В Figma нет дедикатед фрейма для open Tooltip (только TipCard/HelpButton/Hints
+// для других UI-контекстов). Alignment минимальный — text-12 для token-based
+// consistency. Dark bg + white text — стандарт для контраста с подложкой.
 const contentVariants = cva(
   [
-    'z-tooltip overflow-hidden rounded-md bg-fg px-2.5 py-1.5 text-xs text-white shadow-md',
+    'z-tooltip overflow-hidden rounded-md bg-fg px-2.5 py-1.5 text-12 text-white shadow-md',
     'max-w-[var(--tooltip-max-width)]',
     'motion-safe:transition motion-safe:duration-100',
     'data-[state=closed]:motion-safe:opacity-0',

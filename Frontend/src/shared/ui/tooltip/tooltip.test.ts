@@ -14,4 +14,8 @@ describe('tooltipContentVariants', () => {
   it('has z-tooltip class', () => {
     expect(tooltipContentVariants({})).toContain('z-tooltip');
   });
+
+  it('uses token-based text-12 (figma alignment minimal — no frame data)', () => {
+    expect(tooltipContentVariants({})).toContain('text-12');
+  });
 });

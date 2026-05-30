@@ -14,14 +14,16 @@ export interface HeroContent {
   trustBadges: string[];
 }
 
+// Figma node 12:2 (Hero Section). trustBadges перенесены в TrustStripContent
+// — Figma вынесла их в отдельную секцию Trust Strip (13:2).
 export const HERO_CONTENT: HeroContent = {
-  eyebrow: 'ContractPro',
-  title: 'Проверка договоров с помощью ИИ за минуту',
+  eyebrow: 'AI-платформа для договорной работы',
+  title: 'Проверяйте договоры быстрее и без рисков',
   subtitle:
-    'Анализируем риски по ГК РФ, подсвечиваем слабые формулировки и предлагаем рекомендации. Пояснения на простом языке — для юристов и бизнеса.',
-  primaryCta: { label: 'Начать бесплатно', to: '/login' },
-  secondaryCta: { label: 'Войти', to: '/login' },
-  trustBadges: ['Соответствие 152-ФЗ', 'Хранение в РФ', 'До 20 МБ · 100 страниц PDF'],
+    'ContractPro анализирует договоры в юрисдикции РФ, находит юридические и финансовые риски и даёт понятные рекомендации — за минуты, а не часы.',
+  primaryCta: { label: 'Попробовать бесплатно', to: '/login' },
+  secondaryCta: { label: 'Запросить демо', to: '/login' },
+  trustBadges: [],
 };
 
 export interface FeatureCard {

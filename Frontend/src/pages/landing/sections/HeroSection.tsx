@@ -1,63 +1,75 @@
-// HeroSection — верхний экран LandingPage: заголовок, подзаголовок, пара CTA,
-// trust-бейджи. CTA — <Link className={buttonVariants(...)}> (§FE-TASK-042
-// deviation: asChild+Link в jsdom падает на React.Children.only).
+// HeroSection — верхний экран LandingPage (Figma node 12:2). Badge-eyebrow
+// (Brand-pill) + 60px заголовок + 20px подзаголовок + два больших CTA +
+// ProductMockup. Figma выровнен: bg #fafafc (≈ bg-bg-muted), gap-14 (56px)
+// между HeroContent и mockup'ом, p-20 (80px) — на md+ breakpoint'ах.
+//
+// CTA — <Link className={buttonVariants(...)}> (FE-TASK-042 deviation:
+// asChild+Link в jsdom падает на React.Children.only). Hero-CTA крупнее
+// дефолтного `lg` Button'а (px-8 py-4 text-17 rounded-xl + drop shadow),
+// поэтому используем inline-классы вместо нового size'а — это
+// специфический визуал именно для Hero.
 import { Link } from 'react-router-dom';
 
-import { buttonVariants } from '@/shared/ui';
+import { cn } from '@/shared/lib/cn';
+import { Badge, buttonVariants } from '@/shared/ui';
 
 import { HERO_CONTENT, type HeroContent } from '../content';
+import { HeroProductMockup } from './HeroProductMockup';
 
 export interface HeroSectionProps {
   content?: HeroContent;
 }
+
+// Hero-CTA — переопределение размеров Button'а под Figma node 12:9 / 12:11.
+const HERO_CTA_OVERRIDE = 'h-auto px-8 py-4 text-17 rounded-xl';
+const HERO_CTA_PRIMARY_SHADOW = 'shadow-[0_4px_16px_0_rgba(245,94,18,0.25)]';
 
 export function HeroSection({ content = HERO_CONTENT }: HeroSectionProps): JSX.Element {
   return (
     <section
       id="hero"
       aria-labelledby="hero-title"
-      className="relative overflow-hidden bg-gradient-to-b from-brand-50 to-bg"
+      className="bg-bg-muted px-4 py-16 sm:py-20 md:py-24 lg:px-20 lg:py-20"
     >
-      <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-6 px-4 py-16 text-center sm:py-20 md:py-24 lg:py-28">
-        <p className="text-sm font-semibold uppercase tracking-wider text-brand-600">
-          {content.eyebrow}
-        </p>
-        <h1
-          id="hero-title"
-          className="text-3xl font-semibold text-fg sm:text-4xl md:text-5xl md:leading-tight"
-        >
-          {content.title}
-        </h1>
-        <p className="max-w-2xl text-base text-fg-muted md:text-lg">{content.subtitle}</p>
+      <div className="mx-auto flex w-full max-w-[1280px] flex-col items-center gap-14">
+        <div className="flex flex-col items-center gap-6 text-center">
+          <Badge variant="brand" size="md">
+            {content.eyebrow}
+          </Badge>
+          <h1
+            id="hero-title"
+            className="text-4xl font-bold leading-[1.13] tracking-[-0.5px] text-fg sm:text-5xl md:text-60 md:leading-[68px] md:tracking-[-1.5px]"
+          >
+            {content.title}
+          </h1>
+          <p className="max-w-3xl text-base leading-relaxed text-fg-muted md:text-20 md:leading-[30px]">
+            {content.subtitle}
+          </p>
 
-        <div className="mt-2 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center">
-          <Link
-            to={content.primaryCta.to}
-            className={buttonVariants({ variant: 'primary', size: 'lg' })}
-          >
-            {content.primaryCta.label}
-          </Link>
-          <Link
-            to={content.secondaryCta.to}
-            className={buttonVariants({ variant: 'secondary', size: 'lg' })}
-          >
-            {content.secondaryCta.label}
-          </Link>
+          <div className="mt-2 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center sm:gap-4">
+            <Link
+              to={content.primaryCta.to}
+              className={cn(
+                buttonVariants({ variant: 'primary', size: 'lg' }),
+                HERO_CTA_OVERRIDE,
+                HERO_CTA_PRIMARY_SHADOW,
+              )}
+            >
+              {content.primaryCta.label}
+            </Link>
+            <Link
+              to={content.secondaryCta.to}
+              className={cn(
+                buttonVariants({ variant: 'secondary', size: 'lg' }),
+                HERO_CTA_OVERRIDE,
+              )}
+            >
+              {content.secondaryCta.label}
+            </Link>
+          </div>
         </div>
 
-        {content.trustBadges.length > 0 ? (
-          <ul
-            aria-label="Ключевые характеристики"
-            className="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-fg-muted"
-          >
-            {content.trustBadges.map((badge) => (
-              <li key={badge} className="flex items-center gap-2">
-                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-brand-500" />
-                {badge}
-              </li>
-            ))}
-          </ul>
-        ) : null}
+        <HeroProductMockup />
       </div>
     </section>
   );

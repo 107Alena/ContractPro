@@ -808,6 +808,7 @@ Page (route)                             — например, ResultPage
 | `--text-17` | 17px | landing hero CTAs, FAQ titles |
 | `--text-18` | 18px | modal titles |
 | `--text-20` | 20px | card titles |
+| `--text-24` | 24px | dashboard greeting, summary stat numbers (bold) |
 | `--text-60` | 60px | hero headline |
 
 Веса используем Tailwind: `font-normal` (400), `font-medium` (500), `font-semibold` (600), `font-bold` (700).
@@ -834,7 +835,7 @@ colors: {
   danger:{ DEFAULT, bg },
   divider, success, warning, processing,
 },
-fontSize:    { 11, 12, 13, 14, 15, 16, 17, 18, 20, 60 },
+fontSize:    { 11, 12, 13, 14, 15, 16, 17, 18, 20, 24, 60 },
 borderRadius:{ sm, md, lg, xl, pill },
 boxShadow:   { sm, md, lg, card },
 spacing:     { 1, '1.5', 2, '2.5', 3, '3.5', 4, 5, 6, 7, 8, 10, 12 },
@@ -846,6 +847,7 @@ spacing:     { 1, '1.5', 2, '2.5', 3, '3.5', 4, 5, 6, 7, 8, 10, 12 },
 
 | Компонент | Где используется | Ключевые props/состояния |
 |---|---|---|
+| `Card` | Dashboard + все card-поверхности (Contracts, Reports, Result) | `radius: card(12)\|md(10)\|xl(16)`; `bg-bg` + `shadow-sm`, без бордера; `as` для section/article |
 | `DataTable` | Документы, Отчёты, Audit, Версии | сортировка, пагинация, row-selection, empty/loading/error slots, column-visibility |
 | `FileDropZone` | NewCheckPage, VersionUpload | drag-hover, selected, error, loading, disabled, max-size guard |
 | `ProcessingProgress` | Dashboard, NewCheckPage, ContractDetail | 10 статусов → прогресс-бар + список шагов; для `AWAITING_USER_INPUT` рендерится не как «шаг», а как inline-CTA «Подтвердите тип договора» |

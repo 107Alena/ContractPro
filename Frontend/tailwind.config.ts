@@ -60,6 +60,7 @@ export default {
         17: 'var(--text-17)',
         18: 'var(--text-18)',
         20: 'var(--text-20)',
+        24: 'var(--text-24)',
         60: 'var(--text-60)',
       },
       borderRadius: {

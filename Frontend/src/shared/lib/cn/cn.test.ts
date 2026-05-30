@@ -25,10 +25,12 @@ describe('cn', () => {
   it('keeps text color when combined with custom numeric font-size', () => {
     expect(cn('text-white', 'text-15')).toBe('text-white text-15');
     expect(cn('text-fg', 'text-13')).toBe('text-fg text-13');
+    expect(cn('text-white', 'text-24')).toBe('text-white text-24');
   });
 
   it('merges conflicting custom font sizes', () => {
     expect(cn('text-13', 'text-15')).toBe('text-15');
+    expect(cn('text-20', 'text-24')).toBe('text-24');
   });
 
   it('merges conflicting custom shadows', () => {

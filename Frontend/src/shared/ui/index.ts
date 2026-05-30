@@ -29,6 +29,7 @@ export {
   breadcrumbsVariants,
 } from './breadcrumbs';
 export { Button, type ButtonProps, buttonVariants } from './button';
+export { Card, type CardProps, cardVariants } from './card';
 export { Chip, type ChipProps, chipVariants } from './chip';
 export {
   ConfirmDialog,

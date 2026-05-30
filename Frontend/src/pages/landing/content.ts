@@ -121,6 +121,54 @@ export const FEATURES: FeatureCard[] = [
   },
 ];
 
+// ForWhom — Figma node 16:2.
+export interface AudienceCard {
+  id: string;
+  emoji: string;
+  title: string;
+  description: string;
+  bullets: string[];
+}
+
+export const AUDIENCES: AudienceCard[] = [
+  {
+    id: 'sme',
+    emoji: '🏢',
+    title: 'Малый и средний бизнес',
+    description:
+      'Понятный результат проверки без постоянного участия юриста. Экономьте время и деньги.',
+    bullets: [
+      'Быстрая проверка перед подписанием',
+      'Понятные рекомендации простым языком',
+      'Доступные тарифы для МСП',
+    ],
+  },
+  {
+    id: 'legal',
+    emoji: '⚖️',
+    title: 'Юридические департаменты',
+    description:
+      'Ускорение первичного анализа и структурирование рисков. Больше времени на сложные задачи.',
+    bullets: [
+      'Автоматическая приоритизация рисков',
+      'Проверка обязательных условий',
+      'Единый формат отчётности',
+    ],
+  },
+  {
+    id: 'commerce',
+    emoji: '📊',
+    title: 'Закупки и продажи',
+    description:
+      'Быстрое понимание спорных условий и следующих шагов. Уверенность в каждом согласовании.',
+    bullets: [
+      'Понимание рисков без юриста',
+      'Сравнение версий при согласовании',
+      'Быстрая передача контекста коллегам',
+    ],
+  },
+];
+
 // HowItWorks — Figma node 15:2.
 export interface HowItWorksStep {
   id: string;

@@ -11,6 +11,7 @@
 // #faq стабильны и позволяют deep-link'ам.
 import { FAQAccordion } from './sections/FAQAccordion';
 import { FeaturesSection } from './sections/FeaturesSection';
+import { ForWhomSection } from './sections/ForWhomSection';
 import { HeroSection } from './sections/HeroSection';
 import { HowItWorksSection } from './sections/HowItWorksSection';
 import { PricingSection } from './sections/PricingSection';
@@ -23,6 +24,7 @@ export function LandingPage(): JSX.Element {
       <TrustStripSection />
       <FeaturesSection />
       <HowItWorksSection />
+      <ForWhomSection />
       <PricingSection />
       <FAQAccordion />
     </main>

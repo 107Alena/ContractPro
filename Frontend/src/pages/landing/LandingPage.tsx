@@ -9,6 +9,7 @@
 // Доступность: каждая секция — <section aria-labelledby=...> с собственным <h2>,
 // единственный <h1> на странице — в HeroSection. Якоря #features / #pricing /
 // #faq стабильны и позволяют deep-link'ам.
+import { CtaBannerSection } from './sections/CtaBannerSection';
 import { FAQAccordion } from './sections/FAQAccordion';
 import { FeaturesSection } from './sections/FeaturesSection';
 import { ForWhomSection } from './sections/ForWhomSection';
@@ -33,6 +34,7 @@ export function LandingPage(): JSX.Element {
       <PricingSection />
       <WhyContractProSection />
       <FAQAccordion />
+      <CtaBannerSection />
     </main>
   );
 }

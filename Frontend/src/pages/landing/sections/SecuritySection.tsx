@@ -30,7 +30,7 @@ export function SecuritySection({
       aria-labelledby="security-title"
       className="bg-fg px-4 py-16 sm:py-20 lg:px-20 lg:py-[72px]"
     >
-      <div className="mx-auto grid w-full max-w-[1280px] grid-cols-1 gap-12 lg:grid-cols-2 lg:gap-16">
+      <div className="mx-auto grid w-full max-w-[1280px] grid-cols-1 items-center gap-12 lg:grid-cols-2 lg:gap-16">
         <div className="flex flex-col gap-6">
           <p className="text-14 font-semibold tracking-[2px] text-brand-500">БЕЗОПАСНОСТЬ</p>
           <h2

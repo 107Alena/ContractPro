@@ -38,7 +38,7 @@ describe('LandingPage', () => {
     expect(
       within(main).getByRole('heading', {
         level: 2,
-        name: /Часто задаваемые вопросы/i,
+        name: /Частые вопросы/i,
       }),
     ).toBeDefined();
   });

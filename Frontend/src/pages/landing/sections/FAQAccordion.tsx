@@ -22,7 +22,7 @@ export function FAQAccordion({ items = FAQ_ITEMS }: FAQAccordionProps): JSX.Elem
             id="faq-title"
             className="text-3xl font-bold leading-[1.1] tracking-[-0.5px] text-fg sm:text-4xl md:text-[44px] md:tracking-[-1px]"
           >
-            Часто задаваемые вопросы
+            Частые вопросы
           </h2>
         </header>
 

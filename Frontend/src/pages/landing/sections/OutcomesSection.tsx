@@ -27,7 +27,7 @@ export function OutcomesSection({ metrics = OUTCOMES }: OutcomesSectionProps): J
         <ul className="grid w-full grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-4">
           {metrics.map((m) => (
             <li key={m.id} className="flex flex-col gap-3 rounded-[20px] bg-bg-muted px-8 py-9">
-              <p className="text-[48px] font-bold leading-none tracking-[-1.5px] text-brand-500">
+              <p className="whitespace-nowrap text-[48px] font-bold leading-none tracking-[-1.5px] text-brand-500">
                 {m.metric}
               </p>
               <p className="text-16 leading-6 text-fg-muted">{m.label}</p>

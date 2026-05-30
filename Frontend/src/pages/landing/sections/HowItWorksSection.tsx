@@ -30,10 +30,7 @@ export function HowItWorksSection({
         <ol className="grid w-full grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-4">
           {steps.map((step) => (
             <li key={step.id} className="flex flex-col gap-4 rounded-xl bg-bg-muted px-7 py-8">
-              <p
-                aria-hidden="true"
-                className="text-[40px] font-bold leading-none text-brand-500/20"
-              >
+              <p aria-hidden="true" className="text-[40px] font-bold leading-none text-brand-500">
                 {step.number}
               </p>
               <h3 className="text-20 font-semibold text-fg">

@@ -28,9 +28,14 @@ export function FeaturesSection({ items = FEATURES }: FeaturesSectionProps): JSX
           </p>
         </header>
 
-        <ul className="grid w-full grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {/* Flex+wrap+justify-center вместо grid — последний ряд из 3 карточек
+            (при 7 cards / 4 cols) центрируется автоматически. */}
+        <ul className="flex w-full flex-wrap justify-center gap-5">
           {items.map((item) => (
-            <li key={item.id} className="flex flex-col gap-3 rounded-xl bg-bg p-7 shadow-card">
+            <li
+              key={item.id}
+              className="flex w-full flex-col gap-3 rounded-xl bg-bg p-7 shadow-card sm:w-[calc(50%-10px)] lg:w-[calc((100%-40px)/3)] xl:w-[calc((100%-60px)/4)]"
+            >
               <span
                 aria-hidden="true"
                 className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-50 text-2xl"

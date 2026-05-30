@@ -4,11 +4,12 @@ import { type ChangeEvent, forwardRef, type HTMLAttributes, useMemo } from 'reac
 import { cn } from '@/shared/lib/cn';
 import { Button } from '@/shared/ui/button';
 
-const paginationVariants = cva(['flex items-center gap-1 flex-wrap', 'text-sm text-fg'], {
+// Figma-aligned typography: token-based 12/13 scale (controls).
+const paginationVariants = cva(['flex items-center gap-1 flex-wrap', 'text-13 text-fg'], {
   variants: {
     size: {
-      sm: 'text-xs',
-      md: 'text-sm',
+      sm: 'text-12',
+      md: 'text-13',
     },
   },
   defaultVariants: { size: 'md' },
@@ -233,7 +234,7 @@ export function PageSizeSelect({
     if (Number.isFinite(n) && n > 0) onChange(n);
   }
   return (
-    <div className={cn('flex items-center gap-2 text-sm text-fg', className)} {...rest}>
+    <div className={cn('flex items-center gap-2 text-13 text-fg', className)} {...rest}>
       <label htmlFor={selectId} className="text-fg-muted">
         {label}
       </label>
@@ -243,7 +244,7 @@ export function PageSizeSelect({
         disabled={disabled}
         onChange={handleChange}
         className={cn(
-          'h-8 rounded-md border border-border bg-bg px-2 text-sm text-fg',
+          'h-8 rounded-md border border-border bg-bg px-2 text-13 text-fg',
           'focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-0',
           'disabled:cursor-not-allowed disabled:bg-bg-muted disabled:text-fg-muted',
         )}

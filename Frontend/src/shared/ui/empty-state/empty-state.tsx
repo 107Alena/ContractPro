@@ -3,6 +3,7 @@ import { forwardRef, type HTMLAttributes, type ReactNode, useId } from 'react';
 
 import { cn } from '@/shared/lib/cn';
 
+// Figma-aligned typography: token-based 13/14 scale.
 const emptyStateVariants = cva(
   [
     'flex flex-col items-center justify-center gap-3 text-center',
@@ -11,9 +12,9 @@ const emptyStateVariants = cva(
   {
     variants: {
       size: {
-        sm: 'p-6 text-sm',
-        md: 'p-10 text-sm',
-        lg: 'p-14 text-base',
+        sm: 'p-6 text-13',
+        md: 'p-10 text-13',
+        lg: 'p-14 text-14',
       },
       tone: {
         neutral: '',

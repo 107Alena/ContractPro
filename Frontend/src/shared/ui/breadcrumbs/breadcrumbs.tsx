@@ -11,11 +11,12 @@ import {
 
 import { cn } from '@/shared/lib/cn';
 
-const breadcrumbsVariants = cva('text-sm text-fg-muted', {
+// Figma-aligned typography: token-based 12/13/14 scale (info-display).
+const breadcrumbsVariants = cva('text-13 text-fg-muted', {
   variants: {
     size: {
-      sm: 'text-xs',
-      md: 'text-sm',
+      sm: 'text-12',
+      md: 'text-13',
     },
   },
   defaultVariants: { size: 'md' },

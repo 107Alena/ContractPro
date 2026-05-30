@@ -16,12 +16,12 @@ import {
 afterEach(() => cleanup());
 
 describe('breadcrumbsVariants', () => {
-  it('default size md → text-sm', () => {
-    expect(breadcrumbsVariants({})).toContain('text-sm');
+  it('default size md → text-13 (token-based)', () => {
+    expect(breadcrumbsVariants({})).toContain('text-13');
   });
 
-  it('size sm → text-xs', () => {
-    expect(breadcrumbsVariants({ size: 'sm' })).toContain('text-xs');
+  it('size sm → text-12', () => {
+    expect(breadcrumbsVariants({ size: 'sm' })).toContain('text-12');
   });
 });
 

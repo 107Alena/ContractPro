@@ -258,14 +258,14 @@ export const FileDropZone = forwardRef<FileDropZoneHandle, FileDropZoneProps>(fu
         {state === 'loading' && (
           <>
             <Spinner size="md" />
-            <p className="text-sm text-fg">Проверяем файл…</p>
+            <p className="text-13 text-fg">Проверяем файл…</p>
           </>
         )}
 
         {state === 'selected' && file && (
           <>
-            <p className="text-sm font-medium text-fg break-all">{file.name}</p>
-            <p className="text-xs text-fg-muted">{formatBytes(file.size)}</p>
+            <p className="text-13 font-medium text-fg break-all">{file.name}</p>
+            <p className="text-12 text-fg-muted">{formatBytes(file.size)}</p>
             <Button
               type="button"
               variant="ghost"
@@ -285,14 +285,14 @@ export const FileDropZone = forwardRef<FileDropZoneHandle, FileDropZoneProps>(fu
           state === 'dragReject' ||
           state === 'disabled') && (
           <>
-            <p className="text-base font-medium text-fg">
+            <p className="text-15 font-medium text-fg">
               {state === 'dragActive' && !isDragReject
                 ? 'Отпустите файл'
                 : state === 'dragReject'
                   ? 'Этот файл нельзя загрузить'
                   : idleTitle}
             </p>
-            <p className="text-sm text-fg-muted" id={hintId}>
+            <p className="text-13 text-fg-muted" id={hintId}>
               {idleHint ??
                 `Поддерживается: ${allowedLabels}. Максимальный размер: ${maxSizeMb} МБ.`}
             </p>
@@ -313,8 +313,8 @@ export const FileDropZone = forwardRef<FileDropZoneHandle, FileDropZoneProps>(fu
 
         {state === 'error' && (
           <>
-            <p className="text-base font-medium text-fg">Загрузка не выполнена</p>
-            <p id={errorId} className="text-sm text-danger" role="alert" aria-live="polite">
+            <p className="text-15 font-medium text-fg">Загрузка не выполнена</p>
+            <p id={errorId} className="text-13 text-danger" role="alert" aria-live="polite">
               {error ? getFileValidationMessage(error) : ''}
             </p>
             <Button

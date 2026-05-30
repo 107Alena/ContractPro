@@ -45,8 +45,8 @@ const segmentedItemVariants = cva(
   {
     variants: {
       size: {
-        sm: 'h-6 text-xs',
-        md: 'h-8 text-sm',
+        sm: 'h-6 text-12',
+        md: 'h-8 text-13',
       },
       fullWidth: {
         true: 'flex-1',

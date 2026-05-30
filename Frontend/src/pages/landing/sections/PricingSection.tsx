@@ -1,9 +1,10 @@
-// PricingSection — карточки тарифов. featured-карточка визуально выделена
-// (border-brand, Badge «Популярный», primary-CTA). Высоты карточек выравниваются
-// через items-stretch + flex-col.
+// PricingSection — Figma node 21:2. 3 тарифные карточки: Free / Pro (featured,
+// DARK card) / Plus. Featured card имеет ТЁМНЫЙ фон bg-fg + drop-shadow brand,
+// остальные — белые с border-subtle.
 import { Link } from 'react-router-dom';
 
-import { Badge, buttonVariants } from '@/shared/ui';
+import { cn } from '@/shared/lib/cn';
+import { buttonVariants } from '@/shared/ui';
 
 import { PRICING_PLANS, type PricingPlan } from '../content';
 
@@ -16,20 +17,21 @@ export function PricingSection({ plans = PRICING_PLANS }: PricingSectionProps): 
     <section
       id="pricing"
       aria-labelledby="pricing-title"
-      className="bg-bg-muted py-16 md:py-20 lg:py-24"
+      className="bg-bg-muted px-4 py-16 sm:py-20 lg:px-20"
     >
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-4">
-        <header className="flex flex-col gap-3 text-center">
-          <p className="text-sm font-semibold uppercase tracking-wider text-brand-600">Тарифы</p>
-          <h2 id="pricing-title" className="text-2xl font-semibold text-fg md:text-3xl">
-            Начните бесплатно, растите с командой
+      <div className="mx-auto flex w-full max-w-[1280px] flex-col items-center gap-12">
+        <header className="flex flex-col items-center gap-4 text-center">
+          <p className="text-14 font-semibold tracking-[2px] text-brand-500">ТАРИФЫ</p>
+          <h2
+            id="pricing-title"
+            className="text-3xl font-bold leading-[1.1] tracking-[-0.5px] text-fg sm:text-4xl md:text-[44px] md:tracking-[-1px]"
+          >
+            Выберите подходящий план
           </h2>
-          <p className="mx-auto max-w-2xl text-base text-fg-muted">
-            Без скрытых условий. Платите только за объём проверок, который вам нужен.
-          </p>
+          <p className="text-18 text-fg-muted">Начните бесплатно — масштабируйте по мере роста</p>
         </header>
 
-        <ul className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-3">
+        <ul className="grid w-full grid-cols-1 items-stretch gap-6 lg:grid-cols-3">
           {plans.map((plan) => (
             <PlanCard key={plan.id} plan={plan} />
           ))}
@@ -41,69 +43,75 @@ export function PricingSection({ plans = PRICING_PLANS }: PricingSectionProps): 
 
 function PlanCard({ plan }: { plan: PricingPlan }): JSX.Element {
   const isFeatured = plan.featured === true;
-  const cardClassName = [
-    'flex h-full flex-col gap-5 rounded-lg border bg-bg p-6 shadow-sm',
-    isFeatured ? 'border-brand-500 ring-1 ring-brand-500' : 'border-border',
-  ].join(' ');
-
   return (
-    <li className={cardClassName}>
-      <header className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-lg font-semibold text-fg">{plan.name}</h3>
-          {plan.badge ? <Badge variant="brand">{plan.badge}</Badge> : null}
-        </div>
-        <p className="text-sm text-fg-muted">{plan.description}</p>
-      </header>
+    <li
+      className={cn(
+        'flex h-full flex-col gap-6 rounded-[20px] px-8 py-9',
+        isFeatured
+          ? 'bg-fg shadow-[0_8px_32px_0_rgba(245,94,18,0.15)]'
+          : 'border border-border-subtle bg-bg',
+      )}
+    >
+      <h3
+        className={cn(
+          'font-semibold leading-none text-brand-500',
+          isFeatured ? 'text-[40px]' : 'text-[32px]',
+        )}
+      >
+        {plan.name}
+      </h3>
 
-      <div className="flex items-baseline gap-2">
-        <span className="text-3xl font-semibold text-fg">{plan.price}</span>
-        <span className="text-sm text-fg-muted">{plan.priceHint}</span>
+      <div className="flex items-baseline gap-1">
+        <span
+          className={cn(
+            'text-[36px] font-bold leading-none',
+            isFeatured ? 'text-white' : 'text-fg',
+          )}
+        >
+          {plan.price}
+        </span>
+        {plan.priceHint ? (
+          <span className={cn('text-16', isFeatured ? 'text-fg-disabled' : 'text-fg-muted')}>
+            {plan.priceHint}
+          </span>
+        ) : null}
       </div>
 
-      <ul className="flex flex-1 flex-col gap-2 text-sm text-fg">
+      <p className={cn('text-15', isFeatured ? 'text-fg-disabled' : 'text-fg-muted')}>
+        {plan.description}
+      </p>
+
+      <div className={cn('h-px w-full', isFeatured ? 'bg-white/10' : 'bg-border-subtle')} />
+
+      <ul className="flex flex-1 flex-col gap-3">
         {plan.bullets.map((bullet, index) => (
-          // key по (plan.id, index) — bullets внутри плана уникальны, но композитный
-          // key устойчив к дублирующимся строкам между планами.
-          <li key={`${plan.id}-${index}`} className="flex items-start gap-2">
-            <CheckIcon />
-            <span>{bullet}</span>
+          <li key={`${plan.id}-${index}`} className="flex items-center gap-2.5">
+            <span
+              aria-hidden="true"
+              className={cn('font-medium text-14', isFeatured ? 'text-brand-500' : 'text-success')}
+            >
+              ✓
+            </span>
+            <span className={cn('text-15', isFeatured ? 'text-border' : 'text-fg-muted')}>
+              {bullet}
+            </span>
           </li>
         ))}
       </ul>
 
       <Link
         to={plan.cta.to}
-        className={buttonVariants({
-          variant: isFeatured ? 'primary' : 'secondary',
-          size: 'md',
-          fullWidth: true,
-        })}
+        className={cn(
+          buttonVariants({
+            variant: isFeatured ? 'primary' : 'secondary',
+            size: 'md',
+            fullWidth: true,
+          }),
+          'h-auto rounded-xl py-3.5 text-16',
+        )}
       >
         {plan.cta.label}
       </Link>
     </li>
-  );
-}
-
-function CheckIcon(): JSX.Element {
-  return (
-    <svg
-      viewBox="0 0 20 20"
-      width="16"
-      height="16"
-      fill="none"
-      aria-hidden="true"
-      focusable="false"
-      className="mt-0.5 shrink-0 text-brand-600"
-    >
-      <path
-        d="m5 10 3.5 3.5L15 6.5"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }

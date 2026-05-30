@@ -32,7 +32,7 @@ describe('LandingPage', () => {
     expect(
       within(main).getByRole('heading', {
         level: 2,
-        name: /Начните бесплатно, растите с командой/i,
+        name: /Выберите подходящий план/i,
       }),
     ).toBeDefined();
     expect(

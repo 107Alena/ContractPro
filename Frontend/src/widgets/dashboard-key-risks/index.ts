@@ -1,1 +1,1 @@
-export { KeyRisksCards, type KeyRisksCardsProps, splitByBucket } from './ui/KeyRisksCards';
+export { KeyRisksCards, type KeyRisksCardsProps } from './ui/KeyRisksCards';

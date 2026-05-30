@@ -25,8 +25,8 @@ vi.mock('@/shared/api', async (importActual) => {
 
 // Тоже мокаем entity-хуки, чтобы не делать реальных HTTP-запросов в компоненте.
 // Каждый тест через setQueryData подставляет нужные данные.
+import { CurrentActions } from '@/widgets/dashboard-current-actions';
 import { KeyRisksCards } from '@/widgets/dashboard-key-risks';
-import { WhatMattersCards } from '@/widgets/dashboard-what-matters';
 
 import { DashboardPage } from './DashboardPage';
 
@@ -96,8 +96,9 @@ describe('DashboardPage', () => {
     });
     renderPage(qc);
 
-    const kpi = screen.getByRole('region', { name: 'Ключевые показатели' });
-    expect(within(kpi).getByText('12')).toBeDefined(); // total
+    expect(screen.getByRole('region', { name: 'Что важно сейчас' })).toBeDefined();
+    // total «12» переехал из KPI в карточку «Сводка»
+    expect(within(screen.getByRole('region', { name: 'Сводка' })).getByText('12')).toBeDefined();
     expect(screen.getByRole('region', { name: 'Последняя проверка' })).toBeDefined();
     // «Аренда» встречается в LastCheckCard (h3) и в RecentChecksTable (link)
     expect(screen.getAllByText('Аренда').length).toBeGreaterThanOrEqual(1);
@@ -143,7 +144,7 @@ describe('DashboardPage', () => {
     // покрытие — Storybook ErrorState stories + Chromatic.
     render(
       <MemoryRouter>
-        <WhatMattersCards error={new Error('net down')} />
+        <CurrentActions error={new Error('net down')} />
         <KeyRisksCards error={new Error('net down')} />
       </MemoryRouter>,
     );

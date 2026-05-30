@@ -16,6 +16,7 @@ import { useMe } from '@/entities/user';
 import { useEventStream } from '@/shared/api';
 import { Can } from '@/shared/auth';
 import { BusinessSummary } from '@/widgets/dashboard-business-summary';
+import { CurrentActions } from '@/widgets/dashboard-current-actions';
 import { KeyRisksCards } from '@/widgets/dashboard-key-risks';
 import { LastCheckCard } from '@/widgets/dashboard-last-check';
 import { OrgCard } from '@/widgets/dashboard-org-card';
@@ -24,7 +25,6 @@ import { QuickStart } from '@/widgets/dashboard-quick-start';
 import { RecentChecksTable } from '@/widgets/dashboard-recent-checks';
 import { TrustFooter } from '@/widgets/dashboard-trust-footer';
 import { WelcomeBlock } from '@/widgets/dashboard-welcome';
-import { WhatMattersCards } from '@/widgets/dashboard-what-matters';
 
 const CONTRACTS_PARAMS = { size: 5 } as const;
 
@@ -49,12 +49,7 @@ export function DashboardPage(): JSX.Element {
     >
       <WelcomeBlock user={meQuery.data} />
 
-      <WhatMattersCards
-        items={items}
-        total={total ?? undefined}
-        isLoading={isLoading}
-        error={error}
-      />
+      <CurrentActions items={items} isLoading={isLoading} error={error} />
 
       {/* Двухколоночный layout 776/340 (Figma 89:2). Слева — последняя проверка
           и недавние проверки; справа — быстрый старт и карточка организации. */}

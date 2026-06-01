@@ -4,31 +4,12 @@ import '@/shared/i18n/config';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const logoutMock = vi.fn<[], Promise<void>>();
-
-vi.mock('@/processes/auth-flow', () => ({
-  logout: () => logoutMock(),
-}));
-
-import { type User, type UserRole, useSession } from '@/shared/auth';
 import { I18nProvider } from '@/shared/i18n';
 import { useLayoutStore } from '@/shared/layout';
 
 import { Topbar } from './topbar';
-
-function makeUser(role: UserRole = 'LAWYER'): User {
-  return {
-    user_id: '00000000-0000-0000-0000-000000000001',
-    email: 'demo@contractpro.ru',
-    name: 'Демо Пользователь',
-    role,
-    organization_id: '00000000-0000-0000-0000-000000000002',
-    organization_name: 'ООО Демо',
-    permissions: { export_enabled: true },
-  };
-}
 
 function renderTopbar(props: Parameters<typeof Topbar>[0] = {}): void {
   render(
@@ -41,13 +22,7 @@ function renderTopbar(props: Parameters<typeof Topbar>[0] = {}): void {
 }
 
 beforeEach(() => {
-  logoutMock.mockResolvedValue();
   act(() => {
-    useSession.setState({
-      accessToken: 'demo',
-      user: makeUser(),
-      tokenExpiry: Date.now() + 3_600_000,
-    });
     useLayoutStore.setState({ sidebarCollapsed: false, mobileDrawerOpen: false });
   });
   Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true });
@@ -55,18 +30,15 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  vi.clearAllMocks();
   act(() => {
-    useSession.getState().clear();
     useLayoutStore.setState({ sidebarCollapsed: false, mobileDrawerOpen: false });
   });
 });
 
 describe('Topbar widget', () => {
-  it('рендерит sticky-header с триггером user-menu', () => {
+  it('рендерит sticky-header', () => {
     renderTopbar();
     expect(screen.getByTestId('topbar')).toBeDefined();
-    expect(screen.getByTestId('topbar-user-menu-trigger')).toBeDefined();
   });
 
   it('рендерит mobile hamburger с aria-label', () => {
@@ -80,27 +52,6 @@ describe('Topbar widget', () => {
     expect(useLayoutStore.getState().mobileDrawerOpen).toBe(false);
     await user.click(screen.getByTestId('topbar-mobile-menu'));
     expect(useLayoutStore.getState().mobileDrawerOpen).toBe(true);
-  });
-
-  it('открывает user-menu popover и показывает имя/роль/организацию', async () => {
-    const user = userEvent.setup();
-    renderTopbar();
-    await user.click(screen.getByTestId('topbar-user-menu-trigger'));
-    const content = await screen.findByTestId('topbar-user-menu-content');
-    expect(content).toBeDefined();
-    expect(content.textContent).toContain('Демо Пользователь');
-    expect(content.textContent).toContain('demo@contractpro.ru');
-    expect(content.textContent).toContain('ООО Демо');
-    expect(content.textContent).toContain('Юрист');
-  });
-
-  it('клик «Выйти» вызывает processes/auth-flow logout()', async () => {
-    const user = userEvent.setup();
-    renderTopbar();
-    await user.click(screen.getByTestId('topbar-user-menu-trigger'));
-    const logoutBtn = await screen.findByTestId('topbar-logout');
-    await user.click(logoutBtn);
-    expect(logoutMock).toHaveBeenCalledTimes(1);
   });
 
   it('рендерит SearchInput когда передан prop search', () => {
@@ -138,11 +89,5 @@ describe('Topbar widget', () => {
     const trigger = screen.getByTestId('topbar-notifications-trigger');
     await user.click(trigger);
     expect(await screen.findByTestId('topbar-notifications-empty')).toBeDefined();
-  });
-
-  it('не рендерит user-menu когда session.user отсутствует', () => {
-    act(() => useSession.getState().clear());
-    renderTopbar();
-    expect(screen.queryByTestId('topbar-user-menu-trigger')).toBeNull();
   });
 });

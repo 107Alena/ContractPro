@@ -1,7 +1,7 @@
 // useLogout — feature-хук разлогина: delegate в processes/auth-flow.logout()
 // (best-effort POST /auth/logout + clear session + redirect /login — см.
-// processes/auth-flow/actions.ts). Используется widgets/topbar user-menu и
-// любой будущей кнопкой «Выйти» (settings, mobile-меню).
+// processes/auth-flow/actions.ts). Используется widgets/sidebar-navigation
+// user-profile и любой будущей кнопкой «Выйти» (settings, mobile-меню).
 //
 // Состояние `isPending` предотвращает двойной клик во время in-flight запроса
 // (logout — sync-блокирующая операция для пользователя: UI переходит на /login

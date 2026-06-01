@@ -4,8 +4,9 @@
 // Desktop: collapsed (~72px) / expanded (240px) через Zustand UI-store.
 // Mobile: drawer-overlay (Radix Dialog как sheet).
 //
-// RBAC: admin-пункты (Политики/Чек-листы) оборачиваются в <Can> — ORG_ADMIN
-// видит, остальные нет (§5.6). Audit скрыт в v1 (§18 п.5).
+// RBAC: admin-пункты (Политики/Чек-листы) пред-фильтруются role-based
+// `can(role, permission)` — ORG_ADMIN видит, остальные нет (§5.6).
+// Audit скрыт в v1 (§18 п.5).
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';

@@ -61,7 +61,7 @@ function SidebarHarness({ role, collapsed, initialPath }: StoryArgs): JSX.Elemen
 const meta = {
   title: 'Widgets/SidebarNavigation',
   component: SidebarHarness,
-  parameters: { layout: 'fullscreen' },
+  parameters: { layout: 'fullscreen', router: false },
   tags: ['autodocs'],
   argTypes: {
     role: { control: 'select', options: ['LAWYER', 'BUSINESS_USER', 'ORG_ADMIN'] },

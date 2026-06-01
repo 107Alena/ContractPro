@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { MemoryRouter } from 'react-router-dom';
 
 import type { UserProfile } from '@/entities/user';
 
@@ -10,14 +9,6 @@ const meta: Meta<typeof OrgCard> = {
   component: OrgCard,
   tags: ['autodocs'],
   parameters: { layout: 'padded' },
-  // OrgCard рендерит <Link to="/settings"> — нужен Router-контекст в Storybook/Chromatic.
-  decorators: [
-    (Story) => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
-    ),
-  ],
 };
 
 export default meta;

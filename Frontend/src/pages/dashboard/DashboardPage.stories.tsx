@@ -4,7 +4,6 @@
 // безопасно возвращается через noop при отсутствии globalThis.EventSource.
 import type { Meta, StoryObj } from '@storybook/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
 
 import type { ContractSummary } from '@/entities/contract';
 import type { UserProfile } from '@/entities/user';
@@ -96,9 +95,7 @@ function decorate(qc: QueryClient) {
   return function Decorator(Story: () => JSX.Element): JSX.Element {
     return (
       <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <Story />
-        </MemoryRouter>
+        <Story />
       </QueryClientProvider>
     );
   };

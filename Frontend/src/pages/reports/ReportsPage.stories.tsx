@@ -84,7 +84,7 @@ function makeDecorator({ user = lawyer, initialEntry = '/reports', hydrate }: De
 const meta = {
   title: 'Pages/ReportsPage',
   component: ReportsPage,
-  parameters: { layout: 'fullscreen' },
+  parameters: { layout: 'fullscreen', router: false },
 } satisfies Meta<typeof ReportsPage>;
 
 export default meta;

@@ -65,7 +65,7 @@ function BreadcrumbsHarness({ path, maxItems }: HarnessArgs): JSX.Element {
 const meta = {
   title: 'Widgets/Breadcrumbs',
   component: BreadcrumbsHarness,
-  parameters: { layout: 'padded' },
+  parameters: { layout: 'padded', router: false },
   tags: ['autodocs'],
   argTypes: {
     path: {

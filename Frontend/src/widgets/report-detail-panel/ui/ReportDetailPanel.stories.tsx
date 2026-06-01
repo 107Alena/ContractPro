@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { MemoryRouter } from 'react-router-dom';
 
 import type { ContractSummary } from '@/entities/contract';
 
@@ -8,13 +7,6 @@ import { ReportDetailPanel } from './ReportDetailPanel';
 const meta: Meta<typeof ReportDetailPanel> = {
   title: 'Widgets/ReportDetailPanel',
   component: ReportDetailPanel,
-  decorators: [
-    (Story) => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
-    ),
-  ],
   parameters: { layout: 'padded' },
   tags: ['autodocs'],
 };

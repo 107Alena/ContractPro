@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { MemoryRouter } from 'react-router-dom';
 
 import type { ContractSummary } from '@/entities/contract';
 
@@ -16,13 +15,6 @@ const meta: Meta<typeof CurrentActions> = {
   component: CurrentActions,
   tags: ['autodocs'],
   parameters: { layout: 'padded' },
-  decorators: [
-    (Story) => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
-    ),
-  ],
 };
 
 export default meta;

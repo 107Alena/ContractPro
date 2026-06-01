@@ -4,7 +4,6 @@
 // в Storybook не выполняется (кнопка visible, но redirect/clear не трогаем).
 import type { Meta, StoryObj } from '@storybook/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
 
 import type { UserProfile } from '@/entities/user';
 import { qk } from '@/shared/api';
@@ -71,9 +70,7 @@ function decorate(qc: QueryClient) {
   return function Decorator(Story: () => JSX.Element): JSX.Element {
     return (
       <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <Story />
-        </MemoryRouter>
+        <Story />
       </QueryClientProvider>
     );
   };

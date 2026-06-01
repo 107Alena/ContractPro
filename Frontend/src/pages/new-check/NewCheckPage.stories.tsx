@@ -27,7 +27,7 @@ const LAWYER: User = {
 const meta: Meta<typeof NewCheckPage> = {
   title: 'Pages/NewCheck',
   component: NewCheckPage,
-  parameters: { layout: 'fullscreen' },
+  parameters: { layout: 'fullscreen', router: false },
 };
 
 export default meta;

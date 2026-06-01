@@ -1,6 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { useEffect, useState } from 'react';
-import { MemoryRouter } from 'react-router-dom';
 
 import { type User, type UserRole, useSession } from '@/shared/auth';
 
@@ -56,15 +55,13 @@ function TopbarHarness({
   }
 
   return (
-    <MemoryRouter>
-      <div className="min-h-[280px] bg-bg-muted">
-        <Topbar {...topbarProps} />
-        <div className="p-6 text-sm text-fg-muted">
-          Роль: {role} · поиск: {withSearch ? `«${query || '—'}»` : 'скрыт'} · notif:{' '}
-          {withNotifications ? 'on' : 'off'} · offline: {forceOffline ? 'yes' : 'no'}
-        </div>
+    <div className="min-h-[280px] bg-bg-muted">
+      <Topbar {...topbarProps} />
+      <div className="p-6 text-sm text-fg-muted">
+        Роль: {role} · поиск: {withSearch ? `«${query || '—'}»` : 'скрыт'} · notif:{' '}
+        {withNotifications ? 'on' : 'off'} · offline: {forceOffline ? 'yes' : 'no'}
       </div>
-    </MemoryRouter>
+    </div>
   );
 }
 

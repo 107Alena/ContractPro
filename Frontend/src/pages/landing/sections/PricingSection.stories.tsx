@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { MemoryRouter } from 'react-router-dom';
 
 import { PRICING_PLANS } from '../content';
 import { PricingSection } from './PricingSection';
@@ -9,13 +8,6 @@ const meta: Meta<typeof PricingSection> = {
   component: PricingSection,
   tags: ['autodocs'],
   parameters: { layout: 'fullscreen' },
-  decorators: [
-    (Story) => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
-    ),
-  ],
 };
 
 export default meta;

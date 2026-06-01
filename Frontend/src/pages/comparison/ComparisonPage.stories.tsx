@@ -105,7 +105,7 @@ const sampleDiff = {
 const meta = {
   title: 'Pages/ComparisonPage',
   component: ComparisonPage,
-  parameters: { layout: 'fullscreen' },
+  parameters: { layout: 'fullscreen', router: false },
 } satisfies Meta<typeof ComparisonPage>;
 
 export default meta;

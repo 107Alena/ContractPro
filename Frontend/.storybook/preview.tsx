@@ -1,4 +1,5 @@
 import type { Preview } from '@storybook/react';
+import { MemoryRouter } from 'react-router-dom';
 // FE-TASK-054 — msw-storybook-addon подключает MSW service worker в превью.
 // initialize() вызывается в top-level до первого рендера (канонический
 // паттерн addon'а). mswLoader авто-прокидывает `parameters.msw.handlers` из
@@ -23,6 +24,21 @@ initialize({
 void worker;
 
 const preview: Preview = {
+  // Глобальный MemoryRouter — любая story с <Link>/router-хуком работает без
+  // собственного декоратора (см. регрессию OrgCard, ebaddfb). Story, которая
+  // сама управляет роутингом (custom initialEntries / <Routes>), ОБЯЗАНА
+  // отключить обёртку через `parameters: { router: false }`, иначе RR6 бросит
+  // «You cannot render a <Router> inside another <Router>».
+  decorators: [
+    (Story, context) =>
+      context.parameters['router'] === false ? (
+        <Story />
+      ) : (
+        <MemoryRouter>
+          <Story />
+        </MemoryRouter>
+      ),
+  ],
   loaders: [mswLoader],
   parameters: {
     controls: {

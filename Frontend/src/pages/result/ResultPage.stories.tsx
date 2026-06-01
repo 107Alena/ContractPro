@@ -142,7 +142,7 @@ function makeDecorator({ user = lawyer, hydrate }: DecoratorOpts) {
 const meta = {
   title: 'Pages/ResultPage',
   component: ResultPage,
-  parameters: { layout: 'fullscreen' },
+  parameters: { layout: 'fullscreen', router: false },
 } satisfies Meta<typeof ResultPage>;
 
 export default meta;

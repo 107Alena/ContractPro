@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { MemoryRouter } from 'react-router-dom';
 
 import type { UserProfile } from '@/entities/user';
 
@@ -19,13 +18,6 @@ const meta: Meta<typeof WelcomeBlock> = {
   title: 'Widgets/Dashboard/WelcomeBlock',
   component: WelcomeBlock,
   parameters: { layout: 'padded' },
-  decorators: [
-    (Story) => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
-    ),
-  ],
 };
 
 export default meta;

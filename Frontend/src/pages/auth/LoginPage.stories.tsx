@@ -6,10 +6,9 @@
 // processes/auth-flow.login. Для сториз мы рендерим LoginForm напрямую поверх
 // layout'а страницы, чтобы не завязываться на TanStack Query/Router/axios.
 //
-// Декоратор MemoryRouter нужен LoginPage (useNavigate/useSearchParams) —
-// прямое использование Page-компонента без роутера упадёт в Storybook.
+// Router-контекст (useNavigate/useSearchParams) даёт глобальный MemoryRouter-
+// декоратор из .storybook/preview.tsx — собственный декоратор здесь не нужен.
 import type { Meta, StoryObj } from '@storybook/react';
-import { MemoryRouter } from 'react-router-dom';
 
 import { LoginForm, type LoginFormValues } from '@/features/auth/login';
 import { OrchestratorError } from '@/shared/api';
@@ -18,13 +17,6 @@ import { PromoSidebar } from '@/widgets/promo-sidebar';
 const meta: Meta = {
   title: 'Pages/LoginPage',
   parameters: { layout: 'fullscreen' },
-  decorators: [
-    (Story): JSX.Element => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
-    ),
-  ],
 };
 
 export default meta;
@@ -44,9 +36,7 @@ function PageShell({
       <main className="flex min-h-screen items-center justify-center px-6 py-12 md:px-10 md:py-16">
         <div className="flex w-full max-w-sm flex-col gap-8">
           <header className="flex flex-col gap-2">
-            <h1 className="text-2xl font-semibold text-fg md:text-3xl">
-              Вход в ContractPro
-            </h1>
+            <h1 className="text-2xl font-semibold text-fg md:text-3xl">Вход в ContractPro</h1>
             <p className="text-sm text-fg-muted">
               Введите email и пароль, выданные администратором организации.
             </p>

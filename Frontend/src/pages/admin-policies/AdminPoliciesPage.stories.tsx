@@ -24,7 +24,7 @@ function makeUser(role: UserRole): User {
 const meta: Meta<typeof AdminPoliciesPage> = {
   title: 'Pages/Admin/Policies',
   component: AdminPoliciesPage,
-  parameters: { layout: 'fullscreen' },
+  parameters: { layout: 'fullscreen', router: false },
 };
 
 export default meta;

@@ -86,7 +86,7 @@ function makeDecorator({
 const meta = {
   title: 'Pages/ContractsListPage',
   component: ContractsListPage,
-  parameters: { layout: 'fullscreen' },
+  parameters: { layout: 'fullscreen', router: false },
 } satisfies Meta<typeof ContractsListPage>;
 
 export default meta;

@@ -120,7 +120,7 @@ function makeDecorator({ user = lawyer, hydrate }: DecoratorOpts) {
 const meta = {
   title: 'Pages/ContractDetailPage',
   component: ContractDetailPage,
-  parameters: { layout: 'fullscreen' },
+  parameters: { layout: 'fullscreen', router: false },
 } satisfies Meta<typeof ContractDetailPage>;
 
 export default meta;

@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { MemoryRouter } from 'react-router-dom';
 
 import type { ContractSummary } from '@/entities/contract';
 
@@ -9,13 +8,6 @@ const meta: Meta<typeof RecentChecksTable> = {
   title: 'Widgets/Dashboard/RecentChecksTable',
   component: RecentChecksTable,
   tags: ['autodocs'],
-  decorators: [
-    (Story) => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
-    ),
-  ],
   parameters: { layout: 'padded' },
 };
 

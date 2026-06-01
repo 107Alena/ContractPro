@@ -24,7 +24,7 @@ function makeUser(role: UserRole): User {
 const meta: Meta<typeof AdminChecklistsPage> = {
   title: 'Pages/Admin/Checklists',
   component: AdminChecklistsPage,
-  parameters: { layout: 'fullscreen' },
+  parameters: { layout: 'fullscreen', router: false },
 };
 
 export default meta;

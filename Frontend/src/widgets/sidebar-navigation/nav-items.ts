@@ -1,10 +1,13 @@
 // Декларативная таблица пунктов навигации Sidebar (§8.3 high-architecture).
 // Причина declarative const + filter (а не render-prop <Can>-per-item): меньше
-// ре-рендеров, типобезопасность, тестируемость без React. <Can>-guard'ы
-// задумывались для разнородных секций, а не для простых list-фильтраций.
+// ре-рендеров, типобезопасность, тестируемость без React.
 //
-// Порядок пунктов = порядок в Figma (fileKey Lxhk7jQyXL3iuoTpiOHxcb):
-// primary → secondary → admin. Audit намеренно не включён (v1.1, §18 п.5).
+// Группы и порядок = Figma 85:2 (fileKey Lxhk7jQyXL3iuoTpiOHxcb):
+//   menu   → «МЕНЮ»: Главная, Проверка договора, Документы, Отчёты
+//   system → «СИСТЕМА»: Настройки, Политики, Чек-листы (admin — под RBAC)
+// «Сравнение версий» (Figma) опущено: нет standalone-роута (только per-договор
+// /contracts/:id/compare). «Организация» из Figma реализована гранулярно как
+// admin-пункты Политики/Чек-листы (реальные роуты + RBAC). Audit — v1.1 (§18 п.5).
 import type { ComponentType, SVGProps } from 'react';
 
 import type { Permission } from '@/shared/auth';
@@ -13,12 +16,13 @@ import {
   ChecklistIcon,
   ContractsIcon,
   DashboardIcon,
+  NewCheckIcon,
   PoliciesIcon,
   ReportsIcon,
   SettingsIcon,
 } from './icons';
 
-export type NavGroup = 'primary' | 'secondary' | 'admin';
+export type NavGroup = 'menu' | 'system';
 
 export interface NavItem {
   /** Стабильный ключ для React key + data-testid. */
@@ -33,10 +37,11 @@ export interface NavItem {
    */
   permission?: Permission;
   /**
-   * Для react-router NavLink `end`-prop. По умолчанию `false` (default NavLink
-   * behavior): подсветка активна при любом вложенном пути. Dashboard/Settings
-   * — роуты-листы, поэтому `end: true` чтобы не подсвечивались на вложенных.
+   * Кастомный матчер активного состояния по pathname. Если не задан — точное
+   * совпадение при `end`, иначе префиксное (`/to` или `/to/...`).
    */
+  isActive?: (pathname: string) => boolean;
+  /** Точное совпадение (для роутов-листов вроде /dashboard, /settings). */
   end?: boolean;
 }
 
@@ -46,17 +51,34 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: 'Главная',
     to: '/dashboard',
     icon: DashboardIcon,
-    group: 'primary',
+    group: 'menu',
     end: true,
   },
-  { key: 'contracts', label: 'Контракты', to: '/contracts', icon: ContractsIcon, group: 'primary' },
-  { key: 'reports', label: 'Отчёты', to: '/reports', icon: ReportsIcon, group: 'primary' },
+  {
+    key: 'new-check',
+    label: 'Проверка договора',
+    to: '/contracts/new',
+    icon: NewCheckIcon,
+    group: 'menu',
+    end: true,
+  },
+  {
+    key: 'contracts',
+    label: 'Документы',
+    to: '/contracts',
+    icon: ContractsIcon,
+    group: 'menu',
+    // Активна на /contracts и /contracts/:id, но НЕ на /contracts/new
+    // (там активна «Проверка договора»).
+    isActive: (p) => p === '/contracts' || (p.startsWith('/contracts/') && p !== '/contracts/new'),
+  },
+  { key: 'reports', label: 'Отчёты', to: '/reports', icon: ReportsIcon, group: 'menu' },
   {
     key: 'settings',
     label: 'Настройки',
     to: '/settings',
     icon: SettingsIcon,
-    group: 'secondary',
+    group: 'system',
     end: true,
   },
   {
@@ -64,7 +86,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: 'Политики',
     to: '/admin/policies',
     icon: PoliciesIcon,
-    group: 'admin',
+    group: 'system',
     permission: 'admin.policies',
   },
   {
@@ -72,7 +94,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: 'Чек-листы',
     to: '/admin/checklists',
     icon: ChecklistIcon,
-    group: 'admin',
+    group: 'system',
     permission: 'admin.checklists',
   },
 ] as const;
+
+/** Активен ли пункт при данном pathname (учитывает isActive / end / префикс). */
+export function isNavItemActive(item: NavItem, pathname: string): boolean {
+  if (item.isActive) return item.isActive(pathname);
+  if (item.end) return pathname === item.to;
+  return pathname === item.to || pathname.startsWith(`${item.to}/`);
+}

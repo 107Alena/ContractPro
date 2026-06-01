@@ -78,6 +78,35 @@ export function ChecklistIcon(props: IconProps): JSX.Element {
   );
 }
 
+export function NewCheckIcon(props: IconProps): JSX.Element {
+  return (
+    <svg {...defaultSvgProps} {...props}>
+      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6" />
+      <path d="M14 3v5h5" />
+      <circle cx="16.5" cy="16.5" r="3" />
+      <path d="m21 21-1.9-1.9" />
+    </svg>
+  );
+}
+
+export function ChevronDownIcon(props: IconProps): JSX.Element {
+  return (
+    <svg {...defaultSvgProps} {...props}>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+export function LogOutIcon(props: IconProps): JSX.Element {
+  return (
+    <svg {...defaultSvgProps} {...props}>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="m16 17 5-5-5-5" />
+      <path d="M21 12H9" />
+    </svg>
+  );
+}
+
 export function ChevronLeftIcon(props: IconProps): JSX.Element {
   return (
     <svg {...defaultSvgProps} {...props}>

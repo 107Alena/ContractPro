@@ -29,6 +29,17 @@
 
 **Сводка:** 9 страниц ↔ Figma матчатся, 1 — секция Landing, 1 Figma orphan (Audit, отложено), 4 code orphans (без макетов — обновляются только через design-system).
 
+### App Shell (глобальный хром)
+
+Sidebar (`85:2`) и AppHeader (`86:3`) — дети фреймов страниц, общий хром всех
+защищённых экранов (рендерится `AppLayout`, не входит в постраничные этапы 4.1–4.13).
+Выравнивание — отдельный этап **4.4 App Shell**.
+
+| Figma | Код | Статус |
+|---|---|---|
+| `85:2` Sidebar | `widgets/sidebar-navigation` | ✅ aligned (4.4.1): логотип-плашка, WorkspaceSwitcher (org из `useMe`), группы МЕНЮ/СИСТЕМА, active/inactive nav-стили, UserProfile + logout внизу (перенос из топбара). «Сравнение версий» опущено (нет standalone-роута); «Организация» реализована гранулярно как Политики/Чек-листы под RBAC. |
+| `86:3` AppHeader | `widgets/topbar` | restyle (4.4.2): border-subtle, rounded-8 кнопки, h-60; user-menu убран (профиль в сайдбаре); глобальный поиск/help не добавлялись (нет бэкенда). |
+
 ---
 
 ## State frames per screen

@@ -67,6 +67,46 @@ export const versionGammaV1: VersionDetails = {
   created_at: '2026-04-14T18:45:00Z',
 };
 
+// delta — «боевой» READY-договор: текущая версия v2 готова (все CTA активны,
+// статус «Готово»), есть предыдущая версия для истории/сравнения.
+export const versionDeltaV1: VersionDetails = {
+  version_id: IDS.versions.deltaV1,
+  contract_id: IDS.contracts.delta,
+  version_number: 1,
+  origin_type: 'UPLOAD',
+  origin_description: 'Первичная загрузка',
+  parent_version_id: null,
+  source_file_name: 'contract-delta-v1.pdf',
+  source_file_size: 312_000,
+  processing_status: 'READY',
+  processing_status_message: 'Результаты готовы',
+  created_at: '2026-04-12T11:00:00Z',
+};
+
+export const versionDeltaV2: VersionDetails = {
+  version_id: IDS.versions.deltaV2,
+  contract_id: IDS.contracts.delta,
+  version_number: 2,
+  origin_type: 'RE_UPLOAD',
+  origin_description: 'Финальная редакция',
+  parent_version_id: IDS.versions.deltaV1,
+  source_file_name: 'contract-delta-v2.pdf',
+  source_file_size: 358_400,
+  processing_status: 'READY',
+  processing_status_message: 'Результаты готовы',
+  created_at: '2026-04-19T16:05:00Z',
+};
+
+export const contractDelta: ContractDetails = {
+  contract_id: IDS.contracts.delta,
+  title: 'Договор подряда на ремонтные работы',
+  status: 'ACTIVE',
+  current_version: versionDeltaV2,
+  created_by_user_id: IDS.users.lawyer,
+  created_at: '2026-04-12T11:00:00Z',
+  updated_at: '2026-04-19T16:05:00Z',
+};
+
 export const contractAlpha: ContractDetails = {
   contract_id: IDS.contracts.alpha,
   title: 'Договор оказания услуг с ООО «Альфа»',
@@ -125,16 +165,27 @@ export const contractSummaries: ContractSummary[] = [
     created_at: '2026-04-14T18:45:00Z',
     updated_at: '2026-04-18T08:00:00Z',
   },
+  {
+    contract_id: IDS.contracts.delta,
+    title: 'Договор подряда на ремонтные работы',
+    status: 'ACTIVE',
+    current_version_number: 2,
+    processing_status: 'READY',
+    created_at: '2026-04-12T11:00:00Z',
+    updated_at: '2026-04-19T16:05:00Z',
+  },
 ];
 
 export const contractDetailsById: Record<string, ContractDetails> = {
   [IDS.contracts.alpha]: contractAlpha,
   [IDS.contracts.beta]: contractBeta,
   [IDS.contracts.gamma]: contractGamma,
+  [IDS.contracts.delta]: contractDelta,
 };
 
 export const versionsByContract: Record<string, VersionDetails[]> = {
   [IDS.contracts.alpha]: [versionAlphaV1, versionAlphaV2],
   [IDS.contracts.beta]: [versionBetaV1],
   [IDS.contracts.gamma]: [versionGammaV1],
+  [IDS.contracts.delta]: [versionDeltaV1, versionDeltaV2],
 };

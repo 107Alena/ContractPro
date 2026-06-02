@@ -30,8 +30,8 @@ describe('MSW global server — default handlers', () => {
       page: number;
       size: number;
     };
-    expect(body.total).toBe(3);
-    expect(body.items).toHaveLength(3);
+    expect(body.total).toBe(4);
+    expect(body.items).toHaveLength(4);
     expect(body.page).toBe(1);
   });
 
@@ -112,28 +112,32 @@ describe('MSW global server — default handlers', () => {
 describe('SSE handler через ReadableStream', () => {
   // Явный timeout 2с — защита от регрессии в ReadableStream closeAfterEvents:
   // без него утечка держала бы test'ы до глобального 5с default'а.
-  it('GET /events/stream — text/event-stream + payload status_update (closeAfterEvents)', { timeout: 2_000 }, async () => {
-    // Закрываем stream после последнего event — иначе fetch-клиент может
-    // ожидать дополнительных данных, а test-timeout сработает раньше.
-    const { createSseHandlers } = await import('../../../tests/msw/handlers');
-    server.use(
-      ...createSseHandlers(BASE, {
-        closeAfterEvents: true,
-        events: [
-          {
-            type: 'status_update',
-            delayMs: 0,
-            data: { version_id: 'v-1', status: 'ANALYZING', message: 'Анализ' },
-          },
-        ],
-      }),
-    );
-    const res = await fetch(`${BASE}/events/stream`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toMatch(/text\/event-stream/);
-    // Читаем весь stream до закрытия. closeAfterEvents гарантирует конечность.
-    const text = await res.text();
-    expect(text).toContain('event: status_update');
-    expect(text).toContain('"status":"ANALYZING"');
-  });
+  it(
+    'GET /events/stream — text/event-stream + payload status_update (closeAfterEvents)',
+    { timeout: 2_000 },
+    async () => {
+      // Закрываем stream после последнего event — иначе fetch-клиент может
+      // ожидать дополнительных данных, а test-timeout сработает раньше.
+      const { createSseHandlers } = await import('../../../tests/msw/handlers');
+      server.use(
+        ...createSseHandlers(BASE, {
+          closeAfterEvents: true,
+          events: [
+            {
+              type: 'status_update',
+              delayMs: 0,
+              data: { version_id: 'v-1', status: 'ANALYZING', message: 'Анализ' },
+            },
+          ],
+        }),
+      );
+      const res = await fetch(`${BASE}/events/stream`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toMatch(/text\/event-stream/);
+      // Читаем весь stream до закрытия. closeAfterEvents гарантирует конечность.
+      const text = await res.text();
+      expect(text).toContain('event: status_update');
+      expect(text).toContain('"status":"ANALYZING"');
+    },
+  );
 });

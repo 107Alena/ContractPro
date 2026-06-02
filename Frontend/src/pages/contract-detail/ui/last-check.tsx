@@ -1,21 +1,28 @@
-// LastCheck — карточка «Последняя проверка» на ContractDetailPage.
-// Отличается от widgets/dashboard-last-check — та собирает данные по списку
-// /contracts, а эта — метаданные текущей версии договора.
+// LastCheck — карточка «Последняя проверка» (Figma 306:2 → Latest Check 313:2).
+// Реальные данные: номер/дата текущей версии, статус, статус-сообщение, CTA.
+// Risk-meta строка Figma (2 высокий / 3 средний / 1 низкий / 4 рекомендации) —
+// уровни риска недоступны в ContractDetails (FE-TASK-046/048) → опущена.
 import { Link } from 'react-router-dom';
 
 import type { ContractDetails } from '@/entities/contract';
 import { StatusBadge } from '@/entities/version';
-import { buttonVariants } from '@/shared/ui';
+import { buttonVariants, Card } from '@/shared/ui';
 
 export interface LastCheckProps {
   contract: ContractDetails;
 }
 
-function formatDate(iso?: string): string {
+function formatDateTime(iso?: string): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' });
+  return d.toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export function LastCheck({ contract }: LastCheckProps): JSX.Element {
@@ -23,45 +30,62 @@ export function LastCheck({ contract }: LastCheckProps): JSX.Element {
   const contractId = contract.contract_id;
   const versionId = version?.version_id;
   const isReady = version?.processing_status === 'READY';
+  const resultHref =
+    contractId && versionId ? `/contracts/${contractId}/versions/${versionId}/result` : undefined;
 
   return (
-    <section
+    <Card
+      as="section"
       aria-label="Последняя проверка"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+      radius="xl"
+      className="flex flex-col gap-4 border border-border-subtle px-7 py-6 shadow-none"
     >
-      <header className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Последняя проверка
-        </h2>
-        {version?.processing_status ? <StatusBadge status={version.processing_status} /> : null}
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-18 font-semibold text-fg">Последняя проверка</h2>
+        <div className="flex items-center gap-3">
+          {version?.created_at ? (
+            <span className="text-13 text-fg-subtle">{formatDateTime(version.created_at)}</span>
+          ) : null}
+          {version?.processing_status ? <StatusBadge status={version.processing_status} /> : null}
+        </div>
       </header>
 
       {!version ? (
-        <p className="text-sm text-fg-muted">Версий ещё нет.</p>
+        <p className="text-14 text-fg-muted">Версий ещё нет.</p>
       ) : (
-        <div className="flex flex-col gap-2">
-          <p className="text-base font-semibold text-fg">
-            v{version.version_number ?? '—'}
-            {version.source_file_name ? (
-              <span className="ml-2 text-sm font-normal text-fg-muted">
-                {version.source_file_name}
-              </span>
-            ) : null}
+        <>
+          <p className="text-14 leading-5 text-fg-muted">
+            {version.processing_status_message ??
+              (isReady
+                ? 'Анализ завершён. Откройте результат проверки для детального разбора рисков и рекомендаций.'
+                : 'Дождитесь завершения анализа текущей версии.')}
           </p>
-          <p className="text-xs text-fg-muted">Создана: {formatDate(version.created_at)}</p>
-          {version.processing_status_message ? (
-            <p className="text-sm text-fg-muted">{version.processing_status_message}</p>
-          ) : null}
-          {isReady && contractId && versionId ? (
-            <Link
-              to={`/contracts/${contractId}/versions/${versionId}/result`}
-              className={`${buttonVariants({ variant: 'primary', size: 'md' })} self-start`}
-            >
-              Открыть результат
-            </Link>
-          ) : null}
-        </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {isReady && resultHref ? (
+              <Link to={resultHref} className={buttonVariants({ variant: 'primary', size: 'sm' })}>
+                Открыть результат
+              </Link>
+            ) : null}
+            {isReady && resultHref ? (
+              <Link
+                to={resultHref}
+                className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+              >
+                Скачать отчёт
+              </Link>
+            ) : null}
+            {contractId ? (
+              <Link
+                to={`/contracts/${contractId}/compare`}
+                className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+              >
+                Открыть сравнение
+              </Link>
+            ) : null}
+          </div>
+        </>
       )}
-    </section>
+    </Card>
   );
 }

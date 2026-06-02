@@ -29,13 +29,10 @@ export function RiskProfileCard({
     <section
       aria-label="Профиль рисков"
       data-testid="risk-profile-card"
-      className="flex flex-col gap-4 rounded-md border border-border bg-bg p-5 shadow-sm"
+      className="flex flex-col gap-4 rounded-xl border border-border-subtle bg-bg p-6 shadow-none"
     >
       <header className="flex flex-col gap-1">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Профиль рисков
-        </h2>
-        <p className="text-xs text-fg-muted">Агрегированная оценка по выявленным рискам</p>
+        <h2 className="text-16 font-semibold text-fg">Профиль рисков</h2>
       </header>
 
       {isLoading && !profile ? (

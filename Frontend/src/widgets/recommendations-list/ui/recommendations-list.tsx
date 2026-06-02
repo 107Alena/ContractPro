@@ -29,15 +29,10 @@ export function RecommendationsList({
   return (
     <section
       aria-label="Рекомендации"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+      className="flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg p-6 shadow-none"
     >
       <header>
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Рекомендации
-        </h2>
-        <p className="mt-1 text-xs text-fg-muted">
-          Предлагаемые правки формулировок для снижения рисков
-        </p>
+        <h2 className="text-16 font-semibold text-fg">Рекомендации</h2>
       </header>
 
       {isLoading && !items ? (

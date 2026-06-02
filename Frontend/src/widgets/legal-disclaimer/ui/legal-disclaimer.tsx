@@ -7,7 +7,7 @@ export function LegalDisclaimer(): JSX.Element {
     <section
       aria-label="Юридический дисклеймер"
       data-testid="legal-disclaimer"
-      className="rounded-md border border-dashed border-border bg-bg-muted p-4 text-xs text-fg-muted"
+      className="rounded-xl border border-border-subtle bg-bg-muted p-4 text-xs text-fg-muted shadow-none"
     >
       <p>
         Результаты автоматического анализа носят рекомендательный характер и не заменяют юридическую

@@ -39,15 +39,10 @@ export function SummaryTable({ results }: SummaryTableProps): JSX.Element {
     <section
       aria-label="Краткое резюме"
       data-testid="summary-table"
-      className="flex flex-col gap-4 rounded-md border border-border bg-bg p-5 shadow-sm"
+      className="flex flex-col gap-4 rounded-xl border border-border-subtle bg-bg p-6 shadow-none"
     >
       <header className="flex flex-col gap-1">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Краткое резюме
-        </h2>
-        <p className="text-xs text-fg-muted">
-          Обзор договора для бизнес-пользователя: суть сделки и ключевые параметры
-        </p>
+        <h2 className="text-16 font-semibold text-fg">Краткое резюме</h2>
       </header>
 
       {results.summary ? (

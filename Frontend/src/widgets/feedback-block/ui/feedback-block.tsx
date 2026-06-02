@@ -60,11 +60,9 @@ export function FeedbackBlock({ contractId, versionId }: FeedbackBlockProps): JS
       <section
         aria-label="Обратная связь"
         data-testid="feedback-block-done"
-        className="flex flex-col gap-2 rounded-md border border-success/30 bg-bg p-5 shadow-sm"
+        className="flex flex-col gap-2 rounded-xl border border-border-subtle bg-bg p-6 shadow-none"
       >
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-success">
-          Обратная связь принята
-        </h2>
+        <h2 className="text-16 font-semibold text-success">Обратная связь принята</h2>
         <p className="text-sm text-fg-muted">
           Мы используем ваш отзыв для улучшения качества проверок.
         </p>
@@ -76,13 +74,10 @@ export function FeedbackBlock({ contractId, versionId }: FeedbackBlockProps): JS
     <section
       aria-label="Обратная связь"
       data-testid="feedback-block"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+      className="flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg p-6 shadow-none"
     >
       <header className="flex flex-col gap-1">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Результат был полезен?
-        </h2>
-        <p className="text-xs text-fg-muted">Ваш ответ помогает нам улучшать алгоритмы анализа.</p>
+        <h2 className="text-16 font-semibold text-fg">Результат был полезен?</h2>
       </header>
 
       <div className="flex flex-wrap gap-2">

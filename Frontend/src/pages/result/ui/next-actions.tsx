@@ -77,13 +77,10 @@ export function NextActions({ results }: NextActionsProps): JSX.Element {
     <section
       aria-label="Следующие шаги"
       data-testid="next-actions"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+      className="flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg p-6 shadow-none"
     >
       <header className="flex flex-col gap-1">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Следующие шаги
-        </h2>
-        <p className="text-xs text-fg-muted">Что сделать на основании результатов проверки</p>
+        <h2 className="text-16 font-semibold text-fg">Следующие шаги</h2>
       </header>
 
       <ol className="flex flex-col gap-2" data-testid="next-actions-list">

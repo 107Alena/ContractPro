@@ -21,15 +21,10 @@ export function DeviationsFromPolicy({ risks }: DeviationsFromPolicyProps): JSX.
     <section
       aria-label="Отклонения от политики"
       data-testid="deviations-from-policy"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+      className="flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg p-6 shadow-none"
     >
       <header className="flex flex-col gap-1">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Отклонения от политики
-        </h2>
-        <p className="text-xs text-fg-muted">
-          Пункты договора, нарушающие внутренние политики организации
-        </p>
+        <h2 className="text-16 font-semibold text-fg">Отклонения от политики</h2>
       </header>
 
       {deviations.length === 0 ? (

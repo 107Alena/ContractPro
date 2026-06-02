@@ -193,7 +193,7 @@ export function DocumentsTable({
       aria-label={ariaLabel}
       aria-busy={isLoading || isFetching ? 'true' : undefined}
       data-testid={testId}
-      className="relative flex flex-col gap-2 rounded-md border border-border bg-bg"
+      className="relative flex flex-col gap-2 rounded-[12px] border border-border-subtle bg-bg"
     >
       {isFetching && !isLoading ? (
         <span
@@ -232,7 +232,7 @@ export function DocumentsTable({
                         key={header.id}
                         scope="col"
                         {...(ariaSort ? { 'aria-sort': ariaSort } : {})}
-                        className="h-10 whitespace-nowrap px-3 text-left align-middle text-xs font-medium uppercase tracking-wide text-fg-muted"
+                        className="h-10 whitespace-nowrap px-3 text-left align-middle text-13 font-medium text-fg-subtle"
                       >
                         {header.isPlaceholder ? null : canSort ? (
                           <button

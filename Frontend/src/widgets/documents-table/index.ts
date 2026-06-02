@@ -1,9 +1,5 @@
 // Публичный API widgets/documents-table (FSD: импортировать ТОЛЬКО этот путь).
-export {
-  buildDocumentsTableColumns,
-  DOCUMENT_STATUS_LABEL,
-  type DocumentStatusDisplay,
-} from './model/columns';
+export { buildDocumentsTableColumns } from './model/columns';
 export {
   DocumentsTable,
   type DocumentsTableProps,

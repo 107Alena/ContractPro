@@ -33,11 +33,8 @@ export function WhatWeCheck({ className, ...rest }: WhatWeCheckProps): JSX.Eleme
   return (
     <Card
       aria-label="Что проверяет ContractPro"
-      radius="md"
-      className={cn(
-        'flex flex-col gap-4 rounded-lg border border-border-subtle p-6 shadow-none',
-        className,
-      )}
+      radius="lg"
+      className={cn('flex flex-col gap-4 border border-border-subtle p-6 shadow-none', className)}
       {...rest}
     >
       <h2 className="text-16 font-semibold text-fg">Что проверяет ContractPro</h2>

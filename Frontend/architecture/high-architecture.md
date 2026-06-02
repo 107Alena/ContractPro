@@ -847,7 +847,7 @@ spacing:     { 1, '1.5', 2, '2.5', 3, '3.5', 4, 5, 6, 7, 8, 10, 12 },
 
 | Компонент | Где используется | Ключевые props/состояния |
 |---|---|---|
-| `Card` | Dashboard + все card-поверхности (Contracts, Reports, Result) | `radius: card(12)\|md(10)\|xl(16)`; `bg-bg` + `shadow-sm`, без бордера; `as` для section/article |
+| `Card` | Dashboard + все card-поверхности (Contracts, Reports, Result, New Check) | `radius: card(12)\|md(10)\|lg(14)\|xl(16)`; `bg-bg` + `shadow-sm`, без бордера; `as` для section/article. New Check использует flat-border treatment: `+ border-border-subtle shadow-none` |
 | `DataTable` | Документы, Отчёты, Audit, Версии | сортировка, пагинация, row-selection, empty/loading/error slots, column-visibility |
 | `FileDropZone` | NewCheckPage, VersionUpload | drag-hover, selected, error, loading, disabled, max-size guard |
 | `ProcessingProgress` | Dashboard, NewCheckPage, ContractDetail | 10 статусов → прогресс-бар + список шагов; для `AWAITING_USER_INPUT` рендерится не как «шаг», а как inline-CTA «Подтвердите тип договора» |

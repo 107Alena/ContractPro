@@ -22,9 +22,9 @@ export function Tips({ className, ...rest }: TipsProps): JSX.Element {
   return (
     <Card
       aria-label="Советы для лучшего результата"
-      radius="md"
+      radius="lg"
       className={cn(
-        'flex flex-col gap-3.5 rounded-lg border border-border-subtle px-6 py-5 shadow-none',
+        'flex flex-col gap-3.5 border border-border-subtle px-6 py-5 shadow-none',
         className,
       )}
       {...rest}

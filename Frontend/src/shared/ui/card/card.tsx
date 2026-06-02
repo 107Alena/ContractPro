@@ -10,14 +10,16 @@ import { cn } from '@/shared/lib/cn';
 // radius:
 //   card (12px) — контентные карточки (LastCheck, Сводка, Организация, ActionCard);
 //   md   (10px) — мелкие risk-карточки (KeyRisks);
+//   lg   (14px) — info/tips-поверхности New Check (Figma 117:3/117:35/118:2);
 //   xl   (16px) — hero/welcome поверхность.
-// 12px остаётся arbitrary (`rounded-[12px]`) по прецеденту modal (ADR-FE-09): нет
-// семантического слота между md(10) и lg(14). Padding/gap задаёт потребитель через className.
+// 12px остаётся arbitrary (`rounded-[12px]`) по прецеденту modal (ADR-FE-09).
+// Padding/gap задаёт потребитель через className.
 const cardVariants = cva('bg-bg shadow-sm', {
   variants: {
     radius: {
       card: 'rounded-[12px]',
       md: 'rounded-md',
+      lg: 'rounded-lg',
       xl: 'rounded-xl',
     },
   },

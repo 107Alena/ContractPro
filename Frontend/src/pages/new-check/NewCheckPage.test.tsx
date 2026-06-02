@@ -124,11 +124,34 @@ describe('NewCheckPage', () => {
     expect(screen.getByText(/выберите файл договора/i)).toBeDefined();
   });
 
-  it('табы: переключение на «Вставить текст» показывает placeholder', () => {
+  it('табы: клик по «Вставить текст» активирует вкладку и скрывает upload-панель', () => {
     renderPage();
     const pasteTab = screen.getByRole('tab', { name: /вставить текст/i });
+    expect(pasteTab.getAttribute('aria-selected')).toBe('false');
     fireEvent.click(pasteTab);
+    expect(pasteTab.getAttribute('aria-selected')).toBe('true');
+    // Обе панели смонтированы; неактивная upload-форма скрыта атрибутом hidden.
+    expect(screen.getByTestId('new-check-form').hasAttribute('hidden')).toBe(true);
     expect(screen.getByText(/вставка текста появится позже/i)).toBeDefined();
+  });
+
+  it('табы: стрелка ArrowRight переключает на следующую вкладку (roving a11y)', () => {
+    renderPage();
+    const uploadTab = screen.getByRole('tab', { name: /загрузить pdf/i });
+    fireEvent.keyDown(uploadTab, { key: 'ArrowRight' });
+    expect(screen.getByRole('tab', { name: /вставить текст/i }).getAttribute('aria-selected')).toBe(
+      'true',
+    );
+  });
+
+  it('tab/tabpanel: aria-controls обоих табов указывают на существующие панели', () => {
+    renderPage();
+    const uploadTab = screen.getByRole('tab', { name: /загрузить pdf/i });
+    const pasteTab = screen.getByRole('tab', { name: /вставить текст/i });
+    const uploadPanelId = uploadTab.getAttribute('aria-controls');
+    const pastePanelId = pasteTab.getAttribute('aria-controls');
+    expect(uploadPanelId && document.getElementById(uploadPanelId)).toBeTruthy();
+    expect(pastePanelId && document.getElementById(pastePanelId)).toBeTruthy();
   });
 
   it('виджеты WillHappenSteps и WhatWeCheck видны', () => {

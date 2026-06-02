@@ -21,7 +21,15 @@
 //     openapi `макс. 20 МБ`); подзаголовок без обещания paste-ввода.
 //   - Корень — <div> (AppLayout уже оборачивает Outlet в <main>; избегаем
 //     вложенного landmark).
-import { type FormEvent, useCallback, useRef, useState } from 'react';
+import {
+  type FormEvent,
+  forwardRef,
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { type UploadFormValues, useUploadContract } from '@/features/contract-upload';
@@ -53,10 +61,14 @@ const INITIAL_STATE: FormState = {
   formError: null,
 };
 
-/** Название договора из имени файла: отрезаем расширение, пустое → запасной. */
+/** Название договора из имени файла: отрезаем расширение и хвостовые точки/
+ *  пробелы; если не осталось ни одной буквы/цифры — запасной «Договор». */
 function deriveTitle(fileName: string): string {
-  const stripped = fileName.replace(/\.[^./\\]+$/, '').trim();
-  return stripped || 'Договор';
+  const stripped = fileName
+    .replace(/\.[^./\\]+$/, '')
+    .replace(/[.\s]+$/, '')
+    .trim();
+  return /[\p{L}\p{N}]/u.test(stripped) ? stripped : 'Договор';
 }
 
 function formatBytes(bytes: number): string {
@@ -70,6 +82,7 @@ export function NewCheckPage(): JSX.Element {
   const navigate = useNavigate();
   const canUpload = useCan('contract.upload');
   const dropRef = useRef<FileDropZoneHandle>(null);
+  const fileCardRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<FormState>(INITIAL_STATE);
   const [activeTab, setActiveTab] = useState<TabKey>('upload');
   const [uploadFraction, setUploadFraction] = useState<number | null>(null);
@@ -110,6 +123,18 @@ export function NewCheckPage(): JSX.Element {
       }
     },
   });
+
+  // A11y: drop-зона скрывается (display:none) при выборе файла — фокус с её
+  // кнопки «Выбрать файл» иначе свалится на <body>. Приземляем фокус на
+  // появившуюся FileCard при переходе «нет файла → файл выбран».
+  const prevHasFileRef = useRef(false);
+  useEffect(() => {
+    const hasFileNow = state.file !== null && !isPending;
+    if (hasFileNow && !prevHasFileRef.current) {
+      fileCardRef.current?.focus();
+    }
+    prevHasFileRef.current = hasFileNow;
+  }, [state.file, isPending]);
 
   const handleFileAccepted = (file: File): void => {
     setState((prev) => ({
@@ -195,106 +220,112 @@ export function NewCheckPage(): JSX.Element {
       >
         <Tabs active={activeTab} onChange={setActiveTab} disabled={submitting} />
 
-        {activeTab === 'upload' ? (
-          <form
-            data-testid="new-check-form"
-            onSubmit={handleSubmit}
-            className="flex flex-col gap-5 p-6 md:p-8"
-            noValidate
-          >
-            {/* Drop-зона остаётся смонтированной (хранит file-state + picker),
+        {/* Обе панели смонтированы всегда (валидный aria-controls для обоих
+            табов + сохранение выбранного файла при переключении), неактивная
+            скрыта атрибутом hidden (display:none, вне a11y-дерева). */}
+        <form
+          id="tab-panel-upload"
+          role="tabpanel"
+          aria-labelledby="tab-upload"
+          data-testid="new-check-form"
+          onSubmit={handleSubmit}
+          hidden={activeTab !== 'upload'}
+          className="flex flex-col gap-5 p-6 md:p-8"
+          noValidate
+        >
+          {/* Drop-зона остаётся смонтированной (хранит file-state + picker),
                 визуально скрывается после выбора файла / во время отправки. */}
-            <div className={cn((hasFile || submitting) && 'hidden')}>
-              <FileDropZone
-                ref={dropRef}
-                id="new-check-file"
-                idleTitle="Перетащите PDF сюда"
-                loading={submitting}
-                disabled={submitting}
-                onAccepted={handleFileAccepted}
-                onError={handleFileError}
-                onReset={handleFileReset}
-              />
-              <p className="mt-3 flex items-center justify-center gap-1.5 text-12 text-fg-disabled">
-                <span aria-hidden>🔒</span>
-                Документы обрабатываются конфиденциально и не передаются третьим лицам
-              </p>
-            </div>
-
-            {state.fileError ? (
-              <p id="new-check-file-error" className="text-13 text-danger" role="alert">
-                {state.fileError}
-              </p>
-            ) : null}
-
-            {hasFile && !submitting && state.file ? (
-              <FileCard
-                file={state.file}
-                onReplace={() => dropRef.current?.open()}
-                onRemove={() => dropRef.current?.reset()}
-              />
-            ) : null}
-
-            {submitting ? (
-              <ProcessingProgress
-                status="UPLOADED"
-                aria-label="Загрузка договора"
-                // Прогресс-байт из axios (0..1) отражает лишь upload-фазу;
-                // pipeline-шаги (QUEUED → ... → READY) уже после 202.
-                // Используем UPLOADED как «договор загружается».
-              />
-            ) : null}
-
-            {uploadFraction !== null && submitting ? (
-              <p className="text-12 text-fg-muted" aria-live="polite">
-                Отправлено {Math.round(uploadFraction * 100)}%
-              </p>
-            ) : null}
-
-            {state.formError ? (
-              <p
-                className="rounded-md border border-danger/40 bg-danger/5 p-3 text-13 text-danger"
-                role="alert"
-              >
-                {state.formError}
-              </p>
-            ) : null}
-
-            <div className="flex flex-wrap items-center justify-end gap-3">
-              {hasFile ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => dropRef.current?.open()}
-                  disabled={submitting}
-                >
-                  Выбрать другой файл
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => navigate('/dashboard')}
-                  disabled={submitting}
-                >
-                  Отмена
-                </Button>
-              )}
-              <Button
-                type="submit"
-                variant="primary"
-                disabled={!hasFile || submitting}
-                loading={submitting}
-              >
-                Начать проверку
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <div className="p-6 md:p-8">
-            <PasteTextPlaceholder />
+          <div className={cn((hasFile || submitting) && 'hidden')}>
+            <FileDropZone
+              ref={dropRef}
+              id="new-check-file"
+              idleTitle="Перетащите PDF сюда"
+              loading={submitting}
+              disabled={submitting}
+              onAccepted={handleFileAccepted}
+              onError={handleFileError}
+              onReset={handleFileReset}
+            />
+            <p className="mt-3 flex items-center justify-center gap-1.5 text-12 text-fg-disabled">
+              <span aria-hidden>🔒</span>
+              Документы обрабатываются конфиденциально и не передаются третьим лицам
+            </p>
           </div>
-        )}
+
+          {state.fileError ? (
+            <p id="new-check-file-error" className="text-13 text-danger" role="alert">
+              {state.fileError}
+            </p>
+          ) : null}
+
+          {hasFile && !submitting && state.file ? (
+            <FileCard
+              ref={fileCardRef}
+              file={state.file}
+              onReplace={() => dropRef.current?.open()}
+              onRemove={() => dropRef.current?.reset()}
+            />
+          ) : null}
+
+          {submitting ? (
+            <ProcessingProgress
+              status="UPLOADED"
+              aria-label="Загрузка договора"
+              // Прогресс-байт из axios (0..1) отражает лишь upload-фазу;
+              // pipeline-шаги (QUEUED → ... → READY) уже после 202.
+              // Используем UPLOADED как «договор загружается».
+            />
+          ) : null}
+
+          {uploadFraction !== null && submitting ? (
+            <p className="text-12 text-fg-muted" aria-live="polite">
+              Отправлено {Math.round(uploadFraction * 100)}%
+            </p>
+          ) : null}
+
+          {state.formError ? (
+            <p
+              className="rounded-md border border-danger/40 bg-danger/5 p-3 text-13 text-danger"
+              role="alert"
+            >
+              {state.formError}
+            </p>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {hasFile ? (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => dropRef.current?.open()}
+                disabled={submitting}
+              >
+                Выбрать другой файл
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => navigate('/dashboard')}
+                disabled={submitting}
+              >
+                Отмена
+              </Button>
+            )}
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!hasFile || submitting}
+              loading={submitting}
+            >
+              Начать проверку
+            </Button>
+          </div>
+        </form>
+
+        <div hidden={activeTab !== 'paste'} className="p-6 md:p-8">
+          <PasteTextPlaceholder />
+        </div>
       </Card>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
@@ -310,16 +341,27 @@ export function NewCheckPage(): JSX.Element {
 }
 
 /** FileCard — карточка выбранного PDF (Figma 135:3): тип-бейдж + имя + размер
- *  + действия «Заменить»/«Удалить» + зелёный статус готовности. */
+ *  + действия «Заменить»/«Удалить» + зелёный статус готовности. forwardRef +
+ *  tabIndex=-1: страница приземляет сюда фокус после выбора файла (см. useEffect)
+ *  — чтобы клавиатурный фокус не свалился на <body> при скрытии drop-зоны. */
 interface FileCardProps {
   file: File;
   onReplace: () => void;
   onRemove: () => void;
 }
 
-function FileCard({ file, onReplace, onRemove }: FileCardProps): JSX.Element {
+const FileCard = forwardRef<HTMLDivElement, FileCardProps>(function FileCard(
+  { file, onReplace, onRemove },
+  ref,
+) {
   return (
-    <div className="flex flex-col gap-4">
+    <div
+      ref={ref}
+      role="group"
+      aria-label="Выбранный файл"
+      tabIndex={-1}
+      className="flex flex-col gap-4 focus:outline-none"
+    >
       <div className="flex items-center gap-3.5 rounded-md bg-bg-muted px-4 py-3.5">
         <span
           aria-hidden
@@ -349,17 +391,35 @@ function FileCard({ file, onReplace, onRemove }: FileCardProps): JSX.Element {
         </div>
       </div>
       <div className="flex items-center justify-center gap-2">
-        <span aria-hidden className="h-2 w-2 shrink-0 rounded-sm bg-success" />
+        <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-success" />
         <p className="text-13 font-medium text-success" role="status">
           PDF загружен. Можно запускать проверку
         </p>
       </div>
     </div>
   );
-}
+});
 
 /** Табы upload ↔ paste (Figma 116:3). Нативные button-ы с role=tab; panel —
- *  родительская форма/placeholder. Active — brand-подчёркивание. */
+ *  родительская форма/placeholder. Active — brand-подчёркивание. Клавиатура:
+ *  стрелки/Home/End перемещают и активируют таб (WAI-ARIA APG, follow-focus). */
+const TAB_DEFS: ReadonlyArray<{
+  key: TabKey;
+  id: string;
+  panelId: string;
+  icon: string;
+  label: string;
+}> = [
+  {
+    key: 'upload',
+    id: 'tab-upload',
+    panelId: 'tab-panel-upload',
+    icon: '↑',
+    label: 'Загрузить PDF',
+  },
+  { key: 'paste', id: 'tab-paste', panelId: 'tab-panel-paste', icon: '✎', label: 'Вставить текст' },
+];
+
 interface TabsProps {
   active: TabKey;
   onChange: (key: TabKey) => void;
@@ -367,30 +427,47 @@ interface TabsProps {
 }
 
 function Tabs({ active, onChange, disabled }: TabsProps): JSX.Element {
+  const listRef = useRef<HTMLDivElement>(null);
+  const activeIdx = TAB_DEFS.findIndex((t) => t.key === active);
+
+  // Обработчик стрелок навешан на сами таб-кнопки (они focusable) — не на
+  // контейнер tablist, чтобы не делать список фокусируемым (jsx-a11y).
+  function handleKeyDown(e: KeyboardEvent<HTMLButtonElement>): void {
+    if (disabled) return;
+    let next = -1;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (activeIdx + 1) % TAB_DEFS.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
+      next = (activeIdx - 1 + TAB_DEFS.length) % TAB_DEFS.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = TAB_DEFS.length - 1;
+    else return;
+    e.preventDefault();
+    const nextTab = TAB_DEFS[next];
+    if (!nextTab) return;
+    onChange(nextTab.key);
+    listRef.current?.querySelector<HTMLButtonElement>(`#${nextTab.id}`)?.focus();
+  }
+
   return (
     <div
+      ref={listRef}
       role="tablist"
       aria-label="Способ загрузки"
       className="flex gap-1 border-b border-border-subtle px-6"
     >
-      <TabButton
-        id="tab-upload"
-        panelId="tab-panel-upload"
-        icon="↑"
-        label="Загрузить PDF"
-        selected={active === 'upload'}
-        onClick={() => onChange('upload')}
-        disabled={disabled}
-      />
-      <TabButton
-        id="tab-paste"
-        panelId="tab-panel-paste"
-        icon="✎"
-        label="Вставить текст"
-        selected={active === 'paste'}
-        onClick={() => onChange('paste')}
-        disabled={disabled}
-      />
+      {TAB_DEFS.map((t) => (
+        <TabButton
+          key={t.key}
+          id={t.id}
+          panelId={t.panelId}
+          icon={t.icon}
+          label={t.label}
+          selected={active === t.key}
+          onClick={() => onChange(t.key)}
+          onKeyDown={handleKeyDown}
+          disabled={disabled}
+        />
+      ))}
     </div>
   );
 }
@@ -403,6 +480,7 @@ interface TabButtonProps {
   selected: boolean;
   disabled: boolean;
   onClick: () => void;
+  onKeyDown: (e: KeyboardEvent<HTMLButtonElement>) => void;
 }
 
 function TabButton({
@@ -413,6 +491,7 @@ function TabButton({
   selected,
   disabled,
   onClick,
+  onKeyDown,
 }: TabButtonProps): JSX.Element {
   const base =
     'inline-flex items-center gap-2 -mb-px border-b-2 px-4 py-3 text-14 transition-colors focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60';
@@ -428,6 +507,7 @@ function TabButton({
       aria-controls={panelId}
       tabIndex={selected ? 0 : -1}
       onClick={onClick}
+      onKeyDown={onKeyDown}
       disabled={disabled}
       className={`${base} ${variant}`}
     >
@@ -443,7 +523,8 @@ function PasteTextPlaceholder(): JSX.Element {
       id="tab-panel-paste"
       role="tabpanel"
       aria-labelledby="tab-paste"
-      className="flex flex-col items-center gap-2 rounded-md border border-dashed border-border bg-bg-muted p-8 text-center"
+      tabIndex={0}
+      className="flex flex-col items-center gap-2 rounded-md border border-dashed border-border bg-bg-muted p-8 text-center focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
     >
       <p className="text-14 font-medium text-fg">Вставка текста появится позже</p>
       <p className="text-13 text-fg-muted">

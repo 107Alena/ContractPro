@@ -53,7 +53,6 @@ import { Button } from '@/shared/ui/button';
 import { FeedbackBlock } from '@/widgets/feedback-block';
 import { LegalDisclaimer } from '@/widgets/legal-disclaimer';
 import { MandatoryConditionsChecklist } from '@/widgets/mandatory-conditions-checklist';
-import { RecommendationsList } from '@/widgets/recommendations-list';
 import { RiskProfileCard } from '@/widgets/risk-profile-card';
 import { RisksList } from '@/widgets/risks-list';
 
@@ -143,11 +142,11 @@ function ReadyContent({
       </Can>
 
       <Can I="risks.view">
-        <RisksList risks={results.risks ?? []} onRiskClick={openRisk} />
-      </Can>
-
-      <Can I="recommendations.view">
-        <RecommendationsList items={results.recommendations ?? []} />
+        <RisksList
+          risks={results.risks ?? []}
+          recommendations={results.recommendations ?? []}
+          onRiskClick={openRisk}
+        />
       </Can>
 
       <Can I="risks.view">

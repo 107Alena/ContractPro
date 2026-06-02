@@ -1,46 +1,65 @@
-// RisksList — список рисков версии (экран 8 Figma «Ключевые риски»; §17.4,
-// §17.5 artifact RISK_ANALYSIS). В v1 FE-TASK-045 виджет сам не тянет /risks
-// (это FE-TASK-046/048) — принимает `risks` пропом; при отсутствии рисует
-// empty state «Появятся после анализа».
+// RisksList — секция «Ключевые риски» (Figma 150:2 → 156:2/156:7). Каждый риск
+// — карточка с левым акцент-бордером по уровню, бейджем, описанием, строкой
+// «пункт · рекомендация» и действиями «Подробнее» (drawer) / «Показать
+// формулировку» (раскрывает рекомендованную формулировку).
 //
-// RBAC: виджет скрывается на уровне page через <Can I="risks.view">
-// (Pattern B из §5.6.1). Сам компонент role-agnostic.
+// Рекомендации интегрированы в карточки риска по `recommendation.risk_id ===
+// risk.id` (Figma 150:2 не имеет отдельной секции «Рекомендации»). Передаётся
+// опциональным `recommendations` — ContractDetail/Dashboard их не передают и
+// получают карточки без рекомендательной части (обратная совместимость).
 //
-// TODO(FE-TASK-046/048): при подключении useRisks(contractId, versionId) в
-// parent-page сам запрос должен быть защищён `enabled: useCan('risks.view')` —
-// §5.6.1 требует, чтобы скрытые для роли данные не загружались. Не переносить
-// useQuery внутрь этого виджета без такого guard'а.
-import { RiskBadge } from '@/entities/risk';
+// RBAC: виджет скрывается на уровне page через <Can I="risks.view"> (§5.6.1).
+import { useState } from 'react';
+
+import { RiskBadge, type RiskLevel } from '@/entities/risk';
 import type { components } from '@/shared/api/openapi';
+import { cn } from '@/shared/lib/cn';
 import { Spinner } from '@/shared/ui';
 
 type Risk = components['schemas']['Risk'];
+type Recommendation = components['schemas']['Recommendation'];
 
 export interface RisksListProps {
   risks?: readonly Risk[] | undefined;
+  /** Рекомендации версии — мапятся в карточки по `risk_id`. */
+  recommendations?: readonly Recommendation[] | undefined;
   isLoading?: boolean | undefined;
   error?: unknown;
   /**
-   * Открывает RiskDetailsDrawer (§16.5 компонентное дерево ResultPage,
-   * §17.5 artifact RISK_ANALYSIS). Когда передан — каждый элемент списка
-   * рендерится как `<button>`, кликабелен и получает роль кнопки. Когда
-   * пропущен — элементы остаются пассивными `<li>` (обратная совместимость
-   * с ContractDetailPage/Dashboard, где drawer пока не подключён).
+   * Открывает RiskDetailsDrawer. Когда передан — у карточки появляется кнопка
+   * «Подробнее» (data-testid=risks-list-item-button). Без него карточка
+   * пассивна (обратная совместимость с ContractDetailPage/Dashboard).
    */
   onRiskClick?: ((risk: Risk) => void) | undefined;
 }
 
-export function RisksList({ risks, isLoading, error, onRiskClick }: RisksListProps): JSX.Element {
+const RISK_ACCENT: Record<RiskLevel, string> = {
+  high: 'border-l-risk-high',
+  medium: 'border-l-risk-medium',
+  low: 'border-l-risk-low',
+};
+
+export function RisksList({
+  risks,
+  recommendations,
+  isLoading,
+  error,
+  onRiskClick,
+}: RisksListProps): JSX.Element {
+  const recByRiskId = new Map<string, Recommendation>();
+  for (const rec of recommendations ?? []) {
+    if (rec.risk_id) recByRiskId.set(rec.risk_id, rec);
+  }
+  const count = risks?.length ?? 0;
+
   return (
     <section
       aria-label="Ключевые риски"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+      className="flex flex-col gap-4 rounded-xl border border-border-subtle bg-bg p-6 shadow-none"
     >
-      <header>
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Ключевые риски
-        </h2>
-        <p className="mt-1 text-xs text-fg-muted">Выявленные юридические и финансовые риски</p>
+      <header className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-18 font-semibold text-fg">Ключевые риски</h2>
+        {count > 0 ? <span className="text-13 text-fg-subtle">{count} найдено</span> : null}
       </header>
 
       {isLoading && !risks ? (
@@ -52,11 +71,11 @@ export function RisksList({ risks, isLoading, error, onRiskClick }: RisksListPro
           <Spinner size="md" aria-hidden="true" />
         </div>
       ) : error ? (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-13 text-danger">
           Не удалось загрузить список рисков.
         </p>
       ) : !risks || risks.length === 0 ? (
-        <p className="text-sm text-fg-muted" data-testid="risks-list-empty">
+        <p className="text-14 text-fg-muted" data-testid="risks-list-empty">
           Риски появятся после завершения анализа текущей версии.
         </p>
       ) : (
@@ -65,6 +84,7 @@ export function RisksList({ risks, isLoading, error, onRiskClick }: RisksListPro
             <RiskItem
               key={risk.id ?? `risk-${idx}`}
               risk={risk}
+              recommendation={risk.id ? recByRiskId.get(risk.id) : undefined}
               {...(onRiskClick ? { onClick: () => onRiskClick(risk) } : {})}
             />
           ))}
@@ -74,43 +94,87 @@ export function RisksList({ risks, isLoading, error, onRiskClick }: RisksListPro
   );
 }
 
-function RiskItem({ risk, onClick }: { risk: Risk; onClick?: () => void }): JSX.Element {
-  const body = (
-    <>
-      <div className="flex flex-wrap items-baseline gap-2">
-        {risk.level ? <RiskBadge level={risk.level} /> : null}
-        {risk.clause_ref ? (
-          <span className="text-xs text-fg-muted">Пункт: {risk.clause_ref}</span>
-        ) : null}
-      </div>
-      {risk.description ? <p className="text-sm text-fg">{risk.description}</p> : null}
-      {risk.legal_basis ? (
-        <p className="text-xs text-fg-muted">Основание: {risk.legal_basis}</p>
-      ) : null}
-    </>
-  );
+interface RiskItemProps {
+  risk: Risk;
+  recommendation?: Recommendation | undefined;
+  onClick?: () => void;
+}
 
-  if (onClick) {
-    return (
-      <li data-testid="risks-list-item">
-        <button
-          type="button"
-          onClick={onClick}
-          data-testid="risks-list-item-button"
-          className="flex w-full flex-col gap-2 rounded-md border border-border bg-bg-muted p-3 text-left transition hover:bg-bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-        >
-          {body}
-        </button>
-      </li>
-    );
-  }
+function RiskItem({ risk, recommendation, onClick }: RiskItemProps): JSX.Element {
+  const [showWording, setShowWording] = useState(false);
+  const level = risk.level;
+  const hasWording = Boolean(recommendation?.recommended_text);
 
   return (
     <li
       data-testid="risks-list-item"
-      className="flex flex-col gap-2 rounded-md border border-border bg-bg-muted p-3"
+      className={cn(
+        'flex flex-col gap-3 rounded-xl border border-border-subtle border-l-[3px] bg-bg px-5 py-4',
+        level ? RISK_ACCENT[level] : 'border-l-border',
+      )}
     >
-      {body}
+      <div className="flex flex-wrap items-center gap-2.5">
+        {level ? <RiskBadge level={level} /> : null}
+        {risk.description ? (
+          <p className="text-15 font-semibold text-fg">{risk.description}</p>
+        ) : null}
+      </div>
+
+      {risk.legal_basis ? (
+        <p className="text-13 leading-5 text-fg-muted">{risk.legal_basis}</p>
+      ) : null}
+
+      {risk.clause_ref || recommendation?.explanation ? (
+        <div className="flex flex-wrap items-center gap-2 text-12">
+          {risk.clause_ref ? (
+            <span className="font-medium text-fg-subtle">{risk.clause_ref}</span>
+          ) : null}
+          {risk.clause_ref && recommendation?.explanation ? (
+            <span aria-hidden className="text-fg-disabled">
+              ·
+            </span>
+          ) : null}
+          {recommendation?.explanation ? (
+            <span className="text-brand-600">{recommendation.explanation}</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {onClick || hasWording ? (
+        <div className="flex flex-wrap items-center gap-4 text-13 font-medium">
+          {onClick ? (
+            <button
+              type="button"
+              onClick={onClick}
+              data-testid="risks-list-item-button"
+              className="rounded-sm text-brand-500 hover:underline focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
+            >
+              Подробнее
+            </button>
+          ) : null}
+          {hasWording ? (
+            <button
+              type="button"
+              onClick={() => setShowWording((v) => !v)}
+              aria-expanded={showWording}
+              className="rounded-sm text-fg-subtle hover:text-fg focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
+            >
+              {showWording ? 'Скрыть формулировку' : 'Показать формулировку'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {showWording && recommendation ? (
+        <div className="flex flex-col gap-2 rounded-md bg-bg-muted p-3 text-13">
+          {recommendation.original_text ? (
+            <p className="text-fg-muted line-through">{recommendation.original_text}</p>
+          ) : null}
+          {recommendation.recommended_text ? (
+            <p className="text-fg">{recommendation.recommended_text}</p>
+          ) : null}
+        </div>
+      ) : null}
     </li>
   );
 }

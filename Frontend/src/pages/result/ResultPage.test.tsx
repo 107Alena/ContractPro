@@ -216,11 +216,13 @@ describe('ResultPage', () => {
       expect(screen.getByTestId('state-ready')).toBeDefined();
     });
     expect(screen.getByRole('region', { name: 'Ключевые риски' })).toBeDefined();
-    expect(screen.getByRole('region', { name: 'Рекомендации' })).toBeDefined();
     expect(screen.getByRole('region', { name: 'Профиль рисков' })).toBeDefined();
     expect(screen.getByRole('region', { name: 'Краткое резюме' })).toBeDefined();
     expect(screen.getByRole('region', { name: 'Отклонения от политики' })).toBeDefined();
     expect(screen.getByTestId('legal-disclaimer')).toBeDefined();
+    // Рекомендации интегрированы в карточки риска (Figma 150:2 — отдельной
+    // секции нет): для риска r1 есть рекомендация → кнопка «Показать формулировку».
+    expect(screen.getByRole('button', { name: /показать формулировку/i })).toBeDefined();
   });
 
   it('PartiallyFailed — показывает WarningsBanner + полный контент', async () => {
@@ -244,7 +246,6 @@ describe('ResultPage', () => {
     });
     expect(screen.getByRole('region', { name: 'Краткое резюме' })).toBeDefined();
     expect(screen.queryByRole('region', { name: 'Ключевые риски' })).toBeNull();
-    expect(screen.queryByRole('region', { name: 'Рекомендации' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Профиль рисков' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Отклонения от политики' })).toBeNull();
     // BUSINESS_USER без export_enabled — кнопка экспорта скрывается.

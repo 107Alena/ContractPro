@@ -128,8 +128,10 @@ function StatusLine({
   return (
     <div className="flex items-center gap-2">
       <dt className="text-13 text-fg-subtle">{label}</dt>
-      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
-      <dd className="text-13 font-medium text-fg">{value}</dd>
+      <dd className="flex items-center gap-2 text-13 font-medium text-fg">
+        <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+        {value}
+      </dd>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom';
 
 import type { ContractDetails } from '@/entities/contract';
 import { StatusBadge } from '@/entities/version';
+import { useCanExport } from '@/shared/auth';
 import { buttonVariants, Card } from '@/shared/ui';
 
 export interface LastCheckProps {
@@ -26,6 +27,7 @@ function formatDateTime(iso?: string): string {
 }
 
 export function LastCheck({ contract }: LastCheckProps): JSX.Element {
+  const canExport = useCanExport();
   const version = contract.current_version;
   const contractId = contract.contract_id;
   const versionId = version?.version_id;
@@ -67,7 +69,7 @@ export function LastCheck({ contract }: LastCheckProps): JSX.Element {
                 Открыть результат
               </Link>
             ) : null}
-            {isReady && resultHref ? (
+            {isReady && resultHref && canExport ? (
               <Link
                 to={resultHref}
                 className={buttonVariants({ variant: 'secondary', size: 'sm' })}

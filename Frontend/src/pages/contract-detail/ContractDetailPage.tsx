@@ -71,7 +71,7 @@ function NotFoundState(): JSX.Element {
       data-testid="state-not-found"
       className="flex flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border bg-bg-muted p-12 text-center"
     >
-      <h2 className="text-lg font-semibold text-fg">Договор не найден</h2>
+      <h1 className="text-lg font-semibold text-fg">Договор не найден</h1>
       <p className="max-w-md text-sm text-fg-muted">
         Возможно, ссылка устарела или договор был удалён. Проверьте URL или вернитесь к списку.
       </p>
@@ -89,7 +89,7 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
       role="alert"
       className="flex flex-col items-center justify-center gap-3 rounded-md border border-danger/30 bg-bg p-12 text-center"
     >
-      <h2 className="text-lg font-semibold text-danger">Не удалось загрузить карточку</h2>
+      <h1 className="text-lg font-semibold text-danger">Не удалось загрузить карточку</h1>
       <p className="max-w-md text-sm text-fg-muted">{message}</p>
       <Button type="button" variant="secondary" onClick={onRetry} data-testid="retry-contract">
         Повторить
@@ -146,7 +146,7 @@ function ReadyContent({
             error={versionsError ?? undefined}
           />
 
-          <div id="check-history">
+          <div id="check-history" tabIndex={-1} className="scroll-mt-4 focus:outline-none">
             <ChecksHistory
               contractId={contractId}
               versions={versions}

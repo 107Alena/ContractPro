@@ -14,6 +14,7 @@ import { Link } from 'react-router-dom';
 
 import type { ContractDetails } from '@/entities/contract';
 import { StatusBadge } from '@/entities/version';
+import { useCanExport } from '@/shared/auth';
 import { Button, buttonVariants, Card } from '@/shared/ui';
 
 export interface DocumentHeaderProps {
@@ -47,6 +48,7 @@ function fileType(name?: string): string {
 }
 
 export function DocumentHeader({ contract }: DocumentHeaderProps): JSX.Element {
+  const canExport = useCanExport();
   const version = contract.current_version;
   const title = contract.title ?? 'Договор без названия';
   const contractId = contract.contract_id;
@@ -69,31 +71,34 @@ export function DocumentHeader({ contract }: DocumentHeaderProps): JSX.Element {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <h1 className="text-24 font-bold leading-9 text-fg">{title}</h1>
         <div className="flex flex-wrap items-center gap-2.5 pt-1">
-          {isReady && resultHref ? (
-            <>
-              <Link
-                to={resultHref}
-                className={buttonVariants({ variant: 'secondary', size: 'sm' })}
-              >
-                Скачать отчёт
-              </Link>
-              <Link
-                to={resultHref}
-                className={buttonVariants({ variant: 'secondary', size: 'sm' })}
-              >
-                Поделиться
-              </Link>
-            </>
-          ) : (
-            <>
-              <Button type="button" variant="secondary" size="sm" disabled>
-                Скачать отчёт
-              </Button>
-              <Button type="button" variant="secondary" size="sm" disabled>
-                Поделиться
-              </Button>
-            </>
-          )}
+          {/* Экспорт/шаринг — только для ролей с правом экспорта (как
+              ExportShareButton на ResultPage); иначе CTA не показываем. */}
+          {canExport &&
+            (isReady && resultHref ? (
+              <>
+                <Link
+                  to={resultHref}
+                  className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+                >
+                  Скачать отчёт
+                </Link>
+                <Link
+                  to={resultHref}
+                  className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+                >
+                  Поделиться
+                </Link>
+              </>
+            ) : (
+              <>
+                <Button type="button" variant="secondary" size="sm" disabled>
+                  Скачать отчёт
+                </Button>
+                <Button type="button" variant="secondary" size="sm" disabled>
+                  Поделиться
+                </Button>
+              </>
+            ))}
           {contractId ? (
             <Link
               to={`/contracts/new?contractId=${contractId}`}
@@ -115,7 +120,7 @@ export function DocumentHeader({ contract }: DocumentHeaderProps): JSX.Element {
         <div className="flex flex-wrap items-center gap-4">
           <span
             aria-hidden
-            className="flex h-12 items-center justify-center rounded-lg bg-brand-500/10 px-2.5 text-12 font-bold text-brand-600"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-brand-500/10 text-12 font-bold text-brand-600"
           >
             PDF
           </span>

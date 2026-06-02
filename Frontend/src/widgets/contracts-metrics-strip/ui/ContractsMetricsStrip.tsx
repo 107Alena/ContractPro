@@ -78,9 +78,17 @@ export function ContractsMetricsStrip({
     label: string;
     dot?: string;
     muted?: boolean;
+    /** Счётчик по текущей странице (не глобальный) — добавляем пояснение об охвате. */
+    scoped?: boolean;
   }> = [
     { key: 'total', value: safeTotal, label: 'документов' },
-    { key: 'in-progress', value: counts.inProgress, label: 'в обработке', dot: 'bg-processing' },
+    {
+      key: 'in-progress',
+      value: counts.inProgress,
+      label: 'в обработке',
+      dot: 'bg-processing',
+      scoped: true,
+    },
     { key: 'high-risk', value: '—', label: 'высокий риск', dot: 'bg-risk-high', muted: true },
     {
       key: 'completed-today',
@@ -89,7 +97,13 @@ export function ContractsMetricsStrip({
       dot: 'bg-success',
       muted: true,
     },
-    { key: 'attention', value: counts.attention, label: 'требуют внимания', dot: 'bg-warning' },
+    {
+      key: 'attention',
+      value: counts.attention,
+      label: 'требуют внимания',
+      dot: 'bg-warning',
+      scoped: true,
+    },
   ];
 
   return (
@@ -103,6 +117,7 @@ export function ContractsMetricsStrip({
           key={s.key}
           className="flex items-center gap-2"
           data-testid={`contracts-metrics-strip-card-${s.key}`}
+          {...(s.scoped ? { title: `${s.label} — на текущей странице` } : {})}
         >
           {s.dot ? (
             <span className={`size-2 shrink-0 rounded-full ${s.dot}`} aria-hidden="true" />
@@ -110,7 +125,10 @@ export function ContractsMetricsStrip({
           <span className={`text-24 font-bold ${s.muted ? 'text-fg-disabled' : 'text-fg'}`}>
             {s.value}
           </span>
-          <span className="text-13 text-fg-muted">{s.label}</span>
+          <span className="text-13 text-fg-muted">
+            {s.label}
+            {s.scoped ? <span className="sr-only"> — на текущей странице</span> : null}
+          </span>
         </div>
       ))}
     </Card>

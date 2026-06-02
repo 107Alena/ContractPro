@@ -17,6 +17,7 @@ import {
   flexRender,
   getCoreRowModel,
   getSortedRowModel,
+  type Header,
   type Row,
   type SortingState,
   useReactTable,
@@ -150,6 +151,48 @@ function DefaultFilteredEmpty(): JSX.Element {
   );
 }
 
+// Единый класс заголовка таблицы (sentence-case, Figma 201:2) — общий для
+// обычного и виртуализированного <thead>, чтобы стиль не расходился.
+const HEADER_TH_CLASS =
+  'h-10 whitespace-nowrap px-3 text-left align-middle text-13 font-medium text-fg-subtle';
+
+// Ячейка заголовка с client-side сортировкой (sort-кнопка + aria-sort).
+// Используется в ОБОИХ thead (обычном и виртуализированном), чтобы сортировка
+// кликом и aria-sort работали и при >50 строках (virtualized path).
+function HeaderCell({ header }: { header: Header<ContractSummary, unknown> }): JSX.Element {
+  const canSort = header.column.getCanSort();
+  const direction = header.column.getIsSorted();
+  const ariaSort =
+    canSort && direction === 'asc'
+      ? 'ascending'
+      : canSort && direction === 'desc'
+        ? 'descending'
+        : canSort
+          ? 'none'
+          : undefined;
+  const label = header.column.columnDef.header;
+
+  return (
+    <th scope="col" {...(ariaSort ? { 'aria-sort': ariaSort } : {})} className={HEADER_TH_CLASS}>
+      {header.isPlaceholder ? null : canSort ? (
+        <button
+          type="button"
+          onClick={header.column.getToggleSortingHandler()}
+          aria-label={typeof label === 'string' ? `Сортировать по «${label}»` : 'Сортировать'}
+          className="inline-flex items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
+        >
+          {flexRender(label, header.getContext())}
+          <span aria-hidden="true" className="text-fg-muted">
+            {direction === 'asc' ? '▲' : direction === 'desc' ? '▼' : '↕'}
+          </span>
+        </button>
+      ) : (
+        flexRender(label, header.getContext())
+      )}
+    </th>
+  );
+}
+
 export function DocumentsTable({
   items,
   isLoading = false,
@@ -216,46 +259,9 @@ export function DocumentsTable({
             <thead className="bg-bg-muted">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id} className="border-b border-border">
-                  {hg.headers.map((header) => {
-                    const canSort = header.column.getCanSort();
-                    const direction = header.column.getIsSorted();
-                    const ariaSort =
-                      canSort && direction === 'asc'
-                        ? 'ascending'
-                        : canSort && direction === 'desc'
-                          ? 'descending'
-                          : canSort
-                            ? 'none'
-                            : undefined;
-                    return (
-                      <th
-                        key={header.id}
-                        scope="col"
-                        {...(ariaSort ? { 'aria-sort': ariaSort } : {})}
-                        className="h-10 whitespace-nowrap px-3 text-left align-middle text-13 font-medium text-fg-subtle"
-                      >
-                        {header.isPlaceholder ? null : canSort ? (
-                          <button
-                            type="button"
-                            onClick={header.column.getToggleSortingHandler()}
-                            aria-label={
-                              typeof header.column.columnDef.header === 'string'
-                                ? `Сортировать по «${header.column.columnDef.header}»`
-                                : 'Сортировать'
-                            }
-                            className="inline-flex items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
-                          >
-                            {flexRender(header.column.columnDef.header, header.getContext())}
-                            <span aria-hidden="true" className="text-fg-muted">
-                              {direction === 'asc' ? '▲' : direction === 'desc' ? '▼' : '↕'}
-                            </span>
-                          </button>
-                        ) : (
-                          flexRender(header.column.columnDef.header, header.getContext())
-                        )}
-                      </th>
-                    );
-                  })}
+                  {hg.headers.map((header) => (
+                    <HeaderCell key={header.id} header={header} />
+                  ))}
                 </tr>
               ))}
             </thead>
@@ -347,6 +353,9 @@ function VirtualizedBody({ rows, columns, headerGroups }: VirtualizedBodyProps):
           stable aria-rowindex, заголовок = 1, первая строка данных = 2. */}
       <table
         className="w-full border-collapse text-sm text-fg"
+        // role="grid" сохранён: строки виртуализированы (position:absolute),
+        // implicit table-роли теряются — нужны явные role row/gridcell. Полный
+        // grid-keyboard-паттерн — отдельный backlog-пункт (a11y).
         role="grid"
         aria-rowcount={rows.length + 1}
         aria-colcount={columns}
@@ -354,18 +363,8 @@ function VirtualizedBody({ rows, columns, headerGroups }: VirtualizedBodyProps):
         <thead className="sticky top-0 z-10 bg-bg-muted">
           {headerGroups.map((hg) => (
             <tr key={hg.id} role="row" aria-rowindex={1} className="border-b border-border">
-              {hg.headers.map((header, colIdx) => (
-                <th
-                  key={header.id}
-                  scope="col"
-                  role="columnheader"
-                  aria-colindex={colIdx + 1}
-                  className="h-10 whitespace-nowrap px-3 text-left align-middle text-xs font-medium uppercase tracking-wide text-fg-muted"
-                >
-                  {header.isPlaceholder
-                    ? null
-                    : flexRender(header.column.columnDef.header, header.getContext())}
-                </th>
+              {hg.headers.map((header) => (
+                <HeaderCell key={header.id} header={header} />
               ))}
             </tr>
           ))}

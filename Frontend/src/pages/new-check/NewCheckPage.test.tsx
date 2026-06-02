@@ -99,9 +99,7 @@ afterEach(() => {
 describe('NewCheckPage', () => {
   it('рендерит главный заголовок «Новая проверка»', () => {
     renderPage();
-    expect(
-      screen.getByRole('heading', { level: 1, name: /новая проверка/i }),
-    ).toBeDefined();
+    expect(screen.getByRole('heading', { level: 1, name: /новая проверка/i })).toBeDefined();
   });
 
   it('показывает форму: title input + file-dropzone + submit', () => {
@@ -135,15 +133,13 @@ describe('NewCheckPage', () => {
 
   it('виджеты WillHappenSteps и WhatWeCheck видны', () => {
     renderPage();
-    expect(screen.getByRole('region', { name: 'Что произойдёт' })).toBeDefined();
-    expect(screen.getByRole('region', { name: 'Что мы проверяем' })).toBeDefined();
+    expect(screen.getByRole('region', { name: 'Что произойдёт после запуска' })).toBeDefined();
+    expect(screen.getByRole('region', { name: 'Что проверяет ContractPro' })).toBeDefined();
   });
 
   it('RBAC: user=null → fallback «Недостаточно прав»', () => {
     renderPage(null);
-    expect(
-      screen.getByRole('heading', { level: 1, name: /недостаточно прав/i }),
-    ).toBeDefined();
+    expect(screen.getByRole('heading', { level: 1, name: /недостаточно прав/i })).toBeDefined();
   });
 
   it('onSuccess → navigate(/contracts/:id/versions/:vid/result)', () => {

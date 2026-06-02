@@ -1417,7 +1417,7 @@ graph TD
 | 2. Auth | 4 (Desktop) + Mobile | LoginPage | PromoSidebar, LoginForm |
 | 3. Dashboard | 4 | DashboardPage | WhatMattersCards, LastCheckCard, QuickStart, OrgCard, RecentChecksTable, KeyRisksCards |
 | 4. Новая проверка | 12 | NewCheckPage | FileDropZone, FileCard, PasteTextTab, WillHappenSteps, WhatWeCheck, Tips, TrustFooter (reuse), LowConfidenceConfirm |
-| 5. Результат | 8 | ResultPage | DocumentCard, RiskProfileCard, MandatoryConditions, RisksList, SummaryTable, DeviationsFromPolicy, NextActions, FeedbackBlock, LegalDisclaimer |
+| 5. Результат | 8 | ResultPage | DocumentCard (тонкая meta), RiskProfileCard, MandatoryConditions, RisksList (с интегрированными рекомендациями по risk_id), SummaryTable, DeviationsFromPolicy, NextActions, FeedbackBlock, LegalDisclaimer, TrustFooter (reuse). 2-кол layout (Figma 150:2); standalone RecommendationsList убран (рекомендации в risk-карточках) |
 | 6. Сравнение | 9 | ComparisonPage | VersionMetaHeader, ComparisonVerdictCard, ChangeCounters, TabsFilters, ChangesTable, RiskProfileDelta, KeyDiffsBySection, SideBySideDiff, RisksGroups |
 | 7. Документы | 9 + 1 tablet | ContractsListPage | MetricsStrip, WhatMattersCards, SearchBar, FilterChips, DocumentsTable |
 | 8. Карточка документа | 9 + 1 tablet | ContractDetailPage | DocumentHeader (PageIntro + MetaCard), SummaryCard, LastCheck, QuickStart (Быстрые действия), AccessNote, ComparisonEntry, KeyRisks, Recommendations, VersionsTimeline, ChecksHistory, ReportsShared, DeviationsChecklist, TrustFooter (reuse), PDFNavigator. Stats/Activity-карточки Figma не реализованы (нет бэкенда для агрегатов/ленты); VersionPicker удалён (в Figma нет) |

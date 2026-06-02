@@ -29,18 +29,20 @@ import { type ContractDetails, useContract } from '@/entities/contract';
 import { useVersions, type VersionDetails } from '@/entities/version';
 import { isOrchestratorError, toUserMessage, useEventStream } from '@/shared/api';
 import { Can } from '@/shared/auth';
-import { Button, buttonVariants, Spinner } from '@/shared/ui';
+import { Button, buttonVariants, Card, Spinner } from '@/shared/ui';
+import { TrustFooter } from '@/widgets/dashboard-trust-footer';
 import { RecommendationsList } from '@/widgets/recommendations-list';
 import { RisksList } from '@/widgets/risks-list';
 import { ChecksHistory, VersionsTimeline } from '@/widgets/versions-timeline';
 
+import { AccessNote } from './ui/access-note';
+import { ComparisonEntry } from './ui/comparison-entry';
 import { DeviationsChecklist } from './ui/deviations-checklist';
 import { DocumentHeader } from './ui/document-header';
 import { LastCheck } from './ui/last-check';
 import { QuickStart } from './ui/quick-start';
 import { ReportsShared } from './ui/reports-shared';
 import { SummaryCard } from './ui/summary-card';
-import { VersionPicker } from './ui/version-picker';
 
 // React.lazy → отдельный chunk `chunks/pdf-preview` (vite.config manualChunks).
 // Default-export PDFNavigator загружается динамически только при включении тумблера.
@@ -117,109 +119,111 @@ function ReadyContent({
     setPDFOpen((prev) => !prev);
   }, []);
 
+  const isReady = currentVersion?.processing_status === 'READY';
+
   return (
     <div className="flex flex-col gap-6" data-testid="state-ready">
       <DocumentHeader contract={contract} />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="md:col-span-2">
+      {/* Main Content Row — левая колонка (контент) + правая (320, действия). */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+        <div className="flex min-w-0 flex-col gap-6">
           <SummaryCard contract={contract} />
-        </div>
-        <LastCheck contract={contract} />
-      </div>
+          <LastCheck contract={contract} />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <QuickStart contractId={contractId} />
-        <Can I="risks.view">
-          <div className="md:col-span-2">
+          <Can I="risks.view">
             <RisksList />
-          </div>
-        </Can>
-      </div>
+          </Can>
 
-      <Can I="recommendations.view">
-        <RecommendationsList />
-      </Can>
+          <Can I="recommendations.view">
+            <RecommendationsList />
+          </Can>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="md:col-span-2">
           <VersionsTimeline
             contractId={contractId}
             versions={versions}
             isLoading={versionsLoading}
             error={versionsError ?? undefined}
           />
-        </div>
-        {currentVersion?.version_id ? (
-          <VersionPicker
-            contractId={contractId}
-            versions={versions}
-            selectedVersionId={currentVersion.version_id}
-          />
-        ) : (
-          <VersionPicker contractId={contractId} versions={versions} />
-        )}
-      </div>
 
-      <ChecksHistory
-        contractId={contractId}
-        versions={versions}
-        isLoading={versionsLoading}
-        error={versionsError ?? undefined}
-      />
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <ReportsShared />
-        <Can I="risks.view">
-          <DeviationsChecklist />
-        </Can>
-      </div>
-
-      <div className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm">
-        <header className="flex items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-              Превью PDF
-            </h2>
-            <p className="mt-1 text-xs text-fg-muted">
-              Подгружается отдельным чанком только при необходимости.
-            </p>
+          <div id="check-history">
+            <ChecksHistory
+              contractId={contractId}
+              versions={versions}
+              isLoading={versionsLoading}
+              error={versionsError ?? undefined}
+            />
           </div>
-          <Button
-            type="button"
-            variant={isPDFOpen ? 'ghost' : 'secondary'}
-            onClick={togglePDF}
-            data-testid="pdf-navigator-toggle"
-            disabled={!currentVersion?.version_id}
-            aria-expanded={isPDFOpen}
-            aria-controls="pdf-preview-panel"
-          >
-            {isPDFOpen ? 'Скрыть PDF' : 'Показать PDF'}
-          </Button>
-        </header>
 
-        <div id="pdf-preview-panel">
-          {isPDFOpen && currentVersion?.version_id ? (
-            <Suspense
-              fallback={
-                <div
-                  data-testid="pdf-navigator-suspense"
-                  aria-busy="true"
-                  className="flex min-h-[240px] items-center justify-center"
+          <ComparisonEntry contractId={contractId} versionCount={versions.length} />
+
+          <ReportsShared />
+
+          <Can I="risks.view">
+            <DeviationsChecklist />
+          </Can>
+
+          {/* Document Preview (Figma 315:68) — PDF lazy-chunk по тумблеру.
+              Sections-nav из Figma опущен: структура разделов недоступна в API. */}
+          <Card
+            as="section"
+            aria-label="Документ и навигация"
+            radius="xl"
+            className="flex flex-col gap-3 border border-border-subtle px-7 py-6 shadow-none"
+          >
+            <header className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-18 font-semibold text-fg">Документ и навигация</h2>
+              <Button
+                type="button"
+                variant={isPDFOpen ? 'ghost' : 'secondary'}
+                size="sm"
+                onClick={togglePDF}
+                data-testid="pdf-navigator-toggle"
+                disabled={!currentVersion?.version_id}
+                aria-expanded={isPDFOpen}
+                aria-controls="pdf-preview-panel"
+              >
+                {isPDFOpen ? 'Скрыть PDF' : 'Показать PDF'}
+              </Button>
+            </header>
+
+            <div id="pdf-preview-panel">
+              {isPDFOpen && currentVersion?.version_id ? (
+                <Suspense
+                  fallback={
+                    <div
+                      data-testid="pdf-navigator-suspense"
+                      aria-busy="true"
+                      className="flex min-h-[240px] items-center justify-center"
+                    >
+                      <Spinner size="md" aria-hidden="true" />
+                    </div>
+                  }
                 >
-                  <Spinner size="md" aria-hidden="true" />
-                </div>
-              }
-            >
-              <LazyPDFNavigator
-                versionId={currentVersion.version_id}
-                sourceFileName={currentVersion.source_file_name ?? undefined}
-                onClose={togglePDF}
-              />
-            </Suspense>
-          ) : null}
+                  <LazyPDFNavigator
+                    versionId={currentVersion.version_id}
+                    sourceFileName={currentVersion.source_file_name ?? undefined}
+                    onClose={togglePDF}
+                  />
+                </Suspense>
+              ) : null}
+            </div>
+          </Card>
         </div>
+
+        {/* Right column (Figma 312) — быстрые действия + доступ. Stats/Activity
+            опущены: бэкенда для агрегатов/ленты нет (scope 4.7). */}
+        <aside className="flex flex-col gap-6">
+          <QuickStart
+            contractId={contractId}
+            versionId={currentVersion?.version_id}
+            isReady={isReady}
+          />
+          <AccessNote />
+        </aside>
       </div>
+
+      <TrustFooter />
     </div>
   );
 }

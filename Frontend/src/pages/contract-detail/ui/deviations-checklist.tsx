@@ -1,26 +1,23 @@
-// DeviationsChecklist — отклонения от политики организации (экран 8 Figma,
-// §17.4). В v1 настоящие политики/чек-листы подключаются через
-// features/policy-edit + features/checklist-edit (ORG_ADMIN-only), а сопоставление
-// с конкретным договором — из анализа LIC (FE-TASK-046 ResultPage).
-// Здесь — плейсхолдер с пустым состоянием.
+// DeviationsChecklist — отклонения от шаблона организации (Figma 306:2 → 315:48).
+// Honest-плейсхолдер: сопоставление договора с корпоративными чек-листами/
+// политиками приходит из анализа LIC (FE-TASK-046) — здесь данных нет → empty.
+// aria-label «Отклонения от политики» сохранён (от него зависит RBAC-тест +
+// единообразие с §5.6 Pattern B). Card flat-border treatment.
+import { Card } from '@/shared/ui';
+
 export function DeviationsChecklist(): JSX.Element {
   return (
-    <section
+    <Card
+      as="section"
       aria-label="Отклонения от политики"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+      radius="xl"
+      className="flex flex-col gap-3 border border-border-subtle px-7 py-6 shadow-none"
     >
-      <header>
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-          Отклонения от политики
-        </h2>
-        <p className="mt-1 text-xs text-fg-muted">
-          Сопоставление с корпоративными чек-листами и политиками
-        </p>
-      </header>
-      <p className="text-sm text-fg-muted">
+      <h2 className="text-18 font-semibold text-fg">Отклонения от шаблона организации</h2>
+      <p className="text-14 leading-5 text-fg-muted">
         Отклонения отобразятся после завершения анализа. Настраивать политики может администратор
         организации в разделе «Политики».
       </p>
-    </section>
+    </Card>
   );
 }

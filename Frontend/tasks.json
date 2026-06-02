@@ -3237,6 +3237,33 @@
       "dependencies": [],
       "blocked_until_completion_of": "Figma alignment work (Этапы 3-6) — открыто после завершения визуальной сверки frontend с макетами Figma fileKey Lxhk7jQyXL3iuoTpiOHxcb",
       "status": "pending"
+    },
+    {
+      "id": "FE-TASK-058",
+      "category": "feature",
+      "priority": "medium",
+      "description": "Подключить во Frontend новые поля ContractSummary (contract_type, risk_level, risk_counts) и серверные фильтры/сортировку после реализации ORCH-TASK-056. Убрать заглушки «—» в списке «Документы» (Figma 193:2) и на дашборде там, где данные стали доступны: колонки Тип/Риск, stat «высокий риск», фильтр-чипы по типу/риску/статусу/периоду, сортировка по риску.",
+      "context": "В рамках Figma-alignment (Frontend этап 4.5) колонки «Тип»/«Риск» в DocumentsTable, stat «высокий риск» в ContractsMetricsStrip и фильтр-чипы по типу/риску рендерятся как «—»/не работают, потому что GET /contracts отдаёт ContractSummary без типа договора и уровня риска (доступны только пер-версионно — N+1 неприемлем для списка). ORCH-TASK-056 добавляет contract_type/risk_level/risk_counts в ответ списка + query-фильтры (risk_level, contract_type, processing_status, date_from/date_to) и sort. Эта задача — frontend-сторона: потребить новые поля и снять заглушки. Контракт типов берётся ТОЛЬКО из перегенерированного openapi.d.ts (ручные типы запрещены).",
+      "acceptance_criteria": [
+        "Регенерировать src/shared/api/openapi.d.ts из обновлённого ApiBackendOrchestrator/architecture/api-specification.yaml (npm run gen:api): ContractSummary получает contract_type/risk_level/risk_counts. Никаких ручных типов",
+        "DocumentsTable (widgets/documents-table/model/columns.tsx): колонка «Тип» рендерит contract_type через общий enum→RU label-маппинг (12 значений ASSUMPTION-LIC-16, обратный к серверной RU→EN нормализации из ORCH-TASK-055); колонка «Риск» — RiskBadge по risk_level. Убрать жёсткие accessorFn () => '—'; «—» остаётся ТОЛЬКО когда поле null (не проанализирован)",
+        "ContractsMetricsStrip: «высокий риск» считается из risk_level текущей страницы (page-scoped, как «в обработке»/«требуют внимания») с тем же scope-сигналом sr-only «— на текущей странице»; убрать value:'—'/muted для high-risk. (Глобальный счётчик — отдельная задача, если понадобится /contracts/summary.)",
+        "ContractsListPage + model/use-contracts-list-query.ts: подключить серверные фильтры к API-params — risk_level (single), contract_type (multi), processing_status (multi; маппинг user-чипов «Завершено/В обработке/Требует внимания/Ошибка» → значения UserProcessingStatus), date_from/date_to (чипы «Период» 7д/30д/90д). Привести model/filter-definitions.ts и FilterChips к Figma 200:2 (статус-чипы по processing_status + risk-чипы). Убрать комментарии/TODO «значения сохраняются в URL, но не уходят в бэкенд» — теперь уходят",
+        "Сортировка списка: подключить sort=date|title|risk (+dir) к API (server-side) вместо/в дополнение к client-side per-page сортировке DocumentsTable; при наличии toolbar-контрола «Сортировка» (Figma 200:7) — связать его с API. Зафиксировать решение client-side vs server-side в комментарии",
+        "Dashboard (согласованно, т.к. /contracts?size=5 тоже получит поля): RecentChecksTable — колонки Тип/Риск из реальных данных; LastCheckCard — RiskCounters из risk_counts; KeyRisksCards — из реальных рисков (где применимо). Снять соответствующие «—»/skeleton там, где данные появились",
+        "Обновить data-honesty комментарии в затронутых виджетах (убрать ссылки «нет данных»/FE-TASK-046 там, где данные появились) + Frontend/architecture/figma-mapping.md и high-architecture.md §8.3 при изменении контракта компонентов",
+        "Тесты обновлены: columns (Тип/Риск из данных + «—» только при null), ContractsMetricsStrip (высокий риск из risk_level), ContractsListPage (расширить тест «status=ACTIVE → серверу» на risk_level/contract_type/processing_status/date_from-date_to), dashboard-виджеты. Chromatic — принять новые baseline"
+      ],
+      "test_steps": [
+        "Шаг 1: npm run gen:api — ContractSummary содержит contract_type/risk_level/risk_counts; git diff openapi.d.ts осмыслен",
+        "Шаг 2: npm run typecheck — 0 ошибок; npm run lint — 0 предупреждений",
+        "Шаг 3: npm run test -- --run — все unit зелёные; обновлённые тесты колонок/strip/page/dashboard PASS",
+        "Шаг 4: ручная проверка (npm run dev): Тип/Риск в таблице из данных; фильтры по типу/риску/статусу/периоду уходят на бэкенд и меняют список; сортировка по риску работает",
+        "Шаг 5: npm run e2e — флоу списка/фильтров PASS; npm run build OK; npm run chromatic — принять diff'ы"
+      ],
+      "dependencies": [],
+      "blocked_until_completion_of": "ORCH-TASK-056 (ApiBackendOrchestrator/tasks.json) — расширение GET /contracts полями contract_type/risk_level/risk_counts + серверными фильтрами (risk_level/contract_type/processing_status/date_from/date_to) и sort. Старт FE-задачи — после деплоя обновлённого api-specification.yaml",
+      "status": "pending"
     }
   ]
 }

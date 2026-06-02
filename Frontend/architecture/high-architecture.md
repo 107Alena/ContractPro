@@ -1416,7 +1416,7 @@ graph TD
 | 1. Landing | — | LandingPage | HeroSection, FeaturesSection, PricingSection, FAQAccordion |
 | 2. Auth | 4 (Desktop) + Mobile | LoginPage | PromoSidebar, LoginForm |
 | 3. Dashboard | 4 | DashboardPage | WhatMattersCards, LastCheckCard, QuickStart, OrgCard, RecentChecksTable, KeyRisksCards |
-| 4. Новая проверка | 12 | NewCheckPage | FileDropZone, PasteTextTab, WillHappenSteps, WhatWeCheck, LowConfidenceConfirm |
+| 4. Новая проверка | 12 | NewCheckPage | FileDropZone, FileCard, PasteTextTab, WillHappenSteps, WhatWeCheck, Tips, TrustFooter (reuse), LowConfidenceConfirm |
 | 5. Результат | 8 | ResultPage | DocumentCard, RiskProfileCard, MandatoryConditions, RisksList, SummaryTable, DeviationsFromPolicy, NextActions, FeedbackBlock, LegalDisclaimer |
 | 6. Сравнение | 9 | ComparisonPage | VersionMetaHeader, ComparisonVerdictCard, ChangeCounters, TabsFilters, ChangesTable, RiskProfileDelta, KeyDiffsBySection, SideBySideDiff, RisksGroups |
 | 7. Документы | 9 + 1 tablet | ContractsListPage | MetricsStrip, WhatMattersCards, SearchBar, FilterChips, DocumentsTable |

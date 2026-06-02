@@ -1,7 +1,7 @@
-// NewCheckPage (§17.4/§16.2 — FE-TASK-043) — экран «Новая проверка договора»
-// с 12 состояниями Figma. Оркеструет feature/contract-upload и делит экран
-// на форму (title + FileDropZone) и информационные виджеты (WillHappenSteps,
-// WhatWeCheck).
+// NewCheckPage (Figma 112:2, FE-TASK-043) — экран «Новая проверка договора».
+// Полная структура Figma (этап 4.6): PageIntro + FormatHint → full-width
+// WorkspaceCard (табы + drop-зона/файл-карточка) → TwoColumnInfo (шаги +
+// категории) → Tips → TrustFooter. Оркеструет feature/contract-upload.
 //
 // Архитектура:
 //   - useUploadContract (feature) — mutation + abortController + setError.
@@ -11,41 +11,27 @@
 //   - ProcessingProgress (widget) — inline показ после 202/UPLOADED. Финальное
 //     пребывание пользователя с прогрессом — на ResultPage (через SSE);
 //     мы редиректим туда сразу после успешной мутации (§16.2 sequence).
-//   - Tabs (upload | paste-text) — для v1 вкладка «Текст» видна как placeholder:
-//     backend поддерживает только PDF (ADR-FE-01, §7.5), текстовый ввод
-//     появится в v1.1. Табы оставлены для согласования с Figma и чтобы не
-//     менять layout при будущем включении.
-//   - State: form-поля (title/file) держим в useState — в проекте RHF ещё
-//     не введён (FE-TASK-025). Адаптер `setError` совместим с
-//     `UseFormSetErrorLike` в `useUploadContract`.
-//   - RBAC: <RequireRole>-guard не нужен — permission `contract.upload` есть у
-//     всех ролей (§5.5). Гарантия: route уже под AppLayout (auth).
-//
-// Состояния 12 (AC + Figma 4. Новая проверка):
-//   1. idle — пустая форма, default.
-//   2. title-filled — title заполнен, файл ещё не выбран.
-//   3. drag-hover — файл над drop-зоной.
-//   4. file-selected — файл валиден, submit активен.
-//   5. error-file-too-large — inline в FileDropZone (413 / maxSize).
-//   6. error-file-wrong-format — inline (415 / accept-check).
-//   7. error-invalid-file — inline (400 INVALID_FILE).
-//   8. submitting — upload идёт, прогресс, submit disabled.
-//   9. processing-start — 202 UPLOADED, ProcessingProgress виден, ждём redirect.
-//  10. upload-error — generic (5xx, сеть) — toast, форма остаётся заполненной.
-//  11. low-confidence-type — модалка от глобального Provider (FE-TASK-037).
-//  12. rbac-restricted — пользователь без `contract.upload` (не достигается в v1,
-//       т.к. permission есть у всех ролей, но story существует для полноты).
+//   - Title: в Figma-флоу нет поля «Название договора», но бэкенд требует
+//     обязательный `title` (multipart). Решение (scope 4.6): авто-вывод из
+//     имени файла (без расширения) — пользователь видит имя файла в FileCard.
+//   - Tabs (upload | paste-text) — вкладка «Текст» = placeholder: backend
+//     поддерживает только PDF (ADR-FE-01, §7.5), текстовый ввод — в v1.1.
+//   - State: file/title/ошибки держим в useState (RHF не введён, FE-TASK-025).
+//   - Honesty-отклонения от Figma: «до 50 МБ» → «до 20 МБ» (реальный лимит,
+//     openapi `макс. 20 МБ`); подзаголовок без обещания paste-ввода.
+//   - Корень — <div> (AppLayout уже оборачивает Outlet в <main>; избегаем
+//     вложенного landmark).
 import { type FormEvent, useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import {
-  type UploadFormValues,
-  useUploadContract,
-} from '@/features/contract-upload';
+import { type UploadFormValues, useUploadContract } from '@/features/contract-upload';
 import { OrchestratorError, type UseFormSetErrorLike } from '@/shared/api';
 import { useCan } from '@/shared/auth';
-import { Button, Input, Label, toast } from '@/shared/ui';
+import { cn } from '@/shared/lib/cn';
+import { Button, Card, toast } from '@/shared/ui';
 import { FileDropZone, type FileDropZoneHandle } from '@/shared/ui/file-drop-zone';
+import { TrustFooter } from '@/widgets/dashboard-trust-footer';
+import { Tips } from '@/widgets/new-check-tips';
 import { WhatWeCheck } from '@/widgets/new-check-what-we-check';
 import { WillHappenSteps } from '@/widgets/new-check-will-happen';
 import { ProcessingProgress } from '@/widgets/processing-progress';
@@ -53,20 +39,32 @@ import { ProcessingProgress } from '@/widgets/processing-progress';
 type TabKey = 'upload' | 'paste';
 
 interface FormState {
-  title: string;
   file: File | null;
-  titleError: string | null;
+  /** Авто-выведенное из имени файла название (отправляется на сервер). */
+  title: string;
   fileError: string | null;
   formError: string | null;
 }
 
 const INITIAL_STATE: FormState = {
-  title: '',
   file: null,
-  titleError: null,
+  title: '',
   fileError: null,
   formError: null,
 };
+
+/** Название договора из имени файла: отрезаем расширение, пустое → запасной. */
+function deriveTitle(fileName: string): string {
+  const stripped = fileName.replace(/\.[^./\\]+$/, '').trim();
+  return stripped || 'Договор';
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} Б`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(0)} КБ`;
+  return `${(kb / 1024).toFixed(1)} МБ`;
+}
 
 export function NewCheckPage(): JSX.Element {
   const navigate = useNavigate();
@@ -77,24 +75,15 @@ export function NewCheckPage(): JSX.Element {
   const [uploadFraction, setUploadFraction] = useState<number | null>(null);
 
   // Adapter под UseFormSetErrorLike — `useUploadContract` пробрасывает file-field
-  // коды (413/415/400) и VALIDATION_ERROR на этот setter. Поле 'file' видим в
-  // UploadFormValues, но показываем ошибку через FileDropZone.error-state,
-  // которое он держит сам — поэтому здесь дублируем в `state.fileError` для
-  // aria-describedby под input'ом.
-  const setFieldError = useCallback<UseFormSetErrorLike<UploadFormValues>>(
-    (name, error) => {
-      setState((prev) => {
-        if (name === 'file') {
-          return { ...prev, fileError: error.message };
-        }
-        if (name === 'title') {
-          return { ...prev, titleError: error.message };
-        }
-        return prev;
-      });
-    },
-    [],
-  );
+  // коды (413/415/400) и VALIDATION_ERROR. Поля title нет в UI → серверную
+  // ошибку title показываем как form-banner.
+  const setFieldError = useCallback<UseFormSetErrorLike<UploadFormValues>>((name, error) => {
+    setState((prev) => {
+      if (name === 'file') return { ...prev, fileError: error.message };
+      if (name === 'title') return { ...prev, formError: error.message };
+      return prev;
+    });
+  }, []);
 
   const { upload, isPending, reset } = useUploadContract<UploadFormValues>({
     setError: setFieldError,
@@ -122,35 +111,28 @@ export function NewCheckPage(): JSX.Element {
     },
   });
 
-  const handleTitleChange = (value: string): void => {
-    setState((prev) => ({ ...prev, title: value, titleError: null, formError: null }));
-  };
-
   const handleFileAccepted = (file: File): void => {
-    setState((prev) => ({ ...prev, file, fileError: null, formError: null }));
+    setState((prev) => ({
+      ...prev,
+      file,
+      title: deriveTitle(file.name),
+      fileError: null,
+      formError: null,
+    }));
   };
 
-  // FileDropZone сам рендерит человекочитаемое сообщение client-side
-  // валидации (см. getFileValidationMessage). Мы только обнуляем выбранный
-  // файл — server-side ошибки приходят отдельно через useUploadContract.setError.
+  // FileDropZone сам рендерит человекочитаемое сообщение client-side валидации.
+  // Мы только обнуляем выбранный файл — server-side ошибки приходят отдельно.
   const handleFileError = (): void => {
-    setState((prev) => ({ ...prev, file: null }));
+    setState((prev) => ({ ...prev, file: null, title: '' }));
   };
 
   const handleFileReset = (): void => {
-    setState((prev) => ({ ...prev, file: null, fileError: null }));
+    setState((prev) => ({ ...prev, file: null, title: '', fileError: null }));
   };
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
-    const title = state.title.trim();
-    // Client-side pre-check: оба поля обязательны (см. UploadContractInput).
-    // Серверная валидация параллельно перехватит VALIDATION_ERROR, если
-    // что-то проскочит (например, пустой title после trim'а).
-    if (!title) {
-      setState((prev) => ({ ...prev, titleError: 'Укажите название договора' }));
-      return;
-    }
     if (!state.file) {
       setState((prev) => ({
         ...prev,
@@ -160,132 +142,135 @@ export function NewCheckPage(): JSX.Element {
     }
     reset();
     setUploadFraction(0);
-    upload({ file: state.file, title });
+    upload({ file: state.file, title: state.title || deriveTitle(state.file.name) });
   };
 
-  // RBAC-fallback (story #12). В v1 не достигается — permission есть у всех
-  // ролей. Оставляем на случай будущих изменений §5.5 или debug-режима.
+  // RBAC-fallback. В v1 не достигается — permission `contract.upload` есть у
+  // всех ролей. Оставляем на случай будущих изменений §5.5 или debug-режима.
   if (!canUpload) {
     return (
-      <main
+      <div
         data-testid="page-new-check"
         className="mx-auto flex min-h-[60vh] max-w-3xl flex-col items-center gap-3 px-6 py-12 text-center"
       >
-        <h1 className="text-2xl font-semibold text-fg">Недостаточно прав</h1>
+        <h1 className="text-24 font-semibold text-fg">Недостаточно прав</h1>
         <p className="text-base text-fg-muted">
-          Загрузка договоров доступна юристам, бизнес-пользователям и администраторам
-          организации. Обратитесь к администратору, если нужен доступ.
+          Загрузка договоров доступна юристам, бизнес-пользователям и администраторам организации.
+          Обратитесь к администратору, если нужен доступ.
         </p>
-      </main>
+      </div>
     );
   }
 
-  const canSubmit = Boolean(state.title.trim()) && Boolean(state.file) && !isPending;
   const submitting = isPending;
+  const hasFile = Boolean(state.file);
 
   return (
-    <main
+    <div
       data-testid="page-new-check"
       className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8"
     >
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold text-fg">Новая проверка</h1>
-        <p className="text-sm text-fg-muted">
-          Загрузите PDF договора — через 1–2 минуты получите отчёт с рисками и
-          рекомендациями.
+      <header className="flex flex-col gap-3">
+        <h1 className="text-24 font-bold text-fg">Новая проверка договора</h1>
+        <p className="max-w-[700px] text-15 leading-[22px] text-fg-muted">
+          Загрузите PDF-файл — ContractPro определит тип документа, проверит обязательные условия и
+          покажет риски с рекомендациями.
         </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center rounded-sm bg-brand-500/10 px-2 py-1 text-12 font-semibold text-brand-600">
+            PDF
+          </span>
+          <p className="text-13 text-fg-disabled">
+            На текущем этапе ContractPro поддерживает только PDF. Поддержка других форматов появится
+            позже.
+          </p>
+        </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <form
-          aria-label="Загрузка договора"
-          data-testid="new-check-form"
-          onSubmit={handleSubmit}
-          className="flex flex-col gap-5 rounded-md border border-border bg-bg p-5 shadow-sm"
-          noValidate
-        >
-          <Tabs active={activeTab} onChange={setActiveTab} disabled={submitting} />
+      <Card
+        as="section"
+        aria-label="Загрузка договора"
+        radius="xl"
+        className="overflow-hidden border border-border-subtle shadow-none"
+      >
+        <Tabs active={activeTab} onChange={setActiveTab} disabled={submitting} />
 
-          {activeTab === 'upload' ? (
-            <>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="new-check-title" required>
-                  Название договора
-                </Label>
-                <Input
-                  id="new-check-title"
-                  name="title"
-                  value={state.title}
-                  onChange={(e) => handleTitleChange(e.target.value)}
-                  placeholder="Например: Договор аренды офиса № 42"
-                  error={Boolean(state.titleError)}
-                  aria-describedby={state.titleError ? 'new-check-title-error' : undefined}
+        {activeTab === 'upload' ? (
+          <form
+            data-testid="new-check-form"
+            onSubmit={handleSubmit}
+            className="flex flex-col gap-5 p-6 md:p-8"
+            noValidate
+          >
+            {/* Drop-зона остаётся смонтированной (хранит file-state + picker),
+                визуально скрывается после выбора файла / во время отправки. */}
+            <div className={cn((hasFile || submitting) && 'hidden')}>
+              <FileDropZone
+                ref={dropRef}
+                id="new-check-file"
+                idleTitle="Перетащите PDF сюда"
+                loading={submitting}
+                disabled={submitting}
+                onAccepted={handleFileAccepted}
+                onError={handleFileError}
+                onReset={handleFileReset}
+              />
+              <p className="mt-3 flex items-center justify-center gap-1.5 text-12 text-fg-disabled">
+                <span aria-hidden>🔒</span>
+                Документы обрабатываются конфиденциально и не передаются третьим лицам
+              </p>
+            </div>
+
+            {state.fileError ? (
+              <p id="new-check-file-error" className="text-13 text-danger" role="alert">
+                {state.fileError}
+              </p>
+            ) : null}
+
+            {hasFile && !submitting && state.file ? (
+              <FileCard
+                file={state.file}
+                onReplace={() => dropRef.current?.open()}
+                onRemove={() => dropRef.current?.reset()}
+              />
+            ) : null}
+
+            {submitting ? (
+              <ProcessingProgress
+                status="UPLOADED"
+                aria-label="Загрузка договора"
+                // Прогресс-байт из axios (0..1) отражает лишь upload-фазу;
+                // pipeline-шаги (QUEUED → ... → READY) уже после 202.
+                // Используем UPLOADED как «договор загружается».
+              />
+            ) : null}
+
+            {uploadFraction !== null && submitting ? (
+              <p className="text-12 text-fg-muted" aria-live="polite">
+                Отправлено {Math.round(uploadFraction * 100)}%
+              </p>
+            ) : null}
+
+            {state.formError ? (
+              <p
+                className="rounded-md border border-danger/40 bg-danger/5 p-3 text-13 text-danger"
+                role="alert"
+              >
+                {state.formError}
+              </p>
+            ) : null}
+
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              {hasFile ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => dropRef.current?.open()}
                   disabled={submitting}
-                  required
-                  maxLength={200}
-                />
-                {state.titleError ? (
-                  <p
-                    id="new-check-title-error"
-                    className="text-sm text-danger"
-                    role="alert"
-                  >
-                    {state.titleError}
-                  </p>
-                ) : null}
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="new-check-file" required>
-                  Файл договора
-                </Label>
-                <FileDropZone
-                  ref={dropRef}
-                  id="new-check-file"
-                  loading={submitting}
-                  disabled={submitting}
-                  onAccepted={handleFileAccepted}
-                  onError={handleFileError}
-                  onReset={handleFileReset}
-                />
-                {state.fileError ? (
-                  <p
-                    id="new-check-file-error"
-                    className="text-sm text-danger"
-                    role="alert"
-                  >
-                    {state.fileError}
-                  </p>
-                ) : null}
-              </div>
-
-              {submitting ? (
-                <ProcessingProgress
-                  status="UPLOADED"
-                  aria-label="Загрузка договора"
-                  className="mt-1"
-                  // Прогресс-байт из axios (0..1) отражает лишь upload-фазу;
-                  // pipeline-шаги (QUEUED → ... → READY) уже после 202.
-                  // Используем UPLOADED как «договор загружается».
-                />
-              ) : null}
-
-              {uploadFraction !== null && submitting ? (
-                <p className="text-xs text-fg-muted" aria-live="polite">
-                  Отправлено {Math.round(uploadFraction * 100)}%
-                </p>
-              ) : null}
-
-              {state.formError ? (
-                <p
-                  className="rounded-md border border-danger/40 bg-danger/5 p-3 text-sm text-danger"
-                  role="alert"
                 >
-                  {state.formError}
-                </p>
-              ) : null}
-
-              <div className="flex flex-wrap items-center justify-end gap-3">
+                  Выбрать другой файл
+                </Button>
+              ) : (
                 <Button
                   type="button"
                   variant="ghost"
@@ -294,33 +279,87 @@ export function NewCheckPage(): JSX.Element {
                 >
                   Отмена
                 </Button>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  disabled={!canSubmit}
-                  loading={submitting}
-                >
-                  Начать проверку
-                </Button>
-              </div>
-            </>
-          ) : (
+              )}
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={!hasFile || submitting}
+                loading={submitting}
+              >
+                Начать проверку
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <div className="p-6 md:p-8">
             <PasteTextPlaceholder />
-          )}
-        </form>
+          </div>
+        )}
+      </Card>
 
-        <aside className="flex flex-col gap-4">
-          <WillHappenSteps />
-          <WhatWeCheck />
-        </aside>
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <WillHappenSteps />
+        <WhatWeCheck />
       </div>
-    </main>
+
+      <Tips />
+
+      <TrustFooter />
+    </div>
   );
 }
 
-/** Табы upload ↔ paste (§17.4 «PasteTextTab (опц., через табы)»). Нативные
- *  button-ы с role=tab; panel — родительская форма. Минимальная реализация
- *  без Radix Tabs (не зависим от неустановленного пакета). */
+/** FileCard — карточка выбранного PDF (Figma 135:3): тип-бейдж + имя + размер
+ *  + действия «Заменить»/«Удалить» + зелёный статус готовности. */
+interface FileCardProps {
+  file: File;
+  onReplace: () => void;
+  onRemove: () => void;
+}
+
+function FileCard({ file, onReplace, onRemove }: FileCardProps): JSX.Element {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-3.5 rounded-md bg-bg-muted px-4 py-3.5">
+        <span
+          aria-hidden
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-danger/10 text-11 font-bold text-danger"
+        >
+          PDF
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <p className="truncate text-14 font-medium text-fg">{file.name}</p>
+          <p className="text-12 text-fg-subtle">PDF · {formatBytes(file.size)} · Загружен</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-3 text-13 font-medium">
+          <button
+            type="button"
+            onClick={onReplace}
+            className="rounded-sm text-brand-500 hover:underline focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
+          >
+            Заменить
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            className="rounded-sm text-fg-disabled hover:text-fg focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
+          >
+            Удалить
+          </button>
+        </div>
+      </div>
+      <div className="flex items-center justify-center gap-2">
+        <span aria-hidden className="h-2 w-2 shrink-0 rounded-sm bg-success" />
+        <p className="text-13 font-medium text-success" role="status">
+          PDF загружен. Можно запускать проверку
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Табы upload ↔ paste (Figma 116:3). Нативные button-ы с role=tab; panel —
+ *  родительская форма/placeholder. Active — brand-подчёркивание. */
 interface TabsProps {
   active: TabKey;
   onChange: (key: TabKey) => void;
@@ -332,12 +371,13 @@ function Tabs({ active, onChange, disabled }: TabsProps): JSX.Element {
     <div
       role="tablist"
       aria-label="Способ загрузки"
-      className="flex gap-1 rounded-md border border-border bg-bg-muted p-1"
+      className="flex gap-1 border-b border-border-subtle px-6"
     >
       <TabButton
         id="tab-upload"
         panelId="tab-panel-upload"
-        label="Загрузить файл"
+        icon="↑"
+        label="Загрузить PDF"
         selected={active === 'upload'}
         onClick={() => onChange('upload')}
         disabled={disabled}
@@ -345,6 +385,7 @@ function Tabs({ active, onChange, disabled }: TabsProps): JSX.Element {
       <TabButton
         id="tab-paste"
         panelId="tab-panel-paste"
+        icon="✎"
         label="Вставить текст"
         selected={active === 'paste'}
         onClick={() => onChange('paste')}
@@ -357,6 +398,7 @@ function Tabs({ active, onChange, disabled }: TabsProps): JSX.Element {
 interface TabButtonProps {
   id: string;
   panelId: string;
+  icon: string;
   label: string;
   selected: boolean;
   disabled: boolean;
@@ -366,16 +408,17 @@ interface TabButtonProps {
 function TabButton({
   id,
   panelId,
+  icon,
   label,
   selected,
   disabled,
   onClick,
 }: TabButtonProps): JSX.Element {
   const base =
-    'flex-1 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60';
+    'inline-flex items-center gap-2 -mb-px border-b-2 px-4 py-3 text-14 transition-colors focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60';
   const variant = selected
-    ? 'bg-bg text-fg shadow-sm'
-    : 'text-fg-muted hover:bg-bg hover:text-fg';
+    ? 'border-brand-500 font-semibold text-brand-500'
+    : 'border-transparent font-medium text-fg-subtle hover:text-fg';
   return (
     <button
       id={id}
@@ -388,6 +431,7 @@ function TabButton({
       disabled={disabled}
       className={`${base} ${variant}`}
     >
+      <span aria-hidden>{icon}</span>
       {label}
     </button>
   );
@@ -401,10 +445,10 @@ function PasteTextPlaceholder(): JSX.Element {
       aria-labelledby="tab-paste"
       className="flex flex-col items-center gap-2 rounded-md border border-dashed border-border bg-bg-muted p-8 text-center"
     >
-      <p className="text-sm font-medium text-fg">Вставка текста появится позже</p>
-      <p className="text-sm text-fg-muted">
-        В v1 поддерживается только загрузка PDF-файла. Вставка текста из буфера —
-        в планах на следующий релиз.
+      <p className="text-14 font-medium text-fg">Вставка текста появится позже</p>
+      <p className="text-13 text-fg-muted">
+        В v1 поддерживается только загрузка PDF-файла. Вставка текста из буфера — в планах на
+        следующий релиз.
       </p>
     </div>
   );

@@ -62,17 +62,14 @@ function decorate(user: User | null = LAWYER) {
 // 1. Idle — пустая форма, title пустой, dropzone в idle-состоянии.
 export const Idle: Story = { decorators: [decorate()] };
 
-// 2. TitleFilled — только title заполнен. В Storybook показываем baseline
-//    (Storybook-play не требуется — реализуется интерактивно пользователем).
-export const TitleFilled: Story = {
-  name: '02. Title заполнен',
+// 2. PasteText — вкладка «Вставить текст» (Figma 135:22). В v1 — placeholder
+//    (backend поддерживает только PDF). Play кликает по табу.
+export const PasteText: Story = {
+  name: '02. Вставить текст (placeholder)',
   decorators: [decorate()],
   play: async ({ canvasElement }) => {
-    const input = canvasElement.querySelector<HTMLInputElement>('#new-check-title');
-    if (input) {
-      input.value = 'Договор аренды офиса № 42';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    }
+    const pasteTab = canvasElement.querySelector<HTMLButtonElement>('#tab-paste');
+    pasteTab?.click();
   },
 };
 

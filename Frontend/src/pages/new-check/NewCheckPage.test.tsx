@@ -102,26 +102,26 @@ describe('NewCheckPage', () => {
     expect(screen.getByRole('heading', { level: 1, name: /новая проверка/i })).toBeDefined();
   });
 
-  it('показывает форму: title input + file-dropzone + submit', () => {
+  it('показывает форму: file-dropzone + submit (title-поля нет — авто из имени файла)', () => {
     renderPage();
-    expect(screen.getByLabelText(/название договора/i)).toBeDefined();
+    expect(screen.queryByLabelText(/название договора/i)).toBeNull();
     expect(screen.getByLabelText(/файл договора/i)).toBeDefined();
     expect(screen.getByRole('button', { name: /начать проверку/i })).toBeDefined();
   });
 
-  it('submit disabled пока title и file не заполнены', () => {
+  it('submit disabled пока файл не выбран', () => {
     renderPage();
     const submit = screen.getByRole('button', { name: /начать проверку/i });
     expect(submit.hasAttribute('disabled')).toBe(true);
   });
 
-  it('валидация при submit: если title пустой, показывается ошибка', () => {
+  it('валидация при submit: если файл не выбран, показывается ошибка', () => {
     renderPage();
     // Используем data-testid вместо role=form — implicit form-role требует
     // aria-labelledby по ARIA 1.2; надёжнее через testid.
     const form = screen.getByTestId('new-check-form');
     fireEvent.submit(form);
-    expect(screen.getByText(/укажите название договора/i)).toBeDefined();
+    expect(screen.getByText(/выберите файл договора/i)).toBeDefined();
   });
 
   it('табы: переключение на «Вставить текст» показывает placeholder', () => {

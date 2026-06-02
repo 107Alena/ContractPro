@@ -35,9 +35,10 @@ import { PaginationControls } from '@/features/pagination';
 import { SearchInput } from '@/features/search';
 import { isOrchestratorError, toUserMessage } from '@/shared/api';
 import { useCan } from '@/shared/auth';
-import { Button, buttonVariants, toast } from '@/shared/ui';
+import { Button, buttonVariants, Card, toast } from '@/shared/ui';
 import { ContractsMetricsStrip } from '@/widgets/contracts-metrics-strip';
-import { WhatMattersCards } from '@/widgets/dashboard-what-matters';
+import { CurrentActions } from '@/widgets/dashboard-current-actions';
+import { TrustFooter } from '@/widgets/dashboard-trust-footer';
 import { DocumentsTable } from '@/widgets/documents-table';
 
 import { CONTRACTS_FILTER_DEFINITIONS } from './model/filter-definitions';
@@ -171,22 +172,32 @@ export function ContractsListPage(): JSX.Element {
   })();
 
   return (
-    <main
+    <div
       data-testid="page-contracts-list"
-      className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8"
+      className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-8 md:py-8"
     >
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-fg">Документы</h1>
-          <p className="mt-1 text-sm text-fg-muted">Все загруженные договоры вашей организации.</p>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-col gap-1.5">
+          <h1 className="text-24 font-bold text-fg">Документы и история проверок</h1>
+          <p className="text-15 text-fg-muted">
+            Находите договоры, отслеживайте статус проверок и открывайте результаты анализа.
+          </p>
         </div>
-        <Link
-          to="/contracts/new"
-          className={buttonVariants({ variant: 'primary', size: 'md' })}
-          data-testid="contracts-list-new"
-        >
-          Загрузить договор
-        </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            to="/contracts/new"
+            className={buttonVariants({ variant: 'secondary', size: 'md' })}
+          >
+            Загрузить PDF
+          </Link>
+          <Link
+            to="/contracts/new"
+            className={buttonVariants({ variant: 'primary', size: 'md' })}
+            data-testid="contracts-list-new"
+          >
+            Новая проверка
+          </Link>
+        </div>
       </header>
 
       <ContractsMetricsStrip
@@ -196,17 +207,9 @@ export function ContractsListPage(): JSX.Element {
         error={isError ? error : undefined}
       />
 
-      <WhatMattersCards
-        items={items}
-        total={total}
-        isLoading={isLoading}
-        error={isError ? error : undefined}
-      />
+      <CurrentActions items={items} isLoading={isLoading} error={isError ? error : undefined} />
 
-      <section
-        aria-label="Поиск и фильтры"
-        className="flex flex-col gap-3 rounded-md border border-border bg-bg p-4 shadow-sm"
-      >
+      <Card aria-label="Поиск и фильтры" className="flex flex-col gap-3 p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
           <SearchInput
             value={search.inputValue}
@@ -224,7 +227,7 @@ export function ContractsListPage(): JSX.Element {
           onToggleOption={filters.toggleOption}
           onClear={filters.clear}
         />
-      </section>
+      </Card>
 
       <DocumentsTable
         items={items}
@@ -287,6 +290,8 @@ export function ContractsListPage(): JSX.Element {
           {errorMessage}
         </p>
       ) : null}
-    </main>
+
+      <TrustFooter />
+    </div>
   );
 }

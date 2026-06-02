@@ -1420,7 +1420,7 @@ graph TD
 | 5. Результат | 8 | ResultPage | DocumentCard, RiskProfileCard, MandatoryConditions, RisksList, SummaryTable, DeviationsFromPolicy, NextActions, FeedbackBlock, LegalDisclaimer |
 | 6. Сравнение | 9 | ComparisonPage | VersionMetaHeader, ComparisonVerdictCard, ChangeCounters, TabsFilters, ChangesTable, RiskProfileDelta, KeyDiffsBySection, SideBySideDiff, RisksGroups |
 | 7. Документы | 9 + 1 tablet | ContractsListPage | MetricsStrip, WhatMattersCards, SearchBar, FilterChips, DocumentsTable |
-| 8. Карточка документа | 9 + 1 tablet | ContractDetailPage | DocumentHeader, SummaryCard, QuickStart, LastCheck, KeyRisks, Recommendations, VersionsTimeline, ChecksHistory, VersionPicker, ReportsShared, DeviationsChecklist, PDFNavigator |
+| 8. Карточка документа | 9 + 1 tablet | ContractDetailPage | DocumentHeader (PageIntro + MetaCard), SummaryCard, LastCheck, QuickStart (Быстрые действия), AccessNote, ComparisonEntry, KeyRisks, Recommendations, VersionsTimeline, ChecksHistory, ReportsShared, DeviationsChecklist, TrustFooter (reuse), PDFNavigator. Stats/Activity-карточки Figma не реализованы (нет бэкенда для агрегатов/ленты); VersionPicker удалён (в Figma нет) |
 | 9. Отчёты | 10 + 1 tablet | ReportsPage | ReportsMetrics, ReportsTable, ReportDetailPanel, ShareModal, ExpiredLinkBanner |
 | 10. Аудит | 9 + 1 tablet | AuditPage | AuditMetrics, DateRangeFilter, QuickFilters, AuditTable, EventDetailPanel — **v1.1** (см. §18 п.5, дизайн готов как контракт на будущее) |
 | 11. Админ. политики (TBD) | 0 — дизайна нет | AdminPoliciesPage | EmptyState (placeholder в v1); финал — после `DESIGN-TASK-002` |

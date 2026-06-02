@@ -1,46 +1,106 @@
-// QuickStart (ContractDetail) — CTA «Загрузить новую версию» на карточке
-// договора. Отличается от widgets/dashboard-quick-start (там CTA на первую
-// загрузку). Feature version-upload существует, но его мутация монтируется
-// отдельной страницей /contracts/new (в v1). Здесь — ссылка-CTA, без
-// локальной мутации.
+// QuickStart (ContractDetail) — карточка «Быстрые действия» правой колонки
+// (Figma 306:2 → Quick Start Card 312:3). Набор навигационных действий по
+// договору. Действия, требующие готового результата (открыть результат,
+// скачать отчёт, поделиться), доступны только при READY-версии — иначе
+// рендерятся как disabled-строки (честно, без перехода в никуда).
+//
+// «Открыть историю проверок» — якорь на секцию журнала на этой же странице
+// (#check-history). Stats/Activity-карточки Figma (12 проверок, 8 рисков,
+// лента активности) НЕ реализованы: бэкенда для агрегатов/ленты нет вообще —
+// не выдумываем (см. scope-решение 4.7).
 import { Link } from 'react-router-dom';
 
-import { buttonVariants } from '@/shared/ui';
+import { cn } from '@/shared/lib/cn';
+import { Card } from '@/shared/ui';
 
 export interface QuickStartProps {
   contractId: string;
+  versionId?: string | undefined;
+  isReady?: boolean;
 }
 
-const STEPS: Array<{ title: string; description: string }> = [
-  { title: '1. Загрузите PDF', description: 'Перетащите новую редакцию или выберите файл.' },
-  { title: '2. Дождитесь анализа', description: 'Обычно проверка занимает 1–2 минуты.' },
-  { title: '3. Сверьте версии', description: 'Сравните изменения и применяйте рекомендации.' },
-];
+interface ActionDef {
+  icon: string;
+  label: string;
+  href?: string | undefined;
+}
 
-export function QuickStart({ contractId }: QuickStartProps): JSX.Element {
+export function QuickStart({
+  contractId,
+  versionId,
+  isReady = false,
+}: QuickStartProps): JSX.Element {
+  const resultHref =
+    isReady && versionId ? `/contracts/${contractId}/versions/${versionId}/result` : undefined;
+
+  const actions: ActionDef[] = [
+    { icon: '→', label: 'Открыть результат проверки', href: resultHref },
+    { icon: '⇆', label: 'Сравнить версии', href: `/contracts/${contractId}/compare` },
+    { icon: '↑', label: 'Загрузить новую версию', href: `/contracts/new?contractId=${contractId}` },
+    { icon: '↓', label: 'Скачать последний отчёт', href: resultHref },
+    { icon: '🔗', label: 'Поделиться ссылкой', href: resultHref },
+    { icon: '◎', label: 'Открыть историю проверок', href: '#check-history' },
+  ];
+
   return (
-    <section
-      aria-label="Что дальше"
-      className="flex flex-col gap-4 rounded-md border border-border bg-brand-50 p-5 shadow-sm"
+    <Card
+      as="section"
+      aria-label="Быстрые действия"
+      radius="lg"
+      className="flex flex-col gap-1 border border-border-subtle p-5 shadow-none"
     >
-      <header>
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-brand-600">Что дальше</h2>
-        <p className="mt-1 text-base font-semibold text-fg">Загрузите новую версию</p>
-      </header>
-      <ol className="flex flex-col gap-2">
-        {STEPS.map((step) => (
-          <li key={step.title} className="text-sm text-fg">
-            <p className="font-medium">{step.title}</p>
-            <p className="text-fg-muted">{step.description}</p>
+      <h2 className="mb-2 text-16 font-semibold text-fg">Быстрые действия</h2>
+      <ul className="flex flex-col">
+        {actions.map((a) => (
+          <li key={a.label}>
+            <ActionRow {...a} />
           </li>
         ))}
-      </ol>
-      <Link
-        to={`/contracts/new?contractId=${contractId}`}
-        className={`${buttonVariants({ variant: 'primary', size: 'md' })} self-start`}
+      </ul>
+    </Card>
+  );
+}
+
+function ActionRow({ icon, label, href }: ActionDef): JSX.Element {
+  const inner = (
+    <>
+      <span aria-hidden className="w-4 shrink-0 text-center text-13">
+        {icon}
+      </span>
+      {label}
+    </>
+  );
+  const base = 'flex items-center gap-2 rounded-md py-2 text-14';
+
+  if (!href) {
+    return (
+      <span className={cn(base, 'cursor-not-allowed text-fg-disabled')} aria-disabled="true">
+        {inner}
+      </span>
+    );
+  }
+  if (href.startsWith('#')) {
+    return (
+      <a
+        href={href}
+        className={cn(
+          base,
+          'text-fg transition-colors hover:text-brand-600 focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1',
+        )}
       >
-        Загрузить новую версию
-      </Link>
-    </section>
+        {inner}
+      </a>
+    );
+  }
+  return (
+    <Link
+      to={href}
+      className={cn(
+        base,
+        'text-fg transition-colors hover:text-brand-600 focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1',
+      )}
+    >
+      {inner}
+    </Link>
   );
 }

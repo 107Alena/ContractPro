@@ -48,8 +48,9 @@ import { type ContractDetails, useContract } from '@/entities/contract';
 import { type AnalysisResults, useResults } from '@/entities/result';
 import { RiskDetailsDrawer } from '@/entities/risk';
 import { isOrchestratorError, toUserMessage, useEventStream } from '@/shared/api';
-import { Can } from '@/shared/auth';
+import { useCan } from '@/shared/auth';
 import { Button } from '@/shared/ui/button';
+import { TrustFooter } from '@/widgets/dashboard-trust-footer';
 import { FeedbackBlock } from '@/widgets/feedback-block';
 import { LegalDisclaimer } from '@/widgets/legal-disclaimer';
 import { MandatoryConditionsChecklist } from '@/widgets/mandatory-conditions-checklist';
@@ -107,6 +108,7 @@ function ReadyContent({
   showWarningsBanner,
   warningMessage,
 }: ReadyContentProps): JSX.Element {
+  const canViewRisks = useCan('risks.view');
   const [selectedRiskId, setSelectedRiskId] = useState<string | null>(null);
 
   const openRisk = useCallback((risk: { id?: string }) => {
@@ -128,36 +130,42 @@ function ReadyContent({
 
       {showWarningsBanner ? <WarningsBanner message={warningMessage} /> : null}
 
-      <SummaryTable results={results} />
+      {/* Risk overview (Figma 154:2) — профиль рисков | обязательные условия.
+          Только для ролей с risks.view; иначе блок скрыт целиком (без пустых колонок). */}
+      {canViewRisks ? (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+          <RiskProfileCard
+            {...(results.risk_profile !== undefined ? { profile: results.risk_profile } : {})}
+            {...(results.aggregate_score !== undefined
+              ? { aggregate: results.aggregate_score }
+              : {})}
+          />
+          <MandatoryConditionsChecklist />
+        </div>
+      ) : null}
 
-      <Can I="risks.view">
-        <RiskProfileCard
-          {...(results.risk_profile !== undefined ? { profile: results.risk_profile } : {})}
-          {...(results.aggregate_score !== undefined ? { aggregate: results.aggregate_score } : {})}
-        />
-      </Can>
-
-      <Can I="risks.view">
-        <MandatoryConditionsChecklist />
-      </Can>
-
-      <Can I="risks.view">
+      {/* Key Risks (Figma 156:2) — карточки риска с интегрированными рекомендациями. */}
+      {canViewRisks ? (
         <RisksList
           risks={results.risks ?? []}
           recommendations={results.recommendations ?? []}
           onRiskClick={openRisk}
         />
-      </Can>
+      ) : null}
 
-      <Can I="risks.view">
-        <DeviationsFromPolicy risks={results.risks ?? []} />
-      </Can>
-
-      <NextActions results={results} />
-
-      <FeedbackBlock contractId={contractId} versionId={versionId} />
+      {/* TwoColumnBottom (Figma 157:2) — Краткое резюме + key-параметры |
+          Отклонения от политики + Следующие шаги + Обратная связь. */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+        <SummaryTable results={results} />
+        <div className="flex flex-col gap-6">
+          {canViewRisks ? <DeviationsFromPolicy risks={results.risks ?? []} /> : null}
+          <NextActions results={results} />
+          <FeedbackBlock contractId={contractId} versionId={versionId} />
+        </div>
+      </div>
 
       <LegalDisclaimer />
+      <TrustFooter />
 
       <RiskDetailsDrawer
         open={selectedRiskId !== null}

@@ -1,11 +1,12 @@
-// ContractsMetricsStrip (FE-TASK-044, Figma 198:2) — 5-stat сводка над списком.
+// ContractsMetricsStrip (FE-TASK-044, Figma 198:2) — сводка над списком.
 //
 // data-honesty:
 //   • «документов» = серверный total (глобальный, реальный);
 //   • «в обработке» / «требуют внимания» считаются из items ТЕКУЩЕЙ СТРАНИЦЫ
 //     (глобального aggregate-эндпоинта нет — показываем срез загруженной страницы);
-//   • «высокий риск» (нет risk-данных) и «завершено сегодня» (нет глобального
-//     date-aggregate) — «—» до бэкенда (FE-TASK-046). Никаких выдуманных чисел.
+//   • «высокий риск» — «—» до интеграции risk-данных (ORCH-TASK-056 / FE-TASK-046);
+//   • «завершено сегодня» из Figma исключена: требует глобального date-aggregate
+//     (вне scope), честно посчитать из текущей страницы нельзя. Никаких выдуманных чисел.
 import { useMemo } from 'react';
 
 import { type ContractSummary, viewStatus } from '@/entities/contract';
@@ -90,13 +91,6 @@ export function ContractsMetricsStrip({
       scoped: true,
     },
     { key: 'high-risk', value: '—', label: 'высокий риск', dot: 'bg-risk-high', muted: true },
-    {
-      key: 'completed-today',
-      value: '—',
-      label: 'завершено сегодня',
-      dot: 'bg-success',
-      muted: true,
-    },
     {
       key: 'attention',
       value: counts.attention,

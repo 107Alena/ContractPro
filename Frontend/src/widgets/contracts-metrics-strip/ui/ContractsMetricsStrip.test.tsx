@@ -32,16 +32,14 @@ describe('computeStripCounters', () => {
 });
 
 describe('ContractsMetricsStrip', () => {
-  it('Default — total реальный, риск/сегодня = «—»', () => {
+  it('Default — total реальный, «высокий риск» = «—», без «завершено сегодня»', () => {
     render(<ContractsMetricsStrip items={[s('ANALYZING'), s('FAILED')]} total={42} />);
     expect(screen.getByTestId('contracts-metrics-strip')).toBeInTheDocument();
     expect(screen.getByTestId('contracts-metrics-strip-card-total')).toHaveTextContent('42');
     expect(screen.getByTestId('contracts-metrics-strip-card-in-progress')).toHaveTextContent('1');
     expect(screen.getByTestId('contracts-metrics-strip-card-attention')).toHaveTextContent('1');
     expect(screen.getByTestId('contracts-metrics-strip-card-high-risk')).toHaveTextContent('—');
-    expect(screen.getByTestId('contracts-metrics-strip-card-completed-today')).toHaveTextContent(
-      '—',
-    );
+    expect(screen.queryByTestId('contracts-metrics-strip-card-completed-today')).toBeNull();
   });
 
   it('Loading — спиннер и aria-busy', () => {

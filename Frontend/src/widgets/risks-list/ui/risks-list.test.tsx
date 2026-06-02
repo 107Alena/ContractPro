@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RisksList } from './risks-list';
 
@@ -40,5 +40,28 @@ describe('RisksList', () => {
     expect(screen.getByText(/Штраф 10%/)).toBeDefined();
     expect(screen.getByText(/5\.3/)).toBeDefined();
     expect(screen.getByText(/ГК РФ/)).toBeDefined();
+  });
+
+  it('риск без id не получает кнопку «Подробнее» (клик был бы no-op)', () => {
+    const onRiskClick = vi.fn();
+    render(
+      <RisksList risks={[{ level: 'high', description: 'Без id' }]} onRiskClick={onRiskClick} />,
+    );
+    expect(screen.queryByTestId('risks-list-item-button')).toBeNull();
+  });
+
+  it('несколько рекомендаций на один risk_id — показываются все', () => {
+    render(
+      <RisksList
+        risks={[{ id: 'r1', level: 'high', description: 'Риск с двумя правками' }]}
+        recommendations={[
+          { risk_id: 'r1', recommended_text: 'Формулировка А' },
+          { risk_id: 'r1', recommended_text: 'Формулировка Б' },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /показать формулировку/i }));
+    expect(screen.getByText('Формулировка А')).toBeDefined();
+    expect(screen.getByText('Формулировка Б')).toBeDefined();
   });
 });

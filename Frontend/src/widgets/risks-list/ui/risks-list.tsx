@@ -4,12 +4,13 @@
 // формулировку» (раскрывает рекомендованную формулировку).
 //
 // Рекомендации интегрированы в карточки риска по `recommendation.risk_id ===
-// risk.id` (Figma 150:2 не имеет отдельной секции «Рекомендации»). Передаётся
-// опциональным `recommendations` — ContractDetail/Dashboard их не передают и
-// получают карточки без рекомендательной части (обратная совместимость).
+// risk.id` (Figma 150:2 не имеет отдельной секции «Рекомендации»). Несколько
+// рекомендаций на один risk_id группируются и показываются все (не теряются).
+// Передаётся опциональным `recommendations` — ContractDetail/Dashboard их не
+// передают и получают карточки без рекомендательной части (обратная совм.).
 //
 // RBAC: виджет скрывается на уровне page через <Can I="risks.view"> (§5.6.1).
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { RiskBadge, type RiskLevel } from '@/entities/risk';
 import type { components } from '@/shared/api/openapi';
@@ -26,9 +27,9 @@ export interface RisksListProps {
   isLoading?: boolean | undefined;
   error?: unknown;
   /**
-   * Открывает RiskDetailsDrawer. Когда передан — у карточки появляется кнопка
-   * «Подробнее» (data-testid=risks-list-item-button). Без него карточка
-   * пассивна (обратная совместимость с ContractDetailPage/Dashboard).
+   * Открывает RiskDetailsDrawer. Когда передан И у риска есть `id` — у карточки
+   * появляется кнопка «Подробнее» (data-testid=risks-list-item-button). Без id
+   * кнопку не рендерим (клик был бы silent no-op: drawer открывается по id).
    */
   onRiskClick?: ((risk: Risk) => void) | undefined;
 }
@@ -46,9 +47,13 @@ export function RisksList({
   error,
   onRiskClick,
 }: RisksListProps): JSX.Element {
-  const recByRiskId = new Map<string, Recommendation>();
+  // Группируем по risk_id (несколько рекомендаций на риск — допустимо схемой).
+  const recsByRiskId = new Map<string, Recommendation[]>();
   for (const rec of recommendations ?? []) {
-    if (rec.risk_id) recByRiskId.set(rec.risk_id, rec);
+    if (!rec.risk_id) continue;
+    const list = recsByRiskId.get(rec.risk_id);
+    if (list) list.push(rec);
+    else recsByRiskId.set(rec.risk_id, [rec]);
   }
   const count = risks?.length ?? 0;
 
@@ -59,7 +64,7 @@ export function RisksList({
     >
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-18 font-semibold text-fg">Ключевые риски</h2>
-        {count > 0 ? <span className="text-13 text-fg-subtle">{count} найдено</span> : null}
+        {count > 0 ? <span className="text-13 text-fg-muted">{count} найдено</span> : null}
       </header>
 
       {isLoading && !risks ? (
@@ -84,8 +89,8 @@ export function RisksList({
             <RiskItem
               key={risk.id ?? `risk-${idx}`}
               risk={risk}
-              recommendation={risk.id ? recByRiskId.get(risk.id) : undefined}
-              {...(onRiskClick ? { onClick: () => onRiskClick(risk) } : {})}
+              recommendations={(risk.id ? recsByRiskId.get(risk.id) : undefined) ?? []}
+              {...(onRiskClick && risk.id ? { onClick: () => onRiskClick(risk) } : {})}
             />
           ))}
         </ul>
@@ -96,14 +101,17 @@ export function RisksList({
 
 interface RiskItemProps {
   risk: Risk;
-  recommendation?: Recommendation | undefined;
+  recommendations: readonly Recommendation[];
   onClick?: () => void;
 }
 
-function RiskItem({ risk, recommendation, onClick }: RiskItemProps): JSX.Element {
+function RiskItem({ risk, recommendations, onClick }: RiskItemProps): JSX.Element {
   const [showWording, setShowWording] = useState(false);
+  const wordingId = useId();
   const level = risk.level;
-  const hasWording = Boolean(recommendation?.recommended_text);
+  const explanation = recommendations.find((r) => r.explanation)?.explanation;
+  const wordingRecs = recommendations.filter((r) => r.recommended_text || r.original_text);
+  const hasWording = wordingRecs.length > 0;
 
   return (
     <li
@@ -124,19 +132,17 @@ function RiskItem({ risk, recommendation, onClick }: RiskItemProps): JSX.Element
         <p className="text-13 leading-5 text-fg-muted">{risk.legal_basis}</p>
       ) : null}
 
-      {risk.clause_ref || recommendation?.explanation ? (
+      {risk.clause_ref || explanation ? (
         <div className="flex flex-wrap items-center gap-2 text-12">
           {risk.clause_ref ? (
             <span className="font-medium text-fg-subtle">{risk.clause_ref}</span>
           ) : null}
-          {risk.clause_ref && recommendation?.explanation ? (
+          {risk.clause_ref && explanation ? (
             <span aria-hidden className="text-fg-disabled">
               ·
             </span>
           ) : null}
-          {recommendation?.explanation ? (
-            <span className="text-brand-600">{recommendation.explanation}</span>
-          ) : null}
+          {explanation ? <span className="text-fg-muted">{explanation}</span> : null}
         </div>
       ) : null}
 
@@ -147,7 +153,7 @@ function RiskItem({ risk, recommendation, onClick }: RiskItemProps): JSX.Element
               type="button"
               onClick={onClick}
               data-testid="risks-list-item-button"
-              className="rounded-sm text-brand-500 hover:underline focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
+              className="rounded-sm text-brand-600 underline underline-offset-2 focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
             >
               Подробнее
             </button>
@@ -157,7 +163,8 @@ function RiskItem({ risk, recommendation, onClick }: RiskItemProps): JSX.Element
               type="button"
               onClick={() => setShowWording((v) => !v)}
               aria-expanded={showWording}
-              className="rounded-sm text-fg-subtle hover:text-fg focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
+              aria-controls={wordingId}
+              className="rounded-sm text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
             >
               {showWording ? 'Скрыть формулировку' : 'Показать формулировку'}
             </button>
@@ -165,14 +172,16 @@ function RiskItem({ risk, recommendation, onClick }: RiskItemProps): JSX.Element
         </div>
       ) : null}
 
-      {showWording && recommendation ? (
-        <div className="flex flex-col gap-2 rounded-md bg-bg-muted p-3 text-13">
-          {recommendation.original_text ? (
-            <p className="text-fg-muted line-through">{recommendation.original_text}</p>
-          ) : null}
-          {recommendation.recommended_text ? (
-            <p className="text-fg">{recommendation.recommended_text}</p>
-          ) : null}
+      {hasWording ? (
+        <div id={wordingId} hidden={!showWording} className="flex flex-col gap-3">
+          {wordingRecs.map((rec, i) => (
+            <div key={i} className="flex flex-col gap-2 rounded-md bg-bg-muted p-3 text-13">
+              {rec.original_text ? (
+                <p className="text-fg-muted line-through">{rec.original_text}</p>
+              ) : null}
+              {rec.recommended_text ? <p className="text-fg">{rec.recommended_text}</p> : null}
+            </div>
+          ))}
         </div>
       ) : null}
     </li>

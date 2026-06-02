@@ -159,7 +159,10 @@ function ReadyContent({
         <SummaryTable results={results} />
         <div className="flex flex-col gap-6">
           {canViewRisks ? <DeviationsFromPolicy risks={results.risks ?? []} /> : null}
-          <NextActions results={results} />
+          {/* NextActions выводит вердикт из risk_profile/risks; для BUSINESS_USER
+              эти данные стрипает backend → шаги были бы ложными («готов к
+              подписанию» при скрытых high-рисках). Гейтим как risk-секцию. */}
+          {canViewRisks ? <NextActions results={results} /> : null}
           <FeedbackBlock contractId={contractId} versionId={versionId} />
         </div>
       </div>

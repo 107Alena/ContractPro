@@ -6,8 +6,17 @@
 import type { RiskLevel } from '@/entities/risk';
 import { RISK_LEVEL_META } from '@/entities/risk';
 import type { components } from '@/shared/api/openapi';
+import { cn } from '@/shared/lib/cn';
 import { Badge } from '@/shared/ui/badge';
 import { Spinner } from '@/shared/ui/spinner';
+
+// Цветовой тинт счётчиков по уровню (Figma 154:2). Значение — 24px bold
+// (крупный текст: WCAG 3:1), risk-* токены на своём *-bg проходят порог.
+const COUNTER_TINT: Record<RiskLevel, string> = {
+  high: 'bg-risk-high-bg-soft text-risk-high',
+  medium: 'bg-risk-medium-bg text-risk-medium',
+  low: 'bg-risk-low-bg text-risk-low',
+};
 
 type RiskProfile = components['schemas']['RiskProfile'];
 type AggregateScore = components['schemas']['AggregateScore'];
@@ -121,11 +130,11 @@ function CounterItem({ level, value }: { level: RiskLevel; value: number }): JSX
   const meta = RISK_LEVEL_META[level];
   return (
     <div
-      className="flex flex-col items-start gap-1 rounded-md border border-border bg-bg p-3"
+      className={cn('flex flex-col items-start gap-1 rounded-md p-3', COUNTER_TINT[level])}
       data-testid={`risk-profile-counter-${level}`}
     >
       <dt className="text-xs uppercase tracking-wide text-fg-muted">{meta.label}</dt>
-      <dd className="text-2xl font-semibold text-fg">{value}</dd>
+      <dd className="text-2xl font-semibold">{value}</dd>
     </div>
   );
 }

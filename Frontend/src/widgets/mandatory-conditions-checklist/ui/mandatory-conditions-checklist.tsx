@@ -64,7 +64,7 @@ export function MandatoryConditionsChecklist({
         </p>
       ) : !items || items.length === 0 ? (
         <p className="text-sm text-fg-muted" data-testid="mandatory-conditions-empty">
-          Обязательные условия появятся после завершения анализа.
+          Проверка обязательных условий по чек-листу организации пока недоступна.
         </p>
       ) : (
         <ul className="flex flex-col gap-2" data-testid="mandatory-conditions-list">

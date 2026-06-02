@@ -58,7 +58,7 @@ export function DocumentCard({ contract, results }: DocumentCardProps): JSX.Elem
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p className="truncate text-14 font-medium text-fg">{title}</p>
-        <p className="truncate text-12 text-fg-subtle">{sub || '—'}</p>
+        <p className="truncate text-12 text-fg-muted">{sub || '—'}</p>
       </div>
       {version?.processing_status ? <StatusBadge status={version.processing_status} /> : null}
     </Card>

@@ -248,6 +248,9 @@ describe('ResultPage', () => {
     expect(screen.queryByRole('region', { name: 'Ключевые риски' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Профиль рисков' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Отклонения от политики' })).toBeNull();
+    // NextActions выводит вердикт из risk_profile (стрипается для бизнеса) —
+    // скрыт, чтобы не показывать ложное «готов к подписанию».
+    expect(screen.queryByTestId('next-actions')).toBeNull();
     // BUSINESS_USER без export_enabled — кнопка экспорта скрывается.
     // Тут organization разрешает экспорт, поэтому кнопка видна.
     expect(screen.getByTestId('export-share-button')).toBeDefined();

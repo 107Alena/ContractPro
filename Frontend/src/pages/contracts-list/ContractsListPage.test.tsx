@@ -10,6 +10,7 @@
 // Мутации не тестируем — покрыто в features/contract-archive|contract-delete.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -154,7 +155,7 @@ describe('ContractsListPage', () => {
     expect(screen.getByTestId('contracts-list-error')).toBeInTheDocument();
   });
 
-  it('RBAC Pattern B — BUSINESS_USER не видит кнопки архивации/удаления в строках', async () => {
+  it('RBAC Pattern B — BUSINESS_USER видит Результат/Сравнить, но не ⋯-меню', async () => {
     getSpy.mockResolvedValue({ data: sample });
     const qc = makeClient();
 
@@ -163,20 +164,25 @@ describe('ContractsListPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Договор оказания услуг')).toBeInTheDocument();
     });
-    expect(screen.queryByTestId('row-actions-c1')).toBeNull();
+    // Результат/Сравнить доступны всем — actions-обёртка есть; ⋯ (архив/удаление) — нет.
+    expect(screen.getByTestId('row-actions-c1')).toBeInTheDocument();
+    expect(screen.queryByTestId('row-more-c1')).toBeNull();
     expect(screen.queryByTestId('row-archive-c1')).toBeNull();
     expect(screen.queryByTestId('row-delete-c1')).toBeNull();
   });
 
-  it('RBAC Pattern B — LAWYER видит кнопки архивации/удаления', async () => {
+  it('RBAC Pattern B — LAWYER: ⋯-меню содержит архивацию/удаление', async () => {
     getSpy.mockResolvedValue({ data: sample });
     const qc = makeClient();
+    const user = userEvent.setup();
 
     renderPage(qc, lawyer);
 
     await waitFor(() => {
-      expect(screen.getByTestId('row-archive-c1')).toBeInTheDocument();
+      expect(screen.getByTestId('row-more-c1')).toBeInTheDocument();
     });
+    await user.click(screen.getByTestId('row-more-c1'));
+    expect(await screen.findByTestId('row-archive-c1')).toBeInTheDocument();
     expect(screen.getByTestId('row-delete-c1')).toBeInTheDocument();
   });
 

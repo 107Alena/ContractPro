@@ -33,7 +33,15 @@ import { PaginationControls } from '@/features/pagination';
 import { SearchInput } from '@/features/search';
 import { isOrchestratorError, toUserMessage } from '@/shared/api';
 import { useCan } from '@/shared/auth';
-import { Button, buttonVariants, Card, toast } from '@/shared/ui';
+import {
+  Button,
+  buttonVariants,
+  Card,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  toast,
+} from '@/shared/ui';
 import { ContractsMetricsStrip } from '@/widgets/contracts-metrics-strip';
 import { CurrentActions } from '@/widgets/dashboard-current-actions';
 import { TrustFooter } from '@/widgets/dashboard-trust-footer';
@@ -126,40 +134,72 @@ export function ContractsListPage(): JSX.Element {
 
   // ------------------ Render-actions ------------------
 
-  const renderRowActions = canArchive
-    ? ({ contract }: { contract: ContractSummary }): JSX.Element | null => {
-        if (!contract.contract_id) return null;
-        const archived = contract.status === 'ARCHIVED';
-        const deleted = contract.status === 'DELETED';
-        return (
-          <div
-            className="flex items-center justify-end gap-1"
-            data-testid={`row-actions-${contract.contract_id}`}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => handleArchive(contract)}
-              disabled={archived || deleted || archiveMutation.isPending}
-              data-testid={`row-archive-${contract.contract_id}`}
-            >
-              {archived ? 'В архиве' : 'В архив'}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => handleOpenDelete(contract)}
-              disabled={deleted || deleteMutation.isPending}
-              data-testid={`row-delete-${contract.contract_id}`}
-            >
-              Удалить
-            </Button>
-          </div>
-        );
-      }
-    : undefined;
+  // Действия в строке (Figma 202:24): Результат / Сравнить доступны всем
+  // (read-навигация); архивация/удаление — в ⋯-меню только при RBAC-доступе
+  // (canArchive). Колонка показывается всем ролям.
+  const renderRowActions = ({ contract }: { contract: ContractSummary }): JSX.Element | null => {
+    const id = contract.contract_id;
+    if (!id) return null;
+    const archived = contract.status === 'ARCHIVED';
+    const deleted = contract.status === 'DELETED';
+    const encoded = encodeURIComponent(id);
+    return (
+      <div className="flex items-center justify-end gap-1" data-testid={`row-actions-${id}`}>
+        <Link
+          to={`/contracts/${encoded}`}
+          className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+        >
+          Результат
+        </Link>
+        <Link
+          to={`/contracts/${encoded}/compare`}
+          className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+        >
+          Сравнить
+        </Link>
+        {canArchive ? (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-label="Ещё действия"
+                data-testid={`row-more-${id}`}
+                className="inline-flex size-8 items-center justify-center rounded-md text-fg-muted hover:bg-bg-muted focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-2"
+              >
+                ⋯
+              </button>
+            </PopoverTrigger>
+            <PopoverContent size="sm" align="end" className="flex flex-col gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                fullWidth
+                onClick={() => handleArchive(contract)}
+                disabled={archived || deleted || archiveMutation.isPending}
+                data-testid={`row-archive-${id}`}
+                className="justify-start"
+              >
+                {archived ? 'В архиве' : 'В архив'}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                fullWidth
+                onClick={() => handleOpenDelete(contract)}
+                disabled={deleted || deleteMutation.isPending}
+                data-testid={`row-delete-${id}`}
+                className="justify-start"
+              >
+                Удалить
+              </Button>
+            </PopoverContent>
+          </Popover>
+        ) : null}
+      </div>
+    );
+  };
 
   const errorMessage = ((): string => {
     if (!error) return '';
@@ -252,7 +292,7 @@ export function ContractsListPage(): JSX.Element {
             </Button>
           </div>
         }
-        {...(renderRowActions ? { renderRowActions } : {})}
+        renderRowActions={renderRowActions}
       />
 
       {!isError && total > 0 ? (

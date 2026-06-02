@@ -8,37 +8,40 @@ import { computeStripCounters, ContractsMetricsStrip } from './ContractsMetricsS
 
 afterEach(cleanup);
 
-const sample: ContractSummary[] = [
-  { contract_id: '1', title: 'a', status: 'ACTIVE' },
-  { contract_id: '2', title: 'b', status: 'ACTIVE' },
-  { contract_id: '3', title: 'c', status: 'ARCHIVED' },
-  { contract_id: '4', title: 'd', status: 'DELETED' },
-  { contract_id: '5', title: 'e' },
-];
+const s = (status: NonNullable<ContractSummary['processing_status']>): ContractSummary => ({
+  contract_id: status,
+  processing_status: status,
+});
 
 describe('computeStripCounters', () => {
-  it('группирует по DocumentStatus', () => {
-    const counters = computeStripCounters(sample, 42);
-    expect(counters.total).toBe(42);
-    expect(counters.active).toBe(2);
-    expect(counters.archived).toBe(1);
-    expect(counters.deleted).toBe(1);
+  it('считает in_progress и attention по processing_status', () => {
+    const c = computeStripCounters([
+      s('ANALYZING'),
+      s('PROCESSING'),
+      s('AWAITING_USER_INPUT'),
+      s('FAILED'),
+      s('READY'),
+    ]);
+    expect(c.inProgress).toBe(2); // ANALYZING + PROCESSING
+    expect(c.attention).toBe(2); // AWAITING + FAILED
   });
 
-  it('пустой ввод → нули (кроме total)', () => {
-    const counters = computeStripCounters([], 0);
-    expect(counters).toEqual({ total: 0, active: 0, archived: 0, deleted: 0 });
+  it('пустой ввод → нули', () => {
+    expect(computeStripCounters([])).toEqual({ inProgress: 0, attention: 0 });
   });
 });
 
 describe('ContractsMetricsStrip', () => {
-  it('Default — рендерит 4 карточки', () => {
-    render(<ContractsMetricsStrip items={sample} total={42} />);
+  it('Default — total реальный, риск/сегодня = «—»', () => {
+    render(<ContractsMetricsStrip items={[s('ANALYZING'), s('FAILED')]} total={42} />);
     expect(screen.getByTestId('contracts-metrics-strip')).toBeInTheDocument();
     expect(screen.getByTestId('contracts-metrics-strip-card-total')).toHaveTextContent('42');
-    expect(screen.getByTestId('contracts-metrics-strip-card-active')).toHaveTextContent('2');
-    expect(screen.getByTestId('contracts-metrics-strip-card-archived')).toHaveTextContent('1');
-    expect(screen.getByTestId('contracts-metrics-strip-card-deleted')).toHaveTextContent('1');
+    expect(screen.getByTestId('contracts-metrics-strip-card-in-progress')).toHaveTextContent('1');
+    expect(screen.getByTestId('contracts-metrics-strip-card-attention')).toHaveTextContent('1');
+    expect(screen.getByTestId('contracts-metrics-strip-card-high-risk')).toHaveTextContent('—');
+    expect(screen.getByTestId('contracts-metrics-strip-card-completed-today')).toHaveTextContent(
+      '—',
+    );
   });
 
   it('Loading — спиннер и aria-busy', () => {
@@ -52,7 +55,7 @@ describe('ContractsMetricsStrip', () => {
   });
 
   it('без total → считает из items.length', () => {
-    render(<ContractsMetricsStrip items={sample.slice(0, 2)} />);
+    render(<ContractsMetricsStrip items={[s('READY'), s('READY')]} />);
     expect(screen.getByTestId('contracts-metrics-strip-card-total')).toHaveTextContent('2');
   });
 });

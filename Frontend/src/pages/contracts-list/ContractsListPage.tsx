@@ -1,15 +1,13 @@
 // ContractsListPage (FE-TASK-044) — экран «Документы» (Figma 7, §17.1/§17.3/§17.4).
-// URL: /contracts (auth). Композиция:
+// URL: /contracts (auth). Композиция (Figma 193:2, этап 4.5):
 //
 //   ┌─────────────────────────────────────────────────────┐
-//   │ <ContractsMetricsStrip> 4 KPI-карточки по статусу    │
-//   ├─────────────────────────────────────────────────────┤
-//   │ <WhatMattersCards> 4 счётчика по processing_status   │
-//   ├─────────────────────────────────────────────────────┤
-//   │ <SearchInput>   <FilterChips>                        │
-//   ├─────────────────────────────────────────────────────┤
-//   │ <DocumentsTable> server-side pagination+виртуал.     │
-//   │ <PaginationControls>                                 │
+//   │ PageIntro (заголовок + Загрузить PDF / Новая проверка)│
+//   │ <ContractsMetricsStrip> 5-stat сводка                │
+//   │ <CurrentActions> «Что важно сейчас» (= dashboard)    │
+//   │ Card[ <SearchInput>  <FilterChips> ]                 │
+//   │ <DocumentsTable> server-side pagination + виртуал.   │
+//   │ <PaginationControls>  ·  <TrustFooter>               │
 //   └─────────────────────────────────────────────────────┘
 //
 // RBAC Pattern B (§5.6.1, §17.3): для BUSINESS_USER колонка «Действия» не

@@ -15,10 +15,10 @@ export default meta;
 type Story = StoryObj<typeof ContractsMetricsStrip>;
 
 const sample: ContractSummary[] = [
-  { contract_id: '1', title: 'a', status: 'ACTIVE' },
-  { contract_id: '2', title: 'b', status: 'ACTIVE' },
-  { contract_id: '3', title: 'c', status: 'ARCHIVED' },
-  { contract_id: '4', title: 'd', status: 'DELETED' },
+  { contract_id: '1', title: 'a', processing_status: 'READY' },
+  { contract_id: '2', title: 'b', processing_status: 'ANALYZING' },
+  { contract_id: '3', title: 'c', processing_status: 'AWAITING_USER_INPUT' },
+  { contract_id: '4', title: 'd', processing_status: 'FAILED' },
 ];
 
 export const Default: Story = {

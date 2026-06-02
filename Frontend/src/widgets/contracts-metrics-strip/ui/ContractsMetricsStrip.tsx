@@ -1,18 +1,15 @@
-// ContractsMetricsStrip (FE-TASK-044) — верхняя KPI-полоса на странице «Документы»
-// (§17.4). Четыре счётчика по состоянию документа (ACTIVE/ARCHIVED/DELETED) +
-// общий total. Отличается от Dashboard WhatMattersCards (там — агрегация по
-// processing_status). Полностью презентационный виджет — данные приходят
-// пропами от page.
+// ContractsMetricsStrip (FE-TASK-044, Figma 198:2) — 5-stat сводка над списком.
 //
-// ВАЖНО: при серверной пагинации items[] = только текущая страница. Поэтому
-// метки карточек active/archived/deleted содержат «на странице» — чтобы не
-// вводить пользователя в заблуждение (считается по первым N строкам).
-// Серверный total показывается честно. Когда backend добавит агрегаты по
-// статусу — переключимся на глобальные счётчики.
+// data-honesty:
+//   • «документов» = серверный total (глобальный, реальный);
+//   • «в обработке» / «требуют внимания» считаются из items ТЕКУЩЕЙ СТРАНИЦЫ
+//     (глобального aggregate-эндпоинта нет — показываем срез загруженной страницы);
+//   • «высокий риск» (нет risk-данных) и «завершено сегодня» (нет глобального
+//     date-aggregate) — «—» до бэкенда (FE-TASK-046). Никаких выдуманных чисел.
 import { useMemo } from 'react';
 
-import { type ContractSummary } from '@/entities/contract';
-import { Spinner } from '@/shared/ui';
+import { type ContractSummary, viewStatus } from '@/entities/contract';
+import { Card, Spinner } from '@/shared/ui';
 
 export interface ContractsMetricsStripProps {
   items?: readonly ContractSummary[] | undefined;
@@ -22,33 +19,17 @@ export interface ContractsMetricsStripProps {
   error?: unknown;
 }
 
-interface StripCounters {
-  total: number;
-  active: number;
-  archived: number;
-  deleted: number;
+export interface StripCounts {
+  inProgress: number;
+  attention: number;
 }
 
-export function computeStripCounters(
-  items: readonly ContractSummary[],
-  total: number,
-): StripCounters {
-  const c: StripCounters = { total, active: 0, archived: 0, deleted: 0 };
+export function computeStripCounters(items: readonly ContractSummary[]): StripCounts {
+  const c: StripCounts = { inProgress: 0, attention: 0 };
   for (const item of items) {
-    switch (item.status) {
-      case 'ACTIVE':
-        c.active += 1;
-        break;
-      case 'ARCHIVED':
-        c.archived += 1;
-        break;
-      case 'DELETED':
-        c.deleted += 1;
-        break;
-      default:
-        // status может быть undefined — не считаем.
-        break;
-    }
+    const { bucket } = viewStatus(item.processing_status);
+    if (bucket === 'in_progress') c.inProgress += 1;
+    else if (bucket === 'awaiting' || bucket === 'failed') c.attention += 1;
   }
   return c;
 }
@@ -59,61 +40,79 @@ export function ContractsMetricsStrip({
   isLoading,
   error,
 }: ContractsMetricsStripProps): JSX.Element {
-  const counters = useMemo<StripCounters>(() => {
-    const safeItems = items ?? [];
-    const safeTotal = typeof total === 'number' ? total : safeItems.length;
-    return computeStripCounters(safeItems, safeTotal);
-  }, [items, total]);
+  const counts = useMemo(() => computeStripCounters(items ?? []), [items]);
 
   if (isLoading && !items) {
     return (
-      <section
+      <Card
         aria-label="Показатели договоров"
         aria-busy="true"
-        className="flex h-[120px] items-center justify-center rounded-md border border-border bg-bg-muted"
+        className="flex h-[88px] items-center justify-center"
         data-testid="contracts-metrics-strip-loading"
       >
         <Spinner size="md" aria-hidden="true" />
-      </section>
+        <span className="sr-only">Загрузка…</span>
+      </Card>
     );
   }
 
   if (error) {
     return (
-      <section
+      <Card
         aria-label="Показатели договоров"
-        role="alert"
-        className="rounded-md border border-danger/30 bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-4 text-sm text-danger"
+        className="p-5"
         data-testid="contracts-metrics-strip-error"
       >
-        Не удалось загрузить показатели. Попробуйте обновить страницу.
-      </section>
+        <p role="alert" className="text-14 text-danger">
+          Не удалось загрузить показатели. Попробуйте обновить страницу.
+        </p>
+      </Card>
     );
   }
 
-  const cards: Array<{ key: keyof StripCounters; label: string; tone: string }> = [
-    { key: 'total', label: 'Всего договоров', tone: 'text-fg' },
-    { key: 'active', label: 'Активных на странице', tone: 'text-brand-600' },
-    { key: 'archived', label: 'В архиве (на странице)', tone: 'text-fg-muted' },
-    { key: 'deleted', label: 'Удалённых (на странице)', tone: 'text-danger' },
+  const safeTotal = typeof total === 'number' ? total : (items?.length ?? 0);
+
+  const stats: Array<{
+    key: string;
+    value: number | string;
+    label: string;
+    dot?: string;
+    muted?: boolean;
+  }> = [
+    { key: 'total', value: safeTotal, label: 'документов' },
+    { key: 'in-progress', value: counts.inProgress, label: 'в обработке', dot: 'bg-processing' },
+    { key: 'high-risk', value: '—', label: 'высокий риск', dot: 'bg-risk-high', muted: true },
+    {
+      key: 'completed-today',
+      value: '—',
+      label: 'завершено сегодня',
+      dot: 'bg-success',
+      muted: true,
+    },
+    { key: 'attention', value: counts.attention, label: 'требуют внимания', dot: 'bg-warning' },
   ];
 
   return (
-    <section
+    <Card
       aria-label="Показатели договоров"
-      className="grid grid-cols-2 gap-3 md:grid-cols-4"
+      className="flex flex-wrap items-center gap-x-8 gap-y-4 px-5 py-4"
       data-testid="contracts-metrics-strip"
     >
-      {cards.map((card) => (
-        <article
-          key={card.key}
-          className="rounded-md border border-border bg-bg p-4 shadow-sm"
-          data-testid={`contracts-metrics-strip-card-${card.key}`}
+      {stats.map((s) => (
+        <div
+          key={s.key}
+          className="flex items-center gap-2"
+          data-testid={`contracts-metrics-strip-card-${s.key}`}
         >
-          <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">{card.label}</p>
-          <p className={`mt-2 text-3xl font-semibold ${card.tone}`}>{counters[card.key]}</p>
-        </article>
+          {s.dot ? (
+            <span className={`size-2 shrink-0 rounded-full ${s.dot}`} aria-hidden="true" />
+          ) : null}
+          <span className={`text-24 font-bold ${s.muted ? 'text-fg-disabled' : 'text-fg'}`}>
+            {s.value}
+          </span>
+          <span className="text-13 text-fg-muted">{s.label}</span>
+        </div>
       ))}
-    </section>
+    </Card>
   );
 }

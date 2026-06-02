@@ -170,30 +170,31 @@ function ReadyContent({
 }
 
 interface PageHeaderProps {
-  contract: ContractDetails | undefined;
   contractId: string;
   versionId: string;
   disableActions: boolean;
+  /** Описание-результат (Figma 153:12) — только когда анализ завершён. */
+  showDescription: boolean;
 }
 
 function PageHeader({
-  contract,
   contractId,
   versionId,
   disableActions,
+  showDescription,
 }: PageHeaderProps): JSX.Element {
-  const title = contract?.title ?? 'Результат проверки';
-  const versionLabel = contract?.current_version?.version_number
-    ? `v${contract.current_version.version_number}`
-    : versionId;
-
   return (
-    <header className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold text-fg">{title}</h1>
-        <p className="text-sm text-fg-muted">Версия: {versionLabel}</p>
+    <header className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+      <div className="flex max-w-[640px] flex-col gap-2">
+        <h1 className="text-24 font-bold leading-9 text-fg">Результат проверки договора</h1>
+        {showDescription ? (
+          <p className="text-15 leading-[22px] text-fg-muted">
+            ContractPro проанализировал договор, определил ключевые риски, проверил обязательные
+            условия и сформировал рекомендации.
+          </p>
+        ) : null}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2.5">
         <RecheckButton
           contractId={contractId}
           versionId={versionId}
@@ -357,18 +358,20 @@ export function ResultPage(): JSX.Element {
     );
   })();
 
+  const ready = processingStatus === 'READY' || processingStatus === 'PARTIALLY_FAILED';
+
   return (
-    <main
+    <div
       data-testid="page-result"
       className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8"
     >
       <PageHeader
-        contract={contract}
         contractId={contractId}
         versionId={versionId}
         disableActions={disableHeaderActions}
+        showDescription={ready}
       />
       {content}
-    </main>
+    </div>
   );
 }

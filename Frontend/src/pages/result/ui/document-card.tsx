@@ -1,80 +1,66 @@
-// DocumentCard — шапка экрана результатов (§16.5 дерево ResultPage, §17.5
-// artifact CLASSIFICATION_RESULT, row 6). Показывает название договора,
-// определённый тип + confidence, статус обработки версии и метаинформацию.
+// DocumentCard — тонкая мета-карточка документа на экране результатов
+// (Figma 150:2 → DocumentMetaCard 153:20). Одна строка: PDF-иконка + название
+// договора (тип · дата · версия) + статус-бейдж. Заголовок страницы (h1) живёт
+// в Page Intro (ResultPage PageHeader) — здесь название рендерится как <p>,
+// чтобы не плодить второй h1.
 //
-// Page-local компонент: компоновка специфична именно для экрана «Результат»
-// и отличается от DocumentHeader на карточке договора (там другой набор
-// полей + DocumentStatus-badge вместо confidence).
+// Page-local: компоновка специфична экрану «Результат». Тип договора
+// (results.contract_type) встраивается в подпись; confidence в Figma-мете не
+// показывается (деталь классификации) — опущена.
 import type { ContractDetails } from '@/entities/contract';
 import type { AnalysisResults } from '@/entities/result';
 import { StatusBadge } from '@/entities/version';
-import { Badge } from '@/shared/ui/badge';
+import { Card } from '@/shared/ui';
 
 export interface DocumentCardProps {
   contract: ContractDetails;
   results?: AnalysisResults | undefined;
 }
 
-function formatDate(iso?: string): string {
+function formatDateTime(iso?: string): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' });
-}
-
-function classificationConfidenceTone(conf: number): 'success' | 'warning' | 'danger' {
-  if (conf >= 0.85) return 'success';
-  if (conf >= 0.6) return 'warning';
-  return 'danger';
+  return d.toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export function DocumentCard({ contract, results }: DocumentCardProps): JSX.Element {
   const version = contract.current_version;
   const title = contract.title ?? 'Договор без названия';
-  const classification = results?.contract_type;
-  const confidence =
-    typeof classification?.confidence === 'number' ? classification.confidence : undefined;
+  const contractType = results?.contract_type?.contract_type;
+
+  const sub = [
+    contractType,
+    version?.created_at ? formatDateTime(version.created_at) : null,
+    version?.version_number ? `Версия ${version.version_number}` : null,
+  ]
+    .filter((v): v is string => Boolean(v))
+    .join(' · ');
 
   return (
-    <header
+    <Card
+      as="header"
       data-testid="document-card"
-      className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+      radius="card"
+      className="flex flex-wrap items-center gap-5 border border-border-subtle px-5 py-4 shadow-none"
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-2xl font-semibold text-fg">{title}</h1>
-        {version?.processing_status ? <StatusBadge status={version.processing_status} /> : null}
-        {classification?.contract_type ? (
-          <Badge variant="brand" data-testid="document-card-type">
-            {classification.contract_type}
-          </Badge>
-        ) : null}
-        {confidence !== undefined ? (
-          <Badge
-            variant={classificationConfidenceTone(confidence)}
-            data-testid="document-card-confidence"
-          >
-            {Math.round(confidence * 100)}%
-          </Badge>
-        ) : null}
+      <span
+        aria-hidden
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-risk-high-bg text-11 font-bold text-risk-high"
+      >
+        PDF
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <p className="truncate text-14 font-medium text-fg">{title}</p>
+        <p className="truncate text-12 text-fg-subtle">{sub || '—'}</p>
       </div>
-      <dl className="grid grid-cols-[max-content,1fr] gap-x-4 gap-y-1 text-sm text-fg-muted md:grid-cols-[max-content,1fr,max-content,1fr]">
-        <dt>Версия:</dt>
-        <dd className="text-fg">{version?.version_number ? `v${version.version_number}` : '—'}</dd>
-        <dt>Обновлён:</dt>
-        <dd className="text-fg">{formatDate(contract.updated_at)}</dd>
-        {version?.source_file_name ? (
-          <>
-            <dt>Исходный файл:</dt>
-            <dd className="text-fg">{version.source_file_name}</dd>
-          </>
-        ) : null}
-        {version?.created_at ? (
-          <>
-            <dt>Загружено:</dt>
-            <dd className="text-fg">{formatDate(version.created_at)}</dd>
-          </>
-        ) : null}
-      </dl>
-    </header>
+      {version?.processing_status ? <StatusBadge status={version.processing_status} /> : null}
+    </Card>
   );
 }

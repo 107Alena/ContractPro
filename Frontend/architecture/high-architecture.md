@@ -1381,7 +1381,7 @@ graph TD
 | `/contracts/:id/versions/:vid/result` | ResultPage | auth (risks/recommendations hidden for BUSINESS_USER) | GET results, risks, summary, recommendations |
 | `/contracts/:id/versions/:vid/result` (модалка) | LowConfidenceConfirmModal | auth + LAWYER\|ORG_ADMIN | POST /contracts/{id}/versions/{vid}/confirm-type (триггер — SSE `type_confirmation_required`) |
 | `/contracts/:id/compare` | ComparisonPage | comparison.run | POST /contracts/{id}/compare, GET /diff |
-| `/reports` | ReportsPage | auth | GET /contracts + export endpoints |
+| `/reports` | ReportsPage | auth (риск-профиль/risks gated на risks.view) | GET /contracts; при выборе отчёта — GET /contracts/{id} (резолв version-UUID), GET …/risks; POST …/feedback; export/share endpoints |
 | `/audit` | AuditPage | audit.view | GET /audit | **v1.1** — backend `GET /audit` отсутствует (см. §18 п.5). В v1 страница не имплементируется; маршрут зарезервирован, query-keys/RBAC/Figma — задел на будущее. Backend: `ORCH-TASK-044..046` (`backlog-tasks.json`); frontend: `FE-TASK-003` (`backlog-tasks.json`) |
 | `/admin/policies` | AdminPoliciesPage | admin.policies | GET/PUT /admin/policies | v1: placeholder + EmptyState; финальный UI — после `DESIGN-TASK-002` (см. §18 п.4) |
 | `/admin/checklists` | AdminChecklistsPage | admin.checklists | GET/PUT /admin/checklists | v1: placeholder + EmptyState; финальный UI — после `DESIGN-TASK-002` (см. §18 п.4) |
@@ -1421,7 +1421,7 @@ graph TD
 | 6. Сравнение | 9 | ComparisonPage | VersionMetaHeader, ComparisonVerdictCard, ChangeCounters, TabsFilters, ChangesTable, RiskProfileDelta, KeyDiffsBySection, DiffViewer (lazy), RisksGroups. Этап 4.9 (Figma 169:2): flat-card выравнивание + реальная риск-дельта через useRisks(base/target) → risk-aggregation (FE-TASK-048). Опущены: рекомендации-после-сравнения / дельта политик (нет сравнительного артефакта LIC) |
 | 7. Документы | 9 + 1 tablet | ContractsListPage | MetricsStrip, WhatMattersCards, SearchBar, FilterChips, DocumentsTable |
 | 8. Карточка документа | 9 + 1 tablet | ContractDetailPage | DocumentHeader (PageIntro + MetaCard), SummaryCard, LastCheck, QuickStart (Быстрые действия), AccessNote, ComparisonEntry, KeyRisks, Recommendations, VersionsTimeline, ChecksHistory, ReportsShared, DeviationsChecklist, TrustFooter (reuse), PDFNavigator. Stats/Activity-карточки Figma не реализованы (нет бэкенда для агрегатов/ленты); VersionPicker удалён (в Figma нет) |
-| 9. Отчёты | 10 + 1 tablet | ReportsPage | ReportsMetrics, ReportsTable, ReportDetailPanel, ShareModal, ExpiredLinkBanner |
+| 9. Отчёты | 10 + 1 tablet | ReportsPage | ReportsMetrics, ReportsTable, ReportDetailPanel (риск-профиль через useRisks), ShareableMaterials, FeedbackBlock (reuse), ExportShareModal, ExpiredLinkBanner, TrustFooter (reuse). Этап 4.10 (Figma 223:2): flat-card выравнивание + честные секции; version-UUID резолвится через useContract (чинит латентный export-баг). Опущены: share-агрегаты/активные-ссылки, activity-log (audit v1.1), shared-link статус, колонки тип/риск (нет в ContractSummary) |
 | 10. Аудит | 9 + 1 tablet | AuditPage | AuditMetrics, DateRangeFilter, QuickFilters, AuditTable, EventDetailPanel — **v1.1** (см. §18 п.5, дизайн готов как контракт на будущее) |
 | 11. Админ. политики (TBD) | 0 — дизайна нет | AdminPoliciesPage | EmptyState (placeholder в v1); финал — после `DESIGN-TASK-002` |
 | 12. Админ. чек-листы (TBD) | 0 — дизайна нет | AdminChecklistsPage | EmptyState (placeholder в v1); финал — после `DESIGN-TASK-002` |

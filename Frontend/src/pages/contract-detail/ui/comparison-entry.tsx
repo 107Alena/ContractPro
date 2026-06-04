@@ -10,9 +10,15 @@ import { buttonVariants, Card } from '@/shared/ui';
 export interface ComparisonEntryProps {
   contractId: string;
   versionCount: number;
+  /** Query-suffix `?base=&target=` для пресета пары prev→current (Stage 5). */
+  compareSearch?: string;
 }
 
-export function ComparisonEntry({ contractId, versionCount }: ComparisonEntryProps): JSX.Element {
+export function ComparisonEntry({
+  contractId,
+  versionCount,
+  compareSearch = '',
+}: ComparisonEntryProps): JSX.Element {
   const canCompare = versionCount >= 2;
   return (
     <Card
@@ -29,8 +35,9 @@ export function ComparisonEntry({ contractId, versionCount }: ComparisonEntryPro
             риска.
           </p>
           <Link
-            to={`/contracts/${contractId}/compare`}
+            to={`/contracts/${contractId}/compare${compareSearch}`}
             className={`${buttonVariants({ variant: 'secondary', size: 'md' })} self-start`}
+            data-testid="comparison-entry-link"
           >
             Открыть сравнение версий
           </Link>

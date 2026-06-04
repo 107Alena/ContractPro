@@ -13,6 +13,8 @@ import { Button, buttonVariants, Card } from '@/shared/ui';
 
 export interface SummaryCardProps {
   contract: ContractDetails;
+  /** Query-suffix `?base=&target=` для пресета пары prev→current (Stage 5). */
+  compareSearch?: string;
 }
 
 const RISK_LEVELS: ReadonlyArray<{ label: string }> = [
@@ -37,7 +39,7 @@ function statusDotClass(status: VersionStatus | undefined | null): string {
   }
 }
 
-export function SummaryCard({ contract }: SummaryCardProps): JSX.Element {
+export function SummaryCard({ contract, compareSearch = '' }: SummaryCardProps): JSX.Element {
   const version = contract.current_version;
   const contractId = contract.contract_id;
   const versionId = version?.version_id;
@@ -105,7 +107,7 @@ export function SummaryCard({ contract }: SummaryCardProps): JSX.Element {
         ) : null}
         {contractId ? (
           <Link
-            to={`/contracts/${contractId}/compare`}
+            to={`/contracts/${contractId}/compare${compareSearch}`}
             className={buttonVariants({ variant: 'secondary', size: 'md' })}
           >
             Сравнить версии

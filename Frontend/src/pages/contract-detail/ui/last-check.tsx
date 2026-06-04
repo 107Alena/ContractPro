@@ -11,6 +11,8 @@ import { buttonVariants, Card } from '@/shared/ui';
 
 export interface LastCheckProps {
   contract: ContractDetails;
+  /** Query-suffix `?base=&target=` для пресета пары prev→current (Stage 5). */
+  compareSearch?: string;
 }
 
 function formatDateTime(iso?: string): string {
@@ -26,7 +28,7 @@ function formatDateTime(iso?: string): string {
   });
 }
 
-export function LastCheck({ contract }: LastCheckProps): JSX.Element {
+export function LastCheck({ contract, compareSearch = '' }: LastCheckProps): JSX.Element {
   const canExport = useCanExport();
   const version = contract.current_version;
   const contractId = contract.contract_id;
@@ -79,7 +81,7 @@ export function LastCheck({ contract }: LastCheckProps): JSX.Element {
             ) : null}
             {contractId ? (
               <Link
-                to={`/contracts/${contractId}/compare`}
+                to={`/contracts/${contractId}/compare${compareSearch}`}
                 className={buttonVariants({ variant: 'secondary', size: 'sm' })}
               >
                 Открыть сравнение

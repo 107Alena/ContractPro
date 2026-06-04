@@ -226,4 +226,19 @@ describe('ContractDetailPage', () => {
     expect(screen.queryByTestId('pdf-navigator')).toBeNull();
     expect(screen.queryByTestId('pdf-navigator-suspense')).toBeNull();
   });
+
+  it('Stage 5 — compare-CTA пресетит пару prev→current (?base=&target=)', async () => {
+    const qc = makeClient();
+    qc.setQueryData(qk.contracts.byId(CONTRACT_ID), sampleContract);
+    qc.setQueryData(qk.contracts.versions(CONTRACT_ID), sampleVersions);
+
+    renderPage(qc);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('state-ready')).toBeDefined();
+    });
+    expect(screen.getByTestId('comparison-entry-link').getAttribute('href')).toBe(
+      `/contracts/${CONTRACT_ID}/compare?base=v1&target=v2`,
+    );
+  });
 });

@@ -20,6 +20,8 @@ export interface QuickStartProps {
   contractId: string;
   versionId?: string | undefined;
   isReady?: boolean;
+  /** Query-suffix `?base=&target=` для пресета пары prev→current (Stage 5). */
+  compareSearch?: string;
 }
 
 interface ActionDef {
@@ -33,6 +35,7 @@ export function QuickStart({
   contractId,
   versionId,
   isReady = false,
+  compareSearch = '',
 }: QuickStartProps): JSX.Element {
   const canExport = useCanExport();
   const resultHref =
@@ -40,7 +43,11 @@ export function QuickStart({
 
   const actions: ActionDef[] = [
     { icon: '→', label: 'Открыть результат проверки', href: resultHref },
-    { icon: '⇆', label: 'Сравнить версии', href: `/contracts/${contractId}/compare` },
+    {
+      icon: '⇆',
+      label: 'Сравнить версии',
+      href: `/contracts/${contractId}/compare${compareSearch}`,
+    },
     { icon: '↑', label: 'Загрузить новую версию', href: `/contracts/new?contractId=${contractId}` },
     { icon: '↓', label: 'Скачать последний отчёт', href: resultHref, requiresExport: true },
     { icon: '🔗', label: 'Поделиться ссылкой', href: resultHref, requiresExport: true },

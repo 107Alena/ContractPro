@@ -35,6 +35,7 @@ import { RecommendationsList } from '@/widgets/recommendations-list';
 import { RisksList } from '@/widgets/risks-list';
 import { ChecksHistory, VersionsTimeline } from '@/widgets/versions-timeline';
 
+import { buildComparePreset } from './model/compare-preset';
 import { AccessNote } from './ui/access-note';
 import { ComparisonEntry } from './ui/comparison-entry';
 import { DeviationsChecklist } from './ui/deviations-checklist';
@@ -113,6 +114,9 @@ function ReadyContent({
 }: ReadyContentProps): JSX.Element {
   const contractId = contract.contract_id ?? '';
   const currentVersion = contract.current_version;
+  // Stage 5: пресет пары prev→current для всех compare-CTA карточки договора —
+  // /compare открывается populated, а не на «Версии не выбраны».
+  const compareSearch = buildComparePreset(versions);
   const [isPDFOpen, setPDFOpen] = useState(false);
 
   const togglePDF = useCallback(() => {
@@ -128,8 +132,8 @@ function ReadyContent({
       {/* Main Content Row — левая колонка (контент) + правая (320, действия). */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
         <div className="flex min-w-0 flex-col gap-6">
-          <SummaryCard contract={contract} />
-          <LastCheck contract={contract} />
+          <SummaryCard contract={contract} compareSearch={compareSearch} />
+          <LastCheck contract={contract} compareSearch={compareSearch} />
 
           <Can I="risks.view">
             <RisksList />
@@ -155,7 +159,11 @@ function ReadyContent({
             />
           </div>
 
-          <ComparisonEntry contractId={contractId} versionCount={versions.length} />
+          <ComparisonEntry
+            contractId={contractId}
+            versionCount={versions.length}
+            compareSearch={compareSearch}
+          />
 
           <ReportsShared />
 
@@ -218,6 +226,7 @@ function ReadyContent({
             contractId={contractId}
             versionId={currentVersion?.version_id}
             isReady={isReady}
+            compareSearch={compareSearch}
           />
           <AccessNote />
         </aside>

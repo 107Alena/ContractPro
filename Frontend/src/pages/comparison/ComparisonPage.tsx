@@ -124,7 +124,7 @@ function BackToContractLink({ contractId }: { contractId: string }): JSX.Element
       className={buttonVariants({ variant: 'secondary', size: 'sm' })}
       data-testid="comparison-back-to-contract"
     >
-      ← Вернуться на карточку договора
+      <span aria-hidden="true">←</span> Вернуться на карточку договора
     </Link>
   );
 }

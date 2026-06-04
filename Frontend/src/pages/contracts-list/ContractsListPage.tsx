@@ -144,6 +144,9 @@ export function ContractsListPage(): JSX.Element {
     const archived = contract.status === 'ARCHIVED';
     const deleted = contract.status === 'DELETED';
     const encoded = encodeURIComponent(id);
+    // Stage 5: «Сравнить» только при ≥2 версий — иначе /compare откроется на
+    // «Версии не выбраны» (пресет невозможен — version-UUID нет в ContractSummary).
+    const canCompareRow = (contract.current_version_number ?? 0) >= 2;
     return (
       <div className="flex items-center justify-end gap-1" data-testid={`row-actions-${id}`}>
         <Link
@@ -152,12 +155,15 @@ export function ContractsListPage(): JSX.Element {
         >
           Результат
         </Link>
-        <Link
-          to={`/contracts/${encoded}/compare`}
-          className={buttonVariants({ variant: 'ghost', size: 'sm' })}
-        >
-          Сравнить
-        </Link>
+        {canCompareRow ? (
+          <Link
+            to={`/contracts/${encoded}/compare`}
+            className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+            data-testid={`row-compare-${id}`}
+          >
+            Сравнить
+          </Link>
+        ) : null}
         {canArchive ? (
           <Popover>
             <PopoverTrigger asChild>

@@ -172,6 +172,42 @@ describe('ContractsListPage', () => {
     expect(screen.queryByTestId('row-delete-c1')).toBeNull();
   });
 
+  it('Stage 5 — «Сравнить» скрыт при <2 версий, показан при ≥2', async () => {
+    getSpy.mockResolvedValue({
+      data: {
+        items: [
+          {
+            contract_id: 'one',
+            title: 'Одна версия',
+            status: 'ACTIVE' as const,
+            current_version_number: 1,
+            processing_status: 'READY' as const,
+            updated_at: '2026-04-16T14:20:00Z',
+          },
+          {
+            contract_id: 'two',
+            title: 'Две версии',
+            status: 'ACTIVE' as const,
+            current_version_number: 2,
+            processing_status: 'READY' as const,
+            updated_at: '2026-04-16T14:20:00Z',
+          },
+        ],
+        total: 2,
+        page: 1,
+        size: 25,
+      },
+    });
+    const qc = makeClient();
+    renderPage(qc, lawyer);
+
+    await waitFor(() => {
+      expect(screen.getByText('Две версии')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('row-compare-one')).toBeNull();
+    expect(screen.getByTestId('row-compare-two')).toBeInTheDocument();
+  });
+
   it('RBAC Pattern B — LAWYER: ⋯-меню содержит архивацию/удаление', async () => {
     getSpy.mockResolvedValue({ data: sample });
     const qc = makeClient();

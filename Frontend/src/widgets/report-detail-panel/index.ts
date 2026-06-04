@@ -1,1 +1,5 @@
-export { ReportDetailPanel, type ReportDetailPanelProps } from './ui/ReportDetailPanel';
+export {
+  ReportDetailPanel,
+  type ReportDetailPanelProps,
+  type ReportRiskProfileView,
+} from './ui/ReportDetailPanel';

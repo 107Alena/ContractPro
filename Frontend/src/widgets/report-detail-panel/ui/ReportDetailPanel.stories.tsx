@@ -25,7 +25,36 @@ const contract: ContractSummary = {
 };
 
 export const Open: Story = {
-  args: { contract, onClose: () => {}, onOpenShare: () => {} },
+  args: {
+    contract,
+    versionId: 'ver-uuid-1',
+    showRisk: true,
+    riskProfile: { level: 'medium', high: 2, medium: 3, low: 1 },
+    onClose: () => {},
+    onOpenShare: () => {},
+  },
+};
+
+export const RiskLoading: Story = {
+  args: {
+    contract,
+    versionId: 'ver-uuid-1',
+    showRisk: true,
+    riskLoading: true,
+    onClose: () => {},
+    onOpenShare: () => {},
+  },
+};
+
+export const RiskUnavailable: Story = {
+  args: {
+    contract,
+    versionId: 'ver-uuid-1',
+    showRisk: true,
+    riskProfile: null,
+    onClose: () => {},
+    onOpenShare: () => {},
+  },
 };
 
 export const Empty: Story = {

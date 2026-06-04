@@ -15,9 +15,33 @@ import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 
 import { type ContractSummary } from '@/entities/contract';
+import { type RiskLevel, riskLevelMeta } from '@/entities/risk';
 import { StatusBadge } from '@/entities/version';
 import { useCanExport } from '@/shared/auth/use-can-export';
-import { Button, buttonVariants } from '@/shared/ui';
+import { Button, buttonVariants, Spinner } from '@/shared/ui';
+
+/** Компактный профиль рисков выбранного отчёта (page агрегирует через useRisks). */
+export interface ReportRiskProfileView {
+  level: RiskLevel;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+// Статичные строки классов (не шаблон) — иначе Tailwind JIT не сгенерирует.
+const RISK_DOT: Record<RiskLevel, string> = {
+  high: 'bg-risk-high',
+  medium: 'bg-risk-medium',
+  low: 'bg-risk-low',
+};
+
+type RiskCountKey = 'high' | 'medium' | 'low';
+
+const RISK_BREAKDOWN: ReadonlyArray<readonly [RiskCountKey, string]> = [
+  ['high', 'высоких'],
+  ['medium', 'средних'],
+  ['low', 'низких'],
+];
 
 function formatDateTime(iso?: string): string {
   if (!iso) return '—';
@@ -40,6 +64,12 @@ export interface ReportDetailPanelProps {
    * Пока детали грузятся — undefined/null, кнопка экспорта disabled.
    */
   versionId?: string | null;
+  /** Профиль рисков версии (page агрегирует useRisks → toReportRiskProfile). */
+  riskProfile?: ReportRiskProfileView | null;
+  /** Риск-данные ещё грузятся (детали версии или /risks). */
+  riskLoading?: boolean;
+  /** Показывать риск-секцию (есть право risks.view). BUSINESS_USER → false. */
+  showRisk?: boolean;
   onClose: () => void;
   /** Открывает ExportShareModal на уровне page. Вызывается с contractId+versionId. */
   onOpenShare?: (input: { contractId: string; versionId: string }) => void;
@@ -48,6 +78,9 @@ export interface ReportDetailPanelProps {
 export function ReportDetailPanel({
   contract,
   versionId,
+  riskProfile,
+  riskLoading,
+  showRisk,
   onClose,
   onOpenShare,
 }: ReportDetailPanelProps): JSX.Element | null {
@@ -112,6 +145,60 @@ export function ReportDetailPanel({
           Закрыть
         </Button>
       </header>
+
+      {showRisk ? (
+        <div
+          data-testid="report-detail-risk"
+          className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-bg-muted p-4"
+        >
+          {riskLoading ? (
+            <div
+              data-testid="report-detail-risk-loading"
+              aria-busy="true"
+              className="flex items-center gap-2 text-sm text-fg-muted"
+            >
+              <Spinner size="sm" aria-hidden="true" />
+              <span>Загружаем профиль рисков…</span>
+            </div>
+          ) : riskProfile ? (
+            <>
+              <div className="flex items-center gap-2">
+                <span
+                  aria-hidden="true"
+                  className={`inline-block h-2 w-2 rounded-full ${RISK_DOT[riskProfile.level]}`}
+                />
+                <span
+                  className="text-15 font-semibold text-fg"
+                  data-testid="report-detail-risk-level"
+                >
+                  {riskLevelMeta(riskProfile.level).label}
+                </span>
+              </div>
+              <ul
+                className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm"
+                aria-label="Распределение рисков"
+              >
+                {RISK_BREAKDOWN.map(([key, word]) => (
+                  <li key={key} className="flex items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className={`inline-block h-1.5 w-1.5 rounded-full ${RISK_DOT[key]}`}
+                    />
+                    <span>
+                      <span className="font-semibold text-fg">{riskProfile[key]}</span>{' '}
+                      <span className="text-fg-muted">{word}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="text-sm text-fg-muted" data-testid="report-detail-risk-empty">
+              Профиль рисков недоступен для этой версии.
+            </p>
+          )}
+        </div>
+      ) : null}
 
       <dl className="grid grid-cols-2 gap-3 text-sm">
         <div>

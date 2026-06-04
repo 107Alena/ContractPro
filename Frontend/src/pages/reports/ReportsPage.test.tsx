@@ -226,6 +226,42 @@ describe('ReportsPage', () => {
     expect(screen.queryByTestId('reports-feedback-empty')).toBeNull();
   });
 
+  it('Risk — row select → риск-профиль в detail-panel через useRisks', async () => {
+    getSpy.mockImplementation((url: string) => {
+      if (url === '/contracts') return Promise.resolve({ data: sample });
+      if (url === '/contracts/c1')
+        return Promise.resolve({
+          data: {
+            contract_id: 'c1',
+            title: 'Договор оказания услуг',
+            status: 'ACTIVE',
+            current_version: {
+              version_id: 'ver-c1',
+              version_number: 2,
+              processing_status: 'READY',
+            },
+            updated_at: '2026-04-16T14:20:00Z',
+          },
+        });
+      if (url.endsWith('/risks'))
+        return Promise.resolve({
+          data: {
+            risks: [],
+            risk_profile: { overall_level: 'medium', high_count: 2, medium_count: 3, low_count: 1 },
+          },
+        });
+      return Promise.resolve({ data: {} });
+    });
+    const qc = makeClient();
+    renderPage(qc);
+
+    await waitFor(() => {
+      expect(screen.getByText('Договор оказания услуг')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('reports-table-row-c1'));
+    expect(await screen.findByTestId('report-detail-risk-level')).toHaveTextContent('Средний риск');
+  });
+
   it('Фильтр state=PARTIALLY_FAILED — показывает контракты с предупреждениями', async () => {
     getSpy.mockResolvedValue({ data: sample });
     const qc = makeClient();

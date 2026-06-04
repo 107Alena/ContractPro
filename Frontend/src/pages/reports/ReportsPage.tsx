@@ -23,10 +23,12 @@ import { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { type ContractSummary, useContract } from '@/entities/contract';
+import { useRisks } from '@/entities/result';
 import { FilterChips } from '@/features/filters';
 import { PaginationControls } from '@/features/pagination';
 import { SearchInput } from '@/features/search';
 import { isOrchestratorError, toUserMessage } from '@/shared/api';
+import { useCan } from '@/shared/auth';
 import { Button } from '@/shared/ui';
 import { TrustFooter } from '@/widgets/dashboard-trust-footer';
 import { ExpiredLinkBanner } from '@/widgets/expired-link-banner';
@@ -38,6 +40,7 @@ import { ReportsTable } from '@/widgets/reports-table';
 import { ShareableMaterials } from '@/widgets/shareable-materials';
 
 import { REPORTS_FILTER_DEFINITIONS } from './model/filter-definitions';
+import { toReportRiskProfile } from './model/risk-snapshot';
 import { useReportsListQuery } from './model/use-reports-list-query';
 
 interface ShareState {
@@ -79,6 +82,21 @@ export function ReportsPage(): JSX.Element {
   // раньше в ExportShareModal уходил String(номер версии), а не UUID.
   const detailQuery = useContract(selectedId ?? undefined, { enabled: selectedId != null });
   const selectedVersionId = detailQuery.data?.current_version?.version_id ?? null;
+
+  // Риск-профиль выбранного отчёта (паттерн 4.9): gated на risks.view, грузим
+  // только когда резолвнут version-UUID. Нет артефакта/прав → панель честно
+  // покажет плейсхолдер/скроет секцию, риск-данные не выдумываем (legal-продукт).
+  const canViewRisks = useCan('risks.view');
+  const risksEnabled = Boolean(selectedId && selectedVersionId && canViewRisks);
+  const risksQuery = useRisks(
+    { contractId: selectedId ?? undefined, versionId: selectedVersionId ?? undefined },
+    { enabled: risksEnabled },
+  );
+  const selectedRiskProfile = toReportRiskProfile(risksQuery.data);
+  const riskLoading =
+    canViewRisks &&
+    selectedId != null &&
+    (detailQuery.isLoading || (risksEnabled && risksQuery.isLoading));
 
   const handleRetry = useCallback(() => {
     void query.refetch();
@@ -220,6 +238,9 @@ export function ReportsPage(): JSX.Element {
           <ReportDetailPanel
             contract={selectedContract}
             versionId={selectedVersionId}
+            showRisk={canViewRisks}
+            riskProfile={selectedRiskProfile}
+            riskLoading={riskLoading}
             onClose={handleCloseDetail}
             onOpenShare={handleOpenShare}
           />

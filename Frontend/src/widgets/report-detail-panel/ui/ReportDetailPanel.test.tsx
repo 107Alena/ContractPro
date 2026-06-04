@@ -97,4 +97,36 @@ describe('ReportDetailPanel', () => {
     const btn = screen.getByTestId('report-detail-panel-share');
     expect(btn).toBeDisabled();
   });
+
+  it('Risk — showRisk + профиль → уровень и распределение', () => {
+    renderPanel({
+      contract,
+      showRisk: true,
+      riskProfile: { level: 'medium', high: 2, medium: 3, low: 1 },
+    });
+    expect(screen.getByTestId('report-detail-risk')).toBeInTheDocument();
+    expect(screen.getByTestId('report-detail-risk-level')).toHaveTextContent('Средний риск');
+    expect(screen.getByText('высоких')).toBeInTheDocument();
+    expect(screen.getByText('средних')).toBeInTheDocument();
+    expect(screen.getByText('низких')).toBeInTheDocument();
+  });
+
+  it('Risk — showRisk + loading → спиннер', () => {
+    renderPanel({ contract, showRisk: true, riskLoading: true });
+    expect(screen.getByTestId('report-detail-risk-loading')).toBeInTheDocument();
+  });
+
+  it('Risk — showRisk без профиля (нет артефакта) → честный плейсхолдер', () => {
+    renderPanel({ contract, showRisk: true, riskProfile: null });
+    expect(screen.getByTestId('report-detail-risk-empty')).toBeInTheDocument();
+  });
+
+  it('Risk — нет права risks.view (showRisk=false) → риск-секция не рендерится', () => {
+    renderPanel({
+      contract,
+      showRisk: false,
+      riskProfile: { level: 'high', high: 1, medium: 0, low: 0 },
+    });
+    expect(screen.queryByTestId('report-detail-risk')).toBeNull();
+  });
 });

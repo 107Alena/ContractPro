@@ -28,11 +28,13 @@ import { PaginationControls } from '@/features/pagination';
 import { SearchInput } from '@/features/search';
 import { isOrchestratorError, toUserMessage } from '@/shared/api';
 import { Button } from '@/shared/ui';
+import { TrustFooter } from '@/widgets/dashboard-trust-footer';
 import { ExpiredLinkBanner } from '@/widgets/expired-link-banner';
 import { ExportShareModal } from '@/widgets/export-share-modal';
 import { ReportDetailPanel } from '@/widgets/report-detail-panel';
 import { ReportsMetrics } from '@/widgets/reports-metrics';
 import { ReportsTable } from '@/widgets/reports-table';
+import { ShareableMaterials } from '@/widgets/shareable-materials';
 
 import { REPORTS_FILTER_DEFINITIONS } from './model/filter-definitions';
 import { useReportsListQuery } from './model/use-reports-list-query';
@@ -214,6 +216,10 @@ export function ReportsPage(): JSX.Element {
           />
         ) : null}
       </div>
+
+      <ShareableMaterials />
+
+      <TrustFooter />
 
       {shareState ? (
         <ExportShareModal

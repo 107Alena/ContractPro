@@ -2238,3 +2238,40 @@ api-specification.yaml (ContractSummary поля + ContractType/RiskLevel/RiskCo
 ### Субагенты
 - **backend-reliability-engineer** — валидация дизайна (no-N+1 контракт, reverse-map, null/force-null семантика, фильтр/пагинация, feature-flag fail-safe).
 - **code-reviewer** — review (0 Critical/Major); адресованы #1 (сравнение дат по дню) и #5 (дубликат whitelist → confirmtype.IsValidEnum/EnumValues).
+
+---
+
+## ORCH-TASK-057 — GET /contracts/stats (дашборд-агрегат по processing-статусу) — 2026-06-05
+
+### Контекст и решение
+Единственная оставшаяся pending-задача. Зависимость **DM-TASK-059** (`GET /documents/stats`, count-by-`artifact_status`) — pending в домене Document Management (вне скоупа Orchestrator). Acceptance самой задачи предусматривает неготовый DM: реализовать за **feature-флагом** + mock DM в тестах + задокументировать временное поведение (тот же паттерн, что принят в ORCH-TASK-056). → автономно реализована Orchestrator-сторона.
+
+### Что реализовано
+- **dmclient (models.go, client.go)**: `DocumentStatsParams{IncludeArchived}` + модель `DocumentStats{ByArtifactStatus map[string]int, NotStarted, Total}` + метод `GetDocumentStats` (GET /documents/stats?include_archived) в интерфейсе `DMClient`.
+- **domain/model/error_response.go**: новый `ErrorCode` **FEATURE_NOT_AVAILABLE (503)** — отдельно от 502 DM_UNAVAILABLE («фича намеренно отключена, зависимость не развёрнута» ≠ «развёрнутый DM сбойнул»).
+- **config**: `ContractsConfig.StatsEnabled` (`ORCH_CONTRACTS_STATS_ENABLED`, default false).
+- **contracts/response.go**: `ContractStats` + `ProcessingStatusCounts` (11 snake_case полей, метод `sum()`) + `RiskLevelCounts`; `mapDocumentStatsToContractStats`: artifact_status→UserProcessingStatus (переиспользует `processingStatusMap`), нераспознанный статус → бакет `processing` (НЕ not_started) + возврат `unknownStatuses` для WARN; `total` = сумма бакетов (инвариант sum=total by construction) + флаг `totalMismatch` (кросс-чек vs DM total); `by_risk_level`=nil → JSON null.
+- **contracts/handler.go**: `HandleStats` (auth → `parseBoolParam` include_archived → flag OFF: НЕ вызывает DM, 503 → 1 DM-вызов (no N+1) → map → WARN на unknown/mismatch → `Cache-Control: private, max-age=30`) + helper `parseBoolParam`; `NewHandler(+statsEnabled)`.
+- **routes.go**: `/contracts/stats` зарегистрирован ДО `/contracts/{contract_id}`. **rbac.go**: GET /contracts/stats = allRoles. **app.go + integration/testenv.go**: wiring флага.
+
+### Ключевые решения (по итогам backend-reliability-engineer)
+- Нераспознанный artifact_status → `processing` (ближайшее in-flight), НЕ `not_started` (у которого иное дашборд-значение) — инвариант суммы сохраняется + WARN.
+- Flag OFF → 503 FEATURE_NOT_AVAILABLE (новый код), не 502 — чтобы реальные сбои DM были отличимы после включения флага.
+- `Cache-Control: private` (org-scoped, без межорганизационной утечки). `updated_at` = computed-at (DM не отдаёт freshness).
+- Скоуп по организации — через X-Organization-ID, инжектится DM-клиентом из AuthContext (не client-trusted).
+
+### Результаты тестов
+`go test ./...` — ALL PASS; `go test -race ./...` — ALL PASS; `go vet ./...` — OK; make build/test/lint — OK; OpenAPI YAML валиден; tasks.json валиден.
+stats_test.go +14 тестов; client_test.go +2 (×подтесты); обновлены mock/helpers/rbac-completeness/error-catalog тесты.
+
+### Документация (синхронно)
+api-specification.yaml (200 Cache-Control header + 400/503 + общий ServiceUnavailable response); high-architecture.md (§8.7 раздел статистики переписан под реализацию + **ASSUMPTION-ORCH-18**); integration-contracts.md (read-контракт DM GET /documents/stats: query/headers/форма ответа/маппинг/статус); configuration.md (ORCH_CONTRACTS_STATS_ENABLED); sequence-diagrams.md (диаграмма статистики с alt по флагу).
+
+### Заметка для следующей итерации
+- **DM-зависимость**: прод-включение требует **DM-TASK-059** (`GET /documents/stats` — один SQL count-агрегат GROUP BY artifact_status через JOIN documents↔current_version, индекс (organization_id, artifact_status), скоуп по org). После готовности — `ORCH_CONTRACTS_STATS_ENABLED=true`; число «в работе» на дашборде оживёт **без правок Frontend** (openapi.d.ts / useContractStats / BusinessSummary готовы).
+- **Frontend**: после переключения убрать MSW-хэндлер `/contracts/stats` из боевого пути (оставить для тестов/Storybook).
+- **Бэклог ORCH пуст**: после закрытия 057 все 57 ORCH-задач = done. Открытыми остаются только кросс-доменные DM-задачи (DM-TASK-059), разблокирующие прод-включение list-аналитики (ORCH-TASK-056) и stats (ORCH-TASK-057).
+
+### Субагенты
+- **backend-reliability-engineer** — валидация дизайна (stray→processing, 503 vs 502 + новый код, Cache-Control private, cross-check суммы, пин-тесты null/zero-org/route-precedence).
+- **code-reviewer** — review (0 Critical/Major); адресован M1 (текст suggestion FEATURE_NOT_AVAILABLE без вводящего в заблуждение «попробуйте позже»).

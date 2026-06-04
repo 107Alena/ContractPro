@@ -215,6 +215,7 @@ UOM (User & Organization Management) — критическая зависимо
 | Переменная | Описание | По умолчанию | Заметки |
 |-----------|----------|-------------|---------|
 | `ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED` | Включить агрегацию `contract_type`/`risk_level`/`risk_counts` и серверные фильтры/сортировку в `GET /contracts` через DM read-контракт `GET /documents?include=analysis` | `false` | Зависит от DM-стороны (`include=analysis`), которая ещё не реализована — оставить `false` до её готовности. Пока выключен: агрегатные поля = `null`, новые фильтры/сортировка отклоняются с 400 (fail-safe) |
+| `ORCH_CONTRACTS_STATS_ENABLED` | Включить дашборд-агрегат `GET /contracts/stats` через DM read-контракт `GET /documents/stats` (count-by-`artifact_status`) | `false` | Зависит от DM-TASK-059 (`GET /documents/stats`), которая ещё не реализована — оставить `false` до её готовности. Пока выключен: эндпоинт не вызывает DM и отвечает `503 FEATURE_NOT_AVAILABLE`. См. high-architecture.md §8.7 (статистика для дашборда), ASSUMPTION-ORCH-18 |
 
 ---
 

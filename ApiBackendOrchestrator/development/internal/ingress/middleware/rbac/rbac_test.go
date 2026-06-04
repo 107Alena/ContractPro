@@ -517,6 +517,7 @@ func TestAccessPolicy_AllRoutesCovered(t *testing.T) {
 	expected := []string{
 		"GET /api/v1/users/me",
 		"POST /api/v1/contracts/upload",
+		"GET /api/v1/contracts/stats",
 		"GET /api/v1/contracts",
 		"GET /api/v1/contracts/{contract_id}",
 		"DELETE /api/v1/contracts/{contract_id}",
@@ -588,6 +589,12 @@ func TestAccessMatrix_FullCoverage(t *testing.T) {
 		{"LAWYER can POST /contracts/upload", http.MethodPost, "/contracts/upload", "/api/v1/contracts/upload", auth.RoleLawyer, true},
 		{"BUSINESS_USER can POST /contracts/upload", http.MethodPost, "/contracts/upload", "/api/v1/contracts/upload", auth.RoleBusinessUser, true},
 		{"ORG_ADMIN can POST /contracts/upload", http.MethodPost, "/contracts/upload", "/api/v1/contracts/upload", auth.RoleOrgAdmin, true},
+
+		// GET /contracts/stats - all roles allowed; static segment must win over
+		// /contracts/{contract_id} (request path resolves to the stats pattern).
+		{"LAWYER can GET /contracts/stats", http.MethodGet, "/contracts/stats", "/api/v1/contracts/stats", auth.RoleLawyer, true},
+		{"BUSINESS_USER can GET /contracts/stats", http.MethodGet, "/contracts/stats", "/api/v1/contracts/stats", auth.RoleBusinessUser, true},
+		{"ORG_ADMIN can GET /contracts/stats", http.MethodGet, "/contracts/stats", "/api/v1/contracts/stats", auth.RoleOrgAdmin, true},
 
 		// GET /contracts - all roles allowed
 		{"LAWYER can GET /contracts", http.MethodGet, "/contracts", "/api/v1/contracts", auth.RoleLawyer, true},

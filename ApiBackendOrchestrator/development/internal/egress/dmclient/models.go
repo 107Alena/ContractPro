@@ -74,6 +74,14 @@ type ListDocumentsParams struct {
 	Order string
 }
 
+// DocumentStatsParams are query parameters for GET /documents/stats
+// (the DM count-by-artifact_status aggregate, DM-TASK-059).
+type DocumentStatsParams struct {
+	// IncludeArchived adds ARCHIVED documents to the counts. Default (false)
+	// counts only ACTIVE documents; DELETED documents are never counted.
+	IncludeArchived bool
+}
+
 // ListVersionsParams are query parameters for GET /documents/{document_id}/versions.
 type ListVersionsParams struct {
 	Page int // default 1
@@ -165,6 +173,24 @@ type DocumentAnalysisList struct {
 	Total int                    `json:"total"`
 	Page  int                    `json:"page"`
 	Size  int                    `json:"size"`
+}
+
+// DocumentStats is the DM count-by-artifact_status aggregate (DM-TASK-059), the
+// source of truth for the dashboard "in progress" metric (consumed by the
+// orchestrator GET /contracts/stats, ORCH-TASK-057). Counts are over each
+// document's CURRENT version, scoped to the organization (X-Organization-ID).
+//
+//   - ByArtifactStatus is keyed by DM-internal artifact_status (raw values such
+//     as FULLY_READY, PROCESSING_IN_PROGRESS). DM returns them as-is; the
+//     orchestrator maps them to the user-facing UserProcessingStatus.
+//   - NotStarted counts documents WITHOUT a current version (disjoint from
+//     ByArtifactStatus — a document is in exactly one of the two).
+//   - Total is the DM document count in scope; the orchestrator recomputes its
+//     own total from the mapped buckets and cross-checks against this value.
+type DocumentStats struct {
+	ByArtifactStatus map[string]int `json:"by_artifact_status"`
+	NotStarted       int            `json:"not_started"`
+	Total            int            `json:"total"`
 }
 
 // DocumentVersion represents a DM document version resource.

@@ -73,6 +73,135 @@ func artifactStatusesForUserStatus(userStatus string) ([]string, bool) {
 }
 
 // ---------------------------------------------------------------------------
+// ContractStats (ORCH-TASK-057)
+// ---------------------------------------------------------------------------
+
+// ProcessingStatusCounts holds the per-UserProcessingStatus document counts for
+// the dashboard. The JSON keys are the snake_case form of the UserProcessingStatus
+// enum; their sum equals ContractStats.Total. not_started counts documents
+// without a current version or processing status.
+type ProcessingStatusCounts struct {
+	Uploaded          int `json:"uploaded"`
+	Queued            int `json:"queued"`
+	Processing        int `json:"processing"`
+	Analyzing         int `json:"analyzing"`
+	AwaitingUserInput int `json:"awaiting_user_input"`
+	GeneratingReports int `json:"generating_reports"`
+	Ready             int `json:"ready"`
+	PartiallyFailed   int `json:"partially_failed"`
+	Failed            int `json:"failed"`
+	Rejected          int `json:"rejected"`
+	NotStarted        int `json:"not_started"`
+}
+
+// sum returns the total across all processing-status buckets. By construction it
+// equals ContractStats.Total (every source count lands in exactly one bucket).
+func (c ProcessingStatusCounts) sum() int {
+	return c.Uploaded + c.Queued + c.Processing + c.Analyzing + c.AwaitingUserInput +
+		c.GeneratingReports + c.Ready + c.PartiallyFailed + c.Failed + c.Rejected + c.NotStarted
+}
+
+// RiskLevelCounts holds the per-risk-level counts of READY documents.
+type RiskLevelCounts struct {
+	High    int `json:"high"`
+	Medium  int `json:"medium"`
+	Low     int `json:"low"`
+	Unknown int `json:"unknown"`
+}
+
+// ContractStats is the dashboard aggregate response for GET /contracts/stats.
+//
+// ByRiskLevel is a pointer so a nil value serializes as JSON null (not {}): the
+// risk breakdown is unavailable in this increment because the DM stats
+// read-contract provides no risk aggregation (ASSUMPTION-ORCH-18). UpdatedAt is
+// the response-assembly time (computed-at, not data-freshness).
+type ContractStats struct {
+	Total              int                    `json:"total"`
+	ByProcessingStatus ProcessingStatusCounts `json:"by_processing_status"`
+	ByRiskLevel        *RiskLevelCounts       `json:"by_risk_level"`
+	UpdatedAt          string                 `json:"updated_at"`
+}
+
+// addProcessingCount adds n to the bucket for the given user-facing
+// processing_status and reports whether the status was recognized. An
+// unrecognized status (mapProcessingStatus → "UNKNOWN") returns false so the
+// caller can route the stray count to the closest in-flight bucket and warn.
+func (c *ProcessingStatusCounts) addProcessingCount(userStatus string, n int) bool {
+	switch userStatus {
+	case "UPLOADED":
+		c.Uploaded += n
+	case "QUEUED":
+		c.Queued += n
+	case "PROCESSING":
+		c.Processing += n
+	case "ANALYZING":
+		c.Analyzing += n
+	case "AWAITING_USER_INPUT":
+		c.AwaitingUserInput += n
+	case "GENERATING_REPORTS":
+		c.GeneratingReports += n
+	case "READY":
+		c.Ready += n
+	case "PARTIALLY_FAILED":
+		c.PartiallyFailed += n
+	case "FAILED":
+		c.Failed += n
+	case "REJECTED":
+		c.Rejected += n
+	default:
+		return false
+	}
+	return true
+}
+
+// mapDocumentStatsToContractStats maps the DM count-by-artifact_status aggregate
+// to the user-facing ContractStats (ORCH-TASK-057).
+//
+// Each DM artifact_status count is translated to a UserProcessingStatus
+// (processingStatusMap) and accumulated into the matching bucket; documents
+// without a current version (DM not_started) land in not_started. An
+// unrecognized DM artifact_status — which would otherwise have no bucket — is
+// routed to processing (the closest "in flight" state, never not_started, which
+// has a distinct dashboard meaning) and its raw value is returned in
+// unknownStatuses so the caller can warn about DM/Orchestrator enum drift.
+//
+// Total is recomputed from the buckets (not trusted from DM) so the
+// sum(by_processing_status) == total invariant holds by construction;
+// totalMismatch reports whether the recomputed total diverged from the DM total
+// (a correctness canary worth logging).
+func mapDocumentStatsToContractStats(stats dmclient.DocumentStats, now time.Time) (result ContractStats, unknownStatuses []string, totalMismatch bool) {
+	var counts ProcessingStatusCounts
+
+	// Deterministic iteration order so warnings/tests are stable.
+	artifactStatuses := make([]string, 0, len(stats.ByArtifactStatus))
+	for s := range stats.ByArtifactStatus {
+		artifactStatuses = append(artifactStatuses, s)
+	}
+	sort.Strings(artifactStatuses)
+
+	for _, artifactStatus := range artifactStatuses {
+		n := stats.ByArtifactStatus[artifactStatus]
+		userStatus := mapProcessingStatus(artifactStatus)
+		if !counts.addProcessingCount(userStatus, n) {
+			// Enum drift: keep sum == total by routing to the closest in-flight
+			// bucket, and surface the raw value for a warning.
+			counts.Processing += n
+			unknownStatuses = append(unknownStatuses, artifactStatus)
+		}
+	}
+	counts.NotStarted += stats.NotStarted
+
+	result = ContractStats{
+		Total:              counts.sum(),
+		ByProcessingStatus: counts,
+		ByRiskLevel:        nil, // no risk-aggregation source yet (ASSUMPTION-ORCH-18)
+		UpdatedAt:          now.UTC().Format(time.RFC3339),
+	}
+	totalMismatch = result.Total != stats.Total
+	return result, unknownStatuses, totalMismatch
+}
+
+// ---------------------------------------------------------------------------
 // Response DTOs
 // ---------------------------------------------------------------------------
 

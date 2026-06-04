@@ -64,6 +64,13 @@ type DMClient interface {
 	// (ORCH-TASK-056, ASSUMPTION-ORCH-17). A single call per page (no N+1).
 	ListDocumentsWithAnalysis(ctx context.Context, params ListDocumentsParams) (*DocumentAnalysisList, error)
 
+	// GetDocumentStats returns the organization-scoped count-by-artifact_status
+	// aggregate over each document's current version (DM-TASK-059). It targets
+	// the DM aggregate read-contract GET /documents/stats and backs the
+	// orchestrator dashboard metric (ORCH-TASK-057). A single call per request
+	// (no N+1).
+	GetDocumentStats(ctx context.Context, params DocumentStatsParams) (*DocumentStats, error)
+
 	// GetDocument returns a document with its current version.
 	GetDocument(ctx context.Context, documentID string) (*DocumentWithCurrentVersion, error)
 
@@ -259,6 +266,20 @@ func (c *Client) ListDocumentsWithAnalysis(ctx context.Context, params ListDocum
 		return nil, err
 	}
 	return &list, nil
+}
+
+func (c *Client) GetDocumentStats(ctx context.Context, params DocumentStatsParams) (*DocumentStats, error) {
+	q := make(url.Values)
+	if params.IncludeArchived {
+		q.Set("include_archived", "true")
+	}
+
+	var stats DocumentStats
+	err := c.doGET(ctx, "GetDocumentStats", "/documents/stats", q, &stats)
+	if err != nil {
+		return nil, err
+	}
+	return &stats, nil
 }
 
 func (c *Client) GetDocument(ctx context.Context, documentID string) (*DocumentWithCurrentVersion, error) {

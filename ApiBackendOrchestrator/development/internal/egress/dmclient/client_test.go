@@ -1208,6 +1208,70 @@ func TestListDocumentsWithAnalysis_DMError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// GetDocumentStats (ORCH-TASK-057)
+// ---------------------------------------------------------------------------
+
+func TestGetDocumentStats_QueryAndDecode(t *testing.T) {
+	tests := []struct {
+		name            string
+		includeArchived bool
+		wantParam       string
+	}{
+		{"default", false, ""},
+		{"include_archived", true, "true"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := testClientWithServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assertHeaders(t, r)
+				if r.URL.Path != "/documents/stats" {
+					t.Errorf("path = %q, want /documents/stats", r.URL.Path)
+				}
+				if got := r.URL.Query().Get("include_archived"); got != tt.wantParam {
+					t.Errorf("include_archived = %q, want %q", got, tt.wantParam)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(DocumentStats{
+					ByArtifactStatus: map[string]int{"FULLY_READY": 4, "PROCESSING_IN_PROGRESS": 2},
+					NotStarted:       1,
+					Total:            7,
+				})
+			}))
+
+			stats, err := c.GetDocumentStats(testContext(), DocumentStatsParams{IncludeArchived: tt.includeArchived})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if stats.Total != 7 {
+				t.Errorf("total = %d, want 7", stats.Total)
+			}
+			if stats.NotStarted != 1 {
+				t.Errorf("not_started = %d, want 1", stats.NotStarted)
+			}
+			if stats.ByArtifactStatus["FULLY_READY"] != 4 {
+				t.Errorf("FULLY_READY = %d, want 4", stats.ByArtifactStatus["FULLY_READY"])
+			}
+		})
+	}
+}
+
+func TestGetDocumentStats_DMError(t *testing.T) {
+	c, _ := testClientWithServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"unavailable"}`))
+	}))
+
+	_, err := c.GetDocumentStats(testContext(), DocumentStatsParams{})
+	if err == nil {
+		t.Fatal("expected error on 503")
+	}
+	var dmErr *DMError
+	if !errors.As(err, &dmErr) || dmErr.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected DMError 503, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // DMClient interface compile-time check
 // ---------------------------------------------------------------------------
 

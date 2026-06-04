@@ -335,13 +335,24 @@ paths:
             По умолчанию учитываются только активные (status=ACTIVE).
       responses:
         '200':
-          description: Статистика договоров
+          description: |
+            Статистика договоров. Ответ помечен `Cache-Control: private, max-age=30`
+            (агрегат скоупится по организации и устойчив к небольшой устареваемости).
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: 'private, max-age=30 — приватное краткосрочное кэширование.'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ContractStats'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /contracts/{contract_id}:
     get:
@@ -1062,6 +1073,17 @@ components:
           schema:
             type: integer
           description: Секунды до следующей попытки
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    ServiceUnavailable:
+      description: |
+        Функция временно недоступна (`error_code: FEATURE_NOT_AVAILABLE`).
+        Возвращается, когда эндпоинт намеренно отключён feature-флагом, потому
+        что его зависимость ещё не задеплоена (отлично от `DM_UNAVAILABLE`,
+        который означает реальный сбой развёрнутого DM).
       content:
         application/json:
           schema:

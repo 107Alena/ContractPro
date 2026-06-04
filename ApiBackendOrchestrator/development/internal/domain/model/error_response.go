@@ -82,6 +82,15 @@ const (
 	ErrInternalError ErrorCode = "INTERNAL_ERROR"
 )
 
+// Feature availability (503).
+const (
+	// ErrFeatureNotAvailable signals that an endpoint is intentionally disabled
+	// (e.g. its backing dependency is not yet deployed and the feature flag is
+	// OFF). Distinct from DM_UNAVAILABLE, which means a deployed dependency
+	// actually failed.
+	ErrFeatureNotAvailable ErrorCode = "FEATURE_NOT_AVAILABLE"
+)
+
 // ErrorEntry holds the fixed HTTP status, Russian message, and optional
 // Russian suggestion for a single error code.
 type ErrorEntry struct {
@@ -242,6 +251,11 @@ var errorCatalog = map[ErrorCode]ErrorEntry{
 		HTTPStatus: http.StatusInternalServerError,
 		Message:    "Произошла внутренняя ошибка сервиса.",
 		Suggestion: "Попробуйте повторить запрос. Если проблема сохраняется, обратитесь в поддержку с указанием идентификатора ошибки.",
+	},
+	ErrFeatureNotAvailable: {
+		HTTPStatus: http.StatusServiceUnavailable,
+		Message:    "Функция пока недоступна.",
+		Suggestion: "Возможность ещё не активирована в текущей конфигурации сервиса.",
 	},
 }
 

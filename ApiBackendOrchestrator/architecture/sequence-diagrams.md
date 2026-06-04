@@ -412,6 +412,29 @@ sequenceDiagram
     end
 ```
 
+### Статистика дашборда (ORCH-TASK-057)
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant ORCH as Orchestrator
+    participant DM as Document Management
+
+    FE->>ORCH: GET /api/v1/contracts/stats?include_archived=false
+    ORCH->>ORCH: JWT Auth → RBAC (все роли)
+    ORCH->>ORCH: Validate include_archived (bool)
+
+    alt ORCH_CONTRACTS_STATS_ENABLED=true
+        ORCH->>DM: ОДИН агрегатный вызов (no N+1)<br/>GET /documents/stats?include_archived=false<br/>X-Organization-ID
+        DM->>DM: GROUP BY artifact_status<br/>(JOIN documents↔current_version, scope by org)
+        DM-->>ORCH: {by_artifact_status:{...}, not_started, total}
+        ORCH->>ORCH: Map artifact_status → UserProcessingStatus<br/>(processingStatusMap; stray → processing + WARN);<br/>total = Σ buckets (cross-check vs DM total)
+        ORCH-->>FE: 200 {total, by_processing_status:{...11...},<br/>by_risk_level:null, updated_at}<br/>Cache-Control: private, max-age=30
+    else флаг OFF (DM-TASK-059 не задеплоен)
+        ORCH-->>FE: 503 FEATURE_NOT_AVAILABLE<br/>(fail-safe: DM не вызывается)
+    end
+```
+
 ### Архивация
 
 ```mermaid

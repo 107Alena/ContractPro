@@ -41,6 +41,7 @@ import (
 type DMClient interface {
 	ListDocuments(ctx context.Context, params dmclient.ListDocumentsParams) (*dmclient.DocumentList, error)
 	ListDocumentsWithAnalysis(ctx context.Context, params dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error)
+	GetDocumentStats(ctx context.Context, params dmclient.DocumentStatsParams) (*dmclient.DocumentStats, error)
 	GetDocument(ctx context.Context, documentID string) (*dmclient.DocumentWithCurrentVersion, error)
 	DeleteDocument(ctx context.Context, documentID string) (*dmclient.Document, error)
 	ArchiveDocument(ctx context.Context, documentID string) (*dmclient.Document, error)
@@ -113,18 +114,26 @@ type Handler struct {
 	dm              DMClient
 	log             *logger.Logger
 	analysisEnabled bool
+	statsEnabled    bool
 }
 
-// NewHandler creates a new contract CRUD handler. analysisEnabled turns on the
-// DM list-aggregation read-contract for GET /contracts (contract_type /
-// risk_level / risk_counts and server-side filtering/sorting); when false the
-// list falls back to the plain behavior and rejects the new filter/sort params
-// (ORCH-TASK-056, ASSUMPTION-ORCH-17).
-func NewHandler(dm DMClient, log *logger.Logger, analysisEnabled bool) *Handler {
+// NewHandler creates a new contract CRUD handler.
+//
+// analysisEnabled turns on the DM list-aggregation read-contract for
+// GET /contracts (contract_type / risk_level / risk_counts and server-side
+// filtering/sorting); when false the list falls back to the plain behavior and
+// rejects the new filter/sort params (ORCH-TASK-056, ASSUMPTION-ORCH-17).
+//
+// statsEnabled turns on GET /contracts/stats, backed by the DM
+// count-by-artifact_status read-contract (ORCH-TASK-057, ASSUMPTION-ORCH-18);
+// when false the endpoint returns 503 FEATURE_NOT_AVAILABLE rather than calling
+// a DM aggregate that may not be deployed yet.
+func NewHandler(dm DMClient, log *logger.Logger, analysisEnabled, statsEnabled bool) *Handler {
 	return &Handler{
 		dm:              dm,
 		log:             log.With("component", "contracts-handler"),
 		analysisEnabled: analysisEnabled,
+		statsEnabled:    statsEnabled,
 	}
 }
 
@@ -398,6 +407,71 @@ func (h *Handler) serveAnalysisList(ctx context.Context, w http.ResponseWriter, 
 }
 
 // ---------------------------------------------------------------------------
+// HandleStats — GET /api/v1/contracts/stats
+// ---------------------------------------------------------------------------
+
+// HandleStats returns a handler for the dashboard contract-statistics aggregate
+// (ORCH-TASK-057). It scopes by the caller's organization (the DM client injects
+// X-Organization-ID from the auth context) and returns counts by processing
+// status, computed from a SINGLE DM count-by-artifact_status call — never N+1.
+//
+// The endpoint is gated by the stats feature flag because its backing DM
+// read-contract (GET /documents/stats, DM-TASK-059, ASSUMPTION-ORCH-18) may not
+// be deployed yet. When the flag is OFF the handler does NOT call DM and returns
+// 503 FEATURE_NOT_AVAILABLE — distinct from 502 DM_UNAVAILABLE, which means a
+// deployed DM actually failed.
+func (h *Handler) HandleStats() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		if _, ok := auth.AuthContextFrom(ctx); !ok {
+			model.WriteError(w, r, model.ErrAuthTokenMissing, nil)
+			return
+		}
+
+		includeArchived, ok := h.parseBoolParam(w, r, "include_archived", false)
+		if !ok {
+			return
+		}
+
+		// Fail-safe: do not call a DM aggregate that may not be deployed.
+		if !h.statsEnabled {
+			h.log.Warn(ctx, "contract stats requested while disabled "+
+				"(ORCH_CONTRACTS_STATS_ENABLED=false; DM-TASK-059 not deployed)")
+			model.WriteError(w, r, model.ErrFeatureNotAvailable, nil)
+			return
+		}
+
+		stats, err := h.dm.GetDocumentStats(ctx, dmclient.DocumentStatsParams{
+			IncludeArchived: includeArchived,
+		})
+		if err != nil {
+			h.handleDMError(ctx, w, r, err, "GetDocumentStats", "document")
+			return
+		}
+
+		result, unknownStatuses, totalMismatch := mapDocumentStatsToContractStats(*stats, time.Now())
+		if len(unknownStatuses) > 0 {
+			h.log.Warn(ctx, "unrecognized DM artifact_status in stats; counted as processing",
+				"artifact_statuses", unknownStatuses,
+			)
+		}
+		if totalMismatch {
+			h.log.Warn(ctx, "DM stats total mismatch; recomputed from buckets",
+				"dm_total", stats.Total,
+				"computed_total", result.Total,
+			)
+		}
+
+		// Dashboard aggregate is org-scoped and stale-tolerant: allow brief
+		// private caching to shield DM from refresh storms (never shared — would
+		// leak one org's counts to another).
+		w.Header().Set("Cache-Control", "private, max-age=30")
+		h.writeJSON(ctx, w, http.StatusOK, result)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // HandleGet — GET /api/v1/contracts/{contract_id}
 // ---------------------------------------------------------------------------
 
@@ -538,6 +612,25 @@ func (h *Handler) parseIntParam(w http.ResponseWriter, r *http.Request, name str
 		return 0, false
 	}
 
+	return val, true
+}
+
+// parseBoolParam parses a boolean query parameter (true/false/1/0). If absent,
+// defaultVal is used. Returns the parsed value and true, or writes a validation
+// error and returns false.
+func (h *Handler) parseBoolParam(w http.ResponseWriter, r *http.Request, name string, defaultVal bool) (bool, bool) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return defaultVal, true
+	}
+
+	val, err := strconv.ParseBool(raw)
+	if err != nil {
+		vb := validation.NewBuilder()
+		vb.Add(validation.NewInvalidFormat(name, "булево значение (true или false)"))
+		model.WriteValidationError(w, r, vb.Build(), h.log)
+		return false, false
+	}
 	return val, true
 }
 

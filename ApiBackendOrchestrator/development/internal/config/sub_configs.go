@@ -324,11 +324,20 @@ type ContractsConfig struct {
 	// (type/risk-null) behavior and rejects the new filter/sort params with 400
 	// rather than silently returning unfiltered data.
 	ListAnalysisEnabled bool // ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED (default: false)
+
+	// StatsEnabled turns on the GET /contracts/stats dashboard aggregate, which
+	// is backed by the DM count-by-artifact_status read-contract
+	// (GET /documents/stats, DM-TASK-059, ASSUMPTION-ORCH-18). Defaults to false
+	// because that DM endpoint may not yet be deployed; while disabled, the
+	// endpoint returns 503 FEATURE_NOT_AVAILABLE rather than calling a missing DM
+	// aggregate.
+	StatsEnabled bool // ORCH_CONTRACTS_STATS_ENABLED (default: false)
 }
 
 func loadContractsConfig() ContractsConfig {
 	return ContractsConfig{
 		ListAnalysisEnabled: envBool("ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED", false),
+		StatsEnabled:        envBool("ORCH_CONTRACTS_STATS_ENABLED", false),
 	}
 }
 

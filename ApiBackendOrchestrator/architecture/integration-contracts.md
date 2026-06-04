@@ -180,6 +180,61 @@
 
 ---
 
+#### GET /api/v1/documents/stats — count-агрегат по artifact_status (ORCH-TASK-057, ASSUMPTION-ORCH-18)
+
+**Когда вызывается:** Aggregator при `GET /api/v1/contracts/stats` — дашборд-метрика
+«в работе»/«проверено». **Один агрегатный вызов на запрос (без N+1):** DM считает
+договоры по текущим версиям одним SQL-агрегатом (GROUP BY `artifact_status`), а не
+`GET /documents/{id}` на каждый договор.
+
+**DM-метод клиента:** `GetDocumentStats(ctx, DocumentStatsParams{IncludeArchived})`.
+
+**Query-параметры:**
+
+| Параметр | Тип | Семантика |
+|----------|-----|-----------|
+| `include_archived` | bool (default `false`) | `false` → только ACTIVE; `true` → ACTIVE+ARCHIVED. DELETED не считаются никогда. |
+
+**Заголовки:** `X-Organization-ID` (скоуп по организации, как у остальных DM-эндпоинтов), `X-User-ID`, `X-Correlation-Id`.
+
+**Response (200 OK):**
+
+```json
+{
+  "by_artifact_status": {
+    "PENDING_UPLOAD": 1,
+    "PROCESSING_IN_PROGRESS": 3,
+    "FULLY_READY": 8,
+    "PARTIALLY_AVAILABLE": 2,
+    "PROCESSING_FAILED": 1
+  },
+  "not_started": 5,
+  "total": 20
+}
+```
+
+> `by_artifact_status` — счётчики по **текущей версии** каждого документа,
+> сгруппировано по DM-internal `artifact_status` (сырые значения; DM **не** маппит
+> в `UserProcessingStatus` — это делает Orchestrator). `not_started` — документы без
+> `current_version`, **дизъюнктно** с `by_artifact_status` (договор учтён ровно в
+> одном из двух). `total` = число договоров в скоупе; Orchestrator пересчитывает
+> собственный `total` как сумму мапленных бакетов и кросс-чекает против DM-`total`
+> (расхождение → WARN-канарейка). Нераспознанный `artifact_status` Orchestrator
+> роутит в бакет `processing` (не `not_started`) + WARN.
+
+**Маппинг Orchestrator → `ContractStats`:** `artifact_status` → `UserProcessingStatus`
+(тем же `processingStatusMap`, что и в списке) → snake_case-ключи `by_processing_status`;
+`not_started` → `not_started`. `by_risk_level` = `null` (DM stats не отдаёт риск-агрегат).
+
+**Ошибки:** стандартный маппинг DM 4xx/5xx (`MapDMError`). Circuit-open / транспорт → `502 DM_UNAVAILABLE`.
+
+**Статус реализации:** Orchestrator-сторона — **ORCH-TASK-057** (за флагом
+`ORCH_CONTRACTS_STATS_ENABLED`, default `false`). DM-сторона (`GET /documents/stats`) —
+**DM-TASK-059, ещё не реализована**. Пока флаг выключен Orchestrator не вызывает DM и
+отвечает `503 FEATURE_NOT_AVAILABLE`.
+
+---
+
 #### GET /api/v1/documents/{document_id} — получение документа
 
 **Когда вызывается:** Results Aggregator при отображении договора с текущей версией.

@@ -141,7 +141,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	// List-aggregation disabled: the fake DM does not implement the
 	// include=analysis read-contract; the enriched path is covered by the
 	// contracts handler ServeHTTP tests with a DM spy (ORCH-TASK-056).
-	contractHandler := contracts.NewHandler(dmClient, log, false)
+	contractHandler := contracts.NewHandler(dmClient, log, false, false)
 	versionHandler := versions.NewHandler(dmClient, s3Fake, cmdPub, kvFake, log, 20<<20)
 	resultsHandler := results.NewHandler(dmClient, log)
 	comparisonHandler := comparison.NewHandler(dmClient, cmdPub, log)

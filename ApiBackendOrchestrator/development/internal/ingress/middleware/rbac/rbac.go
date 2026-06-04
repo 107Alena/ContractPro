@@ -83,6 +83,7 @@ var accessRules = []policyRule{
 
 	// Contracts.
 	{http.MethodPost, "/api/v1/contracts/upload", allRoles},
+	{http.MethodGet, "/api/v1/contracts/stats", allRoles},
 	{http.MethodGet, "/api/v1/contracts", allRoles},
 	{http.MethodGet, "/api/v1/contracts/{contract_id}", allRoles},
 	{http.MethodDelete, "/api/v1/contracts/{contract_id}", lawyerAndAdmin},

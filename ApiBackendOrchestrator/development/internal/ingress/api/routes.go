@@ -66,11 +66,15 @@ func registerRoutes(r chi.Router, authMW, rbacMW, rateLimitMW func(http.Handler)
 			// Contracts.
 			r.Post("/contracts/upload", uploadH)
 			if contractH != nil {
+				// /contracts/stats MUST precede /contracts/{contract_id} so chi
+				// does not bind "stats" as a contract_id path param.
+				r.Get("/contracts/stats", contractH.HandleStats())
 				r.Get("/contracts", contractH.HandleList())
 				r.Get("/contracts/{contract_id}", contractH.HandleGet())
 				r.Delete("/contracts/{contract_id}", contractH.HandleDelete())
 				r.Post("/contracts/{contract_id}/archive", contractH.HandleArchive())
 			} else {
+				r.Get("/contracts/stats", notImplemented)
 				r.Get("/contracts", notImplemented)
 				r.Get("/contracts/{contract_id}", notImplemented)
 				r.Delete("/contracts/{contract_id}", notImplemented)

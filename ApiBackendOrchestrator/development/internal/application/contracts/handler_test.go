@@ -24,12 +24,14 @@ import (
 type mockDMClient struct {
 	listFn         func(ctx context.Context, params dmclient.ListDocumentsParams) (*dmclient.DocumentList, error)
 	listAnalysisFn func(ctx context.Context, params dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error)
+	statsFn        func(ctx context.Context, params dmclient.DocumentStatsParams) (*dmclient.DocumentStats, error)
 	getFn          func(ctx context.Context, documentID string) (*dmclient.DocumentWithCurrentVersion, error)
 	deleteFn       func(ctx context.Context, documentID string) (*dmclient.Document, error)
 	archiveFn      func(ctx context.Context, documentID string) (*dmclient.Document, error)
 
 	listCalls         []dmclient.ListDocumentsParams
 	listAnalysisCalls []dmclient.ListDocumentsParams
+	statsCalls        []dmclient.DocumentStatsParams
 	getCalls          []string
 	deleteCalls       []string
 	archiveCalls      []string
@@ -49,6 +51,14 @@ func (m *mockDMClient) ListDocumentsWithAnalysis(ctx context.Context, params dmc
 		return m.listAnalysisFn(ctx, params)
 	}
 	return &dmclient.DocumentAnalysisList{Items: []dmclient.DocumentWithAnalysis{}, Total: 0, Page: params.Page, Size: params.Size}, nil
+}
+
+func (m *mockDMClient) GetDocumentStats(ctx context.Context, params dmclient.DocumentStatsParams) (*dmclient.DocumentStats, error) {
+	m.statsCalls = append(m.statsCalls, params)
+	if m.statsFn != nil {
+		return m.statsFn(ctx, params)
+	}
+	return &dmclient.DocumentStats{ByArtifactStatus: map[string]int{}, NotStarted: 0, Total: 0}, nil
 }
 
 func (m *mockDMClient) GetDocument(ctx context.Context, documentID string) (*dmclient.DocumentWithCurrentVersion, error) {
@@ -87,14 +97,21 @@ const testContractID = "550e8400-e29b-41d4-a716-446655440000"
 
 func newTestHandler(dm *mockDMClient) *Handler {
 	log := logger.NewLogger("error")
-	return NewHandler(dm, log, false)
+	return NewHandler(dm, log, false, false)
 }
 
 // newAnalysisHandler builds a handler with list-aggregation enabled
 // (ORCH-TASK-056), exercising the DM include=analysis read-contract path.
 func newAnalysisHandler(dm *mockDMClient) *Handler {
 	log := logger.NewLogger("error")
-	return NewHandler(dm, log, true)
+	return NewHandler(dm, log, true, false)
+}
+
+// newStatsHandler builds a handler with the stats aggregate enabled
+// (ORCH-TASK-057), exercising the DM count-by-artifact_status read-contract.
+func newStatsHandler(dm *mockDMClient) *Handler {
+	log := logger.NewLogger("error")
+	return NewHandler(dm, log, false, true)
 }
 
 func withAuthContext(r *http.Request) *http.Request {

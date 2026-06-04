@@ -22,6 +22,7 @@ var allErrorCodes = []ErrorCode{
 	ErrInvalidCredentials, ErrTokenRevoked, ErrRefreshTokenExpired,
 	ErrValidationError, ErrInvalidContractType,
 	ErrInternalError,
+	ErrFeatureNotAvailable,
 }
 
 func TestErrorCatalog_AllCodesHaveEntries(t *testing.T) {
@@ -84,6 +85,7 @@ func TestErrorCatalog_HTTPStatusCategories(t *testing.T) {
 		{ErrRefreshTokenExpired, 401},
 		{ErrValidationError, 400},
 		{ErrInternalError, 500},
+		{ErrFeatureNotAvailable, 503},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.code), func(t *testing.T) {

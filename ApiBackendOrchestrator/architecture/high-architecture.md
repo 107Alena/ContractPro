@@ -131,6 +131,7 @@ API/Backend Orchestrator
 | ASSUMPTION-ORCH-15 | Orchestrator генерирует `job_id` (UUID v4 через `internal/application/jobid/NewJobID()`) ДО REST-вызова DM `POST /documents/{id}/versions` для **любого** processing-flow, который создаёт новую `version` и публикует `ProcessDocumentRequested` (origin_type ∈ {UPLOAD, RE_UPLOAD, RECOMMENDATION_APPLIED, MANUAL_EDIT, RE_CHECK}). То же значение пробрасывается в `CreateVersionRequest.job_id` (persistится в DM `document_versions.job_id`, см. DM-TASK-054) и в последующий `ProcessDocumentRequested.job_id` для DP. Инвариант: `job_id` immutable в течение всего processing-flow данной версии; одна версия — один `job_id`. **Реализовано для initial-upload-flow в ORCH-TASK-053; расширено на RE_UPLOAD и RE_CHECK flows в ORCH-TASK-054.** Endpoints для RECOMMENDATION_APPLIED / MANUAL_EDIT в коде ещё не существуют — инвариант применится автоматически, если они будут реализованы согласно тому же паттерну (`jobid.NewJobID()` ДО `DM.CreateVersion`). | Сквозной `job_id` нужен для (а) корреляции артефактов DM↔DP↔LIC через одно поле, (б) защиты от race на стороне DP (DM-TASK-056 enforces `event.job_id == stored version.job_id`), (в) per-job метрик и трассировки. Генерация в Orchestrator (не в DP) — единственный способ гарантировать, что DM сохранил тот же `job_id`, что DP получит в команде. |
 | ASSUMPTION-ORCH-16 | Поле `contract_type` в команде `UserConfirmedType` (`orch.commands.user-confirmed-type`) **всегда** содержит одно из 12 значений английского LIC enum (ASSUMPTION-LIC-16): `SERVICES`, `SUPPLY`, `WORK_CONTRACT`, `LEASE`, `NDA`, `SALE`, `LICENSE`, `AGENCY`, `LOAN`, `INSURANCE`, `EMPLOYMENT_CIVIL`, `OTHER`. POST `/contracts/{id}/versions/{vid}/confirm-type` принимает либо русский UI-лейбл (case-insensitive: `Услуги` / `УСЛУГИ` / `услуги` → `SERVICES`), либо английский enum (case-sensitive, pass-through). Серверная нормализация выполняется в Orchestrator (`internal/application/confirmtype/normalize.go::NormalizeContractType`) ДО публикации команды в RabbitMQ; невалидное значение → HTTP 400 `INVALID_CONTRACT_TYPE` (русское `message` per NFR-5.2), команда не публикуется. **Реализовано в ORCH-TASK-055.** Полная RU↔EN-таблица — см. [event-catalog.md §1.3](event-catalog.md). | Frontend оперирует понятиями ГК РФ (русский), LIC оперирует машинным enum'ом (английский). Серверная нормализация на стыке закрывает разрыв единым контрактом — устраняется риск, что разные API-клиенты пришлют русский лейбл в разных форматах или английский enum в нижнем регистре. Whitelist intrinsic к коду (не конфигурируется через env) — гарантирует, что Orchestrator не разойдётся с LIC. |
 | ASSUMPTION-ORCH-17 | Document Management предоставляет read-контракт list-агрегации `GET /documents?include=analysis&...`: для каждого документа DM джойнит артефакты **текущей версии** `CLASSIFICATION_RESULT` (→ `contract_type`, английский LIC enum из 12 значений ASSUMPTION-LIC-16 или `null`) и `RISK_PROFILE` (→ `risk_level` ∈ {high, medium, low}\|null и `risk_counts` {high, medium, low}\|null) и возвращает их в каждом элементе списка вместе с `current_version`, применяя серверную фильтрацию (`risk_level`, `contract_type[]` OR, `artifact_status[]` OR, `date_from`/`date_to` по `created_at`), сортировку (`sort` ∈ {date, title, risk} — для `risk` порядок high>medium>low, null в конце; `order` ∈ {asc, desc}) и пагинацию (`total` = отфильтрованное число). Любое поле агрегата = `null`, когда данных нет или текущая версия не READY. Risk-поля осмыслены только для READY-версии (тот же READY-gate, что у `ContractStats.by_risk_level`). Orchestrator только агрегирует, не вычисляет риск/тип сам. **Orchestrator-сторона реализована в ORCH-TASK-056** (DM-клиент `ListDocumentsWithAnalysis`, маппинг в `ContractSummary`, валидация query-параметров) за фичефлагом `ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED` (default `false`); **DM-сторона (`include=analysis`) ещё не реализована — требуется отдельная DM-задача** (аналог DM-TASK-059). Пока флаг выключен / DM не готов: агрегатные поля = `null`, новые фильтры/сортировка отклоняются с 400 (fail-safe). | Frontend «Документы» (Figma 193:2) рендерит колонки «Тип»/«Риск», stat «высокий риск», фильтр/сортировку по типу/риску/статусу/периоду. Эти данные доступны в DM только пер-версионно (артефакт-на-тип) — собрать их со стороны Frontend можно лишь N+1 fan-out'ом (20 строк → 40-60 запросов, нет серверной фильтрации/сортировки по риску). Серверная агрегация одним батч-вызовом к DM — единственный способ дать колонки и работающие фильтры/сортировку без N+1 и с корректным `total`/пагинацией. Латентность: p95 < 300 ms при `size=20`. Разблокирует FE-TASK-046. |
+| ASSUMPTION-ORCH-18 | Document Management предоставляет read-контракт count-агрегата `GET /documents/stats?include_archived=<bool>` (DM-TASK-059): один SQL-агрегат (GROUP BY `artifact_status` через JOIN `documents`↔`current_version`) считает договоры по **текущей версии** каждого документа, сгруппировано по DM-internal `artifact_status` (сырые значения `PENDING_UPLOAD`/`PROCESSING_IN_PROGRESS`/…/`FULLY_READY`), плюс отдельный счётчик `not_started` (документы без `current_version`, **дизъюнктно** с `by_artifact_status`) и `total`. Скоуп — организация из `X-Organization-ID` (как остальные DM-эндпоинты, совместимо с RLS). `include_archived=false` (default) → только ACTIVE; `true` → +ARCHIVED; DELETED не считаются никогда. DM отдаёт `artifact_status` как есть — маппинг во внешний `UserProcessingStatus` делает **Orchestrator** (не DM). **Orchestrator-сторона реализована в ORCH-TASK-057** (DM-клиент `GetDocumentStats`, `mapDocumentStatsToContractStats` → `ContractStats`) за фичефлагом `ORCH_CONTRACTS_STATS_ENABLED` (default `false`); **DM-сторона (`GET /documents/stats`) ещё не реализована — DM-TASK-059 pending**. Пока флаг выключен / DM не готов: Orchestrator не вызывает DM и возвращает `503 FEATURE_NOT_AVAILABLE` (отлично от `502 DM_UNAVAILABLE`). `ContractStats.by_risk_level` = `null` (DM stats не отдаёт риск-агрегат). | Дашборд (карточка «Сводка») показывает «в работе» = сумма незавершённых processing-статусов организации. Этот счётчик доступен в DM только пер-версионно (`artifact_status` на версии) — собрать его со стороны Orchestrator можно лишь N+1 fan-out'ом (`GET /documents/{id}` на каждый договор). Дешёвый count-агрегат одним SQL-запросом DM с индексом `(organization_id, artifact_status)` — единственный способ дать метрику без N+1 и full-scan. Латентность: p95 < 150 ms (DM-bound). Разблокирует перевод дашборд-метрики «в работе» с MSW-мока на реальные данные. |
 | ASSUMPTION-ORCH-14 | DM Stale Version Watchdog поддерживает per-stage таймауты вместо единого глобального. Значения: `PENDING → PROCESSING_ARTIFACTS_RECEIVED` — `DM_STALE_TIMEOUT_PROCESSING=5m`, `PROCESSING_ARTIFACTS_RECEIVED → ANALYSIS_ARTIFACTS_RECEIVED` — `DM_STALE_TIMEOUT_ANALYSIS=10m`, `ANALYSIS_ARTIFACTS_RECEIVED → REPORTS_READY` — `DM_STALE_TIMEOUT_REPORTS=5m`, `REPORTS_READY → FULLY_READY` — `DM_STALE_TIMEOUT_FINALIZATION=5m` (4-й таймаут добавлен DM на основании фактического state machine из `version.go` — оригинальная формулировка ORCH из 3 таймаутов расширена до 4). DM Watchdog выступает как safety net на случай тихого сбоя LIC/RE (crash без публикации события). **Реализовано в DM-TASK-053.** Legacy `DM_STALE_VERSION_TIMEOUT` сохранён как per-variable fallback (см. DM `architecture/configuration.md`, `state-machine.md`). | Прежний `DM_STALE_VERSION_TIMEOUT=30m` слишком велик для pipeline, который обычно занимает 2–5 мин. Per-stage таймауты позволяют обнаруживать застрявшие версии быстрее. Per-stage метрики: `dm_stuck_versions_count{stage}` / `dm_stuck_versions_total{stage}`, label `stage` ∈ `processing`/`analysis`/`reports`/`finalization`. |
 
 ---
@@ -1026,16 +1027,45 @@ FE-TASK-046).
 
 1. Frontend: `GET /api/v1/contracts/stats?include_archived=false`.
 2. Aggregator → DM Client: один агрегатный вызов count-by-`artifact_status`
-   (DM `GET /documents/stats`, см. DM-TASK-059) — **без N+1** (не дёргает
-   `GET /documents/{id}` на каждый договор).
+   (DM `GET /documents/stats`, см. DM-TASK-059 / **ASSUMPTION-ORCH-18**) — **без N+1**
+   (не дёргает `GET /documents/{id}` на каждый договор). Скоуп — организация из JWT
+   (заголовок `X-Organization-ID`, инжектится DM-клиентом из AuthContext).
 3. Orchestrator маппит `artifact_status` (DM) → `UserProcessingStatus` (тем же
-   `processingStatusMap`, что и в списке) и группирует в `ContractStats`.
-4. HTTP 200. Latency-бюджет: p95 < 150 ms. Скоуп — организация из JWT.
+   `processingStatusMap`, что и в списке) и группирует в `ContractStats`
+   (`mapDocumentStatsToContractStats`). Инвариант: `total` пересчитывается как сумма
+   всех 11 бакетов `by_processing_status` (не доверяется DM-полю `total`), поэтому
+   `sum(by_processing_status) == total` выполняется by construction; расхождение с
+   DM-`total` логируется как канарейка корректности.
+4. **Null-семантика и крайние случаи.** `by_risk_level` = `null` в этой итерации —
+   DM stats read-контракт не отдаёт риск-агрегат (нет дешёвого источника); сериализуется
+   именно как JSON `null` (не `{}`). Документы без `current_version` (DM `not_started`)
+   → бакет `not_started`. `AWAITING_USER_INPUT` — orchestrator-managed статус, DM его
+   никогда не эмитит, поэтому бакет всегда `0`. Нераспознанный `artifact_status`
+   (enum-drift DM↔Orchestrator) роутится в `processing` (ближайшее «in-flight»
+   состояние, **не** `not_started`, у которого иное дашборд-значение) + WARN-лог, чтобы
+   инвариант суммы сохранялся.
+5. HTTP 200 с `Cache-Control: private, max-age=30` (агрегат org-scoped и устойчив к
+   небольшой устареваемости; `private` — никогда не отдавать счётчики одной
+   организации другой). `updated_at` = время сборки ответа (computed-at, не
+   data-freshness). Latency-бюджет: p95 < 150 ms — целиком определяется DM-latency
+   (один вызов + тривиальный in-memory маппинг); справедлив только при дешёвом
+   серверном агрегате DM (DM-TASK-059), N+1-fallback не реализуется.
 
-> Статус реализации: контракт зафиксирован в OpenAPI; серверная реализация —
-> ORCH-TASK-057 (зависит от DM-TASK-059). До их готовности Frontend потребляет
-> эндпоинт через MSW-мок (Путь C), переключение на реальные данные не требует
-> правок Frontend (openapi.d.ts уже сгенерирован, хук `useContractStats` готов).
+**Зависимость и флаг (ORCH-TASK-057).** Эндпоинт за фичефлагом
+`ORCH_CONTRACTS_STATS_ENABLED` (default `false`), потому что backing-эндпоинт DM
+`GET /documents/stats` (DM-TASK-059) ещё не задеплоен. Пока флаг выключен:
+Orchestrator **не вызывает DM** и возвращает `503 FEATURE_NOT_AVAILABLE` (fail-safe).
+Это отдельный код, отличный от `502 DM_UNAVAILABLE`: «функция намеренно отключена,
+зависимость не развёрнута» ≠ «развёрнутый DM реально сбойнул» — чтобы при включении
+флага реальные сбои DM были отличимы на дашбордах/алертах с первого дня.
+
+> Статус реализации: контракт зафиксирован в OpenAPI; серверная реализация
+> Orchestrator-стороны выполнена в **ORCH-TASK-057** (DM-клиент `GetDocumentStats`,
+> маппинг в `ContractStats`, флаг `ORCH_CONTRACTS_STATS_ENABLED`). **DM-сторона
+> (`GET /documents/stats`, DM-TASK-059) ещё не реализована** — до её готовности флаг
+> остаётся выключенным, Frontend потребляет метрику через MSW-мок (Путь C).
+> Переключение на реальные данные не требует правок Frontend (openapi.d.ts уже
+> сгенерирован, хук `useContractStats` и виджет `BusinessSummary` готовы).
 
 ### Получение документа
 

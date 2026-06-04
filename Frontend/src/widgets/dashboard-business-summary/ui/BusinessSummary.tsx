@@ -1,9 +1,10 @@
 // BusinessSummary — карточка «Сводка» на dashboard (Figma 84:2 → 91:2).
 //
-// «проверено» = total из /contracts (реальный all-time счётчик). «внимание» и
-// «готовы» — all-time bucket-агрегаты, которых нет в /contracts?size=5 (только
-// 5 последних), поэтому рендерятся как «—» до появления aggregate-эндпоинта.
-// Никаких выдуманных чисел.
+// Две метрики: «проверено» = total из /contracts (реальный all-time счётчик) и
+// «в работе» — all-time счётчик договоров в обработке. Агрегата по статусам в
+// API нет (ContractList отдаёт только total; фильтр /contracts — по
+// DocumentStatus, не по processing-статусу), поэтому «в работе» рендерится как
+// «—» до появления aggregate-эндпоинта. Никаких выдуманных чисел.
 import { Card, Spinner } from '@/shared/ui';
 
 export interface BusinessSummaryProps {
@@ -30,12 +31,11 @@ export function BusinessSummary({ total, isLoading, error }: BusinessSummaryProp
         <>
           <div className="flex items-start">
             <Stat value={total ?? '—'} label="проверено" muted={total === undefined} />
-            <Stat value="—" label="внимание" muted />
-            <Stat value="—" label="готовы" muted />
+            <Stat value="—" label="в работе" muted />
           </div>
           <div className="h-px w-full bg-divider" />
           <p className="text-13 leading-[19px] text-fg-muted">
-            Разбивка «внимание / готовы» и сводка по рискам появятся после анализа договоров.
+            «В работе» появится, когда добавим агрегатную статистику по статусам договоров.
           </p>
         </>
       )}

@@ -61,7 +61,8 @@ test.describe('Admin placeholders @smoke', () => {
     await loginAs(page, 'ORG_ADMIN');
     const sidebar = page.getByTestId('sidebar-desktop');
     await expect(sidebar).toBeVisible();
-    await expect(sidebar.getByRole('group', { name: 'Администрирование' })).toBeVisible();
+    // Admin-пункты рендерятся в группе «СИСТЕМА» (GROUP_LABEL.system) рядом с
+    // «Настройки» — проверяем их по testid, а не по имени группы.
     await expect(sidebar.getByTestId('nav-admin-policies')).toBeVisible();
     await expect(sidebar.getByTestId('nav-admin-checklists')).toBeVisible();
   });
@@ -70,7 +71,7 @@ test.describe('Admin placeholders @smoke', () => {
     await loginAs(page, 'LAWYER');
     const lawyerSidebar = page.getByTestId('sidebar-desktop');
     await expect(lawyerSidebar).toBeVisible();
-    await expect(lawyerSidebar.getByRole('group', { name: 'Администрирование' })).toHaveCount(0);
+    // У LAWYER admin-пунктов в группе «СИСТЕМА» нет (только «Настройки»).
     await expect(lawyerSidebar.getByTestId('nav-admin-policies')).toHaveCount(0);
     await expect(lawyerSidebar.getByTestId('nav-admin-checklists')).toHaveCount(0);
   });

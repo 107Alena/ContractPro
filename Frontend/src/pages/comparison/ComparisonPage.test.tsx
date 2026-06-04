@@ -214,7 +214,7 @@ describe('ComparisonPage — 9 состояний', () => {
     expect(screen.getByText('Новый риск промежуточного платежа')).toBeDefined();
   });
 
-  it('9) URL params базируются на ?base=&target= и попадают в заголовок', () => {
+  it('9) URL params (?base=&target=) парсятся и используются — рендерится мета версий', () => {
     const qc = makeClient();
     qc.setQueryData(qk.contracts.diff(CONTRACT_ID, BASE_VID, TARGET_VID), {
       baseVersionId: BASE_VID,
@@ -225,8 +225,10 @@ describe('ComparisonPage — 9 состояний', () => {
       structuralDiffs: [],
     });
     renderAt(`/contracts/${CONTRACT_ID}/compare?base=${BASE_VID}&target=${TARGET_VID}`, qc);
-    expect(
-      screen.getByText((content) => content.includes(BASE_VID) && content.includes(TARGET_VID)),
-    ).toBeDefined();
+    // Параметры распарсены → useDiff(base,target) → данные есть → рендерится мета
+    // сравниваемых версий (иначе показался бы no-versions/single-version экран).
+    expect(screen.getByTestId('version-meta-header')).toBeDefined();
+    expect(screen.getByTestId('version-meta-header-base')).toBeDefined();
+    expect(screen.getByTestId('version-meta-header-target')).toBeDefined();
   });
 });

@@ -84,28 +84,21 @@ function diffsToParagraphs(diff: VersionDiffResult): ParagraphForDiff[] {
 // группы пустые, виджеты показывают честные плейсхолдеры.
 
 interface PageHeaderProps {
-  contractId: string | undefined;
-  base: string | null;
-  target: string | null;
   hasBoth: boolean;
   onRecompute: () => void;
   isRecomputing: boolean;
 }
 
-function PageHeader({
-  contractId,
-  base,
-  target,
-  hasBoth,
-  onRecompute,
-  isRecomputing,
-}: PageHeaderProps): JSX.Element {
+// Контекст версий (договор/base/target) виден на VersionMetaHeader — в шапке не
+// дублируем сырые id (Figma 174:24: только заголовок + описание + действия).
+function PageHeader({ hasBoth, onRecompute, isRecomputing }: PageHeaderProps): JSX.Element {
   return (
-    <header className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold text-fg">Сравнение версий</h1>
-        <p className="text-sm text-fg-muted">
-          Договор: {contractId ?? '—'} · База: {base ?? '—'} · Целевая: {target ?? '—'}
+    <header className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+      <div className="flex flex-col gap-1.5">
+        <h1 className="text-24 font-bold text-fg">Сравнение версий договора</h1>
+        <p className="max-w-2xl text-15 text-fg-muted">
+          ContractPro сравнил две редакции договора и показал, что изменилось в тексте и структуре,
+          а также как изменился профиль риска.
         </p>
       </div>
       <div className="flex items-center gap-2">
@@ -327,10 +320,10 @@ function ReadyContent({
 
       <section
         aria-label="Подробный список изменений"
-        className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+        className="flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg px-6 py-5 shadow-none"
       >
         <header className="flex flex-col gap-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">Изменения</h2>
+          <h2 className="text-16 font-semibold text-fg">Что изменилось</h2>
           <TabsFilters value={filter} onChange={setFilter} counters={tabCounters} />
         </header>
 
@@ -345,13 +338,11 @@ function ReadyContent({
 
       <section
         aria-label="Сравнение текста"
-        className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+        className="flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg px-6 py-5 shadow-none"
       >
         <header>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-            Сравнение текста
-          </h2>
-          <p className="mt-1 text-xs text-fg-muted">
+          <h2 className="text-16 font-semibold text-fg">Сравнение текста</h2>
+          <p className="mt-1 text-13 text-fg-muted">
             Side-by-side: слева — базовая версия, справа — целевая. Inline — единая колонка с
             разметкой добавлений/удалений.
           </p>
@@ -432,14 +423,13 @@ export function ComparisonPage(): JSX.Element {
   }, [diffQuery.error]);
 
   return (
-    <main
+    // Корень — <div> (AppLayout уже оборачивает Outlet в <main>); ширина/отступы
+    // по странице-конвенции остальных выровненных экранов.
+    <div
       data-testid="page-comparison"
-      className="mx-auto flex min-h-[60vh] max-w-6xl flex-col gap-6 px-6 py-12"
+      className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-8 md:py-8"
     >
       <PageHeader
-        contractId={id}
-        base={base}
-        target={target}
         hasBoth={hasBoth}
         onRecompute={recompute}
         isRecomputing={startMutation.isPending}
@@ -468,6 +458,6 @@ export function ComparisonPage(): JSX.Element {
       ) : (
         <LoadingState />
       )}
-    </main>
+    </div>
   );
 }

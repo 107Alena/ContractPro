@@ -29,11 +29,9 @@ export function ErrorLayout({
         className,
       )}
     >
-      {code ? (
-        <p className="text-sm font-semibold uppercase tracking-wider text-fg-muted">{code}</p>
-      ) : null}
-      <h1 className="text-3xl font-semibold text-fg">{title}</h1>
-      {description ? <p className="max-w-lg text-base text-fg-muted">{description}</p> : null}
+      {code ? <p className="text-sm font-semibold text-fg-muted">{code}</p> : null}
+      <h1 className="text-24 font-semibold text-fg">{title}</h1>
+      {description ? <p className="max-w-lg text-16 text-fg-muted">{description}</p> : null}
       {children ? <div className="mt-2 flex flex-wrap justify-center gap-3">{children}</div> : null}
     </main>
   );

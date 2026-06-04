@@ -59,7 +59,7 @@ function RoleRestrictedHarness({ userRole }: { userRole: UserRole }): JSX.Elemen
           path="/403"
           element={
             <div className="p-8">
-              <h1 className="text-2xl font-semibold text-fg">403 — Недостаточно прав</h1>
+              <h1 className="text-24 font-semibold text-fg">403 — Недостаточно прав</h1>
               <p className="text-fg-muted">
                 Роль {userRole} не имеет доступа к административным разделам.
               </p>

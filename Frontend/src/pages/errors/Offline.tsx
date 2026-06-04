@@ -26,7 +26,7 @@ export function Offline(): JSX.Element {
       {online ? (
         <div
           data-testid="offline-online-hint"
-          className="mt-4 flex w-full max-w-md flex-col items-center gap-2 rounded-md border border-success/30 bg-success/10 p-3 text-sm text-fg"
+          className="mt-4 flex w-full max-w-md flex-col items-center gap-2 rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-fg"
         >
           <p>{t('offline.onlineHint')}</p>
           <Button

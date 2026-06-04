@@ -28,7 +28,7 @@ export function ServerError500(): JSX.Element {
       </Button>
       {correlationId ? (
         <div
-          className="mt-4 w-full max-w-md rounded-md border border-border bg-bg-muted p-3 text-left text-xs text-fg-muted"
+          className="mt-4 w-full max-w-md rounded-lg border border-border-subtle bg-bg-muted p-3 text-left text-xs text-fg-muted"
           data-testid="correlation-id"
         >
           <div className="flex items-center justify-between gap-2">

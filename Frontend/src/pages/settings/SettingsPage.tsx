@@ -29,19 +29,19 @@ export function SettingsPage(): JSX.Element {
   const { logout, isPending } = useLogout();
 
   return (
-    <main
+    <div
       data-testid="page-settings"
       className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8"
     >
       <header>
-        <h1 className="text-2xl font-semibold text-fg">Настройки</h1>
+        <h1 className="text-24 font-semibold text-fg">Настройки</h1>
         <p className="mt-1 text-sm text-fg-muted">Профиль пользователя и текущая сессия.</p>
       </header>
 
       {meQuery.isLoading && !meQuery.data ? (
         <div
           data-testid="settings-loading"
-          className="flex min-h-[160px] items-center justify-center rounded-md border border-border bg-bg p-5 shadow-sm"
+          className="flex min-h-[160px] items-center justify-center rounded-lg border border-border-subtle bg-bg p-5"
           aria-busy="true"
           aria-live="polite"
         >
@@ -52,7 +52,7 @@ export function SettingsPage(): JSX.Element {
         <section
           data-testid="settings-error"
           role="alert"
-          className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+          className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-bg p-5"
         >
           <p className="text-sm text-danger">Не удалось загрузить профиль пользователя.</p>
           <Button
@@ -73,10 +73,10 @@ export function SettingsPage(): JSX.Element {
 
       <section
         aria-label="Сессия"
-        className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+        className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-bg p-5"
       >
         <header>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">Сессия</h2>
+          <h2 className="text-sm font-semibold text-fg-muted">Сессия</h2>
         </header>
         <p className="text-sm text-fg-muted">Завершите текущий сеанс на этом устройстве.</p>
         <Button
@@ -93,7 +93,7 @@ export function SettingsPage(): JSX.Element {
           Выйти
         </Button>
       </section>
-    </main>
+    </div>
   );
 }
 
@@ -102,10 +102,10 @@ function ProfileSections({ user }: { user: UserProfile }): JSX.Element {
     <>
       <section
         aria-label="Профиль"
-        className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+        className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-bg p-5"
       >
         <header>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">Профиль</h2>
+          <h2 className="text-sm font-semibold text-fg-muted">Профиль</h2>
         </header>
         <dl className="grid grid-cols-1 gap-2 sm:grid-cols-[140px_1fr]">
           <dt className="text-sm text-fg-muted">Имя</dt>
@@ -117,12 +117,10 @@ function ProfileSections({ user }: { user: UserProfile }): JSX.Element {
 
       <section
         aria-label="Организация"
-        className="flex flex-col gap-3 rounded-md border border-border bg-bg p-5 shadow-sm"
+        className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-bg p-5"
       >
         <header>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-            Организация
-          </h2>
+          <h2 className="text-sm font-semibold text-fg-muted">Организация</h2>
         </header>
         <dl className="grid grid-cols-1 gap-2 sm:grid-cols-[140px_1fr]">
           <dt className="text-sm text-fg-muted">Название</dt>

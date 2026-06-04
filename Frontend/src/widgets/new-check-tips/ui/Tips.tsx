@@ -1,5 +1,5 @@
 // Tips — блок «Советы для лучшего результата» на NewCheckPage
-// (Figma 112:2 → 118:2, FE-TASK-043). Presentational-only: 4 статичные
+// (Figma 112:2 → 118:2, FE-TASK-043). Presentational-only: 3 статичные
 // подсказки по подготовке PDF. Декоративные эмодзи — aria-hidden, чтобы
 // скринридер не озвучивал их unicode-имена.
 import { type HTMLAttributes } from 'react';
@@ -12,9 +12,8 @@ export interface TipsProps extends HTMLAttributes<HTMLElement> {
 }
 
 const TIPS: ReadonlyArray<{ icon: string; text: string }> = [
-  { icon: '📄', text: 'Убедитесь, что PDF-файл читаемый и не защищён паролем.' },
+  { icon: '📄', text: 'Убедитесь, что PDF-файл читаемый.' },
   { icon: '📋', text: 'Для точного анализа используйте полный текст договора.' },
-  { icon: '📎', text: 'Если есть приложения — сначала проверьте основной договор.' },
   { icon: 'ⓘ', text: 'Итог анализа носит рекомендательный характер.' },
 ];
 
@@ -31,7 +30,7 @@ export function Tips({ className, ...rest }: TipsProps): JSX.Element {
     >
       <h2 className="text-15 font-semibold text-fg">Советы для лучшего результата</h2>
 
-      <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {TIPS.map((tip) => (
           <li
             key={tip.text}

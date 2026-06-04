@@ -1,19 +1,26 @@
 // BusinessSummary — карточка «Сводка» на dashboard (Figma 84:2 → 91:2).
 //
 // Две метрики: «проверено» = total из /contracts (реальный all-time счётчик) и
-// «в работе» — all-time счётчик договоров в обработке. Агрегата по статусам в
-// API нет (ContractList отдаёт только total; фильтр /contracts — по
-// DocumentStatus, не по processing-статусу), поэтому «в работе» рендерится как
-// «—» до появления aggregate-эндпоинта. Никаких выдуманных чисел.
+// «в работе» = inProgress из /contracts/stats (агрегат незавершённых
+// processing-статусов, см. inProgressCount в entities/contract). Источник
+// истины — Document Management; Orchestrator агрегирует. Если stats недоступны
+// (загрузка/ошибка/эндпоинт не готов) — «в работе» рендерится как «—».
+// Никаких выдуманных чисел.
 import { Card, Spinner } from '@/shared/ui';
 
 export interface BusinessSummaryProps {
   total?: number | undefined;
+  inProgress?: number | undefined;
   isLoading?: boolean | undefined;
   error?: unknown;
 }
 
-export function BusinessSummary({ total, isLoading, error }: BusinessSummaryProps): JSX.Element {
+export function BusinessSummary({
+  total,
+  inProgress,
+  isLoading,
+  error,
+}: BusinessSummaryProps): JSX.Element {
   return (
     <Card as="article" aria-label="Сводка" className="flex flex-col gap-3.5 p-5">
       <h2 className="text-15 font-semibold text-fg">Сводка</h2>
@@ -28,16 +35,10 @@ export function BusinessSummary({ total, isLoading, error }: BusinessSummaryProp
           Не удалось загрузить сводку.
         </p>
       ) : (
-        <>
-          <div className="flex items-start">
-            <Stat value={total ?? '—'} label="проверено" muted={total === undefined} />
-            <Stat value="—" label="в работе" muted />
-          </div>
-          <div className="h-px w-full bg-divider" />
-          <p className="text-13 leading-[19px] text-fg-muted">
-            «В работе» появится, когда добавим агрегатную статистику по статусам договоров.
-          </p>
-        </>
+        <div className="flex items-start">
+          <Stat value={total ?? '—'} label="проверено" muted={total === undefined} />
+          <Stat value={inProgress ?? '—'} label="в работе" muted={inProgress === undefined} />
+        </div>
       )}
     </Card>
   );

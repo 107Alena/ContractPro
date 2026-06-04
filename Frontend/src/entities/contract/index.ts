@@ -1,4 +1,5 @@
 export { CONTRACT_ENDPOINT, type ContractDetails, useContract } from './api/use-contract';
+export { type ContractStats, inProgressCount, useContractStats } from './api/use-contract-stats';
 export {
   type ContractList,
   CONTRACTS_ENDPOINT,

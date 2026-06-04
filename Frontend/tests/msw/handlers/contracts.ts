@@ -33,6 +33,12 @@ export function createContractsHandlers(base: HandlerBase) {
       return HttpResponse.json({ items, total: items.length, page, size }, { status: 200 });
     }),
 
+    // GET /contracts/stats — агрегированная статистика (ДО :contractId, иначе
+    // matcher примет stats за contractId).
+    http.get(joinPath(base, '/contracts/stats'), () =>
+      HttpResponse.json(contracts.contractStats, { status: 200 }),
+    ),
+
     // GET /contracts/{id} — детали договора.
     http.get(joinPath(base, '/contracts/:contractId'), ({ params }) => {
       const contract = contracts.contractDetailsById[params.contractId as string];

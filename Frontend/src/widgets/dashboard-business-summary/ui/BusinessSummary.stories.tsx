@@ -11,6 +11,8 @@ const meta: Meta<typeof BusinessSummary> = {
 export default meta;
 type Story = StoryObj<typeof BusinessSummary>;
 
-export const Default: Story = { args: { total: 12 } };
+export const Default: Story = { args: { total: 12, inProgress: 3 } };
+/** stats недоступны → «в работе» = «—», «проверено» из /contracts. */
+export const NoStats: Story = { args: { total: 12 } };
 export const Loading: Story = { args: { isLoading: true } };
 export const ErrorState: Story = { args: { error: new Error('net') } };

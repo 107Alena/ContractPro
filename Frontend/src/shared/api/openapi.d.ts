@@ -103,6 +103,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/contracts/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Агрегированная статистика договоров организации
+         * @description Возвращает сводные счётчики договоров текущей организации, агрегированные
+         *     по статусу обработки (UserProcessingStatus) текущей версии и по уровню
+         *     риска готовых договоров. Источник истины — Document Management; Orchestrator
+         *     только агрегирует (§8.3 high-architecture). Используется дашбордом
+         *     (карточка «Сводка»: «проверено» = total, «в работе» = сумма незавершённых
+         *     статусов). Скоупится по организации пользователя из JWT.
+         */
+        get: operations["getContractStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/contracts/{contract_id}": {
         parameters: {
             query?: never;
@@ -579,9 +604,16 @@ export interface components {
         };
         ConfirmTypeRequest: {
             /**
-             * @description Подтверждённый пользователем тип договора (e.g. "услуги", "поставка", "подряд",
-             *     "аренда", "NDA"). Whitelist валидных значений контролируется LIC; передача
-             *     значения вне whitelist приводит к 400 VALIDATION_ERROR.
+             * @description Подтверждённый пользователем тип договора. Принимается **либо** русский лейбл из UI
+             *     (например, "услуги", "купля-продажа", "трудовой"), **либо** английский LIC enum
+             *     (например, "SERVICES", "SALE", "EMPLOYMENT_CIVIL"). Сервер нормализует русские
+             *     лейблы в английский enum LIC до публикации `UserConfirmedType` в RabbitMQ
+             *     (ASSUMPTION-LIC-16, ASSUMPTION-ORCH-16). Полный whitelist (12 пар RU↔EN) и таблица
+             *     маппинга — см. [event-catalog.md §1.3 UserConfirmedType](event-catalog.md).
+             *     Маппинг русского ключа case-insensitive ("Услуги" / "УСЛУГИ" / "услуги" → SERVICES),
+             *     английский enum принимается только в каноническом UPPER_SNAKE_CASE (pass-through).
+             *     Невалидное значение → 400 с `error_code: INVALID_CONTRACT_TYPE` и русским
+             *     `message`.
              * @example услуги
              */
             contract_type: string;
@@ -608,6 +640,52 @@ export interface components {
             total?: number;
             page?: number;
             size?: number;
+        };
+        /**
+         * @description Агрегированные счётчики договоров организации для дашборда. Счётчики
+         *     относятся к «текущей версии» каждого договора (processing_status = статус
+         *     current_version). Скоуп — активные документы организации (плюс архивные,
+         *     если include_archived=true).
+         */
+        ContractStats: {
+            /** @description Всего договоров в скоупе статистики (сумма by_processing_status). */
+            total: number;
+            /**
+             * @description Счётчики договоров по статусу обработки текущей версии. Сумма всех
+             *     значений = total. Договоры без current_version или без статуса
+             *     учитываются в not_started.
+             */
+            by_processing_status: {
+                uploaded: number;
+                queued: number;
+                processing: number;
+                analyzing: number;
+                awaiting_user_input: number;
+                generating_reports: number;
+                ready: number;
+                partially_failed: number;
+                failed: number;
+                rejected: number;
+                /** @description Договоры без current_version или без processing_status (например, только что созданные). */
+                not_started: number;
+            };
+            /**
+             * @description Разбивка ГОТОВЫХ (processing_status=READY) договоров по агрегированному
+             *     уровню риска текущей версии. null/опущено, если risk-агрегаты ещё
+             *     недоступны (зависит от готовности агрегации рисков в Orchestrator).
+             */
+            by_risk_level?: {
+                high?: number;
+                medium?: number;
+                low?: number;
+                /** @description READY-договоры без определённого уровня риска. */
+                unknown?: number;
+            } | null;
+            /**
+             * Format: date-time
+             * @description Время расчёта статистики (для клиентского кэширования).
+             */
+            updated_at?: string;
         };
         ContractDetails: {
             /** Format: uuid */
@@ -1146,6 +1224,33 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    getContractStats: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Включать ли архивированные договоры (status=ARCHIVED) в статистику.
+                 *     По умолчанию учитываются только активные (status=ACTIVE).
+                 */
+                include_archived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Статистика договоров */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContractStats"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     getContract: {
         parameters: {
             query?: never;
@@ -1412,7 +1517,7 @@ export interface operations {
                     "application/json": components["schemas"]["UploadResponse"];
                 };
             };
-            /** @description Невалидный contract_type (не соответствует whitelist LIC) */
+            /** @description Невалидный contract_type — `error_code: INVALID_CONTRACT_TYPE` (не соответствует ни одному русскому лейблу UI, ни одному английскому LIC enum из 12-значного whitelist; см. event-catalog.md §1.3 для списка) */
             400: {
                 headers: {
                     [name: string]: unknown;

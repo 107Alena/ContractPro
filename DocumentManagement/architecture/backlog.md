@@ -15,3 +15,4 @@
 | 9 | **Configuration reference** | Полный список `DM_*` переменных окружения (по аналогии с `configuration.md` DP) | Средний |
 | 10 | **Schema contracts (JSON Schema)** | Формальные схемы для каждого event type | Средний |
 | 11 | **Deployment guide** | Docker, Docker Compose, миграции, secrets | Средний |
+| 12 | **Count-by-artifact_status агрегат** | `GET /documents/stats` + repo `CountCurrentVersionsByArtifactStatus` + индекс `(organization_id, artifact_status)`. Источник для дашборд-метрики «в работе» (потребитель — Orchestrator `GET /contracts/stats`). Детали: [../tasks.json](../tasks.json) DM-TASK-059 | Высокий |

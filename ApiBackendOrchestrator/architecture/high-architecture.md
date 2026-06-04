@@ -955,6 +955,27 @@ Sequence diagrams для каждого сценария — см. [sequence-dia
 2. Results Aggregator → DM Client: `GET /documents?page=1&size=20&status=ACTIVE`.
 3. HTTP 200 с пагинированным списком.
 
+### Статистика для дашборда (агрегат по статусам)
+
+`GET /api/v1/contracts/stats` — агрегированные счётчики договоров организации для
+карточки «Сводка» дашборда: `total` (всего договоров в скоупе), `by_processing_status`
+(счётчики по UserProcessingStatus текущей версии, включая `not_started`),
+опционально `by_risk_level` (разбивка READY-договоров по уровню риска). Контракт —
+`ContractStats` в [api-specification.yaml](api-specification.yaml).
+
+1. Frontend: `GET /api/v1/contracts/stats?include_archived=false`.
+2. Aggregator → DM Client: один агрегатный вызов count-by-`artifact_status`
+   (DM `GET /documents/stats`, см. DM-TASK-059) — **без N+1** (не дёргает
+   `GET /documents/{id}` на каждый договор).
+3. Orchestrator маппит `artifact_status` (DM) → `UserProcessingStatus` (тем же
+   `processingStatusMap`, что и в списке) и группирует в `ContractStats`.
+4. HTTP 200. Latency-бюджет: p95 < 150 ms. Скоуп — организация из JWT.
+
+> Статус реализации: контракт зафиксирован в OpenAPI; серверная реализация —
+> ORCH-TASK-057 (зависит от DM-TASK-059). До их готовности Frontend потребляет
+> эндпоинт через MSW-мок (Путь C), переключение на реальные данные не требует
+> правок Frontend (openapi.d.ts уже сгенерирован, хук `useContractStats` готов).
+
 ### Получение документа
 
 1. Frontend: `GET /api/v1/contracts/{id}`.

@@ -13,7 +13,7 @@
 // SSE: useEventStream без document_id подписывается на глобальный feed (§7.7);
 // status-update попадает в qk.contracts.status(id,vid); /contracts сам по себе
 // не инвалидируется (snapshot-цельность), но refetch по staleTime актуализирует.
-import { useContracts } from '@/entities/contract';
+import { inProgressCount, useContracts, useContractStats } from '@/entities/contract';
 import { useMe } from '@/entities/user';
 import { useEventStream } from '@/shared/api';
 import { BusinessSummary } from '@/widgets/dashboard-business-summary';
@@ -27,6 +27,7 @@ const CONTRACTS_PARAMS = { size: 5 } as const;
 export function DashboardPage(): JSX.Element {
   const meQuery = useMe();
   const contractsQuery = useContracts(CONTRACTS_PARAMS);
+  const statsQuery = useContractStats();
 
   // Global SSE feed (без documentId) — обновления статусов попадают в
   // qk.contracts.status(...) и будут подхвачены при переходе на detail-page.
@@ -36,6 +37,10 @@ export function DashboardPage(): JSX.Element {
   const total = contractsQuery.data?.total;
   const isLoading = contractsQuery.isLoading;
   const error = contractsQuery.error ?? undefined;
+
+  // «В работе» — из /contracts/stats (агрегат незавершённых статусов). При
+  // загрузке/ошибке stats остаётся undefined → BusinessSummary покажет «—».
+  const inProgress = inProgressCount(statsQuery.data);
 
   return (
     <div
@@ -51,7 +56,12 @@ export function DashboardPage(): JSX.Element {
           <RecentChecksTable items={items} isLoading={isLoading} error={error} />
         </div>
         <div className="flex flex-col gap-5">
-          <BusinessSummary total={total ?? undefined} isLoading={isLoading} error={error} />
+          <BusinessSummary
+            total={total ?? undefined}
+            inProgress={inProgress}
+            isLoading={isLoading}
+            error={error}
+          />
           <OrgCard
             user={meQuery.data}
             isLoading={meQuery.isLoading}

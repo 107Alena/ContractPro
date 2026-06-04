@@ -70,11 +70,36 @@ afterEach(() => {
   useSession.getState().clear();
 });
 
+// Хелпер для qk.contracts.stats — seed'им во всех тестах, иначе useContractStats
+// уйдёт в реальный fetch (jsdom без MSW). Принимает overrides по статусам;
+// total вычисляется как сумма всех счётчиков (инвариант ContractStats —
+// total = сумма by_processing_status). «в работе» = inProgressCount(...) =
+// uploaded+queued+processing+analyzing+generating_reports.
+function statsSeed(overrides: Record<string, number> = {}): unknown {
+  const byProcessingStatus = {
+    uploaded: 0,
+    queued: 0,
+    processing: 0,
+    analyzing: 0,
+    awaiting_user_input: 0,
+    generating_reports: 0,
+    ready: 0,
+    partially_failed: 0,
+    failed: 0,
+    rejected: 0,
+    not_started: 0,
+    ...overrides,
+  };
+  const total = Object.values(byProcessingStatus).reduce((a, b) => a + b, 0);
+  return { total, by_processing_status: byProcessingStatus };
+}
+
 describe('DashboardPage', () => {
   it('рендерит приветствие по имени пользователя', () => {
     const qc = makeClient();
     qc.setQueryData(qk.me, baseUser);
     qc.setQueryData(qk.contracts.list({ size: 5 }), { items: [], total: 0 });
+    qc.setQueryData(qk.contracts.stats, statsSeed());
     renderPage(qc);
     expect(
       screen.getByRole('heading', { level: 1, name: 'Добро пожаловать, Мария' }),
@@ -91,6 +116,14 @@ describe('DashboardPage', () => {
       ],
       total: 12,
     });
+    // Несколько незавершённых статусов: queued2+processing2+analyzing3 = 7 →
+    // «в работе» = 7 (проверяет именно СУММУ inProgressCount, не одно поле).
+    // ready6 не входит в «в работе». total = 13, но в карточке total приходит
+    // из /contracts (12), а не из stats — поэтому 12 и 7 не конфликтуют.
+    qc.setQueryData(
+      qk.contracts.stats,
+      statsSeed({ queued: 2, processing: 2, analyzing: 3, ready: 6 }),
+    );
     renderPage(qc);
 
     // Убранные блоки больше не рендерятся
@@ -99,8 +132,10 @@ describe('DashboardPage', () => {
     expect(screen.queryByRole('article', { name: 'Статус обработки' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Ключевые риски' })).toBeNull();
 
-    // total «12» — в карточке «Сводка»
-    expect(within(screen.getByRole('article', { name: 'Сводка' })).getByText('12')).toBeDefined();
+    // «Сводка»: total «12» (проверено) + «в работе» = 7 (из stats)
+    const summary = screen.getByRole('article', { name: 'Сводка' });
+    expect(within(summary).getByText('12')).toBeDefined();
+    expect(within(summary).getByText('7')).toBeDefined();
     // Недавние проверки показывают договоры
     expect(screen.getByRole('region', { name: 'Недавние проверки' })).toBeDefined();
     expect(screen.getAllByText('Аренда').length).toBeGreaterThanOrEqual(1);
@@ -112,6 +147,7 @@ describe('DashboardPage', () => {
     const qc = makeClient();
     qc.setQueryData(qk.me, baseUser);
     qc.setQueryData(qk.contracts.list({ size: 5 }), { items: [], total: 0 });
+    qc.setQueryData(qk.contracts.stats, statsSeed());
     renderPage(qc);
 
     // RecentChecksTable empty-текст
@@ -123,6 +159,7 @@ describe('DashboardPage', () => {
     const bu: User = { ...baseUser, role: 'BUSINESS_USER' };
     qc.setQueryData(qk.me, bu);
     qc.setQueryData(qk.contracts.list({ size: 5 }), { items: [], total: 0 });
+    qc.setQueryData(qk.contracts.stats, statsSeed());
     renderPage(qc, bu);
 
     expect(screen.queryByRole('article', { name: 'Быстрый старт' })).toBeNull();

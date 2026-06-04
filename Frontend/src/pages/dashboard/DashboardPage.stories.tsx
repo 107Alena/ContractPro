@@ -56,14 +56,34 @@ type SeedOptions = {
   me?: UserProfile;
   contracts?: { items: ContractSummary[]; total: number };
   contractsError?: boolean;
+  stats?: { total: number; inProgress: number };
 };
 
-function seed({ me, contracts, contractsError }: SeedOptions): QueryClient {
+function seed({ me, contracts, contractsError, stats }: SeedOptions): QueryClient {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
   if (me) qc.setQueryData(qk.me, me);
   if (contracts) qc.setQueryData(qk.contracts.list({ size: 5 }), contracts);
+  if (stats) {
+    qc.setQueryData(qk.contracts.stats, {
+      total: stats.total,
+      by_processing_status: {
+        uploaded: 0,
+        queued: 0,
+        processing: 0,
+        // analyzing несёт весь «в работе» — упрощение для сторибука
+        analyzing: stats.inProgress,
+        awaiting_user_input: 0,
+        generating_reports: 0,
+        ready: 0,
+        partially_failed: 0,
+        failed: 0,
+        rejected: 0,
+        not_started: 0,
+      },
+    });
+  }
   if (contractsError) {
     qc.getQueryCache()
       .build(qc, {
@@ -102,7 +122,11 @@ function decorate(qc: QueryClient) {
 }
 
 export const Default: Story = {
-  decorators: [decorate(seed({ me: user, contracts: { items, total: 12 } }))],
+  decorators: [
+    decorate(
+      seed({ me: user, contracts: { items, total: 12 }, stats: { total: 12, inProgress: 3 } }),
+    ),
+  ],
 };
 
 export const Loading: Story = {
@@ -112,9 +136,16 @@ export const Loading: Story = {
 };
 
 export const Empty: Story = {
-  decorators: [decorate(seed({ me: user, contracts: { items: [], total: 0 } }))],
+  decorators: [
+    decorate(
+      seed({ me: user, contracts: { items: [], total: 0 }, stats: { total: 0, inProgress: 0 } }),
+    ),
+  ],
 };
 
 export const ErrorState: Story = {
-  decorators: [decorate(seed({ me: user, contractsError: true }))],
+  // Список в ошибке; stats сидим нулями, чтобы не дёргать сеть в Storybook.
+  decorators: [
+    decorate(seed({ me: user, contractsError: true, stats: { total: 0, inProgress: 0 } })),
+  ],
 };

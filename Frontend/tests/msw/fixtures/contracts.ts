@@ -8,6 +8,7 @@ import { IDS } from './ids';
 type ContractSummary = components['schemas']['ContractSummary'];
 type ContractDetails = components['schemas']['ContractDetails'];
 type VersionDetails = components['schemas']['VersionDetails'];
+type ContractStats = components['schemas']['ContractStats'];
 
 const BASE_DATE = '2026-04-15T10:00:00Z';
 
@@ -182,6 +183,41 @@ export const contractDetailsById: Record<string, ContractDetails> = {
   [IDS.contracts.gamma]: contractGamma,
   [IDS.contracts.delta]: contractDelta,
 };
+
+// Агрегированная статистика GET /contracts/stats (Путь C: мок). Считается из
+// contractSummaries в активном скоупе (status=ACTIVE), чтобы оставаться
+// консистентной со списком: alpha=ANALYZING, beta=AWAITING_USER_INPUT,
+// delta=READY (gamma ARCHIVED — вне дефолтного скоупа). «в работе» = 1 (alpha).
+function buildContractStats(): ContractStats {
+  const byStatus: ContractStats['by_processing_status'] = {
+    uploaded: 0,
+    queued: 0,
+    processing: 0,
+    analyzing: 0,
+    awaiting_user_input: 0,
+    generating_reports: 0,
+    ready: 0,
+    partially_failed: 0,
+    failed: 0,
+    rejected: 0,
+    not_started: 0,
+  };
+  const active = contractSummaries.filter((c) => c.status === 'ACTIVE');
+  for (const c of active) {
+    const key = (c.processing_status?.toLowerCase() ?? 'not_started') as keyof typeof byStatus;
+    if (key in byStatus) byStatus[key] += 1;
+    else byStatus.not_started += 1;
+  }
+  return {
+    total: active.length,
+    by_processing_status: byStatus,
+    // delta (READY) с medium-риском — единственный готовый в активном скоупе.
+    by_risk_level: { high: 0, medium: byStatus.ready, low: 0, unknown: 0 },
+    updated_at: '2026-04-19T16:10:00Z',
+  };
+}
+
+export const contractStats: ContractStats = buildContractStats();
 
 export const versionsByContract: Record<string, VersionDetails[]> = {
   [IDS.contracts.alpha]: [versionAlphaV1, versionAlphaV2],

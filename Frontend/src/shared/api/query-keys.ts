@@ -5,6 +5,7 @@ export const qk = {
   contracts: {
     all: ['contracts'] as const,
     list: (p: ListParams) => ['contracts', 'list', p] as const,
+    stats: ['contracts', 'stats'] as const,
     byId: (id: string) => ['contracts', id] as const,
     versions: (id: string) => ['contracts', id, 'versions'] as const,
     version: (id: string, vid: string) => ['contracts', id, 'versions', vid] as const,

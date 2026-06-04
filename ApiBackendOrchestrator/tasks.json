@@ -1425,6 +1425,34 @@
       ],
       "dependencies": [],
       "status": "pending"
+    },
+    {
+      "id": "ORCH-TASK-057",
+      "category": "functional",
+      "priority": "high",
+      "description": "Реализовать GET /contracts/stats — агрегированную статистику договоров организации по processing-статусу (и уровню риска) для дашборда. Контракт OpenAPI уже добавлен (schema ContractStats, path /contracts/stats); нужна серверная реализация: handler + агрегация из Document Management, скоуп по организации",
+      "context": "Frontend (dashboard, карточка «Сводка») показывает «проверено» = total из GET /contracts и «в работе» = сумма незавершённых processing-статусов. Сейчас (Путь C) число «в работе» приходит из ЗАМОКАННОГО (MSW) GET /contracts/stats — реального серверного эндпоинта нет. GET /contracts отдаёт только total и постраничный список без агрегата по processing-статусу (а фильтр там — по DocumentStatus ACTIVE/ARCHIVED/DELETED, не по UserProcessingStatus). Контракт уже зафиксирован в architecture/api-specification.yaml: path /contracts/stats (operationId getContractStats, query include_archived) + schema ContractStats { total, by_processing_status{10 статусов + not_started}, by_risk_level{high,medium,low,unknown}|null, updated_at }. Эта задача — серверная реализация под готовый контракт. Зависит от DM-TASK-059 (DM должен отдать count-by-artifact_status; до её готовности Orchestrator не может считать дёшево — см. варианты ниже). Frontend менять НЕ нужно: openapi.d.ts уже сгенерирован, хук useContractStats и виджет BusinessSummary готовы потреблять реальный ответ — при переключении с MSW на реальный backend число оживёт без правок FE.",
+      "acceptance_criteria": [
+        "Handler GET /contracts/stats в internal/application/contracts/ (рядом с HandleList): operationId getContractStats. Роут зарегистрирован в internal/ingress/api/routes.go СТРОГО ДО r.Get(\"/contracts/{contract_id}\", ...) и ДО/после /contracts — но раньше параметризованного, иначе chi примет 'stats' за contract_id. Корректный порядок: /contracts/stats → /contracts → /contracts/{contract_id}",
+        "Response соответствует schema ContractStats из api-specification.yaml: total (int), by_processing_status (объект с 11 полями: uploaded, queued, processing, analyzing, awaiting_user_input, generating_reports, ready, partially_failed, failed, rejected, not_started — сумма = total), by_risk_level (объект high/medium/low/unknown, ТОЛЬКО для READY-договоров; допустимо null/опустить, если risk-агрегация ещё не реализована — поле nullable в контракте), updated_at (RFC3339)",
+        "Скоуп по организации из AuthContext (X-Organization-ID в DM-клиент) — статистика считается ТОЛЬКО по договорам организации пользователя. По умолчанию учитываются ACTIVE-документы; include_archived=true добавляет ARCHIVED (DELETED не учитываются никогда)",
+        "Маппинг artifact_status (DM) → UserProcessingStatus → snake_case-ключи by_processing_status: переиспользовать существующий processingStatusMap (internal/application/contracts/response.go или versions/response.go) — НЕ дублировать. Договоры без current_version/статуса → not_started",
+        "Источник данных — Document Management через DM-TASK-059 (GET /documents/stats или count-by-artifact_status). Orchestrator НЕ делает N+1 (не дёргает GetDocument на каждый договор): один агрегатный вызов к DM на запрос. Если DM-TASK-059 ещё не готова — задокументировать временное поведение и НЕ мёржить медленный fallback в prod (либо feature-flag)",
+        "RBAC: эндпоинт доступен всем аутентифицированным ролям (LAWYER, BUSINESS_USER, ORG_ADMIN) — это агрегат без чувствительного содержимого. Проверить middleware-цепочку (Auth → RBAC)",
+        "Тесты: unit handler (mock DM-stats клиент → корректный маппинг в ContractStats, сумма by_processing_status = total, not_started для договоров без версии); 401 без auth; include_archived поведение; отсутствие N+1 (mock DM вызван 1 раз); table-driven как в handler_test.go",
+        "ДОКУМЕНТАЦИЯ (синхронно, в тех же коммитах): (а) architecture/api-specification.yaml — контракт уже добавлен, при изменениях держать в синхроне; (б) architecture/high-architecture.md — §8.3/Aggregator: как Orchestrator собирает ContractStats из DM count-by-status, latency-бюджет (p95 < 150 ms), null-семантика by_risk_level; (в) architecture/integration-contracts.md — read-контракт Orchestrator↔DM для stats (какой DM-эндпоинт, форма ответа); (г) Frontend openapi.d.ts регенерируется из api-specification.yaml (npm run gen:api) — уже сделано на Frontend-стороне (Путь C)",
+        "СВЯЗЬ С FRONTEND: задача переводит метрику «в работе» дашборда с MSW-мока на реальные данные. После готовности FE убирает MSW-хэндлер /contracts/stats из боевого пути (останется только для тестов/Storybook) — зафиксировать в progress.md"
+      ],
+      "test_steps": [
+        "Шаг 1: go test -count=1 ./... — unit/integration handler PASS",
+        "Шаг 2: GET /contracts/stats (с auth) → 200 ContractStats; сумма by_processing_status = total; not_started корректен для договоров без версии",
+        "Шаг 3: GET /contracts/stats?include_archived=true → ARCHIVED включены в счётчики",
+        "Шаг 4: проверка отсутствия N+1 — mock DM-клиент вызван 1 раз независимо от числа договоров",
+        "Шаг 5: GET /contracts/stats без auth → 401",
+        "Шаг 6: go test -race ./... ALL PASS; go vet OK; make build/test/lint OK; OpenAPI валиден; high-architecture.md + integration-contracts.md обновлены"
+      ],
+      "dependencies": ["DM-TASK-059"],
+      "status": "pending"
     }
   ]
 }

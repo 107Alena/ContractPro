@@ -34,6 +34,12 @@ function formatDateTime(iso?: string): string {
 
 export interface ReportDetailPanelProps {
   contract: ContractSummary | null;
+  /**
+   * UUID текущей версии выбранного отчёта (резолвится page'ом через useContract).
+   * Реестр отдаёт только current_version_number — для экспорта/share нужен UUID.
+   * Пока детали грузятся — undefined/null, кнопка экспорта disabled.
+   */
+  versionId?: string | null;
   onClose: () => void;
   /** Открывает ExportShareModal на уровне page. Вызывается с contractId+versionId. */
   onOpenShare?: (input: { contractId: string; versionId: string }) => void;
@@ -41,6 +47,7 @@ export interface ReportDetailPanelProps {
 
 export function ReportDetailPanel({
   contract,
+  versionId,
   onClose,
   onOpenShare,
 }: ReportDetailPanelProps): JSX.Element | null {
@@ -70,13 +77,13 @@ export function ReportDetailPanel({
   const version = contract.current_version_number;
   const updatedAt = contract.updated_at ?? contract.created_at;
   const canOpenShare =
-    canExport && onOpenShare != null && contract.contract_id != null && version != null;
+    canExport && onOpenShare != null && contract.contract_id != null && versionId != null;
 
   const handleOpenShare = (): void => {
     if (!canOpenShare) return;
     onOpenShare!({
       contractId: contract.contract_id as string,
-      versionId: String(version),
+      versionId: versionId as string,
     });
   };
 

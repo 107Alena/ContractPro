@@ -192,6 +192,40 @@ describe('ReportsPage', () => {
     });
   });
 
+  it('Feedback — без выбора подсказка; row select c резолвнутым versionId → FeedbackBlock', async () => {
+    getSpy.mockImplementation((url: string) => {
+      if (url === '/contracts') return Promise.resolve({ data: sample });
+      if (url === '/contracts/c1')
+        return Promise.resolve({
+          data: {
+            contract_id: 'c1',
+            title: 'Договор оказания услуг',
+            status: 'ACTIVE',
+            current_version: {
+              version_id: 'ver-c1',
+              version_number: 2,
+              processing_status: 'READY',
+            },
+            updated_at: '2026-04-16T14:20:00Z',
+          },
+        });
+      return Promise.resolve({ data: {} });
+    });
+    const qc = makeClient();
+    renderPage(qc);
+
+    await waitFor(() => {
+      expect(screen.getByText('Договор оказания услуг')).toBeInTheDocument();
+    });
+    // Нет выбора → honest-подсказка вместо формы.
+    expect(screen.getByTestId('reports-feedback-empty')).toBeInTheDocument();
+    expect(screen.queryByTestId('feedback-block')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('reports-table-row-c1'));
+    expect(await screen.findByTestId('feedback-block')).toBeInTheDocument();
+    expect(screen.queryByTestId('reports-feedback-empty')).toBeNull();
+  });
+
   it('Фильтр state=PARTIALLY_FAILED — показывает контракты с предупреждениями', async () => {
     getSpy.mockResolvedValue({ data: sample });
     const qc = makeClient();

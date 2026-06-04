@@ -76,13 +76,19 @@ describe('ReportDetailPanel', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('Share — LAWYER может кликнуть, callback вызывается', () => {
+  it('Share — LAWYER с резолвнутым versionId может кликнуть, callback с UUID', () => {
     const onOpenShare = vi.fn();
-    renderPanel({ contract, onOpenShare });
+    renderPanel({ contract, versionId: 'ver-uuid-1', onOpenShare });
     const btn = screen.getByTestId('report-detail-panel-share');
     expect(btn).not.toBeDisabled();
     fireEvent.click(btn);
-    expect(onOpenShare).toHaveBeenCalledWith({ contractId: 'c1', versionId: '2' });
+    expect(onOpenShare).toHaveBeenCalledWith({ contractId: 'c1', versionId: 'ver-uuid-1' });
+  });
+
+  it('Share — без versionId (детали ещё грузятся) → кнопка disabled даже у LAWYER', () => {
+    const onOpenShare = vi.fn();
+    renderPanel({ contract, onOpenShare });
+    expect(screen.getByTestId('report-detail-panel-share')).toBeDisabled();
   });
 
   it('Share — BUSINESS_USER без экспорта видит disabled-кнопку', () => {

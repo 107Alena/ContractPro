@@ -22,7 +22,7 @@
 import { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-import { type ContractSummary } from '@/entities/contract';
+import { type ContractSummary, useContract } from '@/entities/contract';
 import { FilterChips } from '@/features/filters';
 import { PaginationControls } from '@/features/pagination';
 import { SearchInput } from '@/features/search';
@@ -31,6 +31,7 @@ import { Button } from '@/shared/ui';
 import { TrustFooter } from '@/widgets/dashboard-trust-footer';
 import { ExpiredLinkBanner } from '@/widgets/expired-link-banner';
 import { ExportShareModal } from '@/widgets/export-share-modal';
+import { FeedbackBlock } from '@/widgets/feedback-block';
 import { ReportDetailPanel } from '@/widgets/report-detail-panel';
 import { ReportsMetrics } from '@/widgets/reports-metrics';
 import { ReportsTable } from '@/widgets/reports-table';
@@ -71,6 +72,13 @@ export function ReportsPage(): JSX.Element {
 
   const selectedContract: ContractSummary | null =
     selectedId != null ? (items.find((c) => c.contract_id === selectedId) ?? null) : null;
+
+  // Реестр отдаёт ContractSummary без version-UUID (только current_version_number).
+  // Per-version API (риски/feedback/export) требуют UUID → подтягиваем детали
+  // выбранного отчёта и берём current_version.version_id. Это же чинит экспорт:
+  // раньше в ExportShareModal уходил String(номер версии), а не UUID.
+  const detailQuery = useContract(selectedId ?? undefined, { enabled: selectedId != null });
+  const selectedVersionId = detailQuery.data?.current_version?.version_id ?? null;
 
   const handleRetry = useCallback(() => {
     void query.refetch();
@@ -211,6 +219,7 @@ export function ReportsPage(): JSX.Element {
         {selectedContract ? (
           <ReportDetailPanel
             contract={selectedContract}
+            versionId={selectedVersionId}
             onClose={handleCloseDetail}
             onOpenShare={handleOpenShare}
           />
@@ -218,6 +227,25 @@ export function ReportsPage(): JSX.Element {
       </div>
 
       <ShareableMaterials />
+
+      {selectedId != null && selectedVersionId != null ? (
+        <FeedbackBlock
+          key={`${selectedId}:${selectedVersionId}`}
+          contractId={selectedId}
+          versionId={selectedVersionId}
+        />
+      ) : (
+        <section
+          aria-label="Обратная связь по отчёту"
+          data-testid="reports-feedback-empty"
+          className="flex flex-col gap-1 rounded-xl border border-border-subtle bg-bg p-6"
+        >
+          <h2 className="text-16 font-semibold text-fg">Результат был полезен?</h2>
+          <p className="text-sm text-fg-muted">
+            Выберите отчёт в списке, чтобы оценить полезность результата проверки.
+          </p>
+        </section>
+      )}
 
       <TrustFooter />
 

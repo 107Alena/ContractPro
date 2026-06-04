@@ -233,7 +233,11 @@ export function ReportDetailPanel({
       <div className="flex flex-col gap-2">
         {contract.contract_id ? (
           <Link
-            to={`/contracts/${encodeURIComponent(contract.contract_id)}`}
+            to={
+              versionId
+                ? `/contracts/${encodeURIComponent(contract.contract_id)}/versions/${encodeURIComponent(versionId)}/result`
+                : `/contracts/${encodeURIComponent(contract.contract_id)}`
+            }
             className={buttonVariants({ variant: 'primary', size: 'md' })}
             data-testid="report-detail-panel-open"
           >

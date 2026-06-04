@@ -63,10 +63,18 @@ describe('ReportDetailPanel', () => {
     expect(screen.getByText('v2')).toBeInTheDocument();
   });
 
-  it('Link «Открыть результаты» ведёт на /contracts/:id', () => {
+  it('Link «Открыть результаты» без versionId (детали грузятся) → fallback на /contracts/:id', () => {
     renderPanel({ contract });
     const link = screen.getByTestId('report-detail-panel-open');
     expect(link).toHaveAttribute('href', '/contracts/c1');
+  });
+
+  it('Link «Открыть результаты» с versionId → result-страница версии (Stage 5)', () => {
+    renderPanel({ contract, versionId: 'ver-9' });
+    expect(screen.getByTestId('report-detail-panel-open')).toHaveAttribute(
+      'href',
+      '/contracts/c1/versions/ver-9/result',
+    );
   });
 
   it('Close — клик вызывает onClose', () => {

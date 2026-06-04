@@ -40,13 +40,12 @@ describe('WelcomeBlock', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Добро пожаловать' })).toBeDefined();
   });
 
-  it('три CTA ведут на /contracts/new', () => {
+  it('единственный CTA «Новая проверка договора» ведёт на /contracts/new', () => {
     renderWith(user);
     const links = screen.getAllByRole('link');
-    expect(links).toHaveLength(3);
-    for (const link of links) {
-      expect(link.getAttribute('href')).toBe('/contracts/new');
-    }
+    expect(links).toHaveLength(1);
+    expect(links[0]?.textContent).toBe('Новая проверка договора');
+    expect(links[0]?.getAttribute('href')).toBe('/contracts/new');
   });
 
   it('микрокопия отражает реальные ограничения (PDF, 20 МБ)', () => {

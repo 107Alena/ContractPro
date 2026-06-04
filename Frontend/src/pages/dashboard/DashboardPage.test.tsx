@@ -25,9 +25,6 @@ vi.mock('@/shared/api', async (importActual) => {
 
 // Тоже мокаем entity-хуки, чтобы не делать реальных HTTP-запросов в компоненте.
 // Каждый тест через setQueryData подставляет нужные данные.
-import { CurrentActions } from '@/widgets/dashboard-current-actions';
-import { KeyRisksCards } from '@/widgets/dashboard-key-risks';
-
 import { DashboardPage } from './DashboardPage';
 
 function renderPage(qc: QueryClient, user: User | null = baseUser) {
@@ -96,59 +93,39 @@ describe('DashboardPage', () => {
     });
     renderPage(qc);
 
-    expect(screen.getByRole('region', { name: 'Что важно сейчас' })).toBeDefined();
-    // total «12» переехал из KPI в карточку «Сводка»
+    // Убранные блоки больше не рендерятся
+    expect(screen.queryByRole('region', { name: 'Что важно сейчас' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Последняя проверка' })).toBeNull();
+    expect(screen.queryByRole('article', { name: 'Статус обработки' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Ключевые риски' })).toBeNull();
+
+    // total «12» — в карточке «Сводка»
     expect(within(screen.getByRole('article', { name: 'Сводка' })).getByText('12')).toBeDefined();
-    expect(screen.getByRole('region', { name: 'Последняя проверка' })).toBeDefined();
-    // «Аренда» встречается в LastCheckCard (h3) и в RecentChecksTable (link)
+    // Недавние проверки показывают договоры
+    expect(screen.getByRole('region', { name: 'Недавние проверки' })).toBeDefined();
     expect(screen.getAllByText('Аренда').length).toBeGreaterThanOrEqual(1);
-    // «Услуги» (ANALYZING) — в RecentChecksTable (link) и ProcessingStatus (название)
     expect(screen.getAllByText('Услуги').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole('article', { name: 'Организация' })).toBeDefined();
-    expect(screen.getByRole('article', { name: 'Сводка' })).toBeDefined();
-    expect(screen.getByRole('article', { name: 'Статус обработки' })).toBeDefined();
   });
 
-  it('Empty — /contracts пустой: показывает empty state в LastCheck и RecentChecks', () => {
+  it('Empty — /contracts пустой: показывает empty state в недавних проверках', () => {
     const qc = makeClient();
     qc.setQueryData(qk.me, baseUser);
     qc.setQueryData(qk.contracts.list({ size: 5 }), { items: [], total: 0 });
     renderPage(qc);
 
-    // LastCheckCard empty-текст
-    expect(screen.getByText(/пока нет проверок/i)).toBeDefined();
-    // KeyRisksCards empty-текст
-    expect(screen.getByText(/риски появятся после первой проверки/i)).toBeDefined();
+    // RecentChecksTable empty-текст
+    expect(screen.getByText(/ещё не было проверок/i)).toBeDefined();
   });
 
-  it('скрывает QuickStart и KeyRisks для BUSINESS_USER без risk.view', () => {
+  it('QuickStart виден для BUSINESS_USER (есть contract.upload)', () => {
     const qc = makeClient();
-    // BUSINESS_USER: contract.upload=true, risks.view=false
+    // BUSINESS_USER: contract.upload=true
     const bu: User = { ...baseUser, role: 'BUSINESS_USER' };
     qc.setQueryData(qk.me, bu);
     qc.setQueryData(qk.contracts.list({ size: 5 }), { items: [], total: 0 });
     renderPage(qc, bu);
 
-    // QuickStart виден — у BUSINESS_USER есть contract.upload
     expect(screen.getByRole('article', { name: 'Быстрый старт' })).toBeDefined();
-    // KeyRisksCards скрыт (risk.view — только LAWYER/ORG_ADMIN)
-    expect(screen.queryByRole('region', { name: 'Ключевые риски' })).toBeNull();
-  });
-
-  it('ErrorState — виджеты принимают prop `error` и рендерят role=alert', () => {
-    // Полный ErrorState-флоу страницы через TanStack (prefetch reject + useQuery)
-    // нестабилен в jsdom без MSW (FE-TASK-054) — повторный fetch на mount
-    // перезапускает query даже с retry=false. Здесь проверяем ключевой
-    // контракт: при передаче prop error виджеты отрисовывают role=alert
-    // (паттерн §9.3 row «5xx» + ADR error-boundary level 2/3). Полное
-    // покрытие — Storybook ErrorState stories + Chromatic.
-    render(
-      <MemoryRouter>
-        <CurrentActions error={new Error('net down')} />
-        <KeyRisksCards error={new Error('net down')} />
-      </MemoryRouter>,
-    );
-    const alerts = screen.getAllByRole('alert');
-    expect(alerts.length).toBeGreaterThanOrEqual(2);
   });
 });

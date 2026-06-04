@@ -5,7 +5,7 @@
 // contract_type, warnings). Backend фильтрует по роли: BUSINESS_USER не получает
 // поля risks/recommendations (§17.5 row 3). ResultPage (FE-TASK-046) вызывает
 // ТОЛЬКО useResults — под-ресурсы (useRisks/useSummary/...) существуют для
-// других потребителей (Dashboard KeyRisksCards, ContractDetail).
+// других потребителей (ContractDetail).
 //
 // 404 ARTIFACT_NOT_FOUND типично означает "ещё не готово" (§17.5 п.4 / §7.3
 // catalog), page сама принимает решение по processing_status (SSE live), retry

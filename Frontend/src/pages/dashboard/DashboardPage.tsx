@@ -1,6 +1,8 @@
 // DashboardPage (FE-TASK-042) — главный экран после логина.
-// Figma-alignment этап 4.3 (Figma 84:2): WelcomeBlock → «Что важно сейчас» →
-// двухколоночный layout (776/340) → «Ключевые риски» → TrustFooter.
+// Упрощённый layout: WelcomeBlock (один CTA «Новая проверка договора») →
+// двухколоночный layout (776/340: недавние проверки | быстрый старт + сводка +
+// организация) → TrustFooter. Блоки «Что важно сейчас», «Последняя проверка»,
+// «Статус обработки» и «Ключевые риски» убраны по продуктовому решению.
 //
 // Архитектура: §17.1 (auth, GET /users/me + GET /contracts?size=5 + SSE),
 // §17.4 (widgets), §9.3 (error-state), §5.6 (RBAC guards).
@@ -16,11 +18,7 @@ import { useMe } from '@/entities/user';
 import { useEventStream } from '@/shared/api';
 import { Can } from '@/shared/auth';
 import { BusinessSummary } from '@/widgets/dashboard-business-summary';
-import { CurrentActions } from '@/widgets/dashboard-current-actions';
-import { KeyRisksCards } from '@/widgets/dashboard-key-risks';
-import { LastCheckCard } from '@/widgets/dashboard-last-check';
 import { OrgCard } from '@/widgets/dashboard-org-card';
-import { ProcessingStatus } from '@/widgets/dashboard-processing-status';
 import { QuickStart } from '@/widgets/dashboard-quick-start';
 import { RecentChecksTable } from '@/widgets/dashboard-recent-checks';
 import { TrustFooter } from '@/widgets/dashboard-trust-footer';
@@ -38,7 +36,6 @@ export function DashboardPage(): JSX.Element {
 
   const items = contractsQuery.data?.items ?? [];
   const total = contractsQuery.data?.total;
-  const latestContract = items[0];
   const isLoading = contractsQuery.isLoading;
   const error = contractsQuery.error ?? undefined;
 
@@ -49,13 +46,10 @@ export function DashboardPage(): JSX.Element {
     >
       <WelcomeBlock user={meQuery.data} />
 
-      <CurrentActions items={items} isLoading={isLoading} error={error} />
-
-      {/* Двухколоночный layout 776/340 (Figma 89:2). Слева — последняя проверка
-          и недавние проверки; справа — быстрый старт и карточка организации. */}
+      {/* Двухколоночный layout 776/340 (Figma 89:2). Слева — недавние проверки;
+          справа — быстрый старт, сводка и карточка организации. */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="flex min-w-0 flex-col gap-5">
-          <LastCheckCard contract={latestContract} isLoading={isLoading} error={error} />
           <RecentChecksTable items={items} isLoading={isLoading} error={error} />
         </div>
         <div className="flex flex-col gap-5">
@@ -63,7 +57,6 @@ export function DashboardPage(): JSX.Element {
             <QuickStart />
           </Can>
           <BusinessSummary total={total ?? undefined} isLoading={isLoading} error={error} />
-          <ProcessingStatus items={items} isLoading={isLoading} error={error} />
           <OrgCard
             user={meQuery.data}
             isLoading={meQuery.isLoading}
@@ -71,10 +64,6 @@ export function DashboardPage(): JSX.Element {
           />
         </div>
       </div>
-
-      <Can I="risks.view">
-        <KeyRisksCards items={items} isLoading={isLoading} error={error} />
-      </Can>
 
       <TrustFooter />
     </div>

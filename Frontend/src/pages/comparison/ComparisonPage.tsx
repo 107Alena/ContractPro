@@ -16,6 +16,7 @@
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 
+import { type RiskList, useRisks } from '@/entities/result';
 import {
   isDiffNotReadyError,
   useDiff,
@@ -29,7 +30,6 @@ import {
   ChangeCounters,
   type ChangesFilter,
   ChangesTable,
-  type ComparisonRisksGroups,
   ComparisonVerdictCard,
   computeChangeCounters,
   computeRiskDelta,
@@ -37,12 +37,13 @@ import {
   groupBySection,
   KeyDiffsBySection,
   RiskProfileDelta,
-  type RiskProfileSnapshot,
   RisksGroups,
   TabsFilters,
   type VersionMetadata,
   VersionMetaHeader,
 } from '@/widgets/version-compare';
+
+import { groupComparisonRisks, riskListToSnapshot } from './model/risk-aggregation';
 
 // React.lazy → отдельный chunk (Vite manualChunks: chunks/diff-viewer).
 // Default-export DiffViewer (см. widgets/diff-viewer/ui/diff-viewer.tsx).
@@ -77,14 +78,10 @@ function diffsToParagraphs(diff: VersionDiffResult): ParagraphForDiff[] {
   });
 }
 
-// API VersionDiff не содержит risk_profile/risks — агрегация профилей и групп
-// рисков пойдёт через GET /risks в будущей итерации (FE-TASK-048). До тех пор
-// возвращаем undefined/пустые группы; виджеты корректно показывают плейсхолдеры.
-const EMPTY_RISKS_GROUPS: ComparisonRisksGroups = {
-  resolved: [],
-  introduced: [],
-  unchanged: [],
-};
+// Риск-профиль и группы рисков агрегируются из per-version GET /risks
+// (useRisks base/target → risk-aggregation), а НЕ из VersionDiff (FE-TASK-048).
+// Если у версии нет артефакта рисков (не READY / нет прав) — профиль undefined,
+// группы пустые, виджеты показывают честные плейсхолдеры.
 
 interface PageHeaderProps {
   contractId: string | undefined;
@@ -253,17 +250,26 @@ interface ReadyContentProps {
   diff: VersionDiffResult;
   base: string;
   target: string;
+  baseRisks?: RiskList | undefined;
+  targetRisks?: RiskList | undefined;
 }
 
-function ReadyContent({ diff, base, target }: ReadyContentProps): JSX.Element {
+function ReadyContent({
+  diff,
+  base,
+  target,
+  baseRisks,
+  targetRisks,
+}: ReadyContentProps): JSX.Element {
   const [filter, setFilter] = useState<ChangesFilter>('all');
 
   const counters = useMemo(() => computeChangeCounters(diff), [diff]);
   const sections = useMemo(() => groupBySection(diff), [diff]);
-  const profiles = useMemo<{
-    base?: RiskProfileSnapshot;
-    target?: RiskProfileSnapshot;
-  }>(() => ({}), []);
+  // Реальные риск-профили версий из useRisks (undefined, если артефакта нет).
+  const profiles = useMemo(
+    () => ({ base: riskListToSnapshot(baseRisks), target: riskListToSnapshot(targetRisks) }),
+    [baseRisks, targetRisks],
+  );
   const verdict = useMemo(
     () => computeVerdict(profiles.base, profiles.target),
     [profiles.base, profiles.target],
@@ -272,7 +278,10 @@ function ReadyContent({ diff, base, target }: ReadyContentProps): JSX.Element {
     () => computeRiskDelta(profiles.base, profiles.target),
     [profiles.base, profiles.target],
   );
-  const risks = EMPTY_RISKS_GROUPS;
+  const risks = useMemo(
+    () => groupComparisonRisks(baseRisks, targetRisks),
+    [baseRisks, targetRisks],
+  );
 
   const baseMeta: VersionMetadata = useMemo(() => ({ versionId: base }), [base]);
   const targetMeta: VersionMetadata = useMemo(() => ({ versionId: target }), [target]);
@@ -372,6 +381,7 @@ export function ComparisonPage(): JSX.Element {
   const target = searchParams.get('target');
 
   const canCompare = useCan('comparison.run');
+  const canViewRisks = useCan('risks.view');
   const toaster = useToast();
 
   const startMutation = useStartComparison({
@@ -389,6 +399,19 @@ export function ComparisonPage(): JSX.Element {
       targetVersionId: target ?? '',
     },
     { enabled: Boolean(id && hasBoth && canCompare) },
+  );
+
+  // Per-version риск-профили для дельты/verdict/групп рисков (FE-TASK-048).
+  // Грузим, когда diff готов и есть право risks.view; артефакт может отсутствовать
+  // (версия не READY) → useRisks отдаст 404, данные undefined, секции = плейсхолдеры.
+  const risksEnabled = Boolean(id && hasBoth && canViewRisks && diffQuery.data);
+  const baseRisksQuery = useRisks(
+    { contractId: id, versionId: base ?? undefined },
+    { enabled: risksEnabled },
+  );
+  const targetRisksQuery = useRisks(
+    { contractId: id, versionId: target ?? undefined },
+    { enabled: risksEnabled },
   );
 
   const recompute = useCallback(() => {
@@ -435,7 +458,13 @@ export function ComparisonPage(): JSX.Element {
       ) : diffQuery.error ? (
         <ErrorState message={errorMessage} onRetry={() => void diffQuery.refetch()} />
       ) : diffQuery.data ? (
-        <ReadyContent diff={diffQuery.data} base={base ?? ''} target={target ?? ''} />
+        <ReadyContent
+          diff={diffQuery.data}
+          base={base ?? ''}
+          target={target ?? ''}
+          baseRisks={baseRisksQuery.data}
+          targetRisks={targetRisksQuery.data}
+        />
       ) : (
         <LoadingState />
       )}

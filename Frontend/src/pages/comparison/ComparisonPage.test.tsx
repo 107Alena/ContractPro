@@ -178,6 +178,42 @@ describe('ComparisonPage — 9 состояний', () => {
     expect(suspenseOrViewer).not.toBeNull();
   });
 
+  it('Ready: per-version риски (useRisks) текут в группы resolved/introduced/unchanged', () => {
+    const qc = makeClient();
+    qc.setQueryData(qk.contracts.diff(CONTRACT_ID, BASE_VID, TARGET_VID), {
+      baseVersionId: BASE_VID,
+      targetVersionId: TARGET_VID,
+      textDiffCount: 1,
+      structuralDiffCount: 0,
+      textDiffs: [{ type: 'modified', path: '7/clause-2', old_text: 'A', new_text: 'B' }],
+      structuralDiffs: [],
+    });
+    // Реальные per-version риски через qk.contracts.risks (как их грузит useRisks)
+    qc.setQueryData(qk.contracts.risks(CONTRACT_ID, BASE_VID), {
+      risk_profile: { overall_level: 'high', high_count: 2, medium_count: 1, low_count: 0 },
+      risks: [
+        { id: 'r1', level: 'high', description: 'Односторонняя неустойка' },
+        { id: 'r2', level: 'medium', description: 'Нет срока оплаты' },
+      ],
+    });
+    qc.setQueryData(qk.contracts.risks(CONTRACT_ID, TARGET_VID), {
+      risk_profile: { overall_level: 'medium', high_count: 0, medium_count: 2, low_count: 0 },
+      risks: [
+        { id: 'r2', level: 'medium', description: 'Нет срока оплаты' },
+        { id: 'r3', level: 'medium', description: 'Новый риск промежуточного платежа' },
+      ],
+    });
+    renderAt(`/contracts/${CONTRACT_ID}/compare?base=${BASE_VID}&target=${TARGET_VID}`, qc);
+
+    // resolved=r1, introduced=r3, unchanged=r2
+    expect(screen.getByTestId('risks-groups-resolved-count').textContent).toBe('(1)');
+    expect(screen.getByTestId('risks-groups-introduced-count').textContent).toBe('(1)');
+    expect(screen.getByTestId('risks-groups-unchanged-count').textContent).toBe('(1)');
+    // resolved/introduced раскрыты по умолчанию — их элементы в DOM
+    expect(screen.getByText('Односторонняя неустойка')).toBeDefined();
+    expect(screen.getByText('Новый риск промежуточного платежа')).toBeDefined();
+  });
+
   it('9) URL params базируются на ?base=&target= и попадают в заголовок', () => {
     const qc = makeClient();
     qc.setQueryData(qk.contracts.diff(CONTRACT_ID, BASE_VID, TARGET_VID), {

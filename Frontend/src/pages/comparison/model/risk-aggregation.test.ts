@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'vitest';
+
+import type { components } from '@/shared/api/openapi';
+
+import { groupComparisonRisks, riskListToSnapshot } from './risk-aggregation';
+
+type RiskList = components['schemas']['RiskList'];
+
+describe('riskListToSnapshot', () => {
+  it('undefined / без risk_profile → undefined', () => {
+    expect(riskListToSnapshot(undefined)).toBeUndefined();
+    expect(riskListToSnapshot({ risks: [] })).toBeUndefined();
+  });
+
+  it('маппит risk_profile в snapshot (отсутствующие счётчики → 0)', () => {
+    const rl: RiskList = {
+      risk_profile: { overall_level: 'high', high_count: 2, medium_count: 3 },
+    };
+    expect(riskListToSnapshot(rl)).toEqual({ high: 2, medium: 3, low: 0 });
+  });
+});
+
+describe('groupComparisonRisks', () => {
+  const base: RiskList = {
+    risks: [
+      { id: 'r1', level: 'high', description: 'Односторонняя неустойка' },
+      { id: 'r2', level: 'medium', description: 'Нет срока оплаты' },
+      { id: 'r3', level: 'low', description: 'Опечатка в реквизитах' },
+    ],
+  };
+  const target: RiskList = {
+    risks: [
+      { id: 'r2', level: 'medium', description: 'Нет срока оплаты' }, // unchanged
+      { id: 'r3', level: 'low', description: 'Опечатка в реквизитах' }, // unchanged
+      { id: 'r4', level: 'medium', description: 'Неопределённый промежуточный платёж' }, // introduced
+    ],
+  };
+
+  it('делит риски на resolved / introduced / unchanged по id', () => {
+    const g = groupComparisonRisks(base, target);
+    expect(g.resolved.map((r) => r.id)).toEqual(['r1']);
+    expect(g.introduced.map((r) => r.id)).toEqual(['r4']);
+    expect(g.unchanged.map((r) => r.id)).toEqual(['r2', 'r3']);
+  });
+
+  it('пустые / undefined списки → пустые группы', () => {
+    expect(groupComparisonRisks(undefined, undefined)).toEqual({
+      resolved: [],
+      introduced: [],
+      unchanged: [],
+    });
+  });
+
+  it('все риски новые, если base пуст', () => {
+    const g = groupComparisonRisks({ risks: [] }, target);
+    expect(g.introduced).toHaveLength(3);
+    expect(g.resolved).toHaveLength(0);
+    expect(g.unchanged).toHaveLength(0);
+  });
+
+  it('матчинг по clause_ref, если нет id; level по умолчанию low', () => {
+    const b: RiskList = { risks: [{ clause_ref: 'п.7.2' }] };
+    const t: RiskList = { risks: [{ clause_ref: 'п.7.2' }] };
+    const g = groupComparisonRisks(b, t);
+    expect(g.unchanged).toHaveLength(1);
+    expect(g.unchanged[0]?.level).toBe('low');
+    expect(g.unchanged[0]?.category).toBe('п.7.2');
+  });
+});

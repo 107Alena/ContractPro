@@ -53,11 +53,9 @@ import { Button } from '@/shared/ui/button';
 import { TrustFooter } from '@/widgets/dashboard-trust-footer';
 import { FeedbackBlock } from '@/widgets/feedback-block';
 import { LegalDisclaimer } from '@/widgets/legal-disclaimer';
-import { MandatoryConditionsChecklist } from '@/widgets/mandatory-conditions-checklist';
 import { RiskProfileCard } from '@/widgets/risk-profile-card';
 import { RisksList } from '@/widgets/risks-list';
 
-import { DeviationsFromPolicy } from './ui/deviations-from-policy';
 import { DocumentCard } from './ui/document-card';
 import { ExportShareButton } from './ui/export-share-button';
 import { NextActions } from './ui/next-actions';
@@ -130,18 +128,12 @@ function ReadyContent({
 
       {showWarningsBanner ? <WarningsBanner message={warningMessage} /> : null}
 
-      {/* Risk overview (Figma 154:2) — профиль рисков | обязательные условия.
-          Только для ролей с risks.view; иначе блок скрыт целиком (без пустых колонок). */}
+      {/* Профиль рисков (Figma 154:2, левая часть). Только для ролей с risks.view. */}
       {canViewRisks ? (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
-          <RiskProfileCard
-            {...(results.risk_profile !== undefined ? { profile: results.risk_profile } : {})}
-            {...(results.aggregate_score !== undefined
-              ? { aggregate: results.aggregate_score }
-              : {})}
-          />
-          <MandatoryConditionsChecklist />
-        </div>
+        <RiskProfileCard
+          {...(results.risk_profile !== undefined ? { profile: results.risk_profile } : {})}
+          {...(results.aggregate_score !== undefined ? { aggregate: results.aggregate_score } : {})}
+        />
       ) : null}
 
       {/* Key Risks (Figma 156:2) — карточки риска с интегрированными рекомендациями. */}
@@ -154,11 +146,10 @@ function ReadyContent({
       ) : null}
 
       {/* TwoColumnBottom (Figma 157:2) — Краткое резюме + key-параметры |
-          Отклонения от политики + Следующие шаги + Обратная связь. */}
+          Следующие шаги + Обратная связь. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
         <SummaryTable results={results} />
         <div className="flex flex-col gap-6">
-          {canViewRisks ? <DeviationsFromPolicy risks={results.risks ?? []} /> : null}
           {/* NextActions выводит вердикт из risk_profile/risks; для BUSINESS_USER
               эти данные стрипает backend → шаги были бы ложными («готов к
               подписанию» при скрытых high-рисках). Гейтим как risk-секцию. */}

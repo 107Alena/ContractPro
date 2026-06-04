@@ -218,7 +218,6 @@ describe('ResultPage', () => {
     expect(screen.getByRole('region', { name: 'Ключевые риски' })).toBeDefined();
     expect(screen.getByRole('region', { name: 'Профиль рисков' })).toBeDefined();
     expect(screen.getByRole('region', { name: 'Краткое резюме' })).toBeDefined();
-    expect(screen.getByRole('region', { name: 'Отклонения от политики' })).toBeDefined();
     expect(screen.getByTestId('legal-disclaimer')).toBeDefined();
     // Рекомендации интегрированы в карточки риска (Figma 150:2 — отдельной
     // секции нет): для риска r1 есть рекомендация → кнопка «Показать формулировку».
@@ -247,7 +246,6 @@ describe('ResultPage', () => {
     expect(screen.getByRole('region', { name: 'Краткое резюме' })).toBeDefined();
     expect(screen.queryByRole('region', { name: 'Ключевые риски' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Профиль рисков' })).toBeNull();
-    expect(screen.queryByRole('region', { name: 'Отклонения от политики' })).toBeNull();
     // NextActions выводит вердикт из risk_profile (стрипается для бизнеса) —
     // скрыт, чтобы не показывать ложное «готов к подписанию».
     expect(screen.queryByTestId('next-actions')).toBeNull();

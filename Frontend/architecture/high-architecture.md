@@ -1502,6 +1502,21 @@ graph TD
 - ⚠️ Адаптивность: Desktop ✅ (10 макетов) + Tablet частично (3 выверенных макета: Documents, Reports, Audit, Document Card; остальные responsive-фоллбэк) + Mobile только `/login` и `/`. Dashboard/Contracts/Result/Comparison/NewCheck на mobile — без выверенного дизайна (см. §18 п.7).
 - ✅ Аудит-логирование действий ↔ все мутации вызывают логгер; backend пишет лог (§12.3).
 
+### 19.1 Figma-alignment эпик (этапы 4.1–5.x) — завершён
+
+Визуальное + функциональное выравнивание под Figma `Lxhk7jQyXL3iuoTpiOHxcb` завершено: этапы 4.1–4.9 (page-level + flat-card по экранам), 4.10 Reports (honesty-aligned), 4.11 (token cascade на code-orphan страницах Settings/Admin/Errors), Stage 5 (functional/interaction alignment — пресет сравнения prev→current, навигационные довязки), Stage 6 (финальная верификация). Маппинг экранов и honesty-отклонения — в [`figma-mapping.md`](../figma-mapping.md).
+
+**Stage 6 — верификация (2026-06-05):**
+- ✅ `typecheck` / `lint` зелёные; ✅ unit (vitest) **1367**; ✅ `build-storybook`.
+- ✅ Playwright e2e **10/10** (1 flaky `settings-logout` — восстанавливается на retry; CI `retries=2`).
+- ✅ Адверсариальные review каждого этапа + cross-screen аудит: data-honesty (риск-уровни только из бэкового `overall_level`, моки изолированы и `aria-hidden`), навигация (роуты/якоря/CTA валидны), docs↔код — без расхождений.
+- ⏳ Chromatic full baseline — принимает дизайнер/разработчик вручную (free-tier, вне CI).
+
+**Follow-ups (не блокеры):**
+- Recipe-drift на ранних (принятых Chromatic) экранах result/contract-detail/comparison + shared-виджетах (`versions-timeline`/`checks-history`/`pdf-navigator`/`processing-progress`): остаточные `text-lg`/`text-base`/`text-2xl` (пиксельно эквивалентны токен-шкале) + `shadow-sm` — опциональная косметическая чистка отдельным `style(fe)`-этапом (видимое изменение — только снятие теней; нужна переприёмка Chromatic).
+- e2e `settings-logout` — флак тайминга клика (retry-зелёный); admin-nav e2e выровнен под фактическую группу «СИСТЕМА» (Stage 6).
+- `FE-TASK-057` (npm audit), `FE-TASK-058` (type/risk в `/contracts` — после `ORCH-TASK-056`).
+
 ---
 
 ## 20. Приложения

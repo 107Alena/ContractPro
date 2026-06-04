@@ -29,6 +29,8 @@
 
 **Сводка:** 9 страниц ↔ Figma матчатся, 1 — секция Landing, 1 Figma orphan (Audit, отложено), 4 code orphans (без макетов — выровнены под design-system токены, этап 4.11).
 
+> **Статус эпика:** alignment 4.1–5.x + Stage 6 (финальная верификация) завершены — см. [`high-architecture.md` §19.1](./high-architecture.md). Stage 6: typecheck/lint/unit(1367)/storybook зелёные, Playwright e2e 10/10, аудит honesty/навигации/docs чист. Chromatic full baseline — вручную. Опциональный follow-up: косметическая чистка recipe-drift на ранних экранах (§19.1).
+
 **Этап 4.11 (token cascade, без figma):** orphan-страницы приведены к flat-card токен-рецепту — card-поверхности `border-border-subtle`+`shadow-none`+`rounded-lg`, лейблы без uppercase, заголовки на токен-шкалу (`text-24`/`text-16`). Структуру/вёрстку не меняли; Settings корень `<main>`→`<div>` (внутри AppLayout — устранено дублирование landmark). Сохранены валидные стандартные `text-sm`/`text-xs`; `shared/ui/empty-state` не трогали (shared-примитив).
 
 ### App Shell (глобальный хром)

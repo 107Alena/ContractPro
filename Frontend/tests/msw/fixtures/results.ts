@@ -57,7 +57,8 @@ export const recommendations: Recommendation[] = [
     original_text: 'Исполнитель несёт ответственность за нарушение сроков.',
     recommended_text:
       'Исполнитель несёт ответственность в размере 0,1% от стоимости услуг за каждый день просрочки, но не более 10% от общей стоимости.',
-    explanation: 'Ограничение размера неустойки предотвращает злоупотребление правом (ст. 330 ГК РФ).',
+    explanation:
+      'Ограничение размера неустойки предотвращает злоупотребление правом (ст. 330 ГК РФ).',
   },
   {
     risk_id: 'risk-2',
@@ -95,6 +96,71 @@ export const summary: ContractSummaryResult = {
 export const riskList: RiskList = {
   risks,
   risk_profile: riskProfile,
+};
+
+// Демо-дельта рисков для сравнения версий (delta v1 → v2). База «опаснее»;
+// в target два риска устранены (d-high-1, d-med-2), один новый (d-med-3) — даёт
+// наглядную ненулевую дельту в dev:e2e на /contracts/<delta>/compare?base=v1&target=v2.
+export const risksDeltaV1: RiskList = {
+  risk_profile: { overall_level: 'high', high_count: 1, medium_count: 2, low_count: 1 },
+  risks: [
+    {
+      id: 'd-high-1',
+      level: 'high',
+      description: 'Неустойка предусмотрена только для заказчика (асимметрия).',
+      clause_ref: 'Пункт 7.2',
+      legal_basis: 'ст. 330 ГК РФ',
+    },
+    {
+      id: 'd-med-1',
+      level: 'medium',
+      description: 'Не определён порядок приёмки работ.',
+      clause_ref: 'Пункт 5.1',
+    },
+    {
+      id: 'd-med-2',
+      level: 'medium',
+      description: 'Размытые сроки оплаты этапов.',
+      clause_ref: 'Пункт 3.4',
+    },
+    {
+      id: 'd-low-1',
+      level: 'low',
+      description: 'Нет ссылки на приложение №2 в теле договора.',
+      clause_ref: 'Пункт 1.3',
+    },
+  ],
+};
+
+export const risksDeltaV2: RiskList = {
+  risk_profile: { overall_level: 'medium', high_count: 0, medium_count: 2, low_count: 1 },
+  risks: [
+    {
+      id: 'd-med-1',
+      level: 'medium',
+      description: 'Не определён порядок приёмки работ.',
+      clause_ref: 'Пункт 5.1',
+    },
+    {
+      id: 'd-low-1',
+      level: 'low',
+      description: 'Нет ссылки на приложение №2 в теле договора.',
+      clause_ref: 'Пункт 1.3',
+    },
+    {
+      id: 'd-med-3',
+      level: 'medium',
+      description: 'Неуточнённый промежуточный платёж в новой редакции.',
+      clause_ref: 'Пункт 3.5',
+    },
+  ],
+};
+
+// Карта versionId → RiskList для per-version /risks. Версии без записи получают
+// дефолтный riskList (Dashboard/ContractDetail KeyRisks не затронуты).
+export const risksByVersionId: Record<string, RiskList> = {
+  [IDS.versions.deltaV1]: risksDeltaV1,
+  [IDS.versions.deltaV2]: risksDeltaV2,
 };
 
 export const recommendationList: RecommendationList = {

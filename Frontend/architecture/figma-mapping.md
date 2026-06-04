@@ -22,12 +22,14 @@
 | 9 | `223:2` Отчеты (1440×2255) | `/reports` | `src/pages/reports/ReportsPage.tsx` | ✅ matched |
 | 10 | `354:2` Pricing Page (1440×1080) | `/` (внутри Landing) | секция Landing → `widgets/pricing-section` | 🔗 mapped as section |
 | 11 | `245:2` Журнал действий и аудит (1440×856) | — | — | ⚠️ Figma orphan — out of current scope |
-| 12 | — | `/settings` | `src/pages/settings/SettingsPage.tsx` | ⚙️ code orphan — tokens-only alignment |
-| 13 | — | `/admin/policies` | `src/pages/admin-policies/AdminPoliciesPage.tsx` | ⚙️ code orphan — tokens-only alignment |
-| 14 | — | `/admin/checklists` | `src/pages/admin-checklists/AdminChecklistsPage.tsx` | ⚙️ code orphan — tokens-only alignment |
-| 15 | — | `/403` `/404` `/500` `/offline` | `src/pages/errors/*` | ⚙️ code orphan — tokens-only alignment |
+| 12 | — | `/settings` | `src/pages/settings/SettingsPage.tsx` | ✅ code orphan — tokens aligned (этап 4.11) |
+| 13 | — | `/admin/policies` | `src/pages/admin-policies/AdminPoliciesPage.tsx` | ✅ code orphan — tokens aligned (этап 4.11) |
+| 14 | — | `/admin/checklists` | `src/pages/admin-checklists/AdminChecklistsPage.tsx` | ✅ code orphan — tokens aligned (этап 4.11) |
+| 15 | — | `/403` `/404` `/500` `/offline` | `src/pages/errors/*` | ✅ code orphan — tokens aligned (этап 4.11) |
 
-**Сводка:** 9 страниц ↔ Figma матчатся, 1 — секция Landing, 1 Figma orphan (Audit, отложено), 4 code orphans (без макетов — обновляются только через design-system).
+**Сводка:** 9 страниц ↔ Figma матчатся, 1 — секция Landing, 1 Figma orphan (Audit, отложено), 4 code orphans (без макетов — выровнены под design-system токены, этап 4.11).
+
+**Этап 4.11 (token cascade, без figma):** orphan-страницы приведены к flat-card токен-рецепту — card-поверхности `border-border-subtle`+`shadow-none`+`rounded-lg`, лейблы без uppercase, заголовки на токен-шкалу (`text-24`/`text-16`). Структуру/вёрстку не меняли; Settings корень `<main>`→`<div>` (внутри AppLayout — устранено дублирование landmark). Сохранены валидные стандартные `text-sm`/`text-xs`; `shared/ui/empty-state` не трогали (shared-примитив).
 
 ### App Shell (глобальный хром)
 

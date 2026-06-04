@@ -14,7 +14,7 @@
 // Vite-чанк chunks/diff-viewer (§6.3, ≤150 КБ gzip), включает diff-match-patch
 // и Web Worker. Грузим только когда есть готовый diff (после useDiff success).
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { type RiskList, useRisks } from '@/entities/result';
 import {
@@ -25,7 +25,7 @@ import {
 } from '@/features/comparison-start';
 import { isOrchestratorError, toUserMessage } from '@/shared/api';
 import { useCan } from '@/shared/auth';
-import { Button, Spinner, useToast } from '@/shared/ui';
+import { Button, buttonVariants, Spinner, useToast } from '@/shared/ui';
 import {
   ChangeCounters,
   type ChangesFilter,
@@ -116,7 +116,20 @@ function PageHeader({ hasBoth, onRecompute, isRecomputing }: PageHeaderProps): J
   );
 }
 
-function NoVersionsSelected(): JSX.Element {
+function BackToContractLink({ contractId }: { contractId: string }): JSX.Element | null {
+  if (!contractId) return null;
+  return (
+    <Link
+      to={`/contracts/${encodeURIComponent(contractId)}`}
+      className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+      data-testid="comparison-back-to-contract"
+    >
+      ← Вернуться на карточку договора
+    </Link>
+  );
+}
+
+function NoVersionsSelected({ contractId }: { contractId: string }): JSX.Element {
   return (
     <section
       data-testid="state-no-versions"
@@ -127,6 +140,7 @@ function NoVersionsSelected(): JSX.Element {
         Передайте параметры запроса <code>?base=…&amp;target=…</code> или вернитесь на карточку
         договора и выберите две версии для сравнения.
       </p>
+      <BackToContractLink contractId={contractId} />
     </section>
   );
 }
@@ -134,9 +148,11 @@ function NoVersionsSelected(): JSX.Element {
 function SingleVersionSelected({
   base,
   target,
+  contractId,
 }: {
   base: string | null;
   target: string | null;
+  contractId: string;
 }): JSX.Element {
   return (
     <section
@@ -148,6 +164,7 @@ function SingleVersionSelected({
         Указана только одна версия (<code>{base ?? target ?? '—'}</code>). Для сравнения нужны обе:{' '}
         <code>?base=…&amp;target=…</code>.
       </p>
+      <BackToContractLink contractId={contractId} />
     </section>
   );
 }
@@ -438,9 +455,9 @@ export function ComparisonPage(): JSX.Element {
       {!canCompare ? (
         <RoleRestrictedState />
       ) : !base && !target ? (
-        <NoVersionsSelected />
+        <NoVersionsSelected contractId={id ?? ''} />
       ) : !hasBoth ? (
-        <SingleVersionSelected base={base} target={target} />
+        <SingleVersionSelected base={base} target={target} contractId={id ?? ''} />
       ) : diffQuery.isLoading ? (
         <LoadingState />
       ) : diffQuery.error && isDiffNotReadyError(diffQuery.error) ? (

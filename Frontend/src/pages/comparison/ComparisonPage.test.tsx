@@ -102,12 +102,19 @@ describe('ComparisonPage — 9 состояний', () => {
     const qc = makeClient();
     renderAt(`/contracts/${CONTRACT_ID}/compare`, qc);
     expect(screen.getByTestId('state-no-versions')).toBeDefined();
+    // Stage 5: ссылка обратно на карточку договора.
+    expect(screen.getByTestId('comparison-back-to-contract').getAttribute('href')).toBe(
+      `/contracts/${CONTRACT_ID}`,
+    );
   });
 
   it('3) SingleVersionSelected: только base', () => {
     const qc = makeClient();
     renderAt(`/contracts/${CONTRACT_ID}/compare?base=${BASE_VID}`, qc);
     expect(screen.getByTestId('state-single-version')).toBeDefined();
+    expect(screen.getByTestId('comparison-back-to-contract').getAttribute('href')).toBe(
+      `/contracts/${CONTRACT_ID}`,
+    );
   });
 
   it('4) Loading: query в процессе (нет данных и нет ошибки)', () => {

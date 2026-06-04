@@ -84,14 +84,14 @@ export function ReportDetailPanel({
     <aside
       aria-labelledby={titleId}
       data-testid="report-detail-panel"
-      className="flex w-full max-w-sm flex-col gap-4 rounded-md border border-border bg-bg p-4 shadow-md"
+      className="flex w-full max-w-sm flex-col gap-4 rounded-xl border border-border-subtle bg-bg p-4 shadow-none"
     >
       <header className="flex items-start justify-between gap-3">
         <div>
-          <h2 id={titleId} className="text-lg font-semibold text-fg">
+          <h2 id={titleId} className="text-18 font-semibold text-fg">
             {title}
           </h2>
-          <p className="mt-1 text-xs uppercase tracking-wide text-fg-muted">Детали отчёта</p>
+          <p className="mt-1 text-13 text-fg-muted">Детали отчёта</p>
         </div>
         <Button
           ref={closeBtnRef}
@@ -108,15 +108,15 @@ export function ReportDetailPanel({
 
       <dl className="grid grid-cols-2 gap-3 text-sm">
         <div>
-          <dt className="text-xs uppercase tracking-wide text-fg-muted">Версия</dt>
+          <dt className="text-xs text-fg-muted">Версия</dt>
           <dd className="mt-1 text-fg">{version != null ? `v${version}` : '—'}</dd>
         </div>
         <div>
-          <dt className="text-xs uppercase tracking-wide text-fg-muted">Обновлён</dt>
+          <dt className="text-xs text-fg-muted">Обновлён</dt>
           <dd className="mt-1 text-fg">{formatDateTime(updatedAt)}</dd>
         </div>
         <div className="col-span-2">
-          <dt className="text-xs uppercase tracking-wide text-fg-muted">Статус обработки</dt>
+          <dt className="text-xs text-fg-muted">Статус обработки</dt>
           <dd className="mt-1">
             <StatusBadge status={contract.processing_status} />
           </dd>

@@ -116,15 +116,16 @@ export function ReportsPage(): JSX.Element {
   })();
 
   return (
-    <main
+    <div
       data-testid="page-reports"
       className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8"
     >
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-fg">Отчёты</h1>
+          <h1 className="text-24 font-semibold text-fg">Отчёты</h1>
           <p className="mt-1 text-sm text-fg-muted">
-            Готовые проверки с возможностью экспорта и отправки ссылки.
+            Открывайте результаты проверки, экспортируйте отчёты и делитесь ими по защищённой
+            ссылке.
           </p>
         </div>
       </header>
@@ -140,7 +141,7 @@ export function ReportsPage(): JSX.Element {
 
       <section
         aria-label="Поиск и фильтры"
-        className="flex flex-col gap-3 rounded-md border border-border bg-bg p-4 shadow-sm"
+        className="flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg p-4"
       >
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
           <SearchInput
@@ -228,6 +229,6 @@ export function ReportsPage(): JSX.Element {
           {errorMessage}
         </p>
       ) : null}
-    </main>
+    </div>
   );
 }

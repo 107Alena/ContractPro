@@ -126,7 +126,7 @@ function FormatCard({ format, contractId, versionId, navigate }: FormatCardProps
   return (
     <article
       aria-label={`Формат ${format.label}`}
-      className={cn('flex flex-col gap-3 rounded-md border border-border bg-bg p-4', 'shadow-sm')}
+      className={cn('flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg p-4')}
     >
       <header className="flex items-baseline justify-between gap-2">
         <h3 className="text-base font-semibold text-fg">{format.label}</h3>

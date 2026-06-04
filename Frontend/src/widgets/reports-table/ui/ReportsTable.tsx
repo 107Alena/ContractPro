@@ -178,7 +178,7 @@ export function ReportsTable({
       aria-label={ariaLabel}
       aria-busy={isLoading || isFetching ? 'true' : undefined}
       data-testid={testId}
-      className="relative flex flex-col gap-2 rounded-md border border-border bg-bg"
+      className="relative flex flex-col gap-2 rounded-xl border border-border-subtle bg-bg"
     >
       {isFetching && !isLoading ? (
         <span
@@ -193,7 +193,7 @@ export function ReportsTable({
         <table className="w-full border-collapse text-sm text-fg" role="table">
           <thead className="bg-bg-muted">
             {table.getHeaderGroups().map((hg) => (
-              <tr key={hg.id} className="border-b border-border">
+              <tr key={hg.id} className="border-b border-border-subtle">
                 {hg.headers.map((header) => {
                   const canSort = header.column.getCanSort();
                   const direction = header.column.getIsSorted();
@@ -210,7 +210,7 @@ export function ReportsTable({
                       key={header.id}
                       scope="col"
                       {...(ariaSort ? { 'aria-sort': ariaSort } : {})}
-                      className="h-10 whitespace-nowrap px-3 text-left align-middle text-xs font-medium uppercase tracking-wide text-fg-muted"
+                      className="h-10 whitespace-nowrap px-3 text-left align-middle text-xs font-medium text-fg-muted"
                     >
                       {header.isPlaceholder ? null : canSort ? (
                         <button
@@ -282,7 +282,7 @@ export function ReportsTable({
                     role={handleSelect ? 'row' : undefined}
                     onClick={handleSelect}
                     onKeyDown={handleKeyDown}
-                    className={`border-b border-border last:border-b-0 ${
+                    className={`border-b border-border-subtle last:border-b-0 ${
                       handleSelect ? 'cursor-pointer' : ''
                     } ${
                       isSelected

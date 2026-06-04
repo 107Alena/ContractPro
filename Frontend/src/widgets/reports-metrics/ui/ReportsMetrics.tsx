@@ -69,7 +69,7 @@ export function ReportsMetrics({
       <section
         aria-label="Показатели отчётов"
         aria-busy="true"
-        className="flex h-[120px] items-center justify-center rounded-md border border-border bg-bg-muted"
+        className="flex h-[120px] items-center justify-center rounded-xl border border-border-subtle bg-bg-muted"
         data-testid="reports-metrics-loading"
       >
         <Spinner size="md" aria-hidden="true" />
@@ -82,7 +82,7 @@ export function ReportsMetrics({
       <section
         aria-label="Показатели отчётов"
         role="alert"
-        className="rounded-md border border-danger/30 bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-4 text-sm text-danger"
+        className="rounded-xl border border-danger/30 bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-4 text-sm text-danger"
         data-testid="reports-metrics-error"
       >
         Не удалось загрузить показатели. Попробуйте обновить страницу.
@@ -111,11 +111,11 @@ export function ReportsMetrics({
       {cards.map((card) => (
         <article
           key={card.key}
-          className="rounded-md border border-border bg-bg p-4 shadow-sm"
+          className="rounded-xl border border-border-subtle bg-bg p-4"
           data-testid={`reports-metrics-card-${card.key}`}
         >
-          <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">{card.label}</p>
-          <p className={`mt-2 text-3xl font-semibold ${card.tone}`}>{counters[card.key]}</p>
+          <p className="text-13 font-medium text-fg-muted">{card.label}</p>
+          <p className={`mt-2 text-24 font-semibold ${card.tone}`}>{counters[card.key]}</p>
         </article>
       ))}
     </section>

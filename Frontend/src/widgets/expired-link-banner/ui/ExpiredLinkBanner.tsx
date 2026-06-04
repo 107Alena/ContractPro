@@ -31,7 +31,7 @@ export function ExpiredLinkBanner({
       role="status"
       aria-live="polite"
       data-testid="expired-link-banner"
-      className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-warning/40 bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] p-4 text-sm text-fg"
+      className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-warning/40 bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] p-4 text-sm text-fg"
     >
       <div className="flex-1 min-w-[240px]">
         <p className="font-medium text-fg">Защищённая ссылка больше не действительна.</p>

@@ -1,9 +1,9 @@
 // OrgCard — карточка «Организация» на dashboard (Figma 84:2 → 92:38).
 //
-// Строки Политика / Пользователей / Чек-листы требуют данных OPM (лимиты,
-// чек-листы), которых нет в /users/me → структурный «—». Реальна только роль
-// пользователя. Название организации показывается в сайдбаре (WorkspaceSwitcher),
-// здесь не дублируется — соответствует Figma.
+// Строки Название / Пользователя / Внутренняя политика организации требуют
+// данных OPM (лимиты, политика), которых нет в /users/me → структурный «—».
+// Реальна только роль пользователя. Название организации показывается в сайдбаре
+// (WorkspaceSwitcher), здесь не дублируется — соответствует Figma.
 import { type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -40,10 +40,10 @@ export function OrgCard({ user, isLoading, error }: OrgCardProps): JSX.Element {
         <p className="text-13 text-fg-muted">Нет данных профиля.</p>
       ) : (
         <>
-          <Row label="Политика" value={<Dash />} />
-          <Row label="Пользователей" value={<Dash />} />
+          <Row label="Название" value={<Dash />} />
+          <Row label="Пользователя" value={<Dash />} />
           <Row label="Ваша роль" value={ROLE_LABEL[user.role]} />
-          <Row label="Чек-листы" value={<Dash />} />
+          <Row label="Внутренняя политика организации" value={<Dash />} />
           <Link
             to="/settings"
             className="text-13 font-medium text-brand-600 hover:text-brand-500 focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-2"

@@ -63,10 +63,13 @@ export function ComparisonVerdictCard({
     <section
       aria-label="Итоговая оценка изменений"
       data-testid="comparison-verdict-card"
-      className={cn('flex flex-col gap-3 rounded-lg border border-border bg-bg p-5', className)}
+      className={cn(
+        'flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg p-5 shadow-none',
+        className,
+      )}
     >
       <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-lg font-semibold text-fg">Итоговая оценка</h2>
+        <h2 className="text-18 font-semibold text-fg">Итоговая оценка</h2>
         <Badge variant={view.variant} data-testid="comparison-verdict-badge">
           {view.label}
         </Badge>

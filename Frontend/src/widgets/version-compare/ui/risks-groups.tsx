@@ -41,9 +41,9 @@ function GroupSection({
     <details
       open={defaultOpen}
       data-testid={testId}
-      className="group rounded-md border border-border bg-bg"
+      className="group rounded-xl border border-border-subtle bg-bg shadow-none"
     >
-      <summary className="flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm font-medium text-fg">
+      <summary className="flex cursor-pointer items-center justify-between gap-2 px-5 py-4 text-16 font-semibold text-fg">
         <span>
           {title}{' '}
           <span className="text-fg-muted" data-testid={`${testId}-count`}>
@@ -55,14 +55,14 @@ function GroupSection({
         </span>
       </summary>
       {items.length === 0 ? (
-        <p className="px-3 pb-3 text-sm text-fg-muted">Список пуст.</p>
+        <p className="px-5 pb-4 text-sm text-fg-muted">Список пуст.</p>
       ) : (
-        <ul className="flex flex-col gap-1 px-3 pb-3" role="group" aria-label={title}>
+        <ul className="flex flex-col gap-2 px-5 pb-4" role="group" aria-label={title}>
           {items.map((item) => (
             <li
               key={item.id}
               data-testid={`${testId}-item`}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-border px-2 py-1.5"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle bg-bg-muted px-3 py-2"
             >
               <span className="text-sm text-fg">{item.title}</span>
               <span className="flex items-center gap-1.5">
@@ -84,7 +84,7 @@ export function RisksGroups({ groups, className }: RisksGroupsProps): JSX.Elemen
     <section
       aria-label="Сравнение рисков по версиям"
       data-testid="risks-groups"
-      className={cn('flex flex-col gap-2', className)}
+      className={cn('flex flex-col gap-3', className)}
     >
       <GroupSection
         title="Исчезнувшие риски"

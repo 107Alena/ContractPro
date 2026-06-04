@@ -51,9 +51,12 @@ export function RiskProfileDelta({
     <section
       aria-label="Дельта профиля рисков"
       data-testid="risk-profile-delta"
-      className={cn('flex flex-col gap-2 rounded-lg border border-border bg-bg p-4', className)}
+      className={cn(
+        'flex flex-col gap-2 rounded-xl border border-border-subtle bg-bg p-4 shadow-none',
+        className,
+      )}
     >
-      <h3 className="text-sm font-semibold text-fg">Изменение профиля рисков</h3>
+      <h3 className="text-16 font-semibold text-fg">Изменение профиля рисков</h3>
       <ul className="flex flex-col gap-1.5">
         {ROWS.map((row) => {
           const baseVal = baseProfile?.[row.key] ?? 0;

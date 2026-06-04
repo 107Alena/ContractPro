@@ -27,12 +27,10 @@ function Plate({ label, value, testId, accent = 'neutral' }: PlateProps): JSX.El
   return (
     <div
       data-testid={testId}
-      className="flex flex-col gap-1 rounded-md border border-border bg-bg-muted px-3 py-2"
+      className="flex flex-col gap-1 rounded-lg border border-border-subtle bg-bg-muted px-3 py-2"
     >
-      <span className="text-xs font-medium uppercase tracking-wide text-fg-muted">{label}</span>
-      <span className={cn('text-2xl font-semibold tabular-nums', ACCENT_TEXT[accent])}>
-        {value}
-      </span>
+      <span className="text-13 font-medium text-fg-muted">{label}</span>
+      <span className={cn('text-24 font-semibold tabular-nums', ACCENT_TEXT[accent])}>{value}</span>
     </div>
   );
 }
@@ -42,9 +40,12 @@ export function ChangeCounters({ counters, className }: ChangeCountersProps): JS
     <section
       aria-label="Счётчики изменений"
       data-testid="change-counters"
-      className={cn('flex flex-col gap-2', className)}
+      className={cn(
+        'flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg px-5 py-5 shadow-none',
+        className,
+      )}
     >
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Plate label="Всего" value={counters.total} testId="counter-total" accent="neutral" />
         <Plate label="Добавлено" value={counters.added} testId="counter-added" accent="success" />
         <Plate label="Удалено" value={counters.removed} testId="counter-removed" accent="danger" />
@@ -55,7 +56,7 @@ export function ChangeCounters({ counters, className }: ChangeCountersProps): JS
           accent="warning"
         />
       </div>
-      <p className="text-xs text-fg-muted" data-testid="counter-breakdown">
+      <p className="text-13 text-fg-muted" data-testid="counter-breakdown">
         Из них: текстовых <span className="font-medium text-fg">{counters.textual}</span>
         {' / структурных '}
         <span className="font-medium text-fg">{counters.structural}</span>

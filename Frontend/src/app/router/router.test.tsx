@@ -217,11 +217,11 @@ describe('Маршрутизация — рендер pages', () => {
     expect(await screen.findByTestId('page-result')).toBeDefined();
   });
 
-  it('/contracts/:id/compare?base=A&target=B → ComparisonPage с searchParams', async () => {
+  it('/contracts/:id/compare?base=A&target=B → ComparisonPage (lazy) рендерится', async () => {
+    // Парсинг ?base=&target= и их проброс в useDiff покрыт ComparisonPage.test
+    // (тест 9 → version-meta-header). Здесь — что маршрут резолвится в страницу.
     renderAt('/contracts/c1/compare?base=v1&target=v2');
     expect(await screen.findByTestId('page-comparison')).toBeDefined();
-    expect(screen.getByText(/v1/)).toBeDefined();
-    expect(screen.getByText(/v2/)).toBeDefined();
   });
 
   it('/reports → ReportsPage', async () => {

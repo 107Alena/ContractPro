@@ -53,7 +53,7 @@ export function TabsFilters({
       role="tablist"
       aria-label="Фильтр изменений"
       data-testid="tabs-filters"
-      className={cn('flex flex-wrap items-center gap-1 border-b border-border', className)}
+      className={cn('flex flex-wrap items-center gap-2', className)}
     >
       {TABS.map((tab, index) => {
         const isActive = tab.value === value;
@@ -72,16 +72,21 @@ export function TabsFilters({
             onClick={() => onChange(tab.value)}
             onKeyDown={(event) => handleKey(event, index)}
             className={cn(
-              'inline-flex items-center gap-2 px-3 py-2 text-sm transition-colors',
-              'border-b-2 -mb-px focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1',
+              'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors',
+              'focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1',
               isActive
-                ? 'border-brand-600 text-brand-600 font-medium'
-                : 'border-transparent text-fg-muted hover:text-fg',
+                ? 'border-brand-600 bg-brand-600 font-medium text-white'
+                : 'border-border-subtle bg-bg text-fg-muted hover:text-fg',
             )}
           >
             <span>{tab.label}</span>
             {counter !== undefined ? (
-              <span className="rounded-sm bg-bg-muted px-1.5 py-0.5 text-xs font-medium text-fg-muted">
+              <span
+                className={cn(
+                  'rounded-full px-1.5 py-0.5 text-xs font-medium',
+                  isActive ? 'bg-white/20 text-white' : 'bg-bg-muted text-fg-muted',
+                )}
+              >
                 {counter}
               </span>
             ) : null}

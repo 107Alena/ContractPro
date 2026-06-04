@@ -28,7 +28,7 @@ function VersionColumn({ label, meta, testId }: VersionColumnProps) {
   const formattedDate = formatDate(meta?.createdAt);
   return (
     <div
-      className="flex flex-col gap-1 rounded-md border border-border bg-bg p-4"
+      className="flex flex-col gap-1 rounded-xl border border-border-subtle bg-bg p-4 shadow-none"
       data-testid={testId}
     >
       <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">{label}</p>

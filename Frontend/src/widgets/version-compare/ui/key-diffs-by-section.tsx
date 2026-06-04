@@ -15,9 +15,12 @@ export function KeyDiffsBySection({ sections, className }: KeyDiffsBySectionProp
     <section
       aria-label="Ключевые изменения по разделам"
       data-testid="key-diffs-by-section"
-      className={cn('flex flex-col gap-3 rounded-lg border border-border bg-bg p-4', className)}
+      className={cn(
+        'flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg p-4 shadow-none',
+        className,
+      )}
     >
-      <h3 className="text-sm font-semibold text-fg">Ключевые изменения по разделам</h3>
+      <h3 className="text-16 font-semibold text-fg">Ключевые изменения по разделам</h3>
       {sections.length === 0 ? (
         <p className="text-sm text-fg-muted" data-testid="key-diffs-empty">
           Нет данных по разделам
@@ -28,7 +31,7 @@ export function KeyDiffsBySection({ sections, className }: KeyDiffsBySectionProp
             <li
               key={section.section}
               data-testid={`key-diffs-row-${section.section}`}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle bg-bg-muted px-3 py-2"
             >
               <span className="font-mono text-xs text-fg">{section.section}</span>
               <span className="flex flex-wrap gap-1">

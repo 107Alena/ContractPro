@@ -43,20 +43,18 @@ describe('LandingPage', () => {
     ).toBeDefined();
   });
 
-  it('CTA-кнопки героя ведут на /login (primary и secondary)', () => {
+  it('CTA-кнопка героя ведёт на /login (единственный primary)', () => {
     const { container } = renderLanding();
-    // primaryCta.label ("Начать бесплатно") совпадает с CTA free-тарифа —
+    // primaryCta.label ("Попробовать бесплатно") совпадает с CTA pro/plus-тарифов —
     // скоупим запрос внутри секции #hero, чтобы получить именно героевую кнопку.
     const hero = container.querySelector('#hero');
     expect(hero).not.toBeNull();
     const primary = within(hero as HTMLElement).getByRole('link', {
       name: HERO_CONTENT.primaryCta.label,
     });
-    const secondary = within(hero as HTMLElement).getByRole('link', {
-      name: HERO_CONTENT.secondaryCta.label,
-    });
     expect(primary.getAttribute('href')).toBe('/login');
-    expect(secondary.getAttribute('href')).toBe('/login');
+    // секондари-CTA «Запросить демо» убран
+    expect(within(hero as HTMLElement).queryByRole('link', { name: 'Запросить демо' })).toBeNull();
   });
 
   it('рендерит все карточки features', () => {
@@ -71,11 +69,15 @@ describe('LandingPage', () => {
     const pricing = container.querySelector('#pricing');
     expect(pricing).not.toBeNull();
     for (const plan of PRICING_PLANS) {
-      expect(
-        within(pricing as HTMLElement).getByRole('heading', { level: 3, name: plan.name }),
-      ).toBeDefined();
-      // CTA ищем внутри карточки плана, т.к. free-план повторяет текст CTA героя.
-      const cta = within(pricing as HTMLElement).getByRole('link', { name: plan.cta.label });
+      const heading = within(pricing as HTMLElement).getByRole('heading', {
+        level: 3,
+        name: plan.name,
+      });
+      // CTA ищем внутри карточки конкретного плана (pro и plus делят текст CTA),
+      // скоупим по ближайшему <li> карточки.
+      const card = heading.closest('li');
+      expect(card).not.toBeNull();
+      const cta = within(card as HTMLElement).getByRole('link', { name: plan.cta.label });
       expect(cta.getAttribute('href')).toBe(plan.cta.to);
     }
   });

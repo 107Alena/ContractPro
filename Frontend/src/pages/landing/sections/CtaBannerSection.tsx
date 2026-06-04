@@ -34,16 +34,6 @@ export function CtaBannerSection(): JSX.Element {
           >
             Попробовать бесплатно
           </Link>
-          <Link
-            to="/login"
-            className={cn(
-              CTA_OVERRIDE,
-              'inline-flex items-center justify-center border-[1.5px] border-white/20 font-sans font-semibold text-white transition-colors hover:bg-white/5',
-              'focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-2',
-            )}
-          >
-            Запросить демо
-          </Link>
         </div>
       </div>
     </section>

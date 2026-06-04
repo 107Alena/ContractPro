@@ -10,7 +10,7 @@ export interface HeroContent {
   title: string;
   subtitle: string;
   primaryCta: { label: string; to: string };
-  secondaryCta: { label: string; to: string };
+  secondaryCta?: { label: string; to: string };
   trustBadges: string[];
 }
 
@@ -22,7 +22,6 @@ export const HERO_CONTENT: HeroContent = {
   subtitle:
     'ContractPro анализирует договоры в юрисдикции РФ, находит юридические и финансовые риски и даёт понятные рекомендации — за минуты, а не часы.',
   primaryCta: { label: 'Попробовать бесплатно', to: '/login' },
-  secondaryCta: { label: 'Запросить демо', to: '/login' },
   trustBadges: [],
 };
 
@@ -353,7 +352,7 @@ export const PRICING_PLANS: PricingPlan[] = [
       '1-3 пользователя',
       'Рекомендации по формулировкам',
     ],
-    cta: { label: 'Запросить демо', to: '/login' },
+    cta: { label: 'Попробовать бесплатно', to: '/login' },
   },
 ];
 

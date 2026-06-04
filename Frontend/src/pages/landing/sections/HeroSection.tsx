@@ -57,15 +57,17 @@ export function HeroSection({ content = HERO_CONTENT }: HeroSectionProps): JSX.E
             >
               {content.primaryCta.label}
             </Link>
-            <Link
-              to={content.secondaryCta.to}
-              className={cn(
-                buttonVariants({ variant: 'secondary', size: 'lg' }),
-                HERO_CTA_OVERRIDE,
-              )}
-            >
-              {content.secondaryCta.label}
-            </Link>
+            {content.secondaryCta ? (
+              <Link
+                to={content.secondaryCta.to}
+                className={cn(
+                  buttonVariants({ variant: 'secondary', size: 'lg' }),
+                  HERO_CTA_OVERRIDE,
+                )}
+              >
+                {content.secondaryCta.label}
+              </Link>
+            ) : null}
           </div>
         </div>
 

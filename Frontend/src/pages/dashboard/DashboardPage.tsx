@@ -1,8 +1,8 @@
 // DashboardPage (FE-TASK-042) — главный экран после логина.
 // Упрощённый layout: WelcomeBlock (один CTA «Новая проверка договора») →
-// двухколоночный layout (776/340: недавние проверки | быстрый старт + сводка +
-// организация) → TrustFooter. Блоки «Что важно сейчас», «Последняя проверка»,
-// «Статус обработки» и «Ключевые риски» убраны по продуктовому решению.
+// двухколоночный layout (776/340: недавние проверки | сводка + организация) →
+// TrustFooter. Блоки «Что важно сейчас», «Последняя проверка», «Статус
+// обработки», «Ключевые риски» и «Быстрый старт» убраны по продуктовому решению.
 //
 // Архитектура: §17.1 (auth, GET /users/me + GET /contracts?size=5 + SSE),
 // §17.4 (widgets), §9.3 (error-state), §5.6 (RBAC guards).
@@ -16,10 +16,8 @@
 import { useContracts } from '@/entities/contract';
 import { useMe } from '@/entities/user';
 import { useEventStream } from '@/shared/api';
-import { Can } from '@/shared/auth';
 import { BusinessSummary } from '@/widgets/dashboard-business-summary';
 import { OrgCard } from '@/widgets/dashboard-org-card';
-import { QuickStart } from '@/widgets/dashboard-quick-start';
 import { RecentChecksTable } from '@/widgets/dashboard-recent-checks';
 import { TrustFooter } from '@/widgets/dashboard-trust-footer';
 import { WelcomeBlock } from '@/widgets/dashboard-welcome';
@@ -47,15 +45,12 @@ export function DashboardPage(): JSX.Element {
       <WelcomeBlock user={meQuery.data} />
 
       {/* Двухколоночный layout 776/340 (Figma 89:2). Слева — недавние проверки;
-          справа — быстрый старт, сводка и карточка организации. */}
+          справа — сводка и карточка организации. */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="flex min-w-0 flex-col gap-5">
           <RecentChecksTable items={items} isLoading={isLoading} error={error} />
         </div>
         <div className="flex flex-col gap-5">
-          <Can I="contract.upload">
-            <QuickStart />
-          </Can>
           <BusinessSummary total={total ?? undefined} isLoading={isLoading} error={error} />
           <OrgCard
             user={meQuery.data}

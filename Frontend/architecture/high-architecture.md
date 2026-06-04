@@ -1415,7 +1415,7 @@ graph TD
 |---|---|---|---|
 | 1. Landing | — | LandingPage | HeroSection, FeaturesSection, PricingSection, FAQAccordion |
 | 2. Auth | 4 (Desktop) + Mobile | LoginPage | PromoSidebar, LoginForm |
-| 3. Dashboard | 4 | DashboardPage | WelcomeBlock (один CTA «Новая проверка договора»), QuickStart, BusinessSummary, OrgCard, RecentChecksTable, TrustFooter. Упрощён: CurrentActions «Что важно сейчас» / LastCheckCard / ProcessingStatus / KeyRisksCards убраны (продуктовое решение) |
+| 3. Dashboard | 4 | DashboardPage | WelcomeBlock (один CTA «Новая проверка договора»), BusinessSummary, OrgCard, RecentChecksTable, TrustFooter. Упрощён: CurrentActions «Что важно сейчас» / LastCheckCard / ProcessingStatus / KeyRisksCards / QuickStart «Быстрый старт» убраны (продуктовое решение) |
 | 4. Новая проверка | 12 | NewCheckPage | FileDropZone, FileCard, PasteTextTab, WillHappenSteps, WhatWeCheck, Tips, TrustFooter (reuse), LowConfidenceConfirm |
 | 5. Результат | 8 | ResultPage | DocumentCard (тонкая meta), RiskProfileCard, RisksList (с интегрированными рекомендациями по risk_id), SummaryTable, NextActions, FeedbackBlock, LegalDisclaimer, TrustFooter (reuse). 2-кол layout (Figma 150:2); standalone RecommendationsList убран (рекомендации в risk-карточках). Блоки «Обязательные условия» (MandatoryConditions, нет API-источника) и «Отклонения от политики» (DeviationsFromPolicy) убраны со страницы по продуктовому решению — компоненты сохранены в коде |
 | 6. Сравнение | 9 | ComparisonPage | VersionMetaHeader, ComparisonVerdictCard, ChangeCounters, TabsFilters, ChangesTable, RiskProfileDelta, KeyDiffsBySection, SideBySideDiff, RisksGroups |

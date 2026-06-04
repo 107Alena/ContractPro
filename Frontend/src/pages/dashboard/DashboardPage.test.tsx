@@ -118,14 +118,13 @@ describe('DashboardPage', () => {
     expect(screen.getByText(/ещё не было проверок/i)).toBeDefined();
   });
 
-  it('QuickStart виден для BUSINESS_USER (есть contract.upload)', () => {
+  it('блок «Быстрый старт» не рендерится', () => {
     const qc = makeClient();
-    // BUSINESS_USER: contract.upload=true
     const bu: User = { ...baseUser, role: 'BUSINESS_USER' };
     qc.setQueryData(qk.me, bu);
     qc.setQueryData(qk.contracts.list({ size: 5 }), { items: [], total: 0 });
     renderPage(qc, bu);
 
-    expect(screen.getByRole('article', { name: 'Быстрый старт' })).toBeDefined();
+    expect(screen.queryByRole('article', { name: 'Быстрый старт' })).toBeNull();
   });
 });

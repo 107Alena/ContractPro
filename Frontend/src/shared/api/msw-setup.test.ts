@@ -30,8 +30,8 @@ describe('MSW global server — default handlers', () => {
       page: number;
       size: number;
     };
-    expect(body.total).toBe(4);
-    expect(body.items).toHaveLength(4);
+    expect(body.total).toBe(5);
+    expect(body.items).toHaveLength(5);
     expect(body.page).toBe(1);
   });
 

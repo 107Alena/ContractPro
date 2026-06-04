@@ -108,6 +108,33 @@ export const contractDelta: ContractDetails = {
   updated_at: '2026-04-19T16:05:00Z',
 };
 
+// epsilon — второй полностью READY-договор (одна версия), чтобы в dev:e2e было
+// несколько договоров с завершённым результатом. Текущая версия READY → на
+// карточке активны все CTA, «Открыть результат» ведёт на ResultPage.
+export const versionEpsilonV1: VersionDetails = {
+  version_id: IDS.versions.epsilonV1,
+  contract_id: IDS.contracts.epsilon,
+  version_number: 1,
+  origin_type: 'UPLOAD',
+  origin_description: 'Первичная загрузка',
+  parent_version_id: null,
+  source_file_name: 'license-agreement.pdf',
+  source_file_size: 268_000,
+  processing_status: 'READY',
+  processing_status_message: 'Результаты готовы',
+  created_at: '2026-04-10T09:00:00Z',
+};
+
+export const contractEpsilon: ContractDetails = {
+  contract_id: IDS.contracts.epsilon,
+  title: 'Лицензионный договор на ПО',
+  status: 'ACTIVE',
+  current_version: versionEpsilonV1,
+  created_by_user_id: IDS.users.lawyer,
+  created_at: '2026-04-10T09:00:00Z',
+  updated_at: '2026-04-21T12:30:00Z',
+};
+
 export const contractAlpha: ContractDetails = {
   contract_id: IDS.contracts.alpha,
   title: 'Договор оказания услуг с ООО «Альфа»',
@@ -139,6 +166,15 @@ export const contractGamma: ContractDetails = {
 };
 
 export const contractSummaries: ContractSummary[] = [
+  {
+    contract_id: IDS.contracts.epsilon,
+    title: 'Лицензионный договор на ПО',
+    status: 'ACTIVE',
+    current_version_number: 1,
+    processing_status: 'READY',
+    created_at: '2026-04-10T09:00:00Z',
+    updated_at: '2026-04-21T12:30:00Z',
+  },
   {
     contract_id: IDS.contracts.alpha,
     title: 'Договор оказания услуг с ООО «Альфа»',
@@ -182,6 +218,7 @@ export const contractDetailsById: Record<string, ContractDetails> = {
   [IDS.contracts.beta]: contractBeta,
   [IDS.contracts.gamma]: contractGamma,
   [IDS.contracts.delta]: contractDelta,
+  [IDS.contracts.epsilon]: contractEpsilon,
 };
 
 // Агрегированная статистика GET /contracts/stats (Путь C: мок). Считается из

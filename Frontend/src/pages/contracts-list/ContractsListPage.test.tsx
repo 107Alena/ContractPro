@@ -111,7 +111,8 @@ describe('ContractsListPage', () => {
     });
     expect(screen.getByTestId('page-contracts-list')).toBeInTheDocument();
     expect(screen.getByTestId('contracts-metrics-strip')).toBeInTheDocument();
-    expect(screen.getByTestId('contracts-list-new')).toBeInTheDocument();
+    // header-кнопки «Загрузить PDF» / «Новая проверка» убраны (продуктовое решение)
+    expect(screen.queryByTestId('contracts-list-new')).not.toBeInTheDocument();
     expect(screen.getByTestId('documents-table')).toBeInTheDocument();
   });
 

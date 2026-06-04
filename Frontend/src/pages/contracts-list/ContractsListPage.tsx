@@ -2,7 +2,8 @@
 // URL: /contracts (auth). Композиция (Figma 193:2, этап 4.5):
 //
 //   ┌─────────────────────────────────────────────────────┐
-//   │ PageIntro (заголовок + Загрузить PDF / Новая проверка)│
+//   │ PageIntro (только заголовок + описание; header-CTA    │
+//   │   «Загрузить PDF» / «Новая проверка» убраны)          │
 //   │ <ContractsMetricsStrip> 5-stat сводка                │
 //   │ <CurrentActions> «Что важно сейчас» (= dashboard)    │
 //   │ Card[ <SearchInput>  <FilterChips> ]                 │
@@ -214,28 +215,11 @@ export function ContractsListPage(): JSX.Element {
       data-testid="page-contracts-list"
       className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-8 md:py-8"
     >
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex flex-col gap-1.5">
-          <h1 className="text-24 font-bold text-fg">Документы и история проверок</h1>
-          <p className="text-15 text-fg-muted">
-            Находите договоры, отслеживайте статус проверок и открывайте результаты анализа.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Link
-            to="/contracts/new"
-            className={buttonVariants({ variant: 'secondary', size: 'md' })}
-          >
-            Загрузить PDF
-          </Link>
-          <Link
-            to="/contracts/new"
-            className={buttonVariants({ variant: 'primary', size: 'md' })}
-            data-testid="contracts-list-new"
-          >
-            Новая проверка
-          </Link>
-        </div>
+      <header className="flex flex-col gap-1.5">
+        <h1 className="text-24 font-bold text-fg">Документы и история проверок</h1>
+        <p className="text-15 text-fg-muted">
+          Находите договоры, отслеживайте статус проверок и открывайте результаты анализа.
+        </p>
       </header>
 
       <ContractsMetricsStrip

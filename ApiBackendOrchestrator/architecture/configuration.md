@@ -207,6 +207,17 @@ UOM (User & Organization Management) — критическая зависимо
 
 ---
 
+### Список договоров — агрегация (ORCH-TASK-056)
+
+Параметры эндпоинта `GET /contracts` с агрегатами типа/риска и серверной
+фильтрацией/сортировкой (см. high-architecture.md §8.7, ASSUMPTION-ORCH-17).
+
+| Переменная | Описание | По умолчанию | Заметки |
+|-----------|----------|-------------|---------|
+| `ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED` | Включить агрегацию `contract_type`/`risk_level`/`risk_counts` и серверные фильтры/сортировку в `GET /contracts` через DM read-контракт `GET /documents?include=analysis` | `false` | Зависит от DM-стороны (`include=analysis`), которая ещё не реализована — оставить `false` до её готовности. Пока выключен: агрегатные поля = `null`, новые фильтры/сортировка отклоняются с 400 (fail-safe) |
+
+---
+
 ## Устойчивость
 
 ### Rate Limiting

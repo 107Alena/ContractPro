@@ -312,6 +312,26 @@ func loadPermissionsConfig() PermissionsConfig {
 	}
 }
 
+// ContractsConfig holds settings for the contracts list endpoint
+// (GET /contracts), notably the ORCH-TASK-056 list-aggregation feature.
+type ContractsConfig struct {
+	// ListAnalysisEnabled turns on the DM list-aggregation read-contract
+	// (GET /documents?include=analysis) so the contracts list carries
+	// contract_type / risk_level / risk_counts and supports server-side
+	// filtering and sorting by them. Defaults to false because the backing DM
+	// endpoint is a documented dependency (ASSUMPTION-ORCH-17) that may not yet
+	// be deployed; while disabled, the list falls back to the plain
+	// (type/risk-null) behavior and rejects the new filter/sort params with 400
+	// rather than silently returning unfiltered data.
+	ListAnalysisEnabled bool // ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED (default: false)
+}
+
+func loadContractsConfig() ContractsConfig {
+	return ContractsConfig{
+		ListAnalysisEnabled: envBool("ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED", false),
+	}
+}
+
 // ObservabilityConfig holds logging, metrics, and tracing settings.
 type ObservabilityConfig struct {
 	LogLevel        string // ORCH_LOG_LEVEL (default: "info")

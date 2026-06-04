@@ -269,7 +269,7 @@ func NewApp(cfg *config.Config) (*App, error) {
 	uploadDM := &uploadDMAdapter{client: dmClient}
 	uploadCmd := &uploadCmdPubAdapter{pub: cmdPub}
 	uploadHandler := upload.NewHandler(s3Client, uploadDM, uploadCmd, kvClient, log, cfg.Upload.MaxSize)
-	contractHandler := contracts.NewHandler(dmClient, log)
+	contractHandler := contracts.NewHandler(dmClient, log, cfg.Contracts.ListAnalysisEnabled)
 	versionHandler := versions.NewHandler(dmClient, s3Client, cmdPub, kvClient, log, cfg.Upload.MaxSize)
 	resultsHandler := results.NewHandler(dmClient, log)
 	comparisonHandler := comparison.NewHandler(dmClient, cmdPub, log)

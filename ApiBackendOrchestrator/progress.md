@@ -2189,3 +2189,52 @@ Frontend отправляет русские UI-лейблы (например, 
 
 ### Следующие задачи
 - Все 50+ ORCH-TASK выполнены. Проверить состояние `tasks.json` — задача 055 закрывает функциональную область type confirmation.
+
+---
+
+## ORCH-TASK-056: Расширить GET /contracts — агрегаты типа/риска + серверные фильтры/сортировка без N+1
+**Дата:** 2026-06-05
+**Статус:** done
+
+### Контекст выбора
+Из 2 pending-задач ORCH-TASK-057 заблокирована (зависимость DM-TASK-059 = pending). ORCH-TASK-056 — без deps, priority=high → выбрана.
+
+### Ключевое архитектурное решение
+Критерий «no N+1 — один батч-запрос/join к DM» требует DM-эндпоинта батч-чтения classification/risk по текущим версиям страницы, которого в DM НЕТ (только пер-версионный GET .../artifacts/{type}), и DM-задачи на него нет. Скоуп = ApiBackendOrchestrator (DM-код реализовать нельзя). Решение (после валидации backend-reliability-engineer): реализовать Orchestrator-сторону против **нового документированного DM read-контракта** `GET /documents?include=analysis` (DM как источник истины джойнит артефакты текущей версии, фильтрует/сортирует/пагинирует), Orchestrator делает 1 батч-вызов на страницу и маппит агрегаты. Тесты на mock DM. Прод — за фичефлагом `ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED` (default false) до готовности DM. Зафиксировано как ASSUMPTION-ORCH-17 + рекомендация создать DM-задачу (аналог DM-TASK-059).
+
+### План реализации
+1. dmclient: расширить ListDocumentsParams (Include/RiskLevel/ContractTypes/ArtifactStatuses/DateFrom/To/Sort/Order); модели RiskCounts/DocumentAnalysisAggregate/DocumentWithAnalysis/DocumentAnalysisList; метод ListDocumentsWithAnalysis.
+2. ContractSummary +contract_type/risk_level/risk_counts (nullable) + populate current_version_number/processing_status; reverseProcessingStatusMap (программно); mapDocumentWithAnalysisToContractSummary (force-null risk !READY).
+3. HandleList: parse+validate новые query-параметры, feature-flag (fail-safe), 1 батч-вызов, маппинг. Helpers + валидационные множества.
+4. config ContractsConfig + wiring app.go/testenv.go.
+5. Тесты (mock DM) + доки + ASSUMPTION-ORCH-17.
+
+### Что реализовано
+- **dmclient/models.go, client.go**: ListDocumentsWithAnalysis → GET /documents?include=analysis (repeated contract_type/artifact_status, OR); новые модели агрегатов; интерфейс DMClient +метод.
+- **contracts/response.go**: ContractSummary +3 nullable-поля + RiskCounts; reverseProcessingStatusMap из processingStatusMap (single source, sorted, read-only); mapDocumentWithAnalysisToContractSummary (contract_type passthrough; risk_level/risk_counts force-null если status≠READY).
+- **contracts/handler.go**: NewHandler(+analysisEnabled); HandleList переписан (readAggregationParams/validateAndApplyAggregation/parseDateParam/truncateToUTCDay/servePlainList/serveAnalysisList); валидация risk_level/contract_type(через confirmtype.IsValidEnum)/processing_status(→artifact_status, AWAITING_USER_INPUT→400)/date(from<=to day-granularity)/sort/order; fail-safe при флаге off.
+- **config**: ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED (default false).
+- **confirmtype/normalize.go**: экспорт IsValidEnum/EnumValues (single source of truth для 12-enum, убран дубликат whitelist — фикс code-review #5).
+
+### Ключевые решения
+- DM владеет фильтром/сортировкой/пагинацией (никакой post-fetch фильтрации — иначе ломается total/пагинация).
+- NO N+1: 1 DM-вызов на страницу (assert: listAnalysisCalls==1, getCalls==0).
+- risk force-null при !READY (согласовано с READY-only ContractStats.by_risk_level); contract_type независим.
+- Fail-safe: флаг off + новые фильтры → 400 (не «как бы отфильтрованные» данные); off без них → точное legacy-поведение.
+- Backward-compat: nullable без omitempty; archive/delete отдают поля null.
+
+### Результаты тестов
+- `go test ./...` — ALL PASS; `go test -race ./...` — ALL PASS; `go vet ./...` — OK; make build/test/lint — OK.
+- contracts handler_test +~22 теста; dmclient client_test +2.
+
+### Документация (синхронно)
+api-specification.yaml (ContractSummary поля + ContractType/RiskLevel/RiskCounts + query-параметры + example + 400); high-architecture.md §8.7 + ASSUMPTION-ORCH-17; integration-contracts.md (read-контракт GET /documents?include=analysis); sequence-diagrams.md §8.7 (alt по флагу); configuration.md (env-флаг).
+
+### Заметка для следующей итерации
+- **DM-зависимость**: реализация фичи в прод требует DM-эндпоинта `GET /documents?include=analysis` (join classification/risk текущей версии + серверные фильтры/сортировка/пагинация). Создать DM-задачу (аналог DM-TASK-059), затем включить ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED=true.
+- **Frontend**: после готовности DM+флага — FE-TASK-046 подключает contract_type/risk_level/risk_counts, убирает «—», регенерирует openapi.d.ts.
+- **Остаётся pending**: ORCH-TASK-057 (GET /contracts/stats) — ждёт DM-TASK-059.
+
+### Субагенты
+- **backend-reliability-engineer** — валидация дизайна (no-N+1 контракт, reverse-map, null/force-null семантика, фильтр/пагинация, feature-flag fail-safe).
+- **code-reviewer** — review (0 Critical/Major); адресованы #1 (сравнение дат по дню) и #5 (дубликат whitelist → confirmtype.IsValidEnum/EnumValues).

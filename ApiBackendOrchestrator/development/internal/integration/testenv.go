@@ -138,7 +138,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	uploadHandler := upload.NewHandler(s3Fake, uploadDM, uploadCmd, kvFake, log, 20<<20)
 
 	// 13. Application handlers.
-	contractHandler := contracts.NewHandler(dmClient, log)
+	// List-aggregation disabled: the fake DM does not implement the
+	// include=analysis read-contract; the enriched path is covered by the
+	// contracts handler ServeHTTP tests with a DM spy (ORCH-TASK-056).
+	contractHandler := contracts.NewHandler(dmClient, log, false)
 	versionHandler := versions.NewHandler(dmClient, s3Fake, cmdPub, kvFake, log, 20<<20)
 	resultsHandler := results.NewHandler(dmClient, log)
 	comparisonHandler := comparison.NewHandler(dmClient, cmdPub, log)

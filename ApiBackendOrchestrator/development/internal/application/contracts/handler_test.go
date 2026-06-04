@@ -22,15 +22,17 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockDMClient struct {
-	listFn    func(ctx context.Context, params dmclient.ListDocumentsParams) (*dmclient.DocumentList, error)
-	getFn     func(ctx context.Context, documentID string) (*dmclient.DocumentWithCurrentVersion, error)
-	deleteFn  func(ctx context.Context, documentID string) (*dmclient.Document, error)
-	archiveFn func(ctx context.Context, documentID string) (*dmclient.Document, error)
+	listFn         func(ctx context.Context, params dmclient.ListDocumentsParams) (*dmclient.DocumentList, error)
+	listAnalysisFn func(ctx context.Context, params dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error)
+	getFn          func(ctx context.Context, documentID string) (*dmclient.DocumentWithCurrentVersion, error)
+	deleteFn       func(ctx context.Context, documentID string) (*dmclient.Document, error)
+	archiveFn      func(ctx context.Context, documentID string) (*dmclient.Document, error)
 
-	listCalls    []dmclient.ListDocumentsParams
-	getCalls     []string
-	deleteCalls  []string
-	archiveCalls []string
+	listCalls         []dmclient.ListDocumentsParams
+	listAnalysisCalls []dmclient.ListDocumentsParams
+	getCalls          []string
+	deleteCalls       []string
+	archiveCalls      []string
 }
 
 func (m *mockDMClient) ListDocuments(ctx context.Context, params dmclient.ListDocumentsParams) (*dmclient.DocumentList, error) {
@@ -39,6 +41,14 @@ func (m *mockDMClient) ListDocuments(ctx context.Context, params dmclient.ListDo
 		return m.listFn(ctx, params)
 	}
 	return &dmclient.DocumentList{Items: []dmclient.Document{}, Total: 0, Page: params.Page, Size: params.Size}, nil
+}
+
+func (m *mockDMClient) ListDocumentsWithAnalysis(ctx context.Context, params dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error) {
+	m.listAnalysisCalls = append(m.listAnalysisCalls, params)
+	if m.listAnalysisFn != nil {
+		return m.listAnalysisFn(ctx, params)
+	}
+	return &dmclient.DocumentAnalysisList{Items: []dmclient.DocumentWithAnalysis{}, Total: 0, Page: params.Page, Size: params.Size}, nil
 }
 
 func (m *mockDMClient) GetDocument(ctx context.Context, documentID string) (*dmclient.DocumentWithCurrentVersion, error) {
@@ -77,7 +87,14 @@ const testContractID = "550e8400-e29b-41d4-a716-446655440000"
 
 func newTestHandler(dm *mockDMClient) *Handler {
 	log := logger.NewLogger("error")
-	return NewHandler(dm, log)
+	return NewHandler(dm, log, false)
+}
+
+// newAnalysisHandler builds a handler with list-aggregation enabled
+// (ORCH-TASK-056), exercising the DM include=analysis read-contract path.
+func newAnalysisHandler(dm *mockDMClient) *Handler {
+	log := logger.NewLogger("error")
+	return NewHandler(dm, log, true)
 }
 
 func withAuthContext(r *http.Request) *http.Request {
@@ -153,6 +170,26 @@ func stubDocumentList(n int) *dmclient.DocumentList {
 }
 
 func strPtr(s string) *string { return &s }
+
+// stubDocWithAnalysis builds a DM DocumentWithAnalysis for list-aggregation
+// tests. artifactStatus drives the current version's status; analysis (may be
+// nil) carries the aggregate. A nil currentVersion is produced when
+// artifactStatus is empty.
+func stubDocWithAnalysis(id, artifactStatus string, analysis *dmclient.DocumentAnalysisAggregate) dmclient.DocumentWithAnalysis {
+	doc := stubDocument()
+	doc.DocumentID = id
+	d := dmclient.DocumentWithAnalysis{Document: doc, Analysis: analysis}
+	if artifactStatus != "" {
+		d.CurrentVersion = &dmclient.DocumentVersion{
+			VersionID:      "ver-" + id,
+			DocumentID:     id,
+			VersionNumber:  1,
+			ArtifactStatus: artifactStatus,
+			CreatedAt:      time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC),
+		}
+	}
+	return d
+}
 
 func dmHTTPError(operation string, statusCode int, body string) *dmclient.DMError {
 	return &dmclient.DMError{
@@ -1203,6 +1240,450 @@ func TestHandleList_ContentType(t *testing.T) {
 	ct := rr.Header().Get("Content-Type")
 	if ct != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+}
+
+// =========================================================================
+// HandleList — list-aggregation (ORCH-TASK-056)
+// =========================================================================
+
+func aggList(items ...dmclient.DocumentWithAnalysis) *dmclient.DocumentAnalysisList {
+	return &dmclient.DocumentAnalysisList{Items: items, Total: len(items), Page: 1, Size: 20}
+}
+
+func TestHandleList_Analysis_PopulatesFields(t *testing.T) {
+	analysis := &dmclient.DocumentAnalysisAggregate{
+		ContractType: strPtr("LEASE"),
+		RiskLevel:    strPtr("high"),
+		RiskCounts:   &dmclient.RiskCounts{High: 3, Medium: 2, Low: 1},
+	}
+	dm := &mockDMClient{
+		listAnalysisFn: func(_ context.Context, _ dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error) {
+			return aggList(stubDocWithAnalysis(testContractID, "FULLY_READY", analysis)), nil
+		},
+	}
+	h := newAnalysisHandler(dm)
+
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, "/api/v1/contracts", nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	item := parseJSON(t, rr)["items"].([]any)[0].(map[string]any)
+	if item["contract_type"] != "LEASE" {
+		t.Errorf("contract_type = %v, want LEASE", item["contract_type"])
+	}
+	if item["risk_level"] != "high" {
+		t.Errorf("risk_level = %v, want high", item["risk_level"])
+	}
+	if item["processing_status"] != "READY" {
+		t.Errorf("processing_status = %v, want READY", item["processing_status"])
+	}
+	if item["current_version_number"].(float64) != 1 {
+		t.Errorf("current_version_number = %v, want 1", item["current_version_number"])
+	}
+	rc, ok := item["risk_counts"].(map[string]any)
+	if !ok {
+		t.Fatalf("risk_counts missing/null: %v", item["risk_counts"])
+	}
+	if rc["high"].(float64) != 3 || rc["medium"].(float64) != 2 || rc["low"].(float64) != 1 {
+		t.Errorf("risk_counts = %v", rc)
+	}
+	// no N+1: enriched method called once, plain method never.
+	if len(dm.listAnalysisCalls) != 1 {
+		t.Errorf("ListDocumentsWithAnalysis calls = %d, want 1", len(dm.listAnalysisCalls))
+	}
+	if len(dm.listCalls) != 0 {
+		t.Errorf("ListDocuments should not be called, got %d", len(dm.listCalls))
+	}
+	if !dm.listAnalysisCalls[0].IncludeAnalysis {
+		t.Error("IncludeAnalysis should be true")
+	}
+}
+
+func TestHandleList_Analysis_NullWhenNoAnalysis(t *testing.T) {
+	dm := &mockDMClient{
+		listAnalysisFn: func(_ context.Context, _ dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error) {
+			return aggList(stubDocWithAnalysis(testContractID, "PROCESSING_IN_PROGRESS", nil)), nil
+		},
+	}
+	h := newAnalysisHandler(dm)
+
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, "/api/v1/contracts", nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	item := parseJSON(t, rr)["items"].([]any)[0].(map[string]any)
+	for _, f := range []string{"contract_type", "risk_level", "risk_counts"} {
+		if item[f] != nil {
+			t.Errorf("%s should be null, got %v", f, item[f])
+		}
+	}
+	if item["processing_status"] != "PROCESSING" {
+		t.Errorf("processing_status = %v, want PROCESSING", item["processing_status"])
+	}
+}
+
+func TestHandleList_Analysis_RiskNulledWhenNotReady(t *testing.T) {
+	// Analysis carries risk, but the current version is not READY: the
+	// orchestrator must null risk_level/risk_counts, keeping contract_type.
+	analysis := &dmclient.DocumentAnalysisAggregate{
+		ContractType: strPtr("SERVICES"),
+		RiskLevel:    strPtr("medium"),
+		RiskCounts:   &dmclient.RiskCounts{High: 0, Medium: 4, Low: 2},
+	}
+	dm := &mockDMClient{
+		listAnalysisFn: func(_ context.Context, _ dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error) {
+			return aggList(stubDocWithAnalysis(testContractID, "ANALYSIS_IN_PROGRESS", analysis)), nil
+		},
+	}
+	h := newAnalysisHandler(dm)
+
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, "/api/v1/contracts", nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	item := parseJSON(t, rr)["items"].([]any)[0].(map[string]any)
+	if item["contract_type"] != "SERVICES" {
+		t.Errorf("contract_type = %v, want SERVICES (known pre-READY)", item["contract_type"])
+	}
+	if item["risk_level"] != nil {
+		t.Errorf("risk_level should be null when not READY, got %v", item["risk_level"])
+	}
+	if item["risk_counts"] != nil {
+		t.Errorf("risk_counts should be null when not READY, got %v", item["risk_counts"])
+	}
+}
+
+func TestHandleList_Analysis_NoCurrentVersion(t *testing.T) {
+	analysis := &dmclient.DocumentAnalysisAggregate{ContractType: strPtr("OTHER")}
+	dm := &mockDMClient{
+		listAnalysisFn: func(_ context.Context, _ dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error) {
+			return aggList(stubDocWithAnalysis(testContractID, "", analysis)), nil
+		},
+	}
+	h := newAnalysisHandler(dm)
+
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, "/api/v1/contracts", nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	item := parseJSON(t, rr)["items"].([]any)[0].(map[string]any)
+	if item["current_version_number"] != nil {
+		t.Errorf("current_version_number should be null, got %v", item["current_version_number"])
+	}
+	if item["processing_status"] != nil {
+		t.Errorf("processing_status should be null, got %v", item["processing_status"])
+	}
+	if item["risk_level"] != nil {
+		t.Errorf("risk_level should be null without current version, got %v", item["risk_level"])
+	}
+	if item["contract_type"] != "OTHER" {
+		t.Errorf("contract_type = %v, want OTHER", item["contract_type"])
+	}
+}
+
+func TestHandleList_Analysis_SingleBatchCall_NoNPlus1(t *testing.T) {
+	items := make([]dmclient.DocumentWithAnalysis, 25)
+	for i := range items {
+		items[i] = stubDocWithAnalysis(testContractID, "FULLY_READY",
+			&dmclient.DocumentAnalysisAggregate{RiskLevel: strPtr("low")})
+	}
+	dm := &mockDMClient{
+		listAnalysisFn: func(_ context.Context, _ dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error) {
+			return &dmclient.DocumentAnalysisList{Items: items, Total: 25, Page: 1, Size: 100}, nil
+		},
+	}
+	h := newAnalysisHandler(dm)
+
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, "/api/v1/contracts?size=100", nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	// Exactly one DM call regardless of 25 documents.
+	if len(dm.listAnalysisCalls) != 1 {
+		t.Errorf("expected 1 batch DM call, got %d", len(dm.listAnalysisCalls))
+	}
+	if len(dm.getCalls) != 0 {
+		t.Errorf("expected 0 per-document GetDocument calls, got %d", len(dm.getCalls))
+	}
+}
+
+func TestHandleList_Analysis_FiltersAndSortForwarded(t *testing.T) {
+	dm := &mockDMClient{}
+	h := newAnalysisHandler(dm)
+
+	url := "/api/v1/contracts?risk_level=high&contract_type=LEASE&contract_type=SALE" +
+		"&processing_status=ANALYZING&date_from=2026-01-01&date_to=2026-03-31&sort=risk&order=desc"
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, url, nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if len(dm.listAnalysisCalls) != 1 {
+		t.Fatalf("expected 1 DM call, got %d", len(dm.listAnalysisCalls))
+	}
+	p := dm.listAnalysisCalls[0]
+	if p.RiskLevel != "high" {
+		t.Errorf("RiskLevel = %q, want high", p.RiskLevel)
+	}
+	if len(p.ContractTypes) != 2 || p.ContractTypes[0] != "LEASE" || p.ContractTypes[1] != "SALE" {
+		t.Errorf("ContractTypes = %v", p.ContractTypes)
+	}
+	// ANALYZING expands to ARTIFACTS_READY + ANALYSIS_IN_PROGRESS.
+	wantStatuses := map[string]bool{"ARTIFACTS_READY": false, "ANALYSIS_IN_PROGRESS": false}
+	for _, s := range p.ArtifactStatuses {
+		if _, ok := wantStatuses[s]; ok {
+			wantStatuses[s] = true
+		} else {
+			t.Errorf("unexpected artifact_status %q", s)
+		}
+	}
+	for s, seen := range wantStatuses {
+		if !seen {
+			t.Errorf("missing expanded artifact_status %q", s)
+		}
+	}
+	if p.DateFrom != "2026-01-01" || p.DateTo != "2026-03-31" {
+		t.Errorf("date range = %q..%q", p.DateFrom, p.DateTo)
+	}
+	if p.Sort != "risk" || p.Order != "desc" {
+		t.Errorf("sort/order = %q/%q", p.Sort, p.Order)
+	}
+}
+
+func TestHandleList_Analysis_TotalReflectsFiltered(t *testing.T) {
+	dm := &mockDMClient{
+		listAnalysisFn: func(_ context.Context, _ dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error) {
+			return &dmclient.DocumentAnalysisList{
+				Items: []dmclient.DocumentWithAnalysis{stubDocWithAnalysis(testContractID, "FULLY_READY",
+					&dmclient.DocumentAnalysisAggregate{RiskLevel: strPtr("high")})},
+				Total: 7, Page: 1, Size: 20,
+			}, nil
+		},
+	}
+	h := newAnalysisHandler(dm)
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, "/api/v1/contracts?risk_level=high", nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	if got := parseJSON(t, rr)["total"].(float64); got != 7 {
+		t.Errorf("total = %v, want 7 (DM-provided filtered count)", got)
+	}
+}
+
+func TestHandleList_Analysis_InvalidParams(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"risk_level", "/api/v1/contracts?risk_level=critical"},
+		{"contract_type", "/api/v1/contracts?contract_type=NOPE"},
+		{"processing_status_unknown", "/api/v1/contracts?processing_status=BOGUS"},
+		{"processing_status_awaiting", "/api/v1/contracts?processing_status=AWAITING_USER_INPUT"},
+		{"sort", "/api/v1/contracts?sort=color"},
+		{"order", "/api/v1/contracts?order=sideways"},
+		{"date_from_bad", "/api/v1/contracts?date_from=not-a-date"},
+		{"date_inverted", "/api/v1/contracts?date_from=2026-05-01&date_to=2026-01-01"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dm := &mockDMClient{}
+			h := newAnalysisHandler(dm)
+			rr := httptest.NewRecorder()
+			r := withAuthContext(httptest.NewRequest(http.MethodGet, tc.url, nil))
+			h.HandleList().ServeHTTP(rr, r)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d", rr.Code)
+			}
+			if parseJSON(t, rr)["error_code"] != "VALIDATION_ERROR" {
+				t.Errorf("error_code = %v", parseJSON(t, rr)["error_code"])
+			}
+			if len(dm.listAnalysisCalls) != 0 {
+				t.Error("DM should not be called on invalid params")
+			}
+		})
+	}
+}
+
+func TestHandleList_Analysis_DateRangeSameDayMixedFormat(t *testing.T) {
+	// date_from as RFC3339 later in the day + date_to as date-only of the same
+	// calendar day must NOT be rejected (day-granularity comparison).
+	dm := &mockDMClient{}
+	h := newAnalysisHandler(dm)
+	url := "/api/v1/contracts?date_from=2026-01-02T20:00:00Z&date_to=2026-01-02"
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, url, nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for same-day mixed-format range, got %d", rr.Code)
+	}
+	if len(dm.listAnalysisCalls) != 1 {
+		t.Errorf("expected DM call, got %d", len(dm.listAnalysisCalls))
+	}
+}
+
+func TestHandleList_Analysis_DMError(t *testing.T) {
+	dm := &mockDMClient{
+		listAnalysisFn: func(_ context.Context, _ dmclient.ListDocumentsParams) (*dmclient.DocumentAnalysisList, error) {
+			return nil, dmHTTPError("ListDocumentsWithAnalysis", 503, "unavailable")
+		},
+	}
+	h := newAnalysisHandler(dm)
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, "/api/v1/contracts", nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", rr.Code)
+	}
+}
+
+// =========================================================================
+// HandleList — feature flag OFF (fail-safe behavior)
+// =========================================================================
+
+func TestHandleList_FlagOff_PlainPath(t *testing.T) {
+	dm := &mockDMClient{
+		listFn: func(_ context.Context, _ dmclient.ListDocumentsParams) (*dmclient.DocumentList, error) {
+			return stubDocumentList(2), nil
+		},
+	}
+	h := newTestHandler(dm) // flag OFF
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodGet, "/api/v1/contracts", nil))
+	h.HandleList().ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if len(dm.listCalls) != 1 {
+		t.Errorf("expected plain ListDocuments call, got %d", len(dm.listCalls))
+	}
+	if len(dm.listAnalysisCalls) != 0 {
+		t.Errorf("ListDocumentsWithAnalysis must not be called when flag off, got %d", len(dm.listAnalysisCalls))
+	}
+	// New fields present but null in the plain path.
+	item := parseJSON(t, rr)["items"].([]any)[0].(map[string]any)
+	if _, ok := item["contract_type"]; !ok {
+		t.Error("contract_type key should be present (null)")
+	}
+	if item["risk_level"] != nil {
+		t.Errorf("risk_level should be null in plain path, got %v", item["risk_level"])
+	}
+}
+
+func TestHandleList_FlagOff_RejectsAggParams(t *testing.T) {
+	cases := []string{
+		"/api/v1/contracts?risk_level=high",
+		"/api/v1/contracts?contract_type=LEASE",
+		"/api/v1/contracts?processing_status=READY",
+		"/api/v1/contracts?sort=risk",
+		"/api/v1/contracts?date_from=2026-01-01",
+	}
+	for _, url := range cases {
+		t.Run(url, func(t *testing.T) {
+			dm := &mockDMClient{}
+			h := newTestHandler(dm) // flag OFF
+			rr := httptest.NewRecorder()
+			r := withAuthContext(httptest.NewRequest(http.MethodGet, url, nil))
+			h.HandleList().ServeHTTP(rr, r)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d", rr.Code)
+			}
+			if parseJSON(t, rr)["error_code"] != "VALIDATION_ERROR" {
+				t.Errorf("error_code = %v", parseJSON(t, rr)["error_code"])
+			}
+			if len(dm.listCalls) != 0 || len(dm.listAnalysisCalls) != 0 {
+				t.Error("DM must not be called when rejecting unsupported params")
+			}
+		})
+	}
+}
+
+// =========================================================================
+// Backward-compat: archive/delete responses carry null aggregate fields
+// =========================================================================
+
+func TestHandleArchive_NewFieldsNull(t *testing.T) {
+	dm := &mockDMClient{}
+	h := newTestHandler(dm)
+	rr := httptest.NewRecorder()
+	r := withAuthContext(httptest.NewRequest(http.MethodPost, "/api/v1/contracts/"+testContractID+"/archive", nil))
+	r = withChiParam(r, "contract_id", testContractID)
+	h.HandleArchive().ServeHTTP(rr, r)
+
+	body := parseJSON(t, rr)
+	for _, f := range []string{"contract_type", "risk_level", "risk_counts"} {
+		if v, ok := body[f]; !ok || v != nil {
+			t.Errorf("%s should be present and null, got ok=%v v=%v", f, ok, v)
+		}
+	}
+}
+
+// =========================================================================
+// Reverse processing-status map (ORCH-TASK-056)
+// =========================================================================
+
+func TestReverseProcessingStatusMap_RoundTrip(t *testing.T) {
+	// Every artifact_status in the forward map must reverse-expand from its
+	// user status; and every expanded artifact_status must forward-map back to
+	// the same user status (no drift).
+	for artifactStatus, userStatus := range processingStatusMap {
+		expanded, ok := artifactStatusesForUserStatus(userStatus)
+		if !ok {
+			t.Errorf("user status %q not in reverse map", userStatus)
+			continue
+		}
+		found := false
+		for _, a := range expanded {
+			if a == artifactStatus {
+				found = true
+			}
+			if mapProcessingStatus(a) != userStatus {
+				t.Errorf("artifact_status %q forward-maps to %q, want %q", a, mapProcessingStatus(a), userStatus)
+			}
+		}
+		if !found {
+			t.Errorf("artifact_status %q missing from reverse expansion of %q", artifactStatus, userStatus)
+		}
+	}
+}
+
+func TestReverseProcessingStatusMap_AwaitingUserInputUnsupported(t *testing.T) {
+	if _, ok := artifactStatusesForUserStatus("AWAITING_USER_INPUT"); ok {
+		t.Error("AWAITING_USER_INPUT must be unsupported for DM-side filtering")
+	}
+}
+
+func TestMapDocumentWithAnalysis_Mapper(t *testing.T) {
+	doc := stubDocWithAnalysis(testContractID, "FULLY_READY", &dmclient.DocumentAnalysisAggregate{
+		ContractType: strPtr("SUPPLY"),
+		RiskLevel:    strPtr("low"),
+		RiskCounts:   &dmclient.RiskCounts{High: 1, Medium: 0, Low: 5},
+	})
+	cs := mapDocumentWithAnalysisToContractSummary(doc)
+	if cs.ContractType == nil || *cs.ContractType != "SUPPLY" {
+		t.Errorf("ContractType = %v", cs.ContractType)
+	}
+	if cs.RiskLevel == nil || *cs.RiskLevel != "low" {
+		t.Errorf("RiskLevel = %v", cs.RiskLevel)
+	}
+	if cs.RiskCounts == nil || cs.RiskCounts.Low != 5 {
+		t.Errorf("RiskCounts = %v", cs.RiskCounts)
+	}
+	if cs.ProcessingStatus == nil || *cs.ProcessingStatus != "READY" {
+		t.Errorf("ProcessingStatus = %v", cs.ProcessingStatus)
 	}
 }
 

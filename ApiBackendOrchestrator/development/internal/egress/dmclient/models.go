@@ -33,10 +33,45 @@ type CreateVersionRequest struct {
 }
 
 // ListDocumentsParams are query parameters for GET /documents.
+//
+// The first three fields (Page, Size, Status) are used by the plain
+// ListDocuments call. The remaining fields are used only by
+// ListDocumentsWithAnalysis (ORCH-TASK-056), which requests the DM
+// list-aggregation read-contract (GET /documents?include=analysis): DM joins
+// the CLASSIFICATION_RESULT and RISK_PROFILE artifacts of each document's
+// current version and applies server-side filtering, sorting, and pagination.
+// They are ignored by the plain ListDocuments call for backward-compatibility.
 type ListDocumentsParams struct {
 	Page   int    // default 1
 	Size   int    // default 20
 	Status string // optional filter: ACTIVE, ARCHIVED, DELETED
+
+	// IncludeAnalysis requests the per-current-version analysis aggregate
+	// (contract_type, risk_level, risk_counts) joined server-side by DM.
+	IncludeAnalysis bool
+
+	// RiskLevel filters by the aggregated risk level of the current version
+	// (high|medium|low). Empty means no risk filter.
+	RiskLevel string
+
+	// ContractTypes filters by classification result (English LIC enum). An
+	// empty slice means no contract-type filter; multiple values are OR-ed.
+	ContractTypes []string
+
+	// ArtifactStatuses filters by DM artifact_status of the current version.
+	// The orchestrator derives these from the user-facing processing_status
+	// filter. An empty slice means no status filter; multiple values are OR-ed.
+	ArtifactStatuses []string
+
+	// DateFrom / DateTo filter by the document's created_at timestamp
+	// (inclusive bounds, ISO-8601). Empty means no lower/upper bound.
+	DateFrom string
+	DateTo   string
+
+	// Sort selects the ordering field (date|title|risk). Empty means DM default.
+	Sort string
+	// Order selects ordering direction (asc|desc). Empty means DM default.
+	Order string
 }
 
 // ListVersionsParams are query parameters for GET /documents/{document_id}/versions.
@@ -91,6 +126,45 @@ type DocumentList struct {
 	Total int        `json:"total"`
 	Page  int        `json:"page"`
 	Size  int        `json:"size"`
+}
+
+// RiskCounts holds the per-severity risk counts of a version's RISK_PROFILE.
+type RiskCounts struct {
+	High   int `json:"high"`
+	Medium int `json:"medium"`
+	Low    int `json:"low"`
+}
+
+// DocumentAnalysisAggregate is the compact per-current-version analysis summary
+// that DM computes (joins from CLASSIFICATION_RESULT + RISK_PROFILE) for the
+// list-aggregation read-contract (ORCH-TASK-056, ASSUMPTION-ORCH-17). Every
+// field is a pointer: a nil value means the datum is unknown (not yet produced,
+// or the current version is not READY). A nil RiskCounts must NOT be treated as
+// "zero risks" — it means "no result".
+type DocumentAnalysisAggregate struct {
+	ContractType *string     `json:"contract_type"`
+	RiskLevel    *string     `json:"risk_level"`
+	RiskCounts   *RiskCounts `json:"risk_counts"`
+}
+
+// DocumentWithAnalysis is a Document enriched with its current version and the
+// analysis aggregate, returned by the DM list-aggregation read-contract
+// (GET /documents?include=analysis). CurrentVersion and Analysis are nil when
+// DM has no current version / no analysis for the document.
+type DocumentWithAnalysis struct {
+	Document
+	CurrentVersion *DocumentVersion           `json:"current_version"`
+	Analysis       *DocumentAnalysisAggregate `json:"analysis"`
+}
+
+// DocumentAnalysisList is a paginated list of documents enriched with analysis
+// aggregates. Total reflects the FILTERED count (DM applies filters before
+// pagination), so frontend pagination math stays correct.
+type DocumentAnalysisList struct {
+	Items []DocumentWithAnalysis `json:"items"`
+	Total int                    `json:"total"`
+	Page  int                    `json:"page"`
+	Size  int                    `json:"size"`
 }
 
 // DocumentVersion represents a DM document version resource.

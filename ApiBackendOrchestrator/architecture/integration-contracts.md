@@ -105,6 +105,81 @@
 
 ---
 
+#### GET /api/v1/documents?include=analysis — список с агрегацией (ORCH-TASK-056, ASSUMPTION-ORCH-17)
+
+**Когда вызывается:** Contracts Handler при `GET /api/v1/contracts` с включённой
+агрегацией (`ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED=true`). DM Client-метод —
+`ListDocumentsWithAnalysis`. **Один батч-вызов на страницу (без N+1):** агрегаты
+типа/риска по текущим версиям всей страницы (`size` до 100) собираются одним
+обращением, а не `GET /documents/{id}` на каждый договор.
+
+**Источник истины — DM:** DM джойнит артефакты **текущей версии** каждого
+документа — `CLASSIFICATION_RESULT` → `contract_type`, `RISK_PROFILE` →
+`risk_level` + `risk_counts` — и применяет фильтрацию/сортировку/пагинацию
+серверно. Orchestrator только агрегирует ответ, не запрашивает артефакты по типу.
+
+**Query parameters** (все опциональны, надстройка над базовым списком):
+
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `page`, `size`, `status` | — | как в базовом `GET /documents` |
+| `include` | string | `analysis` — включить агрегат `current_version` + `analysis` в элементы |
+| `risk_level` | string | `high`\|`medium`\|`low` — фильтр по уровню риска текущей версии (только READY) |
+| `contract_type` | string[] | повторяемый; английский LIC enum (12 значений); несколько → OR |
+| `artifact_status` | string[] | повторяемый; DM `artifact_status`; несколько → OR. Orchestrator формирует это множество из user-`processing_status` реверсом `processingStatusMap` (напр. `ANALYZING` → `ARTIFACTS_READY`, `ANALYSIS_IN_PROGRESS`) |
+| `date_from`, `date_to` | string | ISO-8601 (`YYYY-MM-DD` или RFC3339); диапазон по `created_at`, включительно |
+| `sort` | string | `date` (по `created_at`)\|`title`\|`risk` (high>medium>low, null в конце) |
+| `order` | string | `asc`\|`desc` (default `desc`) |
+
+> Фильтрация по `organization_id` — автоматически по `X-Organization-ID`.
+> `total` отражает **отфильтрованное** число (фильтр применяется до пагинации).
+
+**Response (200 OK):**
+
+```json
+{
+  "items": [
+    {
+      "document_id": "string (UUID)",
+      "organization_id": "string (UUID)",
+      "title": "string",
+      "status": "ACTIVE | ARCHIVED | DELETED",
+      "current_version_id": "string (UUID) | null",
+      "created_by_user_id": "string (UUID)",
+      "created_at": "string (ISO 8601)",
+      "updated_at": "string (ISO 8601)",
+      "current_version": {
+        "version_id": "string (UUID)",
+        "version_number": 2,
+        "artifact_status": "string (DM artifact_status)"
+      },
+      "analysis": {
+        "contract_type": "string (LIC enum) | null",
+        "risk_level": "high | medium | low | null",
+        "risk_counts": { "high": 3, "medium": 2, "low": 1 }
+      }
+    }
+  ],
+  "total": 42,
+  "page": 1,
+  "size": 20
+}
+```
+
+> `current_version` = `null`, если у документа нет текущей версии. `analysis` и
+> любое его поле = `null`, если данных нет или версия не READY. `analysis` может
+> быть опущен/`null` — Orchestrator трактует отсутствие как «нет агрегата» и
+> отдаёт `null` в `ContractSummary`. Если DM (старый деплой) игнорирует
+> `include=analysis` и возвращает плоский список без `analysis`, Orchestrator
+> деградирует мягко (поля `null`) и логирует WARN.
+
+**Статус реализации:** Orchestrator-сторона — ORCH-TASK-056. DM-сторона
+(`include=analysis`, join + фильтры/сортировка) — **ещё не реализована**,
+требуется отдельная DM-задача (аналог DM-TASK-059). До готовности DM флаг
+`ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED` выключен.
+
+---
+
 #### GET /api/v1/documents/{document_id} — получение документа
 
 **Когда вызывается:** Results Aggregator при отображении договора с текущей версией.

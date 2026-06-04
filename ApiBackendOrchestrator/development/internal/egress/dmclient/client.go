@@ -57,6 +57,13 @@ type DMClient interface {
 	// ListDocuments returns a paginated list of documents for the organization.
 	ListDocuments(ctx context.Context, params ListDocumentsParams) (*DocumentList, error)
 
+	// ListDocumentsWithAnalysis returns a paginated list of documents enriched
+	// with the current-version analysis aggregate (contract_type, risk_level,
+	// risk_counts), filtered and sorted server-side by DM. It targets the DM
+	// list-aggregation read-contract GET /documents?include=analysis
+	// (ORCH-TASK-056, ASSUMPTION-ORCH-17). A single call per page (no N+1).
+	ListDocumentsWithAnalysis(ctx context.Context, params ListDocumentsParams) (*DocumentAnalysisList, error)
+
 	// GetDocument returns a document with its current version.
 	GetDocument(ctx context.Context, documentID string) (*DocumentWithCurrentVersion, error)
 
@@ -202,6 +209,52 @@ func (c *Client) ListDocuments(ctx context.Context, params ListDocumentsParams) 
 
 	var list DocumentList
 	err := c.doGET(ctx, "ListDocuments", "/documents", q, &list)
+	if err != nil {
+		return nil, err
+	}
+	return &list, nil
+}
+
+func (c *Client) ListDocumentsWithAnalysis(ctx context.Context, params ListDocumentsParams) (*DocumentAnalysisList, error) {
+	q := make(url.Values)
+	if params.Page > 0 {
+		q.Set("page", strconv.Itoa(params.Page))
+	}
+	if params.Size > 0 {
+		q.Set("size", strconv.Itoa(params.Size))
+	}
+	if params.Status != "" {
+		q.Set("status", params.Status)
+	}
+	if params.IncludeAnalysis {
+		q.Set("include", "analysis")
+	}
+	if params.RiskLevel != "" {
+		q.Set("risk_level", params.RiskLevel)
+	}
+	// Repeated query params are OR-ed by DM (same convention as the existing
+	// single-value status filter).
+	for _, ct := range params.ContractTypes {
+		q.Add("contract_type", ct)
+	}
+	for _, st := range params.ArtifactStatuses {
+		q.Add("artifact_status", st)
+	}
+	if params.DateFrom != "" {
+		q.Set("date_from", params.DateFrom)
+	}
+	if params.DateTo != "" {
+		q.Set("date_to", params.DateTo)
+	}
+	if params.Sort != "" {
+		q.Set("sort", params.Sort)
+	}
+	if params.Order != "" {
+		q.Set("order", params.Order)
+	}
+
+	var list DocumentAnalysisList
+	err := c.doGET(ctx, "ListDocumentsWithAnalysis", "/documents", q, &list)
 	if err != nil {
 		return nil, err
 	}

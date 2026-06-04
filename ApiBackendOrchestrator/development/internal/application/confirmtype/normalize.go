@@ -2,6 +2,7 @@ package confirmtype
 
 import (
 	"errors"
+	"sort"
 	"strings"
 )
 
@@ -39,6 +40,26 @@ var enWhitelist = func() map[string]struct{} {
 	}
 	return out
 }()
+
+// IsValidEnum reports whether s is one of the 12 canonical English LIC
+// contract-type enum values (ASSUMPTION-LIC-16), matched case-sensitively in
+// UPPER_SNAKE_CASE. It is the single source of truth for the enum whitelist,
+// reused by other packages (e.g. the contracts list filter) to avoid drift.
+func IsValidEnum(s string) bool {
+	_, ok := enWhitelist[s]
+	return ok
+}
+
+// EnumValues returns the 12 canonical English LIC contract-type enum values,
+// sorted, for use in validation error messages.
+func EnumValues() []string {
+	out := make([]string, 0, len(enWhitelist))
+	for v := range enWhitelist {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // NormalizeContractType maps the user-supplied contract_type to the canonical
 // English LIC enum value (ASSUMPTION-LIC-16, ASSUMPTION-ORCH-16). It accepts:

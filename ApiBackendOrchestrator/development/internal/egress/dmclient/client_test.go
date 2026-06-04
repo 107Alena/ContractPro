@@ -1121,6 +1121,92 @@ func TestListDocuments_QueryParams(t *testing.T) {
 	}
 }
 
+func TestListDocumentsWithAnalysis_QueryParamsAndDecode(t *testing.T) {
+	c, _ := testClientWithServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertHeaders(t, r)
+		q := r.URL.Query()
+		if got := q.Get("include"); got != "analysis" {
+			t.Errorf("include = %q, want analysis", got)
+		}
+		if got := q.Get("risk_level"); got != "high" {
+			t.Errorf("risk_level = %q, want high", got)
+		}
+		if got := q["contract_type"]; len(got) != 2 || got[0] != "LEASE" || got[1] != "SALE" {
+			t.Errorf("contract_type = %v, want [LEASE SALE]", got)
+		}
+		if got := q["artifact_status"]; len(got) != 2 {
+			t.Errorf("artifact_status = %v, want 2 values", got)
+		}
+		if got := q.Get("date_from"); got != "2026-01-01" {
+			t.Errorf("date_from = %q", got)
+		}
+		if got := q.Get("date_to"); got != "2026-03-31" {
+			t.Errorf("date_to = %q", got)
+		}
+		if got := q.Get("sort"); got != "risk" {
+			t.Errorf("sort = %q", got)
+		}
+		if got := q.Get("order"); got != "desc" {
+			t.Errorf("order = %q", got)
+		}
+
+		ct := "LEASE"
+		rl := "high"
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(DocumentAnalysisList{
+			Items: []DocumentWithAnalysis{{
+				Document:       Document{DocumentID: "doc-1", Title: "T", Status: "ACTIVE"},
+				CurrentVersion: &DocumentVersion{VersionID: "v1", VersionNumber: 2, ArtifactStatus: "FULLY_READY"},
+				Analysis:       &DocumentAnalysisAggregate{ContractType: &ct, RiskLevel: &rl, RiskCounts: &RiskCounts{High: 3, Medium: 1, Low: 0}},
+			}},
+			Total: 1, Page: 1, Size: 20,
+		})
+	}))
+
+	list, err := c.ListDocumentsWithAnalysis(testContext(), ListDocumentsParams{
+		Page: 1, Size: 20, IncludeAnalysis: true,
+		RiskLevel:        "high",
+		ContractTypes:    []string{"LEASE", "SALE"},
+		ArtifactStatuses: []string{"ARTIFACTS_READY", "ANALYSIS_IN_PROGRESS"},
+		DateFrom:         "2026-01-01",
+		DateTo:           "2026-03-31",
+		Sort:             "risk",
+		Order:            "desc",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if list.Total != 1 || len(list.Items) != 1 {
+		t.Fatalf("unexpected list: %+v", list)
+	}
+	it := list.Items[0]
+	if it.CurrentVersion == nil || it.CurrentVersion.VersionNumber != 2 {
+		t.Errorf("current_version = %+v", it.CurrentVersion)
+	}
+	if it.Analysis == nil || it.Analysis.ContractType == nil || *it.Analysis.ContractType != "LEASE" {
+		t.Errorf("analysis.contract_type = %+v", it.Analysis)
+	}
+	if it.Analysis.RiskCounts == nil || it.Analysis.RiskCounts.High != 3 {
+		t.Errorf("analysis.risk_counts = %+v", it.Analysis.RiskCounts)
+	}
+}
+
+func TestListDocumentsWithAnalysis_DMError(t *testing.T) {
+	c, _ := testClientWithServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"unavailable"}`))
+	}))
+
+	_, err := c.ListDocumentsWithAnalysis(testContext(), ListDocumentsParams{Page: 1, Size: 20, IncludeAnalysis: true})
+	if err == nil {
+		t.Fatal("expected error on 503")
+	}
+	var dmErr *DMError
+	if !errors.As(err, &dmErr) || dmErr.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected DMError 503, got %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // DMClient interface compile-time check
 // ---------------------------------------------------------------------------

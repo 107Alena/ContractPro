@@ -29,6 +29,7 @@ type Config struct {
 	Observability    ObservabilityConfig
 	TypeConfirmation TypeConfirmationConfig
 	Permissions      PermissionsConfig
+	Contracts        ContractsConfig
 }
 
 // Load reads configuration from environment variables, applies defaults,
@@ -57,6 +58,7 @@ func Load() (*Config, error) {
 		Observability:    loadObservabilityConfig(),
 		TypeConfirmation: loadTypeConfirmationConfig(),
 		Permissions:      loadPermissionsConfig(),
+		Contracts:        loadContractsConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err

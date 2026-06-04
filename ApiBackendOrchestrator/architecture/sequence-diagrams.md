@@ -383,6 +383,35 @@ sequenceDiagram
     ORCH-->>FE: 200 {items: [...], total: 42, page: 1, size: 20}
 ```
 
+### Список документов с агрегацией типа/риска (ORCH-TASK-056)
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant ORCH as Orchestrator
+    participant DM as Document Management
+
+    FE->>ORCH: GET /api/v1/contracts?size=20&risk_level=high<br/>&contract_type=LEASE&sort=risk&order=desc
+    ORCH->>ORCH: JWT Auth → RBAC
+    ORCH->>ORCH: Validate query params<br/>(risk_level, contract_type[], processing_status[],<br/>date_from/to, sort, order)
+    ORCH->>ORCH: Expand processing_status → DM artifact_status[]<br/>(reverse processingStatusMap, OR)
+
+    alt ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED=true
+        ORCH->>DM: ОДИН батч-вызов (no N+1)<br/>GET /documents?include=analysis&risk_level=high<br/>&contract_type=LEASE&sort=risk&order=desc
+        DM->>DM: Join CLASSIFICATION_RESULT + RISK_PROFILE<br/>текущей версии; filter + sort + paginate
+        DM-->>ORCH: {items:[{...,current_version,analysis}], total, page, size}
+        ORCH->>ORCH: Map → ContractSummary<br/>(contract_type passthrough;<br/>risk_level/risk_counts force-null если status≠READY)
+        ORCH-->>FE: 200 {items:[{contract_type, risk_level, risk_counts, ...}], total}
+    else флаг OFF и есть новые фильтры/сортировка
+        ORCH-->>FE: 400 VALIDATION_ERROR (fail-safe: не отдаём «как бы отфильтрованное»)
+    else флаг OFF без новых параметров
+        ORCH->>DM: GET /documents?... (плоский список)
+        DM-->>ORCH: {items:[...], total}
+        ORCH->>ORCH: Map → ContractSummary (агрегаты = null)
+        ORCH-->>FE: 200 {items:[{contract_type:null, risk_level:null, ...}], total}
+    end
+```
+
 ### Архивация
 
 ```mermaid

@@ -129,10 +129,8 @@ function FormatCard({ format, contractId, versionId, navigate }: FormatCardProps
       className={cn('flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg p-4')}
     >
       <header className="flex items-baseline justify-between gap-2">
-        <h3 className="text-base font-semibold text-fg">{format.label}</h3>
-        <span className="text-xs uppercase tracking-wide text-fg-muted">
-          {format.id.toUpperCase()}
-        </span>
+        <h3 className="text-16 font-semibold text-fg">{format.label}</h3>
+        <span className="text-xs text-fg-muted">{format.id.toUpperCase()}</span>
       </header>
       <p className="text-sm text-fg-muted">{format.description}</p>
       <div className="flex flex-col gap-2 sm:flex-row">

@@ -111,6 +111,16 @@ describe('ReportDetailPanel', () => {
     expect(screen.getByText('низких')).toBeInTheDocument();
   });
 
+  it('Risk — профиль без вердикта (level=null) → нейтральный заголовок + счётчики, без выдумки', () => {
+    renderPanel({
+      contract,
+      showRisk: true,
+      riskProfile: { level: null, high: 1, medium: 5, low: 9 },
+    });
+    expect(screen.getByTestId('report-detail-risk-level')).toHaveTextContent('Профиль рисков');
+    expect(screen.getByText('высоких')).toBeInTheDocument();
+  });
+
   it('Risk — showRisk + loading → спиннер', () => {
     renderPanel({ contract, showRisk: true, riskLoading: true });
     expect(screen.getByTestId('report-detail-risk-loading')).toBeInTheDocument();

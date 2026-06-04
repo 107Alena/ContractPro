@@ -17,22 +17,16 @@ describe('toReportRiskProfile', () => {
     ).toEqual({ level: 'medium', high: 2, medium: 3, low: 1 });
   });
 
-  it('деривирует доминирующий уровень при отсутствии overall_level', () => {
+  it('нет overall_level → level=null + реальные счётчики (вердикт НЕ синтезируем)', () => {
     expect(
       toReportRiskProfile({
         risks: [],
         risk_profile: { high_count: 1, medium_count: 5, low_count: 9 },
       }),
-    ).toMatchObject({ level: 'high' });
-    expect(
-      toReportRiskProfile({ risks: [], risk_profile: { medium_count: 2, low_count: 4 } }),
-    ).toMatchObject({ level: 'medium' });
-    expect(toReportRiskProfile({ risks: [], risk_profile: { low_count: 3 } })).toMatchObject({
-      level: 'low',
-    });
+    ).toEqual({ level: null, high: 1, medium: 5, low: 9 });
   });
 
-  it('все счётчики 0 и нет overall_level → null (не выдумываем уровень)', () => {
+  it('нет вердикта и все счётчики 0 → null (нечего показывать)', () => {
     expect(
       toReportRiskProfile({
         risks: [],

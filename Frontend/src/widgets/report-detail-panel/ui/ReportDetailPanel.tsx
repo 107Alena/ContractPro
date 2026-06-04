@@ -22,7 +22,11 @@ import { Button, buttonVariants, Spinner } from '@/shared/ui';
 
 /** Компактный профиль рисков выбранного отчёта (page агрегирует через useRisks). */
 export interface ReportRiskProfileView {
-  level: RiskLevel;
+  /**
+   * Authoritative-вердикт бэка (overall_level). null, если бэк уровень не вынес —
+   * тогда показываем нейтральный заголовок + счётчики, вердикт НЕ выдумываем.
+   */
+  level: RiskLevel | null;
   high: number;
   medium: number;
   low: number;
@@ -162,18 +166,27 @@ export function ReportDetailPanel({
             </div>
           ) : riskProfile ? (
             <>
-              <div className="flex items-center gap-2">
-                <span
-                  aria-hidden="true"
-                  className={`inline-block h-2 w-2 rounded-full ${RISK_DOT[riskProfile.level]}`}
-                />
+              {riskProfile.level ? (
+                <div className="flex items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    className={`inline-block h-2 w-2 rounded-full ${RISK_DOT[riskProfile.level]}`}
+                  />
+                  <span
+                    className="text-15 font-semibold text-fg"
+                    data-testid="report-detail-risk-level"
+                  >
+                    {riskLevelMeta(riskProfile.level).label}
+                  </span>
+                </div>
+              ) : (
                 <span
                   className="text-15 font-semibold text-fg"
                   data-testid="report-detail-risk-level"
                 >
-                  {riskLevelMeta(riskProfile.level).label}
+                  Профиль рисков
                 </span>
-              </div>
+              )}
               <ul
                 className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm"
                 aria-label="Распределение рисков"

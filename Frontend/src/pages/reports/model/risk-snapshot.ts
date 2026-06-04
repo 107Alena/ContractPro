@@ -1,11 +1,14 @@
 // toReportRiskProfile — сворачивает RiskList (GET …/risks) в компактный
 // view-model для риск-строки ReportDetailPanel (Figma 230:6).
 //
-// data-honesty: нет risk_profile (версия не READY / артефакта нет / 404) → null,
-// панель покажет честный плейсхолдер, ничего не выдумываем (legal-данные).
-// overall_level берём из бэка, иначе деривируем доминирующий уровень по счётчикам.
+// data-honesty (legal-продукт): уровень риска — ТОЛЬКО authoritative-вердикт
+// бэка (LIC взвешивает счётчики, политику строгости, aggregate-score). Уровень
+// из счётчиков НЕ синтезируем: иначе 1 high среди десятков low дал бы ложный
+// «Высокий риск», которого бэк не выносил. Зеркалит RiskProfileCard (показывает
+// бейдж уровня только при overall_level). Счётчики high/medium/low — реальные
+// данные, показываем их и без вердикта. Нет ни вердикта, ни рисков → null
+// (панель покажет честный плейсхолдер).
 import { type RiskList } from '@/entities/result';
-import { type RiskLevel } from '@/entities/risk';
 import { type ReportRiskProfileView } from '@/widgets/report-detail-panel';
 
 export function toReportRiskProfile(list: RiskList | undefined): ReportRiskProfileView | null {
@@ -14,9 +17,7 @@ export function toReportRiskProfile(list: RiskList | undefined): ReportRiskProfi
   const high = profile.high_count ?? 0;
   const medium = profile.medium_count ?? 0;
   const low = profile.low_count ?? 0;
-  const level: RiskLevel | undefined =
-    profile.overall_level ??
-    (high > 0 ? 'high' : medium > 0 ? 'medium' : low > 0 ? 'low' : undefined);
-  if (!level) return null;
+  const level = profile.overall_level ?? null;
+  if (level == null && high === 0 && medium === 0 && low === 0) return null;
   return { level, high, medium, low };
 }

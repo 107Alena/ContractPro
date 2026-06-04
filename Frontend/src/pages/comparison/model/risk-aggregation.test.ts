@@ -66,4 +66,16 @@ describe('groupComparisonRisks', () => {
     expect(g.unchanged[0]?.level).toBe('low');
     expect(g.unchanged[0]?.category).toBe('п.7.2');
   });
+
+  it('НЕидентифицируемые риски (нет id/clause_ref/description) не слипаются в unchanged', () => {
+    // Два разных безымянных риска НЕ должны ложно совпасть по пустому ключу.
+    const b: RiskList = { risks: [{ level: 'high' }] };
+    const t: RiskList = { risks: [{ level: 'medium' }] };
+    const g = groupComparisonRisks(b, t);
+    expect(g.unchanged).toHaveLength(0); // ключевой инвариант: НЕ unchanged
+    expect(g.resolved).toHaveLength(1); // безымянный из base → resolved
+    expect(g.introduced).toHaveLength(1); // безымянный из target → introduced
+    // уникальные fallback-id (нет коллизии React-ключей)
+    expect(g.resolved[0]?.id).not.toBe(g.introduced[0]?.id);
+  });
 });

@@ -34,7 +34,7 @@ function VersionColumn({ label, meta, testId }: VersionColumnProps) {
       <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">{label}</p>
       {meta ? (
         <>
-          <h3 className="text-base font-semibold text-fg">
+          <h3 className="text-16 font-semibold text-fg">
             {meta.versionNumber !== undefined ? `v${meta.versionNumber}` : 'Версия'}
             {meta.title ? (
               <span className="ml-2 font-normal text-fg-muted">{meta.title}</span>

@@ -32,14 +32,22 @@ export function riskListToSnapshot(
 }
 
 // Ключ матчинга риска между версиями: стабильный id, иначе ссылка на пункт,
-// иначе описание. Риски без любого из них в матчинг не попадают (key '').
-function riskKey(risk: Risk): string {
-  return risk.id ?? risk.clause_ref ?? risk.description ?? '';
+// иначе описание. null — риск НЕидентифицируем (нет ни одного из полей): такой
+// риск не матчится с другими (иначе два разных безымянных риска ложно слиплись
+// бы в «unchanged»), а попадает в resolved (если в base) / introduced (в target).
+function riskKey(risk: Risk): string | null {
+  return risk.id ?? risk.clause_ref ?? risk.description ?? null;
 }
 
-function toItem(risk: Risk): ComparisonRiskItem {
+// Совпал ли риск с риском другой версии: только по непустому ключу.
+function matches(risk: Risk, otherKeys: ReadonlySet<string>): boolean {
+  const key = riskKey(risk);
+  return key !== null && otherKeys.has(key);
+}
+
+function toItem(risk: Risk, fallbackId: string): ComparisonRiskItem {
   return {
-    id: riskKey(risk) || 'risk',
+    id: riskKey(risk) ?? fallbackId,
     title: risk.description ?? risk.clause_ref ?? 'Риск',
     // level в схеме опционален; отсутствие трактуем как 'low' (наименее
     // тревожный дефолт — не завышаем риск).
@@ -48,10 +56,16 @@ function toItem(risk: Risk): ComparisonRiskItem {
   };
 }
 
+// Множество непустых ключей версии (null-ключи исключаются из матчинга).
+function keySet(risks: readonly Risk[]): Set<string> {
+  return new Set(risks.map(riskKey).filter((k): k is string => k !== null));
+}
+
 /**
  * Группирует риски двух версий по дельте через матчинг по riskKey:
  * resolved — были в base, нет в target; introduced — новые в target;
  * unchanged — присутствуют в обеих (берём версию из target).
+ * НЕидентифицируемые риски (key=null) никогда не считаются unchanged.
  */
 export function groupComparisonRisks(
   baseRiskList: RiskList | undefined,
@@ -59,11 +73,15 @@ export function groupComparisonRisks(
 ): ComparisonRisksGroups {
   const base = baseRiskList?.risks ?? [];
   const target = targetRiskList?.risks ?? [];
-  const baseKeys = new Set(base.map(riskKey));
-  const targetKeys = new Set(target.map(riskKey));
+  const baseKeys = keySet(base);
+  const targetKeys = keySet(target);
   return {
-    resolved: base.filter((r) => !targetKeys.has(riskKey(r))).map(toItem),
-    introduced: target.filter((r) => !baseKeys.has(riskKey(r))).map(toItem),
-    unchanged: target.filter((r) => baseKeys.has(riskKey(r))).map(toItem),
+    resolved: base.filter((r) => !matches(r, targetKeys)).map((r, i) => toItem(r, `resolved-${i}`)),
+    introduced: target
+      .filter((r) => !matches(r, baseKeys))
+      .map((r, i) => toItem(r, `introduced-${i}`)),
+    unchanged: target
+      .filter((r) => matches(r, baseKeys))
+      .map((r, i) => toItem(r, `unchanged-${i}`)),
   };
 }

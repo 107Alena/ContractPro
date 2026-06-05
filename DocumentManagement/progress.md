@@ -2912,3 +2912,57 @@ LIC v1.1 RE_CHECK события с `risk_delta` теперь корректно
 TOP-2 critical gap из LIC architecture review полностью закрыт. Together with LIC-side defensive layer (heartbeat + увеличенный TTL idempotency PROCESSING) даёт 100% coverage сценария crash-in-acknowledgment-window. Решение унифицировано между DP artifacts / LIC artifacts / RE reports / DP diff — diff-подход из §8.4 теперь работает через тот же snapshot-механизм, что и три новых.
 
 ---
+
+## DM-TASK-059: Агрегат count-by-artifact_status — GET /documents/stats (2026-06-05)
+
+**Статус:** done
+
+**Задача:** Дать DM дешёвый org-scoped агрегат «сколько договоров в каком processing-статусе» по ТЕКУЩИМ версиям документов — источник истины для дашборд-метрики «в работе» (потребитель — Orchestrator GET /contracts/stats, ORCH-TASK-057).
+
+**План реализации:**
+1. Изучить существующий контракт: Orchestrator dmclient уже ожидает GET /documents/stats?include_archived= с ответом {by_artifact_status: map[string]int, not_started: int, total: int}, scope X-Organization-ID — реализация ДОЛЖНА точно совпасть.
+2. Миграция: индекс под driving-scan + требуемый контрактом индекс versions.
+3. Port (outbound repo-метод + inbound handler-метод + тип DocumentStats), postgres-реализация одним GROUP BY запросом, lifecycle-сервис, API route+handler.
+4. Обновить все реализации/фейки port.DocumentRepository и port.DocumentLifecycleHandler.
+5. Тесты на всех слоях + доки (5 файлов).
+
+**Что сделано:**
+- **Миграция** `000006_document_stats_index` (up/down, BEGIN/COMMIT как 000003):
+  - `idx_documents_org_status ON documents(organization_id, status) INCLUDE (current_version_id)` — реально драйвит запрос (covering join-ключа без heap-fetch).
+  - `idx_versions_org_artifact_status ON document_versions(organization_id, artifact_status)` — требуется acceptance-критериями; для самого /documents/stats forward-looking (версии джойнятся по PK), поддерживает прямые org-scoped status-роллапы. Честно помечено в storage.md и комментарии миграции.
+- **Port:** `port.DocumentStats{ByArtifactStatus map[model.ArtifactStatus]int; NotStarted int; Total int}` (inbound.go), `DocumentLifecycleHandler.GetDocumentStats(ctx, orgID, includeArchived)`, `DocumentRepository.CountCurrentVersionsByArtifactStatus(ctx, orgID, includeArchived) (*DocumentStats, error)` (outbound.go).
+- **postgres:** один запрос `LEFT JOIN documents↔current_version GROUP BY v.artifact_status`, `WHERE d.organization_id=$1 AND d.status=ANY($2)` ($2 = {ACTIVE} | {ACTIVE,ARCHIVED}). NULL-группа (нет текущей версии) → NotStarted через nullable-scan (*string). DELETED исключён всегда. Без N+1.
+- **lifecycle.GetDocumentStats:** pure read (без транзакции), валидация org, нормализация nil-map.
+- **API:** route `GET /api/v1/documents/stats` зарегистрирован ДО wildcard `{document_id}` (Go 1.22 ServeMux отдаёт приоритет более специфичному литералу — подтверждено тестом). Handler: `include_archived` (только литерал "true"), scope из X-Organization-ID, ответ `documentStatsResponse{by_artifact_status (ВСЕ enum-ключи, 0 при отсутствии), not_started, total}` — байт-в-байт совпадает с Orchestrator `dmclient.DocumentStats`.
+- **Обёртки/фейки:** `poolDocumentRepository` (cmd/dm-service/main.go), `memoryDocumentRepository` (integration/testinfra.go — JOIN на versionRepo через новый `findByVersionID`); моки `mockLifecycle` (api_test), `mockDocumentRepo` (lifecycle_test, version_test).
+
+**Тесты:**
+- postgres `document_stats_test.go` (5): группировка + проверка SQL-формы (LEFT JOIN/GROUP BY/org=$1/status=ANY($2)) + single-query (no N+1), include_archived (ACTIVE+ARCHIVED, без DELETED), query/scan/rows-iteration ошибки.
+- lifecycle `lifecycle_stats_test.go` (4): happy (проброс orgID/includeArchived), empty-org → VALIDATION_ERROR, repo-error, nil-map нормализация.
+- api `document_stats_test.go` (6): happy + все enum-ключи присутствуют, include_archived=true, include_archived=1→false, org-scoping, service-error→500, route-not-shadowed (stats не перехватывается getDocument).
+- integration `document_stats_test.go` (3): grouping+not_started, archived/deleted семантика (default vs include_archived), tenant-scoping (orgA≠orgB).
+- migrate count 5→6.
+
+**Проверки:**
+- `go test -count=1 -race ./...` — все 30 пакетов PASS
+- `go vet ./...` — OK
+- `make build` / `make build-migrate` / `make test` / `make lint` — OK (бинарники удалены, не в коммите)
+
+**Документация (синхронно):**
+- `api-specification.yaml` — path `/documents/stats` (operationId getDocumentStats, param include_archived) + schema `DocumentStats`.
+- `high-architecture.md` — строка в §6.5 endpoint-таблице + новый §6.9.1 (SQL, индексы, current-version-семантика, RLS, latency-бюджет, граница ответственности DM/Orchestrator).
+- `storage.md` — оба индекса с пояснением driving vs forward-looking.
+- `integration-contracts.md` — §3.1 контракт DM↔Orchestrator (JSON-пример, семантика by_artifact_status/not_started/total, гарантии) + строка в таблице sync API.
+- `backlog.md` — пункт 12 отмечен Готово со ссылками.
+
+**Subagent-консультации:**
+- **postgres-pro** — валидация SQL/индексов: подтвердил корректность LEFT JOIN+GROUP BY и NULL→not_started; index #2 (documents) драйвит запрос, index #1 (versions) forward-looking; RLS (FORCE + SET LOCAL) не конфликтует; реформулировка через FILTER/CASE не нужна на этом масштабе.
+- **code-reviewer** — 0 blocking. Warning про «dead weight» индекс versions — оставлен как явно требуемый контрактом задачи (честно помечен forward-looking). Применён nit: комментарий о fake-divergence (dangling FK невозможен в реальной схеме) в testinfra.go.
+
+**Ключевые решения:**
+- Контракт ответа продиктован уже существующим Orchestrator `dmclient.DocumentStats` — реализация подгонялась под него, а не наоборот (избегаем рассинхрона DM↔Orchestrator).
+- NULL→not_started через nullable-scan (*string) вместо COALESCE-сентинела в SQL — идиоматично коду (паттерн fromNullableString), не засоряет enum-колонку магической строкой.
+- Все enum-ключи всегда в ответе (0 при отсутствии) — стабильная поверхность контракта независимо от данных организации.
+- Маппинг artifact_status→UserProcessingStatus НЕ в DM (граница доменов): DM отдаёт внутренние значения как есть.
+
+**Итог:** DM-TASK-059 закрыта — последняя pending-задача DM-бэклога. Все 59 задач Document Management = done.

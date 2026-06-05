@@ -158,6 +158,28 @@ func (s *DocumentLifecycleService) ListDocuments(ctx context.Context, params por
 	}, nil
 }
 
+// GetDocumentStats returns the organization-scoped count-by-artifact_status
+// aggregate over each document's current version (DM-TASK-059). It is a pure
+// read (no transaction): a single GROUP BY query in the repository.
+func (s *DocumentLifecycleService) GetDocumentStats(ctx context.Context, organizationID string, includeArchived bool) (*port.DocumentStats, error) {
+	if organizationID == "" {
+		return nil, port.NewValidationError("organization_id is required")
+	}
+	stats, err := s.docRepo.CountCurrentVersionsByArtifactStatus(ctx, organizationID, includeArchived)
+	if err != nil {
+		s.logger.Error("get document stats failed",
+			"organization_id", organizationID,
+			"include_archived", includeArchived,
+			"error", err,
+		)
+		return nil, err
+	}
+	if stats.ByArtifactStatus == nil {
+		stats.ByArtifactStatus = map[model.ArtifactStatus]int{}
+	}
+	return stats, nil
+}
+
 // ArchiveDocument transitions a document from ACTIVE to ARCHIVED within a
 // single transaction that also records an audit entry.
 // Returns ErrCodeDocumentNotFound or ErrCodeStatusTransition on failure.

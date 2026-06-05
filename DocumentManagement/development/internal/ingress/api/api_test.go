@@ -33,6 +33,7 @@ type mockLifecycle struct {
 	listDocs   func(ctx context.Context, params port.ListDocumentsParams) (*port.PageResult[*model.Document], error)
 	archiveDoc func(ctx context.Context, orgID, docID string) error
 	deleteDoc  func(ctx context.Context, orgID, docID string) error
+	statsFn    func(ctx context.Context, orgID string, includeArchived bool) (*port.DocumentStats, error)
 }
 
 func (m *mockLifecycle) CreateDocument(ctx context.Context, params port.CreateDocumentParams) (*model.Document, error) {
@@ -64,6 +65,12 @@ func (m *mockLifecycle) DeleteDocument(ctx context.Context, orgID, docID string)
 		return m.deleteDoc(ctx, orgID, docID)
 	}
 	return nil
+}
+func (m *mockLifecycle) GetDocumentStats(ctx context.Context, orgID string, includeArchived bool) (*port.DocumentStats, error) {
+	if m.statsFn != nil {
+		return m.statsFn(ctx, orgID, includeArchived)
+	}
+	return &port.DocumentStats{ByArtifactStatus: map[model.ArtifactStatus]int{}}, nil
 }
 
 type mockVersions struct {

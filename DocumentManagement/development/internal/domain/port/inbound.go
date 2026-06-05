@@ -34,6 +34,29 @@ type DocumentLifecycleHandler interface {
 	// DeleteDocument transitions a document to DELETED (soft delete).
 	// Returns ErrCodeDocumentNotFound or ErrCodeStatusTransition on failure.
 	DeleteDocument(ctx context.Context, organizationID, documentID string) error
+
+	// GetDocumentStats returns the organization-scoped count-by-artifact_status
+	// aggregate over each document's current version (DM-TASK-059). Documents
+	// without a current version are counted under NotStarted. status=DELETED
+	// documents are never counted; ARCHIVED only when includeArchived is true.
+	GetDocumentStats(ctx context.Context, organizationID string, includeArchived bool) (*DocumentStats, error)
+}
+
+// DocumentStats is the count-by-artifact_status aggregate over each document's
+// current version, scoped to one organization (DM-TASK-059). It is the source
+// of truth for the dashboard "in progress" metric consumed by the Orchestrator
+// (GET /contracts/stats, ORCH-TASK-057).
+//
+// ByArtifactStatus is keyed by DM-internal artifact_status (raw values such as
+// FULLY_READY, PROCESSING_ARTIFACTS_RECEIVED). DM returns them as-is; mapping to
+// the user-facing UserProcessingStatus is the Orchestrator's responsibility, not
+// DM's. NotStarted is disjoint from ByArtifactStatus: a document with no current
+// version is counted only there. Total is the number of documents in scope (the
+// sum of all ByArtifactStatus buckets plus NotStarted).
+type DocumentStats struct {
+	ByArtifactStatus map[model.ArtifactStatus]int
+	NotStarted       int
+	Total            int
 }
 
 // CreateDocumentParams holds the input for creating a new document.

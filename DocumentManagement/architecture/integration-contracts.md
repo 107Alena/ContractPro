@@ -37,6 +37,7 @@
 |--------|----------|----------|
 | POST | `/api/v1/documents` | Создать документ |
 | GET | `/api/v1/documents?page=&size=&status=` | Список документов (org_id из JWT) |
+| GET | `/api/v1/documents/stats?include_archived=` | Агрегат count-by-artifact_status по текущим версиям |
 | GET | `/api/v1/documents/{document_id}` | Метаданные документа |
 | POST | `/api/v1/documents/{document_id}/archive` | Архивация документа |
 | DELETE | `/api/v1/documents/{document_id}` | Soft delete |
@@ -48,6 +49,41 @@
 | GET | `/api/v1/documents/{document_id}/diffs/{base_vid}/{target_vid}` | Получить diff |
 
 **Обоснование sync API:** Sync REST API используется только оркестратором и UI. Для CRUD-операций и отображения данных пользователю async неприемлем — пользователь ожидает немедленный ответ (NFR-1.3 ≤ 2 сек). Междоменное взаимодействие (DP, LIC, RE) — исключительно async через RabbitMQ.
+
+### 3.1. Контракт DM↔Orchestrator: `GET /documents/stats` (DM-TASK-059 ↔ ORCH-TASK-057)
+
+**Назначение.** Источник истины для дашборд-метрики «в работе». DM считает агрегат
+по текущим версиям документов; Orchestrator (`GET /contracts/stats`) маппит
+`artifact_status` во внешний `UserProcessingStatus` и формирует `ContractStats`.
+
+**Запрос.**
+- `GET /api/v1/documents/stats?include_archived={true|false}`
+- Заголовок `X-Organization-ID` — обязателен (скоуп организации, как у остальных DM-эндпоинтов).
+- `include_archived` (bool, default `false`): `false` — только `ACTIVE`; `true` — `ACTIVE`+`ARCHIVED`. `DELETED` исключаются всегда.
+
+**Ответ `200` (JSON):**
+
+```json
+{
+  "by_artifact_status": {
+    "PENDING": 2,
+    "PROCESSING_ARTIFACTS_RECEIVED": 1,
+    "ANALYSIS_ARTIFACTS_RECEIVED": 0,
+    "REPORTS_READY": 0,
+    "FULLY_READY": 5,
+    "PARTIALLY_AVAILABLE": 0
+  },
+  "not_started": 3,
+  "total": 11
+}
+```
+
+**Семантика полей.**
+- `by_artifact_status` — счётчики документов по `artifact_status` их ТЕКУЩЕЙ версии (`documents.current_version_id`). Присутствуют ВСЕ значения enum `ArtifactStatus` (отсутствующие = `0`). Значения — внутренние для DM; **маппинг во внешний `UserProcessingStatus` делает Orchestrator, не DM**.
+- `not_started` — документы без текущей версии (disjoint с `by_artifact_status`: документ ровно в одном из двух).
+- `total` — всего документов в скоупе = сумма всех bucket'ов `by_artifact_status` + `not_started`. Orchestrator пересчитывает собственный total из смапленных bucket'ов и сверяет с этим значением.
+
+**Гарантии.** Один SQL-запрос (без N+1); изоляция организаций через `organization_id` + RLS; `DELETED` никогда не учитывается.
 
 ## 4. Именование топиков RabbitMQ
 

@@ -940,6 +940,10 @@ func (r *poolDocumentRepository) DeleteByID(ctx context.Context, documentID stri
 	return r.inner.DeleteByID(postgres.InjectPool(ctx, r.pool), documentID)
 }
 
+func (r *poolDocumentRepository) CountCurrentVersionsByArtifactStatus(ctx context.Context, orgID string, includeArchived bool) (*port.DocumentStats, error) {
+	return r.inner.CountCurrentVersionsByArtifactStatus(postgres.InjectPool(ctx, r.pool), orgID, includeArchived)
+}
+
 // poolDiffRepository wraps port.DiffRepository to inject the pgxpool.Pool.
 // Required by retention meta cleanup job.
 type poolDiffRepository struct {

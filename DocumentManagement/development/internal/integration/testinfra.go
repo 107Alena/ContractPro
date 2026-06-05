@@ -69,6 +69,7 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		transactor:     newMemoryTransactor(),
 		docRepo:        newMemoryDocumentRepository(),
 		versionRepo:    newMemoryVersionRepository(),
+		// docRepo.versions wired below once both repos exist.
 		artifactRepo:   newMemoryArtifactRepository(),
 		auditRepo:      newMemoryAuditRepository(),
 		outboxRepo:     newMemoryOutboxRepository(),
@@ -82,6 +83,10 @@ func newTestHarnessCore(t *testing.T, confirmationPublisher port.ConfirmationPub
 		broker:          newCaptureBroker(),
 		logger:          newRecordingLogger(),
 	}
+
+	// Let the document repo resolve current-version status for the stats
+	// aggregate (the in-memory equivalent of the documents↔versions JOIN).
+	h.docRepo.versions = h.versionRepo
 
 	h.outboxWriter = outbox.NewOutboxWriter(h.outboxRepo)
 
@@ -199,6 +204,12 @@ var _ port.Transactor = (*memoryTransactor)(nil)
 type memoryDocumentRepository struct {
 	mu   sync.RWMutex
 	docs map[string]*model.Document // key: orgID/docID
+
+	// versions is an optional reference to the version repository, used by
+	// CountCurrentVersionsByArtifactStatus to resolve each document's current
+	// version status (the in-memory equivalent of the SQL JOIN). Wired by the
+	// harness after both repositories are constructed.
+	versions *memoryVersionRepository
 }
 
 func newMemoryDocumentRepository() *memoryDocumentRepository {
@@ -300,6 +311,39 @@ func (r *memoryDocumentRepository) DeleteByID(_ context.Context, _ string) error
 	return nil
 }
 
+func (r *memoryDocumentRepository) CountCurrentVersionsByArtifactStatus(_ context.Context, orgID string, includeArchived bool) (*port.DocumentStats, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	stats := &port.DocumentStats{ByArtifactStatus: map[model.ArtifactStatus]int{}}
+	for _, doc := range r.docs {
+		if doc.OrganizationID != orgID {
+			continue
+		}
+		if doc.Status == model.DocumentStatusDeleted {
+			continue
+		}
+		if doc.Status == model.DocumentStatusArchived && !includeArchived {
+			continue
+		}
+		stats.Total++
+		if doc.CurrentVersionID == "" || r.versions == nil {
+			stats.NotStarted++
+			continue
+		}
+		v, ok := r.versions.findByVersionID(doc.CurrentVersionID)
+		if !ok {
+			// A dangling current_version_id cannot happen against the real
+			// schema (FK constraint), so this branch is fake-only; it errs
+			// toward not_started, the same safe direction as the SQL NULL group.
+			stats.NotStarted++
+			continue
+		}
+		stats.ByArtifactStatus[v.ArtifactStatus]++
+	}
+	return stats, nil
+}
+
 var _ port.DocumentRepository = (*memoryDocumentRepository)(nil)
 
 // ---------------------------------------------------------------------------
@@ -323,6 +367,19 @@ func (r *memoryVersionRepository) store(ver *model.DocumentVersion) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.versions[r.vkey(ver.OrganizationID, ver.DocumentID, ver.VersionID)] = ver
+}
+
+// findByVersionID looks up a version by its version_id alone (scanning all
+// keys). Used by memoryDocumentRepository.CountCurrentVersionsByArtifactStatus.
+func (r *memoryVersionRepository) findByVersionID(versionID string) (*model.DocumentVersion, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, v := range r.versions {
+		if v.VersionID == versionID {
+			return v, true
+		}
+	}
+	return nil, false
 }
 
 func (r *memoryVersionRepository) Insert(ctx context.Context, version *model.DocumentVersion) error {

@@ -33,6 +33,7 @@ type mockDocumentRepo struct {
 	findByIDFn func(ctx context.Context, orgID, docID string) (*model.Document, error)
 	listFn    func(ctx context.Context, orgID string, statusFilter *model.DocumentStatus, page, pageSize int) ([]*model.Document, int, error)
 	updateFn  func(ctx context.Context, doc *model.Document) error
+	statsFn   func(ctx context.Context, orgID string, includeArchived bool) (*port.DocumentStats, error)
 
 	insertedDocs []*model.Document
 	updatedDocs  []*model.Document
@@ -82,6 +83,13 @@ func (m *mockDocumentRepo) FindDeletedOlderThan(context.Context, time.Time, int)
 
 func (m *mockDocumentRepo) DeleteByID(context.Context, string) error {
 	panic("not used in lifecycle")
+}
+
+func (m *mockDocumentRepo) CountCurrentVersionsByArtifactStatus(ctx context.Context, orgID string, includeArchived bool) (*port.DocumentStats, error) {
+	if m.statsFn != nil {
+		return m.statsFn(ctx, orgID, includeArchived)
+	}
+	return &port.DocumentStats{ByArtifactStatus: map[model.ArtifactStatus]int{}}, nil
 }
 
 type mockAuditRepo struct {

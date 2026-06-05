@@ -117,6 +117,9 @@ func (h *Handler) Mux(apiRequests *prometheus.CounterVec, apiDuration *prometheu
 	// --- Documents ---
 	mux.HandleFunc("POST /api/v1/documents", h.createDocument)
 	mux.HandleFunc("GET /api/v1/documents", h.listDocuments)
+	// More-specific literal path; Go 1.22+ routing prefers it over the
+	// {document_id} wildcard regardless of registration order (DM-TASK-059).
+	mux.HandleFunc("GET /api/v1/documents/stats", h.documentStats)
 	mux.HandleFunc("GET /api/v1/documents/{document_id}", h.getDocument)
 	mux.HandleFunc("DELETE /api/v1/documents/{document_id}", h.deleteDocument)
 	mux.HandleFunc("POST /api/v1/documents/{document_id}/archive", h.archiveDocument)
@@ -275,6 +278,47 @@ func (h *Handler) archiveDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, doc)
+}
+
+// documentStatsResponse is the JSON body for GET /documents/stats. The shape is
+// fixed by the DM↔Orchestrator contract (ORCH-TASK-057, integration-contracts.md):
+//   - by_artifact_status: every artifact_status enum value is present (0 when
+//     absent), keyed by the DM-internal status string. The Orchestrator maps
+//     these to the user-facing UserProcessingStatus.
+//   - not_started: documents with no current version (disjoint from the map).
+//   - total: documents in scope (sum of all buckets + not_started).
+type documentStatsResponse struct {
+	ByArtifactStatus map[string]int `json:"by_artifact_status"`
+	NotStarted       int            `json:"not_started"`
+	Total            int            `json:"total"`
+}
+
+// documentStats handles GET /documents/stats — the organization-scoped
+// count-by-artifact_status aggregate over each document's current version.
+// Query param include_archived (bool, default false) adds ARCHIVED documents;
+// DELETED are never counted. Scope comes from X-Organization-ID (authMiddleware).
+func (h *Handler) documentStats(w http.ResponseWriter, r *http.Request) {
+	ac := authFromContext(r.Context())
+	includeArchived := r.URL.Query().Get("include_archived") == "true"
+
+	stats, err := h.lifecycle.GetDocumentStats(r.Context(), ac.OrganizationID, includeArchived)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	// Emit every enum status (0 when absent) so the contract surface is stable
+	// regardless of which statuses currently exist in the organization.
+	byStatus := make(map[string]int, len(model.AllArtifactStatuses))
+	for _, st := range model.AllArtifactStatuses {
+		byStatus[string(st)] = stats.ByArtifactStatus[st]
+	}
+
+	writeJSON(w, http.StatusOK, documentStatsResponse{
+		ByArtifactStatus: byStatus,
+		NotStarted:       stats.NotStarted,
+		Total:            stats.Total,
+	})
 }
 
 // ---------------------------------------------------------------------------

@@ -628,6 +628,7 @@ DM — **центральный data hub** между вычислительны
 |--------|------|----------|---------|
 | POST | `/documents` | Создать документ | Document Lifecycle Service |
 | GET | `/documents` | Список документов организации | Document Lifecycle Service |
+| GET | `/documents/stats` | Агрегат count-by-artifact_status по текущим версиям | Document Lifecycle Service |
 | GET | `/documents/{id}` | Метаданные документа + текущая версия | Document Lifecycle Service |
 | POST | `/documents/{id}/versions` | Создать новую версию | Version Management Service |
 | GET | `/documents/{id}/versions` | Список версий | Version Management Service |
@@ -708,10 +709,59 @@ DM — **центральный data hub** между вычислительны
 4. Архивация документа (`ACTIVE` → `ARCHIVED`).
 5. Soft delete (`ACTIVE`/`ARCHIVED` → `DELETED`).
 6. Запись `AuditRecord`.
+7. Агрегат count-by-artifact_status по текущим версиям (`GET /documents/stats`, DM-TASK-059).
 
 **Входы:** Sync API requests.
 **Выходы:** HTTP responses, audit records.
 **Зависимости:** Metadata Store.
+
+### 6.9.1 Агрегат count-by-artifact_status (`GET /documents/stats`)
+
+**Назначение.** Источник истины для дашборд-метрики «в работе»: число договоров
+организации с незавершённым processing-статусом. Потребитель — Orchestrator
+`GET /contracts/stats` (ORCH-TASK-057), который превращает агрегат в `ContractStats`
+с маппингом во внешний `UserProcessingStatus`.
+
+**Семантика «текущей версии».** Processing-статус хранится на ВЕРСИИ
+(`document_versions.artifact_status`). «Статус договора» = `artifact_status` его
+текущей версии (`documents.current_version_id`). Агрегат считает по текущим
+версиям, а не по всем версиям документа.
+
+**Запрос (один SQL, без N+1).** `LEFT JOIN` документов с их текущей версией,
+группировка по `artifact_status`:
+
+```sql
+SELECT v.artifact_status, COUNT(*)
+FROM documents d
+LEFT JOIN document_versions v ON v.version_id = d.current_version_id
+WHERE d.organization_id = $1 AND d.status = ANY($2)  -- {ACTIVE} | {ACTIVE,ARCHIVED}
+GROUP BY v.artifact_status;
+```
+
+Строки с `current_version_id IS NULL` сворачиваются в NULL-группу и отдаются как
+`not_started`. `status=DELETED` исключается всегда; `ARCHIVED` — только при
+`include_archived=true` (по умолчанию ACTIVE).
+
+**Скоуп и изоляция.** Организация берётся из `X-Organization-ID`; запрос совместим
+с RLS-политиками (фильтр `organization_id` обязателен, изоляция не обходится).
+
+**Индексы.** `idx_documents_org_status ON documents(organization_id, status)
+INCLUDE (current_version_id)` драйвит driving-scan (covering для join-ключа);
+`idx_versions_org_artifact_status ON document_versions(organization_id,
+artifact_status)` требуется контрактом задачи и поддерживает прямые org-scoped
+status-роллапы (для самого `/documents/stats` — forward-looking, т.к. версии
+джойнятся по PK). См. `storage.md`.
+
+**Латентность.** Один индексный скан + PK-probe на документ в скоупе; при целевой
+нагрузке ~1000 договоров/день на организацию — единицы миллисекунд, well within
+sync-API бюджета.
+
+**Граница ответственности.** DM отдаёт `artifact_status` как есть (внутренние
+значения домена: `PENDING`, `PROCESSING_ARTIFACTS_RECEIVED`,
+`ANALYSIS_ARTIFACTS_RECEIVED`, `REPORTS_READY`, `FULLY_READY`,
+`PARTIALLY_AVAILABLE`). Маппинг во внешний `UserProcessingStatus` делает
+Orchestrator — orchestrator-семантика НЕ протекает в DM. Контракт ответа
+зафиксирован в `integration-contracts.md`.
 
 ## 6.10 Diff Storage Service
 

@@ -282,7 +282,7 @@ func TestMigrations_PgxDSNConversion(t *testing.T) {
 // TestMigrations_CurrentVersionCount verifies the expected number of migrations.
 // Update this constant when adding new migrations.
 func TestMigrations_CurrentVersionCount(t *testing.T) {
-	const expectedVersions = 5
+	const expectedVersions = 6
 
 	entries, err := fs.ReadDir(migrationsFS, "migrations")
 	if err != nil {

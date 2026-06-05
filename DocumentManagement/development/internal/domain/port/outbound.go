@@ -64,6 +64,14 @@ type DocumentRepository interface {
 	// ExistsByID returns true if a document exists for the given organization.
 	ExistsByID(ctx context.Context, organizationID, documentID string) (bool, error)
 
+	// CountCurrentVersionsByArtifactStatus returns, for the organization, the
+	// count of documents grouped by the artifact_status of their CURRENT version
+	// (DM-TASK-059). Documents without a current version are reported via
+	// DocumentStats.NotStarted. status=DELETED documents are excluded; ARCHIVED
+	// are included only when includeArchived is true (default ACTIVE-only). The
+	// aggregate is computed with a single GROUP BY query (no N+1).
+	CountCurrentVersionsByArtifactStatus(ctx context.Context, organizationID string, includeArchived bool) (*DocumentStats, error)
+
 	// FindDeletedOlderThan returns documents with status=DELETED whose
 	// deleted_at is older than cutoff, up to limit results ordered by
 	// deleted_at ASC. Cross-tenant system-level query (no org filter).

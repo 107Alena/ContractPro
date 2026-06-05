@@ -210,6 +210,62 @@ func (r *DocumentRepository) ExistsByID(ctx context.Context, organizationID, doc
 	return exists, nil
 }
 
+// CountCurrentVersionsByArtifactStatus returns the organization-scoped
+// count-by-artifact_status aggregate over each document's current version
+// (DM-TASK-059). It runs a single GROUP BY query that LEFT JOINs documents to
+// their current version: rows where current_version_id is NULL collapse into a
+// single NULL group, reported as DocumentStats.NotStarted. status=DELETED is
+// always excluded; ARCHIVED is included only when includeArchived is true.
+func (r *DocumentRepository) CountCurrentVersionsByArtifactStatus(ctx context.Context, organizationID string, includeArchived bool) (*port.DocumentStats, error) {
+	conn := ConnFromCtx(ctx)
+
+	statuses := []string{string(model.DocumentStatusActive)}
+	if includeArchived {
+		statuses = append(statuses, string(model.DocumentStatusArchived))
+	}
+
+	// Single query, no N+1: group documents in scope by the artifact_status of
+	// their current version. A NULL current_version_id yields a NULL group
+	// (counted as not_started). The driving filter (organization_id, status) is
+	// backed by idx_documents_org_status; the join probes document_versions by
+	// primary key (version_id).
+	rows, err := conn.Query(ctx,
+		`SELECT v.artifact_status, COUNT(*) AS cnt
+		FROM documents d
+		LEFT JOIN document_versions v ON v.version_id = d.current_version_id
+		WHERE d.organization_id = $1 AND d.status = ANY($2)
+		GROUP BY v.artifact_status`,
+		organizationID, statuses,
+	)
+	if err != nil {
+		return nil, port.NewDatabaseError("count current versions by artifact status", err)
+	}
+	defer rows.Close()
+
+	stats := &port.DocumentStats{
+		ByArtifactStatus: map[model.ArtifactStatus]int{},
+	}
+	for rows.Next() {
+		var (
+			status *string
+			cnt    int
+		)
+		if err := rows.Scan(&status, &cnt); err != nil {
+			return nil, port.NewDatabaseError("scan artifact status count row", err)
+		}
+		if status == nil {
+			stats.NotStarted += cnt
+		} else {
+			stats.ByArtifactStatus[model.ArtifactStatus(*status)] += cnt
+		}
+		stats.Total += cnt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, port.NewDatabaseError("iterate artifact status count rows", err)
+	}
+	return stats, nil
+}
+
 // FindDeletedOlderThan returns documents with status=DELETED whose
 // deleted_at is older than cutoff, up to limit results ordered by deleted_at ASC.
 // Cross-tenant system-level query (no org filter) for retention cleanup.

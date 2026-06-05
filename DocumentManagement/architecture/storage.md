@@ -20,6 +20,11 @@ CREATE TABLE documents (
     deleted_at        TIMESTAMPTZ
 );
 CREATE INDEX idx_documents_org ON documents(organization_id);
+-- DM-TASK-059: драйвит GET /documents/stats. Фильтр (organization_id, status)
+-- + покрывающий current_version_id (INCLUDE) для probe в document_versions по PK
+-- без heap-fetch на driving-scan.
+CREATE INDEX idx_documents_org_status ON documents(organization_id, status)
+    INCLUDE (current_version_id);
 
 -- document_versions
 CREATE TABLE document_versions (
@@ -41,6 +46,11 @@ CREATE TABLE document_versions (
 );
 CREATE INDEX idx_versions_doc ON document_versions(document_id);
 CREATE INDEX idx_versions_org ON document_versions(organization_id);
+-- DM-TASK-059: требуется контрактом задачи. Поддерживает org-scoped подсчёты
+-- версий по artifact_status (прямые status-роллапы). NB: запрос /documents/stats
+-- джойнит версии по PK (current_version_id), поэтому для него этот индекс
+-- forward-looking — driving-scan ведёт idx_documents_org_status.
+CREATE INDEX idx_versions_org_artifact_status ON document_versions(organization_id, artifact_status);
 
 -- artifact_descriptors
 CREATE TABLE artifact_descriptors (

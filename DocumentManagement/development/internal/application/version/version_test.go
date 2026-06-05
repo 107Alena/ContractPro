@@ -76,6 +76,10 @@ func (m *mockDocumentRepo) DeleteByID(context.Context, string) error {
 	panic("not used in version")
 }
 
+func (m *mockDocumentRepo) CountCurrentVersionsByArtifactStatus(context.Context, string, bool) (*port.DocumentStats, error) {
+	panic("not used in version")
+}
+
 type mockVersionRepo struct {
 	insertFn            func(ctx context.Context, version *model.DocumentVersion) error
 	findByIDFn          func(ctx context.Context, orgID, docID, versionID string) (*model.DocumentVersion, error)

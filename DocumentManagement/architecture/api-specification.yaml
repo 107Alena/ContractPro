@@ -72,6 +72,42 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /documents/stats:
+    get:
+      tags: [Documents]
+      summary: Агрегат count-by-artifact_status по текущим версиям
+      description: |
+        Возвращает счётчики документов организации, сгруппированные по
+        artifact_status их ТЕКУЩЕЙ версии (documents.current_version_id →
+        document_versions). Источник истины для дашборд-метрики «в работе»
+        (потребитель — Orchestrator GET /contracts/stats, ORCH-TASK-057).
+
+        Скоуп — организация из заголовка X-Organization-ID. Документы со
+        status=DELETED не учитываются никогда; ARCHIVED — только при
+        include_archived=true (по умолчанию считаются только ACTIVE).
+        Документы без текущей версии учитываются в not_started.
+
+        DM отдаёт artifact_status как есть (внутренние значения домена);
+        маппинг во внешний UserProcessingStatus делает Orchestrator, не DM.
+      operationId: getDocumentStats
+      parameters:
+        - name: include_archived
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Включить ARCHIVED-документы в подсчёт (DELETED исключены всегда)
+      responses:
+        '200':
+          description: Агрегат счётчиков по artifact_status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /documents/{document_id}:
     get:
       tags: [Documents]
@@ -566,6 +602,36 @@ components:
           type: integer
         size:
           type: integer
+
+    DocumentStats:
+      type: object
+      description: |
+        Агрегат count-by-artifact_status по текущим версиям документов
+        организации (DM-TASK-059). Контракт с Orchestrator (ORCH-TASK-057),
+        зафиксирован в integration-contracts.md.
+      required: [by_artifact_status, not_started, total]
+      properties:
+        by_artifact_status:
+          type: object
+          description: |
+            Счётчики документов по artifact_status их текущей версии. Ключи —
+            все значения enum ArtifactStatus (отсутствующие присутствуют со
+            значением 0). DM отдаёт внутренние значения как есть.
+          additionalProperties:
+            type: integer
+          example:
+            PENDING: 2
+            PROCESSING_ARTIFACTS_RECEIVED: 1
+            ANALYSIS_ARTIFACTS_RECEIVED: 0
+            REPORTS_READY: 0
+            FULLY_READY: 5
+            PARTIALLY_AVAILABLE: 0
+        not_started:
+          type: integer
+          description: Документы без текущей версии (disjoint с by_artifact_status)
+        total:
+          type: integer
+          description: Всего документов в скоупе (сумма всех bucket'ов + not_started)
 
     DocumentVersion:
       type: object

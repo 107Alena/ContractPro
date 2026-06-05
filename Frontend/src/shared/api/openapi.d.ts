@@ -93,7 +93,27 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Список договоров организации */
+        /**
+         * Список договоров организации
+         * @description Возвращает постраничный список договоров организации. Каждый
+         *     `ContractSummary` несёт агрегаты текущей версии — `contract_type`,
+         *     `risk_level`, `risk_counts` (ORCH-TASK-056), — собираемые Orchestrator из
+         *     артефактов Document Management ОДНИМ батч-запросом на страницу (без N+1,
+         *     см. high-architecture.md §8.7 «Список документов с агрегацией»).
+         *
+         *     Серверная фильтрация и сортировка по типу/риску/статусу/периоду
+         *     (`risk_level`, `contract_type`, `processing_status`, `date_from`,
+         *     `date_to`, `sort`, `order`) делегируются DM (источник истины), чтобы
+         *     `total` и пагинация оставались корректными. Все новые параметры
+         *     опциональны; обратная совместимость сохранена.
+         *
+         *     Доступность агрегации зависит от read-контракта DM
+         *     `GET /documents?include=analysis` (ASSUMPTION-ORCH-17) и управляется
+         *     флагом `ORCH_CONTRACTS_LIST_ANALYSIS_ENABLED`. Пока флаг выключен,
+         *     агрегатные поля приходят как `null`, а передача новых фильтров/сортировки
+         *     отклоняется с 400 (fail-safe: список не возвращает «как бы
+         *     отфильтрованные», но фактически неотфильтрованные данные).
+         */
         get: operations["listContracts"];
         put?: never;
         post?: never;
@@ -623,17 +643,54 @@ export interface components {
              */
             confirmed_by_user: boolean;
         };
+        /**
+         * @description Тип договора — английский enum классификации LIC (12 значений,
+         *     ASSUMPTION-LIC-16). `null` в ContractSummary означает, что тип ещё не
+         *     определён либо документ не проанализирован.
+         * @enum {string}
+         */
+        ContractType: "SERVICES" | "SUPPLY" | "WORK_CONTRACT" | "LEASE" | "NDA" | "SALE" | "LICENSE" | "AGENCY" | "LOAN" | "INSURANCE" | "EMPLOYMENT_CIVIL" | "OTHER";
+        /**
+         * @description Агрегированный уровень риска текущей версии (из RISK_PROFILE).
+         * @enum {string}
+         */
+        RiskLevel: "high" | "medium" | "low";
+        /**
+         * @description Счётчики рисков текущей версии по уровням. `null` (а не объект с нулями)
+         *     означает «результата нет»; объект `{high:0,medium:0,low:0}` означал бы
+         *     «рисков не найдено» — это разные состояния.
+         */
+        RiskCounts: {
+            high: number;
+            medium: number;
+            low: number;
+        };
         ContractSummary: {
             /** Format: uuid */
-            contract_id?: string;
-            title?: string;
-            status?: components["schemas"]["DocumentStatus"];
+            contract_id: string;
+            title: string;
+            status: components["schemas"]["DocumentStatus"];
             current_version_number?: number | null;
             processing_status?: components["schemas"]["UserProcessingStatus"];
+            /**
+             * @description Тип договора текущей версии (ORCH-TASK-056). Заполняется только
+             *     эндпоинтом списка при включённой агрегации; `null`, если тип ещё не
+             *     определён, документ не проанализирован, либо агрегация выключена.
+             *     В ответах archive/delete всегда `null`.
+             */
+            contract_type?: components["schemas"]["ContractType"] | null;
+            /**
+             * @description Агрегированный уровень риска ТЕКУЩЕЙ версии (ORCH-TASK-056). `null`,
+             *     если результата нет или версия не READY (риск осмыслен только для
+             *     READY — согласовано с ContractStats.by_risk_level).
+             */
+            risk_level?: components["schemas"]["RiskLevel"] | null;
+            /** @description Счётчики рисков текущей версии (ORCH-TASK-056); `null`, если версия не READY/нет результата. */
+            risk_counts?: components["schemas"]["RiskCounts"] | null;
             /** Format: date-time */
-            created_at?: string;
+            created_at: string;
             /** Format: date-time */
-            updated_at?: string;
+            updated_at: string;
         };
         ContractList: {
             items?: components["schemas"]["ContractSummary"][];
@@ -1044,6 +1101,20 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /**
+         * @description Функция временно недоступна (`error_code: FEATURE_NOT_AVAILABLE`).
+         *     Возвращается, когда эндпоинт намеренно отключён feature-флагом, потому
+         *     что его зависимость ещё не задеплоена (отлично от `DM_UNAVAILABLE`,
+         *     который означает реальный сбой развёрнутого DM).
+         */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
     };
     parameters: {
         /** @description ID договора (маппится в document_id в DM) */
@@ -1201,10 +1272,49 @@ export interface operations {
             query?: {
                 page?: components["parameters"]["PageParam"];
                 size?: components["parameters"]["SizeParam"];
-                /** @description Фильтр по статусу документа */
+                /** @description Фильтр по статусу документа (DocumentStatus — ACTIVE/ARCHIVED/DELETED) */
                 status?: components["schemas"]["DocumentStatus"];
                 /** @description Поиск по названию (substring match) */
                 search?: string;
+                /**
+                 * @description Фильтр по агрегированному уровню риска текущей версии (одиночное
+                 *     значение). Учитываются только договоры с READY-версией.
+                 */
+                risk_level?: "high" | "medium" | "low";
+                /**
+                 * @description Фильтр по типу договора (английский LIC enum). Можно указывать
+                 *     несколько значений (`?contract_type=LEASE&contract_type=SALE`) — они
+                 *     объединяются по ИЛИ.
+                 */
+                contract_type?: components["schemas"]["ContractType"][];
+                /**
+                 * @description Фильтр по статусу обработки текущей версии (UserProcessingStatus).
+                 *     Несколько значений объединяются по ИЛИ. Orchestrator разворачивает
+                 *     каждый user-статус в множество DM `artifact_status` (например
+                 *     `ANALYZING` → {ARTIFACTS_READY, ANALYSIS_IN_PROGRESS}). Значение
+                 *     `AWAITING_USER_INPUT` управляется Orchestrator и не поддерживается
+                 *     для DM-фильтрации в этой версии → 400 VALIDATION_ERROR.
+                 */
+                processing_status?: components["schemas"]["UserProcessingStatus"][];
+                /**
+                 * @description Нижняя граница периода по дате создания договора (`created_at`),
+                 *     включительно. ISO-8601 — `YYYY-MM-DD` или RFC3339. Чипы «Период»
+                 *     7д/30д/90д на Frontend задают `date_from`.
+                 */
+                date_from?: string;
+                /**
+                 * @description Верхняя граница периода по `created_at`, включительно. ISO-8601.
+                 *     Должна быть не раньше `date_from` (иначе 400).
+                 */
+                date_to?: string;
+                /**
+                 * @description Поле сортировки: `date` (по `created_at`), `title`, `risk`. Для
+                 *     `risk` порядок по уровню (high > medium > low); договоры без риска
+                 *     (null) всегда в конце независимо от направления.
+                 */
+                sort?: "date" | "title" | "risk";
+                /** @description Направление сортировки (по умолчанию desc на стороне DM). */
+                order?: "asc" | "desc";
             };
             header?: never;
             path?: never;
@@ -1218,9 +1328,47 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    /**
+                     * @example {
+                     *       "items": [
+                     *         {
+                     *           "contract_id": "550e8400-e29b-41d4-a716-446655440000",
+                     *           "title": "Договор аренды №17",
+                     *           "status": "ACTIVE",
+                     *           "current_version_number": 2,
+                     *           "processing_status": "READY",
+                     *           "contract_type": "LEASE",
+                     *           "risk_level": "high",
+                     *           "risk_counts": {
+                     *             "high": 3,
+                     *             "medium": 2,
+                     *             "low": 1
+                     *           },
+                     *           "created_at": "2026-01-15T10:00:00Z",
+                     *           "updated_at": "2026-01-16T09:30:00Z"
+                     *         },
+                     *         {
+                     *           "contract_id": "660e8400-e29b-41d4-a716-446655440111",
+                     *           "title": "Договор поставки №42",
+                     *           "status": "ACTIVE",
+                     *           "current_version_number": 1,
+                     *           "processing_status": "ANALYZING",
+                     *           "contract_type": "SUPPLY",
+                     *           "risk_level": null,
+                     *           "risk_counts": null,
+                     *           "created_at": "2026-02-01T08:00:00Z",
+                     *           "updated_at": "2026-02-01T08:05:00Z"
+                     *         }
+                     *       ],
+                     *       "total": 2,
+                     *       "page": 1,
+                     *       "size": 20
+                     *     }
+                     */
                     "application/json": components["schemas"]["ContractList"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -1239,16 +1387,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Статистика договоров */
+            /**
+             * @description Статистика договоров. Ответ помечен `Cache-Control: private, max-age=30`
+             *     (агрегат скоупится по организации и устойчив к небольшой устареваемости).
+             */
             200: {
                 headers: {
+                    /** @description private, max-age=30 — приватное краткосрочное кэширование. */
+                    "Cache-Control"?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["ContractStats"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     getContract: {

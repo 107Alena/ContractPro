@@ -133,7 +133,7 @@ function FormatCard({ format, contractId, versionId, navigate }: FormatCardProps
         <span className="text-xs text-fg-muted">{format.id.toUpperCase()}</span>
       </header>
       <p className="text-sm text-fg-muted">{format.description}</p>
-      <div className="flex flex-col gap-2 sm:flex-row">
+      <div className="flex flex-col gap-2">
         <Button
           variant="primary"
           size="md"

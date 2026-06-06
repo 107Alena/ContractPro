@@ -56,7 +56,7 @@ export {
   type TypeConfirmationEvent,
   type UserProcessingStatus,
 } from './sse-events';
-export type { AuditFilters, DocumentStatus, ListParams } from './types';
+export type { AuditFilters, ContractType, DocumentStatus, ListParams } from './types';
 export {
   dispatchStatusEvent,
   type DispatchStatusEventDeps,

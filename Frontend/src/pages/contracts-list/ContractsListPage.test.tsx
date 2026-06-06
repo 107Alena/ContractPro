@@ -48,6 +48,7 @@ const sample = {
       status: 'ACTIVE' as const,
       current_version_number: 2,
       processing_status: 'READY' as const,
+      created_at: '2026-04-15T10:00:00Z',
       updated_at: '2026-04-16T14:20:00Z',
     },
     {
@@ -56,6 +57,7 @@ const sample = {
       status: 'ARCHIVED' as const,
       current_version_number: 1,
       processing_status: 'READY' as const,
+      created_at: '2026-04-09T10:00:00Z',
       updated_at: '2026-04-10T10:00:00Z',
     },
   ],
@@ -182,6 +184,7 @@ describe('ContractsListPage', () => {
             status: 'ACTIVE' as const,
             current_version_number: 1,
             processing_status: 'READY' as const,
+            created_at: '2026-04-15T10:00:00Z',
             updated_at: '2026-04-16T14:20:00Z',
           },
           {
@@ -190,6 +193,7 @@ describe('ContractsListPage', () => {
             status: 'ACTIVE' as const,
             current_version_number: 2,
             processing_status: 'READY' as const,
+            created_at: '2026-04-15T10:00:00Z',
             updated_at: '2026-04-16T14:20:00Z',
           },
         ],
@@ -249,6 +253,97 @@ describe('ContractsListPage', () => {
     const lastCall = getSpy.mock.calls.at(-1);
     expect(lastCall?.[0]).toBe('/contracts');
     expect((lastCall?.[1] as { params?: { status?: string } })?.params?.status).toBe('ACTIVE');
+  });
+
+  it('URL server-фильтры → risk_level/contract_type/processing_status/date_from в params', async () => {
+    getSpy.mockResolvedValue({ data: sample });
+    const qc = makeClient();
+
+    renderPage(
+      qc,
+      lawyer,
+      '/contracts?status=ACTIVE&risk=high&type=SALE,LEASE&processing=error&date=90d',
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('documents-table')).toBeInTheDocument();
+    });
+    const params = (
+      getSpy.mock.calls.at(-1)?.[1] as {
+        params?: {
+          status?: string;
+          risk_level?: string;
+          contract_type?: string[];
+          processing_status?: string[];
+          date_from?: string;
+        };
+      }
+    )?.params;
+    expect(params?.status).toBe('ACTIVE');
+    expect(params?.risk_level).toBe('high');
+    // contract_type — отсортирован для стабильности кэш-ключа (LEASE < SALE).
+    expect(params?.contract_type).toEqual(['LEASE', 'SALE']);
+    // processing «error» разворачивается в server-safe статусы (отсортированы),
+    // AWAITING_USER_INPUT никогда не попадает.
+    expect(params?.processing_status).toEqual(['FAILED', 'PARTIALLY_FAILED', 'REJECTED']);
+    expect(params?.processing_status).not.toContain('AWAITING_USER_INPUT');
+    // date=90d → date_from в формате YYYY-MM-DD.
+    expect(params?.date_from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('URL sort/order → серверу уходит sort=risk&order=asc', async () => {
+    getSpy.mockResolvedValue({ data: sample });
+    const qc = makeClient();
+
+    renderPage(qc, lawyer, '/contracts?sort=risk&order=asc');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('documents-table')).toBeInTheDocument();
+    });
+    const params = (getSpy.mock.calls.at(-1)?.[1] as { params?: { sort?: string; order?: string } })
+      ?.params;
+    expect(params?.sort).toBe('risk');
+    expect(params?.order).toBe('asc');
+  });
+
+  it('дефолтная сортировка (date desc) не уходит в params', async () => {
+    getSpy.mockResolvedValue({ data: sample });
+    const qc = makeClient();
+
+    renderPage(qc, lawyer, '/contracts');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('documents-table')).toBeInTheDocument();
+    });
+    const params = (getSpy.mock.calls.at(-1)?.[1] as { params?: { sort?: string; order?: string } })
+      ?.params;
+    expect(params?.sort).toBeUndefined();
+    expect(params?.order).toBeUndefined();
+  });
+
+  it('смена фильтра со страницы >1 → запрос сбрасывается на page=1', async () => {
+    getSpy.mockResolvedValue({ data: { items: sample.items, total: 80, page: 1, size: 25 } });
+    const qc = makeClient();
+    const user = userEvent.setup();
+
+    renderPage(qc, lawyer, '/contracts?page=2');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('documents-table')).toBeInTheDocument();
+    });
+    // Deep-link сохранён: первый запрос уходит с page=2.
+    expect((getSpy.mock.calls.at(-1)?.[1] as { params?: { page?: number } })?.params?.page).toBe(2);
+
+    // Выбор pinned risk-чипа меняет фильтр → page сбрасывается на 1.
+    await user.click(screen.getByTestId('filter-chip-risk-high'));
+
+    await waitFor(() => {
+      const params = (
+        getSpy.mock.calls.at(-1)?.[1] as { params?: { page?: number; risk_level?: string } }
+      )?.params;
+      expect(params?.risk_level).toBe('high');
+      expect(params?.page).toBe(1);
+    });
   });
 
   it('Pagination — total>size → PaginationControls рендерится', async () => {

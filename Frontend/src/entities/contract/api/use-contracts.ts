@@ -19,7 +19,16 @@ export type ContractList = components['schemas']['ContractList'];
 const ENDPOINT = '/contracts';
 
 async function fetchContracts(params: ListParams, signal?: AbortSignal): Promise<ContractList> {
-  const config: Parameters<typeof http.get>[1] = { params };
+  const config: Parameters<typeof http.get>[1] = {
+    params,
+    // Массивы-фильтры (contract_type / processing_status) должны сериализоваться
+    // повторяющимися ключами — `?contract_type=LEASE&contract_type=SALE` (explode),
+    // как требует OpenAPI listContracts. По умолчанию axios пишет `contract_type[]=…`,
+    // что бэкенд не распознаёт. `{ indexes: null }` → repeated keys; пустые массивы
+    // не добавляют ничего. Сериализатор задаётся per-request (а не глобально на
+    // инстансе) — массивы-параметры есть только у списка договоров.
+    paramsSerializer: { indexes: null },
+  };
   if (signal) config.signal = signal;
   const { data } = await http.get<ContractList>(ENDPOINT, config);
   return data;

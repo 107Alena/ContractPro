@@ -29,6 +29,7 @@ const contract: ContractSummary = {
   status: 'ACTIVE',
   current_version_number: 2,
   processing_status: 'READY',
+  created_at: '2026-04-18T14:20:00Z',
   updated_at: '2026-04-19T14:20:00Z',
 };
 

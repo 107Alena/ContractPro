@@ -1,16 +1,16 @@
 // RecentChecksTable — «Недавние проверки» на dashboard (Figma 84:2 → 90:2).
 //
 // Композиция DataTable с 5 последними договорами из /contracts?size=5.
-// Колонки Тип и Риск присутствуют структурно (Figma), но рендерятся как «—»:
-// contract_type и risk-level не входят в ContractSummary (приходят из /risks,
-// FE-TASK-046). SSE-обновления статусов — через useEventStream на уровне
-// страницы; на /contracts snapshot не инвалидируется, отображаем
-// processing_status из ContractSummary.
+// Колонки Тип и Риск с ORCH-TASK-056 рендерят реальные contract_type / risk_level
+// из ContractSummary; «—» остаётся только при null (договор не проанализирован).
+// SSE-обновления статусов — через useEventStream на уровне страницы; на /contracts
+// snapshot не инвалидируется, отображаем processing_status из ContractSummary.
 import type { ColumnDef } from '@tanstack/react-table';
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 
-import { type ContractSummary, viewStatus } from '@/entities/contract';
+import { type ContractSummary, contractTypeLabel, viewStatus } from '@/entities/contract';
+import { RiskBadge } from '@/entities/risk';
 import { Badge, buttonVariants, Card, DataTable, DataTableContent } from '@/shared/ui';
 
 export interface RecentChecksTableProps {
@@ -54,11 +54,15 @@ function useColumns(): ColumnDef<ContractSummary, unknown>[] {
         },
       },
       {
-        // Тип договора недоступен в ContractSummary — структурный «—» (FE-TASK-046).
+        // Тип договора из ContractSummary.contract_type (ORCH-TASK-056); «—» при null.
         id: 'type',
         header: 'Тип',
-        accessorFn: () => '—',
-        cell: () => <Dash />,
+        accessorFn: (row) => contractTypeLabel(row.contract_type) ?? '',
+        cell: ({ row }) => {
+          const label = contractTypeLabel(row.original.contract_type);
+          // text-fg — одинаковая эмфаза с колонкой «Тип» в DocumentsTable (та же данность).
+          return label ? <span className="text-fg">{label}</span> : <Dash />;
+        },
       },
       {
         id: 'updated_at',
@@ -80,11 +84,14 @@ function useColumns(): ColumnDef<ContractSummary, unknown>[] {
         },
       },
       {
-        // Уровень риска недоступен — структурный «—» (FE-TASK-046).
+        // Уровень риска из ContractSummary.risk_level (ORCH-TASK-056); «—» при null.
         id: 'risk',
         header: 'Риск',
-        accessorFn: () => '—',
-        cell: () => <Dash />,
+        accessorFn: (row) => row.risk_level ?? '',
+        cell: ({ row }) => {
+          const level = row.original.risk_level;
+          return level ? <RiskBadge level={level} /> : <Dash />;
+        },
       },
       {
         id: 'actions',

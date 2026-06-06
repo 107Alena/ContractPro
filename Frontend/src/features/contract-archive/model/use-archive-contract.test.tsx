@@ -36,6 +36,7 @@ const INITIAL_LIST: ContractList = {
       title: 'Договор №1',
       status: 'ACTIVE',
       current_version_number: 2,
+      created_at: '2026-04-09T10:00:00Z',
       updated_at: '2026-04-10T10:00:00Z',
     },
     {
@@ -43,6 +44,7 @@ const INITIAL_LIST: ContractList = {
       title: 'Другой договор',
       status: 'ACTIVE',
       current_version_number: 1,
+      created_at: '2026-04-10T10:00:00Z',
       updated_at: '2026-04-11T10:00:00Z',
     },
   ],

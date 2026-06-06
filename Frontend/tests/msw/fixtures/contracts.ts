@@ -165,6 +165,10 @@ export const contractGamma: ContractDetails = {
   updated_at: '2026-04-18T08:00:00Z',
 };
 
+// contract_type / risk_level / risk_counts добавлены под ORCH-TASK-056. Риск
+// заполнен только у READY-версий (epsilon=low, delta=high); у не-READY (ANALYZING/
+// AWAITING/FAILED) — null (нет результата), чтобы в dev:e2e наглядно показать
+// «—» для непроанализированных и реальные бейджи/тип для готовых.
 export const contractSummaries: ContractSummary[] = [
   {
     contract_id: IDS.contracts.epsilon,
@@ -172,6 +176,9 @@ export const contractSummaries: ContractSummary[] = [
     status: 'ACTIVE',
     current_version_number: 1,
     processing_status: 'READY',
+    contract_type: 'LICENSE',
+    risk_level: 'low',
+    risk_counts: { high: 0, medium: 1, low: 2 },
     created_at: '2026-04-10T09:00:00Z',
     updated_at: '2026-04-21T12:30:00Z',
   },
@@ -181,6 +188,9 @@ export const contractSummaries: ContractSummary[] = [
     status: 'ACTIVE',
     current_version_number: 2,
     processing_status: 'ANALYZING',
+    contract_type: 'SERVICES',
+    risk_level: null,
+    risk_counts: null,
     created_at: BASE_DATE,
     updated_at: '2026-04-16T14:20:00Z',
   },
@@ -190,6 +200,9 @@ export const contractSummaries: ContractSummary[] = [
     status: 'ACTIVE',
     current_version_number: 1,
     processing_status: 'AWAITING_USER_INPUT',
+    contract_type: 'SUPPLY',
+    risk_level: null,
+    risk_counts: null,
     created_at: '2026-04-17T09:10:00Z',
     updated_at: '2026-04-17T09:10:00Z',
   },
@@ -199,6 +212,9 @@ export const contractSummaries: ContractSummary[] = [
     status: 'ARCHIVED',
     current_version_number: 1,
     processing_status: 'FAILED',
+    contract_type: 'LEASE',
+    risk_level: null,
+    risk_counts: null,
     created_at: '2026-04-14T18:45:00Z',
     updated_at: '2026-04-18T08:00:00Z',
   },
@@ -208,6 +224,9 @@ export const contractSummaries: ContractSummary[] = [
     status: 'ACTIVE',
     current_version_number: 2,
     processing_status: 'READY',
+    contract_type: 'WORK_CONTRACT',
+    risk_level: 'high',
+    risk_counts: { high: 3, medium: 2, low: 1 },
     created_at: '2026-04-12T11:00:00Z',
     updated_at: '2026-04-19T16:05:00Z',
   },
@@ -245,11 +264,19 @@ function buildContractStats(): ContractStats {
     if (key in byStatus) byStatus[key] += 1;
     else byStatus.not_started += 1;
   }
+  // by_risk_level — из реальных risk_level активных договоров (delta=high,
+  // epsilon=low; остальные не READY → unknown). Консистентно с contractSummaries.
+  const byRisk = { high: 0, medium: 0, low: 0, unknown: 0 };
+  for (const c of active) {
+    if (c.risk_level === 'high') byRisk.high += 1;
+    else if (c.risk_level === 'medium') byRisk.medium += 1;
+    else if (c.risk_level === 'low') byRisk.low += 1;
+    else byRisk.unknown += 1;
+  }
   return {
     total: active.length,
     by_processing_status: byStatus,
-    // delta (READY) с medium-риском — единственный готовый в активном скоупе.
-    by_risk_level: { high: 0, medium: byStatus.ready, low: 0, unknown: 0 },
+    by_risk_level: byRisk,
     updated_at: '2026-04-19T16:10:00Z',
   };
 }

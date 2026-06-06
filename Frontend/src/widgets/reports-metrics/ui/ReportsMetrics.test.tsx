@@ -11,17 +11,26 @@ const NOW = Date.parse('2026-04-20T12:00:00Z');
 const items: ContractSummary[] = [
   {
     contract_id: 'c1',
+    title: 'Отчёт 1',
+    status: 'ACTIVE',
     processing_status: 'READY',
+    created_at: '2026-04-18T10:00:00Z',
     updated_at: '2026-04-19T10:00:00Z',
   },
   {
     contract_id: 'c2',
+    title: 'Отчёт 2',
+    status: 'ACTIVE',
     processing_status: 'READY',
+    created_at: '2026-04-17T10:00:00Z',
     updated_at: '2026-04-18T10:00:00Z',
   },
   {
     contract_id: 'c3',
+    title: 'Отчёт 3',
+    status: 'ACTIVE',
     processing_status: 'PARTIALLY_FAILED',
+    created_at: '2026-03-31T10:00:00Z',
     updated_at: '2026-04-01T10:00:00Z',
   },
 ];

@@ -6,8 +6,8 @@
 //   │   «Загрузить PDF» / «Новая проверка» убраны)          │
 //   │ <ContractsMetricsStrip> 5-stat сводка                │
 //   │ <CurrentActions> «Что важно сейчас» (= dashboard)    │
-//   │ Card[ <SearchInput>  <FilterChips> ]                 │
-//   │ <DocumentsTable> server-side pagination + виртуал.   │
+//   │ Card[ <SearchInput> <SortControl> · <FilterChips> ]  │
+//   │ <DocumentsTable> server-side pagination + sort       │
 //   │ <PaginationControls>  ·  <TrustFooter>               │
 //   └─────────────────────────────────────────────────────┘
 //
@@ -34,11 +34,13 @@ import { PaginationControls } from '@/features/pagination';
 import { SearchInput } from '@/features/search';
 import { isOrchestratorError, toUserMessage } from '@/shared/api';
 import { useCan } from '@/shared/auth';
+import { cn } from '@/shared/lib/cn';
 import {
   Button,
   buttonVariants,
   Card,
   Popover,
+  PopoverClose,
   PopoverContent,
   PopoverTrigger,
   toast,
@@ -50,6 +52,81 @@ import { DocumentsTable } from '@/widgets/documents-table';
 
 import { CONTRACTS_FILTER_DEFINITIONS } from './model/filter-definitions';
 import { useContractsListQuery } from './model/use-contracts-list-query';
+import { type SortField, type SortOrder } from './model/use-contracts-sort';
+
+// Опции сортировки (Figma 200:7) → пары (sort, order) для API. Дефолт «Сначала
+// новые» (date desc) — не уходит в URL/params (delete-on-default в useContractsSort).
+const SORT_OPTIONS: ReadonlyArray<{ sort: SortField; order: SortOrder; label: string }> = [
+  { sort: 'date', order: 'desc', label: 'Сначала новые' },
+  { sort: 'date', order: 'asc', label: 'Сначала старые' },
+  { sort: 'title', order: 'asc', label: 'По названию (А–Я)' },
+  { sort: 'title', order: 'desc', label: 'По названию (Я–А)' },
+  { sort: 'risk', order: 'desc', label: 'Сначала высокий риск' },
+  { sort: 'risk', order: 'asc', label: 'Сначала низкий риск' },
+];
+
+interface SortControlProps {
+  sort: SortField;
+  order: SortOrder;
+  onChange: (sort: SortField, order: SortOrder) => void;
+}
+
+// Server-side сортировка: контрол читает текущее значение из URL (single source),
+// выбор пишет sort/order и сбрасывает на 1-ю страницу (useContractsSort).
+function SortControl({ sort, order, onChange }: SortControlProps): JSX.Element {
+  const active = SORT_OPTIONS.find((o) => o.sort === sort && o.order === order) ?? SORT_OPTIONS[0]!;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          iconRight={
+            <span aria-hidden="true" className="text-fg-muted">
+              ▾
+            </span>
+          }
+          data-testid="contracts-sort-trigger"
+        >
+          Сортировка: {active.label}
+        </Button>
+      </PopoverTrigger>
+      {/* role=radiogroup (не menu): Radix Popover — dialog-контейнер без menu-клавиатуры
+          (нет roving-focus/стрелок/type-ahead). radiogroup честно отражает single-select
+          и не обещает arrow-навигацию; кнопки Tab-доступны. Прецедент — SegmentedControl. */}
+      <PopoverContent
+        size="sm"
+        align="end"
+        role="radiogroup"
+        aria-label="Сортировка списка"
+        className="flex flex-col gap-0.5"
+      >
+        {SORT_OPTIONS.map((o) => {
+          const selected = o.sort === sort && o.order === order;
+          return (
+            <PopoverClose asChild key={`${o.sort}-${o.order}`}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => onChange(o.sort, o.order)}
+                data-testid={`contracts-sort-${o.sort}-${o.order}`}
+                className={cn(
+                  'flex items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left text-13 hover:bg-bg-muted focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1',
+                  selected ? 'font-semibold text-brand-600' : 'text-fg',
+                )}
+              >
+                <span>{o.label}</span>
+                {selected ? <span aria-hidden="true">✓</span> : null}
+              </button>
+            </PopoverClose>
+          );
+        })}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function getContractTitle(contract?: ContractSummary | null): string {
   return contract?.title ?? 'Без названия';
@@ -60,6 +137,7 @@ export function ContractsListPage(): JSX.Element {
     search,
     filters,
     pagination,
+    sort,
     query,
     items,
     total,
@@ -248,6 +326,9 @@ export function ContractsListPage(): JSX.Element {
             className="w-full md:max-w-md"
             data-testid="contracts-list-search"
           />
+          <div className="md:ml-auto">
+            <SortControl sort={sort.sort} order={sort.order} onChange={sort.setSort} />
+          </div>
         </div>
         <FilterChips
           definitions={CONTRACTS_FILTER_DEFINITIONS}

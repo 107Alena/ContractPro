@@ -1,15 +1,20 @@
-// Column-конфигурация DocumentsTable (FE-TASK-044, Figma 201:2, §5.6.1 Pattern B).
+// Column-конфигурация DocumentsTable (FE-TASK-044/058, Figma 201:2, §5.6.1 Pattern B).
 //
 // Колонки = Figma: Документ (PDF-бейдж + название + status-derived подпись) /
 // Тип / Дата проверки / Статус / Риск / Версии / Действия.
-// Тип договора и уровень риска НЕ входят в ContractSummary (приходят из /risks,
-// FE-TASK-046) → структурный «—». Подпись под названием выводится из РЕАЛЬНОГО
-// processing_status (не выдуманное описание). «Действия» — отдельная колонка,
-// рендерится только при RBAC-доступе (renderActions передаётся page'ем).
+// Тип договора (contract_type) и уровень риска (risk_level) с ORCH-TASK-056 входят
+// в ContractSummary → колонки «Тип»/«Риск» рендерят реальные данные. «—» остаётся
+// ТОЛЬКО когда поле null (договор не проанализирован / тип не выявлен) — не выдумываем.
+// Подпись под названием выводится из РЕАЛЬНОГО processing_status. «Действия» —
+// отдельная колонка, рендерится только при RBAC-доступе (renderActions от page'а).
+// Сортировка — server-side (page-уровень SortControl → API sort/order); колонки
+// не сортируются кликом (enableSorting:false), чтобы per-page reorder не
+// противоречил глобальному серверному порядку.
 import { type ColumnDef } from '@tanstack/react-table';
 import { Link } from 'react-router-dom';
 
-import { type ContractSummary, viewStatus } from '@/entities/contract';
+import { type ContractSummary, contractTypeLabel, viewStatus } from '@/entities/contract';
+import { RiskBadge } from '@/entities/risk';
 import { StatusBadge } from '@/entities/version';
 
 function formatDate(iso?: string): string {
@@ -94,12 +99,15 @@ export function buildDocumentsTableColumns(
       },
     },
     {
-      // Тип договора недоступен в ContractSummary — структурный «—» (FE-TASK-046).
+      // Тип договора из ContractSummary.contract_type (ORCH-TASK-056); «—» при null.
       id: 'type',
       header: 'Тип',
       enableSorting: false,
-      accessorFn: () => '—',
-      cell: () => <Dash />,
+      accessorFn: (row) => contractTypeLabel(row.contract_type) ?? '',
+      cell: ({ row }) => {
+        const label = contractTypeLabel(row.original.contract_type);
+        return label ? <span className="text-fg">{label}</span> : <Dash />;
+      },
     },
     {
       id: 'updated_at',
@@ -118,12 +126,16 @@ export function buildDocumentsTableColumns(
       cell: ({ row }) => <StatusBadge status={row.original.processing_status} />,
     },
     {
-      // Уровень риска недоступен — структурный «—» (FE-TASK-046).
+      // Уровень риска из ContractSummary.risk_level (ORCH-TASK-056); «—» при null
+      // (нет READY-результата). RiskBadge без tooltip — в плотной таблице (см. risk-badge.tsx).
       id: 'risk',
       header: 'Риск',
       enableSorting: false,
-      accessorFn: () => '—',
-      cell: () => <Dash />,
+      accessorFn: (row) => row.risk_level ?? '',
+      cell: ({ row }) => {
+        const level = row.original.risk_level;
+        return level ? <RiskBadge level={level} /> : <Dash />;
+      },
     },
     {
       id: 'current_version_number',

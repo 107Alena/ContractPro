@@ -6,4 +6,5 @@ export {
   type ContractSummary,
   useContracts,
 } from './api/use-contracts';
+export { CONTRACT_TYPE_LABELS, CONTRACT_TYPES, contractTypeLabel } from './model/contract-type';
 export { type StatusBucket, type StatusView, viewStatus } from './model/status-view';

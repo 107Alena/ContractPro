@@ -21,6 +21,10 @@ const sample: ContractSummary[] = [
     status: 'ACTIVE',
     current_version_number: 2,
     processing_status: 'READY',
+    contract_type: 'SERVICES',
+    risk_level: 'high',
+    risk_counts: { high: 2, medium: 1, low: 1 },
+    created_at: '2026-04-15T10:00:00Z',
     updated_at: '2026-04-16T14:20:00Z',
   },
   {
@@ -29,6 +33,10 @@ const sample: ContractSummary[] = [
     status: 'ARCHIVED',
     current_version_number: 1,
     processing_status: 'READY',
+    contract_type: 'NDA',
+    risk_level: 'low',
+    risk_counts: { high: 0, medium: 0, low: 2 },
+    created_at: '2026-04-09T10:00:00Z',
     updated_at: '2026-04-10T10:00:00Z',
   },
   {
@@ -37,6 +45,10 @@ const sample: ContractSummary[] = [
     status: 'ACTIVE',
     current_version_number: 1,
     processing_status: 'ANALYZING',
+    contract_type: 'LEASE',
+    risk_level: null,
+    risk_counts: null,
+    created_at: '2026-04-18T09:30:00Z',
     updated_at: '2026-04-18T09:30:00Z',
   },
   {
@@ -45,6 +57,10 @@ const sample: ContractSummary[] = [
     status: 'ACTIVE',
     current_version_number: 3,
     processing_status: 'PARTIALLY_FAILED',
+    contract_type: 'SUPPLY',
+    risk_level: 'medium',
+    risk_counts: { high: 0, medium: 2, low: 3 },
+    created_at: '2026-04-19T11:00:00Z',
     updated_at: '2026-04-19T11:00:00Z',
   },
 ];
@@ -91,6 +107,10 @@ const manyRows: ContractSummary[] = Array.from({ length: 120 }, (_, i) => ({
   status: 'ACTIVE' as const,
   current_version_number: 1,
   processing_status: 'READY' as const,
+  contract_type: 'OTHER' as const,
+  risk_level: 'medium' as const,
+  risk_counts: { high: 0, medium: 1, low: 0 },
+  created_at: '2026-04-19T10:00:00Z',
   updated_at: '2026-04-19T10:00:00Z',
 }));
 

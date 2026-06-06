@@ -14,12 +14,18 @@ const meta: Meta<typeof WhatMattersCards> = {
 export default meta;
 type Story = StoryObj<typeof WhatMattersCards>;
 
+const base = {
+  status: 'ACTIVE' as const,
+  created_at: '2026-04-15T10:00:00Z',
+  updated_at: '2026-04-15T10:00:00Z',
+};
+
 const sample: ContractSummary[] = [
-  { contract_id: '1', title: 'Аренда офиса', processing_status: 'READY' },
-  { contract_id: '2', title: 'Услуги консалтинга', processing_status: 'ANALYZING' },
-  { contract_id: '3', title: 'NDA партнёр', processing_status: 'AWAITING_USER_INPUT' },
-  { contract_id: '4', title: 'Поставка ПО', processing_status: 'FAILED' },
-  { contract_id: '5', title: 'Договор подряда', processing_status: 'READY' },
+  { ...base, contract_id: '1', title: 'Аренда офиса', processing_status: 'READY' },
+  { ...base, contract_id: '2', title: 'Услуги консалтинга', processing_status: 'ANALYZING' },
+  { ...base, contract_id: '3', title: 'NDA партнёр', processing_status: 'AWAITING_USER_INPUT' },
+  { ...base, contract_id: '4', title: 'Поставка ПО', processing_status: 'FAILED' },
+  { ...base, contract_id: '5', title: 'Договор подряда', processing_status: 'READY' },
 ];
 
 export const Default: Story = {

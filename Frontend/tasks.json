@@ -3263,7 +3263,52 @@
       ],
       "dependencies": [],
       "blocked_until_completion_of": "ORCH-TASK-056 (ApiBackendOrchestrator/tasks.json) — расширение GET /contracts полями contract_type/risk_level/risk_counts + серверными фильтрами (risk_level/contract_type/processing_status/date_from/date_to) и sort. Старт FE-задачи — после деплоя обновлённого api-specification.yaml",
-      "status": "pending"
+      "status": "done",
+      "completion_notes": {
+        "date": "2026-06-06",
+        "summary": "Подключены поля ContractSummary (contract_type, risk_level) и серверные фильтры/сортировка GET /contracts. Колонки Тип/Риск в DocumentsTable и dashboard RecentChecksTable — из реальных данных, «—» только при null. Серверные фильтры (status/risk_level/contract_type[]/группы статуса/период) и серверная сортировка (SortControl→sort/order) уходят на бэкенд. ContractsMetricsStrip «высокий риск» — page-scoped из risk_level с видимой подписью охвата.",
+        "files_created": [
+          "src/entities/contract/model/contract-type.ts — CONTRACT_TYPE_LABELS (EN enum→RU, 12 значений ASSUMPTION-LIC-16, обратные к event-catalog §1.3), CONTRACT_TYPES (satisfies readonly ContractType[]), contractTypeLabel(). Размещение параллельно RISK_LEVEL_META (entities/risk), не cross-entity.",
+          "src/pages/contracts-list/model/use-contracts-sort.ts — useContractsSort: URL-state sort/order, валидация против enum из ListParams, delete-on-default, сброс page в той же транзакции.",
+          "src/widgets/documents-table/model/columns.test.tsx — тест колонок Тип/Риск (реальные данные + «—» при null)."
+        ],
+        "files_changed": [
+          "shared/api/types.ts — ListParams = NonNullable<operations['listContracts']['parameters']['query']> (производный от generated, без ручных API-типов); +export ContractType. shared/api/index.ts — реэкспорт ContractType (RiskLevel НЕ дублируем — канонический в entities/risk).",
+          "entities/contract/api/use-contracts.ts — paramsSerializer {indexes:null} per-request (repeated-key массивы ?contract_type=A&contract_type=B). entities/contract/index.ts — барелл contract-type.",
+          "pages/contracts-list/model/filter-definitions.ts — опции из CONTRACT_TYPES/RISK_LEVELS (один источник; убраны стейл RENT/CONSULTING); группы статуса done/in_progress/error + PROCESSING_GROUP_TO_STATUSES (ServerFilterableStatus = Exclude<…,'AWAITING_USER_INPUT'>); pin status+risk, остальное в MoreFiltersModal.",
+          "pages/contracts-list/model/use-contracts-list-query.ts — guards toRiskLevel/toContractTypes/toProcessingStatuses/dateFromForRange; conditional-assign (exactOptionalPropertyTypes); сорт+дедуп массивов (стабильный кэш-ключ); date_from YYYY-MM-DD; сброс page при смене фильтров/поиска (эффект, mount пропускается).",
+          "pages/contracts-list/ContractsListPage.tsx — SortControl (Popover, URL-derived, role=radiogroup/radio после ревью).",
+          "widgets/documents-table/model/columns.tsx + ui/DocumentsTable.tsx — Тип/Риск реальные; client header-сортировка убрана (server-авторитетная). widgets/dashboard-recent-checks/RecentChecksTable.tsx — Тип/Риск реальные. widgets/contracts-metrics-strip — highRisk из risk_level (page-scoped) + видимая подпись охвата.",
+          "tests/msw/fixtures/contracts.ts — +contract_type/risk_level/risk_counts (delta=WORK_CONTRACT/high, epsilon=LICENSE/low, не-READY=null); by_risk_level из реальных уровней. tests/msw/handlers/contracts.ts — серверная фильтрация/сортировка/пагинация по query.",
+          "Фикстуры (компиляция под ужесточённый ContractSummary): documents-table/recent-checks/contracts-metrics-strip/current-actions/what-matters stories+tests, dashboard.stories, reports-table/reports-metrics/report-detail-panel, contract-archive/contract-delete тесты.",
+          "Доки: architecture/figma-mapping.md (193:2 honesty-блок) + high-architecture.md §17.4 строка «Документы» + reports-заметка."
+        ],
+        "decisions": [
+          "ListParams выведен из operations[] (правило «никаких ручных API-типов»). PageParam/SizeParam уже number — спец-обработки не нужно.",
+          "AWAITING_USER_INPUT не фильтруется (бэкенд → 400): группа «Требует внимания» из AC п.4 заменена на «С ошибкой» (PARTIALLY_FAILED/FAILED/REJECTED); исключение закодировано типом ServerFilterableStatus + guard. Зафиксировано в filter-definitions.ts и figma-mapping.md.",
+          "Сортировка server-авторитетная (нужна для risk null-в-конец и кросс-страничности): client header-sort из DocumentsTable удалён, SortControl — единственный контрол. Решение в шапке DocumentsTable.tsx.",
+          "Массивы-фильтры сортируются+дедуплицируются → стабильный TanStack query-key (порядок кликов не плодит кэш-записи). date_from в день-гранулярности — без ms-thrash кэша.",
+          "CONTRACT_TYPE_LABELS в entities/contract (параллель RISK_LEVEL_META), а не shared/lib (status-meta там из-за cross-entity version+contract; тип — только домен договора)."
+        ],
+        "subagents": [
+          "Дизайн-панель (до реализации): typescript-pro (деривация ListParams, guards, exhaustive Records), react-specialist (paramsSerializer, query-key стабильность, date_from-thrash, sort-хук, dual-sort), architect-reviewer (FSD-размещение, single-source), ui-designer (RiskBadge null-narrow, FilterChips pinned-explosion, page-scoped affordance, D-AWAITING rename).",
+          "Адверсариальное ревью диффа (10 агентов, с верификацией): code-reviewer, typescript-pro, react-specialist, ui-designer, architect-reviewer. Подтверждённые и устранённые находки: (1) major — фильтры/поиск не сбрасывали page→1 (только сортировка): добавлен эффект-сброс; (2) a11y — SortControl role=menu на Popover без menu-клавиатуры: → radiogroup/radio; (3) doc-accuracy — неточный комментарий «зеркалят BUCKET_MAP»: уточнён; (4) nit — цвет тип-ячейки выровнен. FALSE POSITIVE отклонён: «доки не обновлены» (обновлены)."
+        ],
+        "verify": [
+          "npm run typecheck — 0 ошибок (включая tests/e2e/tsconfig).",
+          "npm run lint — 0 warnings (--max-warnings=0).",
+          "npm run test -- --run — 1375/1375 passed (177 файлов).",
+          "npm run build — OK (3.57s); npm run size-limit — все бюджеты в норме.",
+          "Ручная проверка dev:e2e: Тип/Риск из данных; фильтры/сортировка уходят на бэкенд (MSW эмулирует); «высокий риск» в strip page-scoped."
+        ],
+        "open_followups": [
+          "risk_counts есть в ContractSummary, но пока не рендерится (LastCheck использует ContractDetails; dashboard risk-виджеты — orphan). Зарезервировано под follow-up (компактный счётчик high/medium/low).",
+          "Reports-таблица: колонки Тип/Риск теперь доступны в данных, но не добавлены (scope FE-TASK-058 = список «Документы» + дашборд) — отдельная задача.",
+          "FilterChips: pinned single-select чипы сигналят выбор только цветом (нет aria-pressed) и дублируются removable-токеном — общий для status/risk a11y/UX долг shared-фичи (вне scope).",
+          "RiskBadge danger-tint 10% контраст < AA на 12px — общий token-долг (§8.2 (f)), затронул новые табличные поверхности.",
+          "Сорт «date» = created_at (OpenAPI), а колонка «Дата проверки» показывает updated_at — при date-сортировке видимая дата может выглядеть немонотонно (минорное расхождение осей)."
+        ]
+      }
     }
   ]
 }

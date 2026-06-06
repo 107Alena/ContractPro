@@ -14,6 +14,7 @@ const sample: ContractSummary[] = [
     status: 'ACTIVE',
     current_version_number: 2,
     processing_status: 'READY',
+    created_at: '2026-04-18T10:00:00Z',
     updated_at: '2026-04-19T10:00:00Z',
   },
   {
@@ -22,6 +23,7 @@ const sample: ContractSummary[] = [
     status: 'ACTIVE',
     current_version_number: 1,
     processing_status: 'READY',
+    created_at: '2026-04-17T10:00:00Z',
     updated_at: '2026-04-18T10:00:00Z',
   },
 ];

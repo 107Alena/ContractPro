@@ -6,7 +6,11 @@ import { computeCounters } from './WhatMattersCards';
 
 const s = (status: NonNullable<ContractSummary['processing_status']>): ContractSummary => ({
   contract_id: Math.random().toString(),
+  title: status,
+  status: 'ACTIVE',
   processing_status: status,
+  created_at: '2026-04-15T10:00:00Z',
+  updated_at: '2026-04-15T10:00:00Z',
 });
 
 describe('computeCounters', () => {

@@ -4,8 +4,12 @@
 // §5.6.1 Pattern B (скрытие действий для BUSINESS_USER через <Can>).
 //
 // Реализация:
-//   - `useReactTable` в ручном (manualPagination/Sorting=false — сортировка
-//     client-side по текущей странице; server-side пагинация наверху в page).
+//   - `useReactTable` только для core/row-model + колонок (server-side пагинация
+//     наверху в page). Сортировка — server-side (FE-TASK-058): page-уровень
+//     SortControl задаёт API sort/order, бэкенд отдаёт упорядоченную страницу.
+//     Client-side header-сортировку убрали: per-page reorder противоречил бы
+//     глобальному серверному порядку (risk null-в-конец, кросс-страничность) и
+//     ломал бы aria-sort (объявлял порядок, не совпадающий с фактическим).
 //   - Колонка «Действия» добавляется только если вызывающая сторона передала
 //     renderRowActions (page проверяет useCan('contract.archive')).
 //   - Виртуализация через @tanstack/react-virtual включается, когда видимых
@@ -16,14 +20,12 @@
 import {
   flexRender,
   getCoreRowModel,
-  getSortedRowModel,
   type Header,
   type Row,
-  type SortingState,
   useReactTable,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 
 import { type ContractSummary } from '@/entities/contract';
@@ -156,39 +158,15 @@ function DefaultFilteredEmpty(): JSX.Element {
 const HEADER_TH_CLASS =
   'h-10 whitespace-nowrap px-3 text-left align-middle text-13 font-medium text-fg-subtle';
 
-// Ячейка заголовка с client-side сортировкой (sort-кнопка + aria-sort).
-// Используется в ОБОИХ thead (обычном и виртуализированном), чтобы сортировка
-// кликом и aria-sort работали и при >50 строках (virtualized path).
+// Ячейка заголовка (статичная). Сортировка — server-side через page-уровень
+// SortControl, поэтому заголовки некликабельны и без aria-sort. Используется в
+// ОБОИХ thead (обычном и виртуализированном).
 function HeaderCell({ header }: { header: Header<ContractSummary, unknown> }): JSX.Element {
-  const canSort = header.column.getCanSort();
-  const direction = header.column.getIsSorted();
-  const ariaSort =
-    canSort && direction === 'asc'
-      ? 'ascending'
-      : canSort && direction === 'desc'
-        ? 'descending'
-        : canSort
-          ? 'none'
-          : undefined;
-  const label = header.column.columnDef.header;
-
   return (
-    <th scope="col" {...(ariaSort ? { 'aria-sort': ariaSort } : {})} className={HEADER_TH_CLASS}>
-      {header.isPlaceholder ? null : canSort ? (
-        <button
-          type="button"
-          onClick={header.column.getToggleSortingHandler()}
-          aria-label={typeof label === 'string' ? `Сортировать по «${label}»` : 'Сортировать'}
-          className="inline-flex items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring focus-visible:ring-offset-1"
-        >
-          {flexRender(label, header.getContext())}
-          <span aria-hidden="true" className="text-fg-muted">
-            {direction === 'asc' ? '▲' : direction === 'desc' ? '▼' : '↕'}
-          </span>
-        </button>
-      ) : (
-        flexRender(label, header.getContext())
-      )}
+    <th scope="col" className={HEADER_TH_CLASS}>
+      {header.isPlaceholder
+        ? null
+        : flexRender(header.column.columnDef.header, header.getContext())}
     </th>
   );
 }
@@ -206,7 +184,6 @@ export function DocumentsTable({
   ariaLabel = 'Список договоров',
   testId = 'documents-table',
 }: DocumentsTableProps): JSX.Element {
-  const [sorting, setSorting] = useState<SortingState>([]);
   const columns = useMemo(() => {
     // renderActions передаётся только если вызывающий сам решил показать
     // колонку (RBAC-проверка — на уровне page).
@@ -220,10 +197,7 @@ export function DocumentsTable({
   const table = useReactTable<ContractSummary>({
     data,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
     getRowId: (row, idx) => row.contract_id ?? `_row_${idx}`,
   });
 

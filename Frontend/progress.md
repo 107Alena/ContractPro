@@ -3999,3 +3999,61 @@ code-reviewer нашёл 5 P1 + 7 P2. Применены 4 P1 + 1 P2:
 - **Pattern для mock-based тестов TanStack-query-heavy pages**: вместо `QueryCache.build().setState()` мокать сам entity-хук (`vi.mock('@/entities/*', () => ({ useFoo: () => useFooMock() }))`). Стабильно против observer-затирания состояния на mount даже с `retry=false, refetchOnMount=false`. Переиспользуемо для будущих page-тестов без MSW.
 - **E2E loginAs + spaNavigate helper** — дублируется уже в 4 spec-файлах (admin-placeholders, reports, settings + partial в login). При 5-м дубле — вынести в `tests/e2e/fixtures/navigation.ts` (паттерн `seedAuthenticatedSession`).
 - **SettingsPage bundle footprint ~1-2 КБ gzip**. При расширении (password reset, 2FA, notifications, share-permissions): держать lazy-chunk под 10 КБ или ввести именованный budget `chunks/settings` (по аналогии с `chunks/admin` = 10 КБ).
+
+---
+
+## FE-TASK-058 — contract_type/risk_level/risk_counts + серверные фильтры/сортировка `/contracts` (2026-06-06)
+
+### Выбор и контекст
+
+FE-сторона ORCH-TASK-056. Бэкенд (orch) и регенерация `openapi.d.ts` (коммит 486acc1) уже сделаны — `ContractSummary` получил `contract_type`/`risk_level`/`risk_counts`, а `status`/`created_at`/`updated_at` стали обязательными (что ломало ~13 фикстур в тестах/сторис → typecheck/build красные). Задача: снять заглушки «—», подключить серверные фильтры (`risk_level`/`contract_type[]`/`processing_status[]`/`date_from`/`date_to`) и сортировку (`sort`/`order`).
+
+### Дизайн-панель (до реализации, профильные субагенты)
+
+Прогнал проект через 4 субагента (Workflow): **typescript-pro** (деривация `ListParams` из `operations[]`, guards, exhaustive `Record`), **react-specialist** (`paramsSerializer`, стабильность query-key, `date_from` ms-thrash, sort-хук, dual-sort), **architect-reviewer** (FSD-размещение, single-source-of-truth), **ui-designer** (RiskBadge null-narrow, FilterChips pinned-explosion, видимый scope-affordance, D-AWAITING). Ключевые правки проекта по итогам: deriv-тип `ListParams`; guards с дедуп+сорт массивов; `date_from` день-гранулярность; pin только status+risk; видимая подпись охвата в strip; **отказ от чипа «Требует внимания»** (label≠поведение) в пользу «С ошибкой».
+
+### План реализации
+
+1. `shared/api/types.ts`: `ListParams = NonNullable<operations['listContracts']['parameters']['query']>` (без ручных API-типов); +export `ContractType`.
+2. `entities/contract/model/contract-type.ts`: `CONTRACT_TYPE_LABELS` (EN→RU, ASSUMPTION-LIC-16), `CONTRACT_TYPES` (`satisfies`), `contractTypeLabel()`.
+3. `entities/contract/api/use-contracts.ts`: `paramsSerializer {indexes:null}` (repeated-key массивы).
+4. `filter-definitions.ts`: опции из канон-источников (убраны стейл RENT/CONSULTING); группы статуса done/in_progress/error + `PROCESSING_GROUP_TO_STATUSES` (тип `ServerFilterableStatus`).
+5. `use-contracts-list-query.ts`: guards (`toRiskLevel`/`toContractTypes`/`toProcessingStatuses`/`dateFromForRange`), conditional-assign, сорт массивов, эффект-сброс page.
+6. `use-contracts-sort.ts` + `SortControl` (Popover, URL-derived).
+7. `columns.tsx` + `RecentChecksTable` (Тип/Риск реальные), `DocumentsTable` (убрана client-сортировка), `ContractsMetricsStrip` (high-risk page-scoped).
+8. MSW handler (filter/sort/paginate) + фикстуры. Тесты + доки.
+
+### Реализация
+
+- **Типы:** `ListParams` производный от generated. `RiskLevel` НЕ дублирован — канонический в `entities/risk` (architect-reviewer). Guards отбрасывают невалид + дают mutable-массивы под generated-тип; пустые значения не кладутся (`exactOptionalPropertyTypes`).
+- **AWAITING_USER_INPUT** не уходит на бэкенд (→400): закодировано `ServerFilterableStatus = Exclude<UserProcessingStatus,'AWAITING_USER_INPUT'>` + guard опирается только на `PROCESSING_GROUP_TO_STATUSES`.
+- **Сортировка** server-авторитетная: client header-sort удалён из `DocumentsTable`, `SortControl` — единственный контрол; delete-on-default + сброс page.
+- **Кэш:** массивы сорт+дедуп (стабильный query-key), `date_from` `YYYY-MM-DD`.
+- **MSW** воспроизводит server-фильтрацию/сортировку/пагинацию по query (для dev:e2e/e2e).
+
+### Адверсариальное ревью диффа (10 агентов, Workflow с верификацией)
+
+Подтверждённые находки устранены:
+1. **major (correctness)** — смена фильтров/поиска не сбрасывала `page→1` (только сортировка): добавлен эффект-сброс (mount пропускается ради deep-link) + тест.
+2. **a11y** — `SortControl` `role="menu"` на Radix Popover без menu-клавиатуры → `role="radiogroup"`/`role="radio"` (прецедент SegmentedControl).
+3. **doc-accuracy** — неточный комментарий «зеркалят BUCKET_MAP» (группа in_progress шире bucket): уточнён.
+4. **nit** — цвет тип-ячейки выровнен (`text-fg`).
+- **FALSE POSITIVE** отклонён: «доки не обновлены» — верификатор подтвердил, что figma-mapping.md и high-architecture.md изменены в этом же диффе.
+
+### Проверки
+
+- **typecheck** ✓ 0 ошибок (+ tests/e2e/tsconfig).
+- **lint** ✓ 0 warnings (один автофикс simple-import-sort).
+- **test** ✓ **1375/1375** (177 файлов); новые: columns.test (3), strip (+2), ContractsListPage (+5: server-фильтры/sort/page-reset).
+- **build** ✓ (3.57s); **size-limit** ✓ все бюджеты.
+- **Архитектура** — FSD-границы чисты (contract-type в entities/contract; status-group в page/model; MSW в tests/); §17.4 + figma-mapping.md 193:2 обновлены в коммите этапа.
+
+### Заметки для следующих итераций
+
+- **risk_counts** есть в типе/фикстурах, но не рендерится (LastCheck на ContractDetails; dashboard risk-виджеты — orphan). Follow-up: компактный счётчик high/medium/low в risk-ячейке/тултипе.
+- **Reports-таблица** — Тип/Риск теперь в данных, но не добавлены (scope = «Документы»+дашборд). Отдельная задача.
+- **FilterChips** (shared) — pinned single-select чипы: выбор сигналится только цветом (нет `aria-pressed`) и дублируется removable-токеном (`activeTokens` не исключает pinned). Общий a11y/UX-долг (status+risk), вне scope FE-TASK-058.
+- **RiskBadge danger-tint 10%** — контраст <AA на 12px; общий token-долг (§8.2 (f)), теперь на табличных поверхностях.
+- **Сорт «date» = created_at** (OpenAPI), колонка «Дата проверки» = updated_at → при date-сортировке видимая дата может выглядеть немонотонно.
+- **Pattern**: server-query-changing контролы (фильтры/поиск/сортировка) должны сбрасывать page в одной транзакции; сейчас сортировка делает это в `useContractsSort`, фильтры/поиск — через эффект в `use-contracts-list-query`. Если появится 3-й список с такой же связкой — рассмотреть `resetKeys` опцию в `useFilterParams`/`useDebouncedSearchParam`.
+- **Оставшиеся pending после FE-TASK-058**: FE-TASK-002 (admin OPM, блок DESIGN-TASK-002), FE-TASK-057 (npm audit).

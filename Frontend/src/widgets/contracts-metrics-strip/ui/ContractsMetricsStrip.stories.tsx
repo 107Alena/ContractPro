@@ -14,11 +14,23 @@ const meta: Meta<typeof ContractsMetricsStrip> = {
 export default meta;
 type Story = StoryObj<typeof ContractsMetricsStrip>;
 
+const base = {
+  status: 'ACTIVE' as const,
+  created_at: '2026-04-15T10:00:00Z',
+  updated_at: '2026-04-15T10:00:00Z',
+};
+
 const sample: ContractSummary[] = [
-  { contract_id: '1', title: 'a', processing_status: 'READY' },
-  { contract_id: '2', title: 'b', processing_status: 'ANALYZING' },
-  { contract_id: '3', title: 'c', processing_status: 'AWAITING_USER_INPUT' },
-  { contract_id: '4', title: 'd', processing_status: 'FAILED' },
+  { ...base, contract_id: '1', title: 'a', processing_status: 'READY', risk_level: 'high' },
+  { ...base, contract_id: '2', title: 'b', processing_status: 'ANALYZING', risk_level: null },
+  {
+    ...base,
+    contract_id: '3',
+    title: 'c',
+    processing_status: 'AWAITING_USER_INPUT',
+    risk_level: null,
+  },
+  { ...base, contract_id: '4', title: 'd', processing_status: 'FAILED', risk_level: null },
 ];
 
 export const Default: Story = {

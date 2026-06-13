@@ -7,6 +7,7 @@ import type { components } from '@/shared/api/openapi';
 
 import * as contracts from '../fixtures/contracts';
 import { IDS } from '../fixtures/ids';
+import { getSimulatedStatus, startProcessingSimulation } from '../fixtures/processing-simulation';
 import { errorResponse, type HandlerBase, joinPath } from './_helpers';
 
 type ContractSummary = components['schemas']['ContractSummary'];
@@ -73,8 +74,12 @@ function applyContractsQuery(
 export function createContractsHandlers(base: HandlerBase) {
   return [
     // POST /contracts/upload — multipart, возвращает UploadResponse.
-    http.post(joinPath(base, '/contracts/upload'), () =>
-      HttpResponse.json(
+    // Стартует симуляцию обработки (dev:e2e без backend): GET /contracts/{id}
+    // дальше отдаёт прогрессирующий статус, ResultPage показывает прогресс →
+    // результат. См. fixtures/processing-simulation.ts.
+    http.post(joinPath(base, '/contracts/upload'), () => {
+      startProcessingSimulation(IDS.contracts.alpha);
+      return HttpResponse.json(
         {
           contract_id: IDS.contracts.alpha,
           version_id: IDS.versions.alphaV1,
@@ -84,8 +89,8 @@ export function createContractsHandlers(base: HandlerBase) {
           message: 'В очереди на обработку',
         },
         { status: 202 },
-      ),
-    ),
+      );
+    }),
 
     // GET /contracts — список (server-side filter + sort + pagination).
     http.get(joinPath(base, '/contracts'), ({ request }) => {
@@ -104,11 +109,27 @@ export function createContractsHandlers(base: HandlerBase) {
       HttpResponse.json(contracts.contractStats, { status: 200 }),
     ),
 
-    // GET /contracts/{id} — детали договора.
+    // GET /contracts/{id} — детали договора. Если для договора запущена
+    // симуляция обработки (после upload) — подменяем processing_status текущей
+    // версии на вычисленный по времени, чтобы ResultPage анимировал pipeline.
     http.get(joinPath(base, '/contracts/:contractId'), ({ params }) => {
       const contract = contracts.contractDetailsById[params.contractId as string];
       if (!contract) {
         return errorResponse(404, 'DOCUMENT_NOT_FOUND', 'Документ не найден');
+      }
+      const sim = getSimulatedStatus(params.contractId as string);
+      if (sim && contract.current_version) {
+        return HttpResponse.json(
+          {
+            ...contract,
+            current_version: {
+              ...contract.current_version,
+              processing_status: sim.processing_status,
+              processing_status_message: sim.processing_status_message,
+            },
+          },
+          { status: 200 },
+        );
       }
       return HttpResponse.json(contract, { status: 200 });
     }),
